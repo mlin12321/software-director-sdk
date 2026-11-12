@@ -17,19 +17,19 @@ from openhands.agent_server.director.models import (
     EscalationKind,
     EscalationPathStep,
     EscalationsEvent,
-    HealthCounts,
-    NodeHealth,
     NodeRemovedEvent,
+    NodeStatus,
     NodeUpsertEvent,
     OpenEscalation,
     OrgNode,
     OrgNodeInput,
     SnapshotEvent,
+    StatusCounts,
 )
 from openhands.sdk.errors import Invalid, NotFound
 
 
-NODE_HEALTHS: tuple[NodeHealth, ...] = get_args(NodeHealth)
+NODE_STATUSES: tuple[NodeStatus, ...] = get_args(NodeStatus)
 
 type OrgChange = NodeUpsertEvent | NodeRemovedEvent | EscalationsEvent
 type OrgListener = Callable[[OrgChange], None]
@@ -136,7 +136,7 @@ class OrgStore:
                 **node_input.model_dump(),
                 child_ids=child_ids,
                 descendant_counts=(
-                    existing.descendant_counts if existing else HealthCounts()
+                    existing.descendant_counts if existing else StatusCounts()
                 ),
                 escalation_count=self._waiting_on_human(node_input)
                 + sum(self._nodes[c].escalation_count for c in child_ids),
@@ -445,17 +445,17 @@ class OrgStore:
         return ordered
 
     @staticmethod
-    def _rollup(nodes: dict[str, OrgNode], node: OrgNode) -> tuple[HealthCounts, int]:
+    def _rollup(nodes: dict[str, OrgNode], node: OrgNode) -> tuple[StatusCounts, int]:
         """The node's ``descendant_counts`` and ``escalation_count``."""
-        counts = dict.fromkeys(NODE_HEALTHS, 0)
+        counts = dict.fromkeys(NODE_STATUSES, 0)
         escalation_count = OrgStore._waiting_on_human(node)
         for child_id in node.child_ids:
             child = nodes[child_id]
-            counts[child.health] += 1
-            for health in NODE_HEALTHS:
-                counts[health] += getattr(child.descendant_counts, health)
+            counts[child.status] += 1
+            for status in NODE_STATUSES:
+                counts[status] += getattr(child.descendant_counts, status)
             escalation_count += child.escalation_count
-        return HealthCounts(**counts), escalation_count
+        return StatusCounts(**counts), escalation_count
 
     def _refresh_ancestors(
         self, start_id: str | None, *, always_announce_first: bool

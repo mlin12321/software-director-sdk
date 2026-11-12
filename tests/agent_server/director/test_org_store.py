@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from openhands.agent_server.director.fixture import build_fixture_nodes
-from openhands.agent_server.director.models import HealthCounts
+from openhands.agent_server.director.models import StatusCounts
 from openhands.agent_server.director.org_persistence import (
     ORG_REF,
     create_org_board,
@@ -60,10 +60,8 @@ def test_derives_children_ancestors_and_subtree_rollups(store: OrgStore):
     assert root.child_ids == ["a", "b"]
     assert [node.id for node in store.ancestors("a2")] == ["root", "a"]
     assert [node.id for node in store.all()] == ["root", "a", "b", "a1", "a2"]
-    assert root.descendant_counts == HealthCounts(
-        collision=1, done=2, needs_attention=1
-    )
-    assert store.children("a")[0].descendant_counts == HealthCounts()
+    assert root.descendant_counts == StatusCounts(blocked=1, done=2, idle=1)
+    assert store.children("a")[0].descendant_counts == StatusCounts()
 
 
 def test_snapshot_holds_the_focus_its_ancestors_and_direct_reports(store: OrgStore):
@@ -88,7 +86,7 @@ def test_subscribers_hear_about_the_reports_of_nodes_they_expanded(store: OrgSto
     store.subscribe("root", collapsed.append)
     store.subscribe("root", expanded.append, ["a"])
 
-    store.upsert(make_node("a1", "a", health="done", path="renamed"))
+    store.upsert(make_node("a1", "a", status="done", path="renamed"))
     store.remove("a2")
 
     assert describe(collapsed) == [("node_upsert", "a"), ("node_upsert", "root")]
@@ -194,7 +192,7 @@ class TestEscalations:
     def test_changes_that_leave_the_list_alone_announce_nothing(self, store: OrgStore):
         events = record(store, "a")
 
-        store.upsert(make_node("a1", "a", health="pruned"))
+        store.upsert(make_node("a1", "a", status="working"))
         # Held by the node above: not the human's business yet.
         store.upsert(
             make_node("a1", "a", escalations=[make_escalation("held", held_by="a")])
@@ -216,7 +214,7 @@ class TestEscalations:
         events = record(store, "root")
 
         store.upsert(
-            make_node("a", "root", health="collision").model_copy(
+            make_node("a", "root", status="blocked").model_copy(
                 update={"title": "renamed"}
             )
         )
@@ -413,12 +411,12 @@ class TestFullSubscription:
         ]
 
 
-def test_a_health_change_announces_each_ancestor_whose_rollup_changed(
+def test_a_status_change_announces_each_ancestor_whose_rollup_changed(
     store: OrgStore,
 ):
     events = record(store, "a2")
 
-    store.upsert(make_node("a2", "a", health="done", path="svc/a/two"))
+    store.upsert(make_node("a2", "a", status="done", path="svc/a/two"))
 
     assert describe(events) == [
         ("node_upsert", "a2"),
@@ -427,23 +425,23 @@ def test_a_health_change_announces_each_ancestor_whose_rollup_changed(
     ]
     root = store.get("root")
     assert root is not None
-    assert root.descendant_counts == HealthCounts(collision=1, done=3)
+    assert root.descendant_counts == StatusCounts(blocked=1, done=3)
 
 
 def test_an_update_that_keeps_the_rollups_announces_only_the_node(store: OrgStore):
     events = record(store, "a2")
-    unchanged_health = make_node("a2", "a", health="needs_attention", path="svc/a/two")
+    unchanged_status = make_node("a2", "a", status="idle", path="svc/a/two")
 
-    store.upsert(unchanged_health.model_copy(update={"title": "renamed"}))
+    store.upsert(unchanged_status.model_copy(update={"title": "renamed"}))
 
     assert describe(events) == [("node_upsert", "a2")]
 
 
 def test_updating_a_node_keeps_its_children_and_rollup(store: OrgStore):
-    updated = store.upsert(make_node("a", "root", health="done", path="svc/a"))
+    updated = store.upsert(make_node("a", "root", status="done", path="svc/a"))
 
     assert updated.child_ids == ["a1", "a2"]
-    assert updated.descendant_counts == HealthCounts(done=1, needs_attention=1)
+    assert updated.descendant_counts == StatusCounts(done=1, idle=1)
 
 
 def test_subscribers_only_hear_about_nodes_in_their_snapshot(store: OrgStore):
@@ -452,7 +450,7 @@ def test_subscribers_only_hear_about_nodes_in_their_snapshot(store: OrgStore):
 
     # a1 is a grandchild of root and unrelated to b; its change alters a's
     # rollup (a child of root) and root's own.
-    store.upsert(make_node("a1", "a", health="pruned", path="svc/a/one"))
+    store.upsert(make_node("a1", "a", status="working", path="svc/a/one"))
 
     assert describe(at_root) == [("node_upsert", "a"), ("node_upsert", "root")]
     assert describe(at_b) == [("node_upsert", "root")]
@@ -484,7 +482,7 @@ def test_removing_a_subtree_announces_leaves_first_and_fixes_rollups(
     root = store.get("root")
     assert root is not None
     assert root.child_ids == ["b"]
-    assert root.descendant_counts == HealthCounts(done=1)
+    assert root.descendant_counts == StatusCounts(done=1)
     assert store.get("a2") is None
     assert store.remove("a") is False
 
@@ -503,7 +501,7 @@ def test_unsubscribing_stops_delivery(store: OrgStore):
     assert snapshot is not None
 
     unsubscribe()
-    store.upsert(make_node("b", "root", health="collision", path="svc/b"))
+    store.upsert(make_node("b", "root", status="blocked", path="svc/b"))
 
     assert events == []
 
@@ -545,9 +543,7 @@ class TestReplaceAll:
         root = store.get("root")
         assert root is not None
         assert root.child_ids == ["b", "a"]
-        assert root.descendant_counts == HealthCounts(
-            collision=1, done=2, needs_attention=1
-        )
+        assert root.descendant_counts == StatusCounts(blocked=1, done=2, idle=1)
 
     def test_accepts_an_empty_tree(self, store: OrgStore):
         store.replace_all([])

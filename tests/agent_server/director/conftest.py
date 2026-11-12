@@ -9,7 +9,7 @@ from openhands.agent_server.director.models import (
     Escalation,
     EscalationHandoff,
     EscalationKind,
-    NodeHealth,
+    NodeStatus,
     OrgNodeInput,
 )
 
@@ -38,7 +38,7 @@ def make_node(
     node_id: str,
     parent_id: str | None,
     *,
-    health: NodeHealth = "converging",
+    status: NodeStatus = "working",
     path: str | None = None,
     escalations: list[Escalation] | None = None,
 ) -> OrgNodeInput:
@@ -51,7 +51,7 @@ def make_node(
         worktree_path=".",
         branch="main",
         agents=[AgentRef(role="ic", status="idle")],
-        health=health,
+        status=status,
         escalations=escalations or [],
     )
 
@@ -88,8 +88,8 @@ def small_tree() -> list[OrgNodeInput]:
     """root -> (a -> (a1, a2), b)."""
     return [
         make_node("root", None, path=""),
-        make_node("a", "root", health="collision", path="svc/a"),
-        make_node("b", "root", health="done", path="svc/b"),
-        make_node("a1", "a", health="done", path="svc/a/one"),
-        make_node("a2", "a", health="needs_attention", path="svc/a/two"),
+        make_node("a", "root", status="blocked", path="svc/a"),
+        make_node("b", "root", status="done", path="svc/b"),
+        make_node("a1", "a", status="done", path="svc/a/one"),
+        make_node("a2", "a", status="idle", path="svc/a/two"),
     ]

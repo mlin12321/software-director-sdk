@@ -10,7 +10,7 @@ from openhands.agent_server.director.models import (
     Boundary,
     Escalation,
     EscalationHandoff,
-    NodeHealth,
+    NodeStatus,
     OrgNodeInput,
 )
 
@@ -20,18 +20,18 @@ _SERVICES = ("api", "worker", "storage", "gateway", "console")
 _MODULES_PER_SERVICE = 15
 _SEED = 20261111
 
-# Weighted so most of the tree is healthy and a few nodes need attention.
-_HEALTH_WHEEL: tuple[NodeHealth, ...] = (
-    "converging",
-    "converging",
-    "converging",
-    "converging",
+# Weighted so most of the tree is working and a few nodes are blocked.
+_STATUS_WHEEL: tuple[NodeStatus, ...] = (
+    "working",
+    "working",
+    "working",
+    "working",
     "done",
     "done",
-    "negotiating_split",
-    "needs_attention",
-    "collision",
-    "pruned",
+    "idle",
+    "idle",
+    "blocked",
+    "blocked",
 )
 
 
@@ -116,7 +116,7 @@ _ESCALATIONS: dict[str, list[Escalation]] = {
 
 
 class _Wheel:
-    """Picks healths with a fixed linear congruential generator.
+    """Picks statuses with a fixed linear congruential generator.
 
     ``random.Random`` is avoided on purpose: the fixture must stay the same
     across Python versions, because clients and tests refer to its contents.
@@ -125,14 +125,14 @@ class _Wheel:
     def __init__(self, seed: int) -> None:
         self._state = seed
 
-    def pick(self) -> NodeHealth:
+    def pick(self) -> NodeStatus:
         self._state = (self._state * 1103515245 + 12345) % 2**31
-        return _HEALTH_WHEEL[(self._state >> 16) % len(_HEALTH_WHEEL)]
+        return _STATUS_WHEEL[(self._state >> 16) % len(_STATUS_WHEEL)]
 
 
 def _pod() -> list[AgentRef]:
     return [
-        AgentRef(role="ic", status="running"),
+        AgentRef(role="ic", status="working"),
         AgentRef(role="manager", status="idle"),
     ]
 
@@ -150,7 +150,7 @@ def build_fixture_nodes() -> list[OrgNodeInput]:
             worktree_path=".",
             branch="main",
             agents=_pod(),
-            health="converging",
+            status="working",
             spec_summary="Owns cross-domain contracts and the release plan.",
         )
     ]
@@ -170,7 +170,7 @@ def build_fixture_nodes() -> list[OrgNodeInput]:
                 worktree_path=f".worktrees/{domain}",
                 branch=f"agents/{domain}",
                 agents=_pod(),
-                health=wheel.pick(),
+                status=wheel.pick(),
                 spec_summary=f"Interface contracts between the {domain} services.",
                 escalations=_ESCALATIONS.get(domain, []),
             )
@@ -192,7 +192,7 @@ def build_fixture_nodes() -> list[OrgNodeInput]:
                     worktree_path=f".worktrees/{domain}-{service}",
                     branch=f"agents/{domain}/{service}",
                     agents=_pod(),
-                    health=wheel.pick(),
+                    status=wheel.pick(),
                     spec_summary=f"Implements the {service} service for {domain}.",
                     escalations=_ESCALATIONS.get(service_id, []),
                 )
@@ -216,7 +216,7 @@ def build_fixture_nodes() -> list[OrgNodeInput]:
                         worktree_path=f".worktrees/{domain}-{service}",
                         branch=f"agents/{domain}/{service}",
                         agents=_pod(),
-                        health=wheel.pick(),
+                        status=wheel.pick(),
                         spec_summary=f"Leaf module {index} of {domain}/{service}.",
                         escalations=_ESCALATIONS.get(f"{service_id}.{module}", []),
                     )

@@ -52,7 +52,7 @@ def test_returns_a_node_with_its_ancestors_and_children(client: TestClient):
     assert response.status_code == 200
     body = response.json()
     assert body["node"]["id"] == "a"
-    assert body["node"]["descendant_counts"]["needs_attention"] == 1
+    assert body["node"]["descendant_counts"]["idle"] == 1
     assert [node["id"] for node in body["ancestors"]] == ["root"]
     assert [node["id"] for node in body["children"]] == ["a1", "a2"]
 
@@ -222,7 +222,7 @@ class TestTreeStream:
 
         name, snapshot = await self.next_event(body)
         await asyncio.to_thread(
-            service.store.upsert, make_node("b", "root", health="collision")
+            service.store.upsert, make_node("b", "root", status="blocked")
         )
         _, upsert = await self.next_event(body)
         _, rollup = await self.next_event(body)
@@ -232,9 +232,9 @@ class TestTreeStream:
         assert name == "snapshot"
         assert snapshot["focus_id"] == "root"
         assert [node["id"] for node in snapshot["nodes"]] == ["root", "a", "b"]
-        assert (upsert["type"], upsert["node"]["health"]) == (
+        assert (upsert["type"], upsert["node"]["status"]) == (
             "node_upsert",
-            "collision",
+            "blocked",
         )
         assert rollup["node"]["id"] == "root"
         assert removed == {"type": "node_removed", "id": "b"}
@@ -243,8 +243,8 @@ class TestTreeStream:
         body = await self.open_stream(service, "b")
 
         _, snapshot = await self.next_event(body)
-        service.store.upsert(make_node("a1", "a", health="pruned"))
-        service.store.upsert(make_node("b", "root", health="pruned"))
+        service.store.upsert(make_node("a1", "a", status="working"))
+        service.store.upsert(make_node("b", "root", status="working"))
         _, first_change = await self.next_event(body)
 
         assert [node["id"] for node in snapshot["nodes"]] == ["root", "b"]
@@ -257,7 +257,7 @@ class TestTreeStream:
         body = await self.open_stream(service, expanded=["a", "missing"])
 
         _, snapshot = await self.next_event(body)
-        service.store.upsert(make_node("a1", "a", health="pruned"))
+        service.store.upsert(make_node("a1", "a", status="working"))
         _, change = await self.next_event(body)
 
         assert [node["id"] for node in snapshot["nodes"]] == [
@@ -340,7 +340,7 @@ class TestTreeStream:
 
         await body.aclose()  # type: ignore[attr-defined]
         service.store.subscribe("root", delivered.append)
-        service.store.upsert(make_node("b", "root", health="collision"))
+        service.store.upsert(make_node("b", "root", status="blocked"))
 
         # The store has exactly the open stream and this test's listener left.
         assert len(service.store._listeners) == 2

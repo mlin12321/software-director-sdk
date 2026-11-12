@@ -5,20 +5,12 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, Field
 
 
-# A pod has an IC and a Manager, and no other kind of agent. "Lead" and
-# "worker" are not roles: the IC of a team leads it and is at the same time
-# a report of the team above, and it does whatever code work in its boundary
-# no sub-team has taken on. Review is handled outside the pod.
+# A pod has an IC and a Manager. The IC of a team leads it, is a report of
+# the team above, and does the code work in its boundary that no sub-team
+# has taken on.
 AgentRole = Literal["ic", "manager"]
 
-NodeHealth = Literal[
-    "converging",
-    "negotiating_split",
-    "collision",
-    "needs_attention",
-    "pruned",
-    "done",
-]
+NodeStatus = Literal["idle", "working", "done", "blocked"]
 
 IsolationMode = Literal["worktree", "shared"]
 
@@ -86,15 +78,13 @@ class Escalation(BaseModel):
     )
 
 
-class HealthCounts(BaseModel):
-    """Number of nodes in each health state."""
+class StatusCounts(BaseModel):
+    """Number of nodes in each status."""
 
-    converging: int = 0
-    negotiating_split: int = 0
-    collision: int = 0
-    needs_attention: int = 0
-    pruned: int = 0
+    idle: int = 0
+    working: int = 0
     done: int = 0
+    blocked: int = 0
 
 
 class OrgNodeInput(BaseModel):
@@ -113,7 +103,7 @@ class OrgNodeInput(BaseModel):
     worktree_path: str
     branch: str
     agents: list[AgentRef] = Field(default_factory=list)
-    health: NodeHealth
+    status: NodeStatus
     spec_summary: str = ""
     escalations: list[Escalation] = Field(
         default_factory=list,
@@ -128,10 +118,10 @@ class OrgNode(OrgNodeInput):
     """A node of the org tree, including the fields the store derives."""
 
     child_ids: list[str] = Field(default_factory=list)
-    descendant_counts: HealthCounts = Field(
-        default_factory=HealthCounts,
+    descendant_counts: StatusCounts = Field(
+        default_factory=StatusCounts,
         description=(
-            "Health of every node below this one, so a parent can summarize its "
+            "Status of every node below this one, so a parent can summarize its "
             "whole subtree without the client loading it."
         ),
     )
