@@ -284,6 +284,20 @@ class Config(BaseModel):
             "Default workspace directory for conversations created by the server."
         ),
     )
+    director_repo_path: Path | None = Field(
+        default=None,
+        description=(
+            "Git repository the director keeps its org tree and blackboard in, "
+            "under the hidden refs `refs/agents/*`. Defaults to `workspace_path`."
+        ),
+    )
+    director_fixture: bool = Field(
+        default=False,
+        description=(
+            "Serve the director's built-in 487-node fixture org tree instead of "
+            "the one stored in the repository. For developing clients."
+        ),
+    )
     conversation_worktree_root: Path = Field(
         default=Path("/tmp/conversation-worktrees"),
         description=(
