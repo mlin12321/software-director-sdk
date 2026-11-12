@@ -6,6 +6,8 @@ import pytest
 from openhands.agent_server.director.models import (
     AgentRef,
     Boundary,
+    Escalation,
+    EscalationKind,
     NodeHealth,
     OrgNodeInput,
 )
@@ -37,6 +39,7 @@ def make_node(
     *,
     health: NodeHealth = "converging",
     path: str | None = None,
+    escalations: list[Escalation] | None = None,
 ) -> OrgNodeInput:
     return OrgNodeInput(
         id=node_id,
@@ -48,6 +51,18 @@ def make_node(
         branch="main",
         agents=[AgentRef(role="lead_ic", status="idle")],
         health=health,
+        escalations=escalations or [],
+    )
+
+
+def make_escalation(
+    escalation_id: str,
+    *,
+    kind: EscalationKind = "design_decision",
+    raised_at: str = "2026-11-10T00:00:00Z",
+) -> Escalation:
+    return Escalation(
+        id=escalation_id, kind=kind, title=escalation_id, raised_at=raised_at
     )
 
 

@@ -36,7 +36,7 @@ def create_org_board(repo_dir: Path) -> GitBlackboard:
 def save_org(board: GitBlackboard, store: OrgStore) -> None:
     """Write the tree to ``board`` unless it is already stored unchanged."""
     nodes = [
-        node.model_dump(exclude={"child_ids", "descendant_counts"})
+        node.model_dump(exclude={"child_ids", "descendant_counts", "escalation_count"})
         for node in store.all()
     ]
     content = json.dumps({"version": _VERSION, "nodes": nodes}, indent=2) + "\n"

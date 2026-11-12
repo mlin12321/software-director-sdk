@@ -18,6 +18,8 @@ NodeHealth = Literal[
 
 IsolationMode = Literal["worktree", "shared"]
 
+EscalationKind = Literal["critical_issue", "design_decision"]
+
 
 class Boundary(BaseModel):
     """A codeowner boundary. All paths and globs are repo-relative."""
@@ -42,6 +44,16 @@ class AgentRef(BaseModel):
         description="None until a conversation has been started for this agent.",
     )
     status: str
+
+
+class Escalation(BaseModel):
+    """Something a node cannot settle itself and has sent up to the human."""
+
+    id: str = Field(description="Unique within the node that raised it.")
+    kind: EscalationKind
+    title: str
+    detail: str = ""
+    raised_at: str = Field(description="ISO 8601 timestamp.")
 
 
 class HealthCounts(BaseModel):
@@ -73,6 +85,10 @@ class OrgNodeInput(BaseModel):
     agents: list[AgentRef] = Field(default_factory=list)
     health: NodeHealth
     spec_summary: str = ""
+    escalations: list[Escalation] = Field(
+        default_factory=list,
+        description="Open escalations this node raised, oldest first.",
+    )
 
 
 class OrgNode(OrgNodeInput):
@@ -84,6 +100,13 @@ class OrgNode(OrgNodeInput):
         description=(
             "Health of every node below this one, so a parent can summarize its "
             "whole subtree without the client loading it."
+        ),
+    )
+    escalation_count: int = Field(
+        default=0,
+        description=(
+            "Open escalations on this node and every node below it, so a "
+            "collapsed parent still shows that something below needs the human."
         ),
     )
 
@@ -137,12 +160,40 @@ class TeachRequest(BaseModel):
     rule: str = Field(min_length=1, description="The rule, in plain English.")
 
 
+class EscalationPathStep(BaseModel):
+    """One node on the way from the root to an escalation."""
+
+    id: str
+    title: str
+
+
+class OpenEscalation(BaseModel):
+    """An escalation with the chain of nodes it travelled up."""
+
+    node_id: str = Field(description="The node that raised it.")
+    escalation: Escalation
+    path: list[EscalationPathStep] = Field(
+        description="Root first, ending at the node that raised it."
+    )
+
+
 class SnapshotEvent(BaseModel):
-    """The focused node, its ancestors and its direct reports."""
+    """The part of the tree one subscriber follows.
+
+    ``nodes`` holds the focused node, its ancestors, its direct reports and
+    the direct reports of every expanded node.
+    """
 
     type: Literal["snapshot"] = "snapshot"
     focus_id: str
     nodes: list[OrgNode]
+    escalations: list[OpenEscalation] = Field(
+        default_factory=list,
+        description=(
+            "Every open escalation at or below the focused node, critical "
+            "issues first, then longest waiting first."
+        ),
+    )
 
 
 class NodeUpsertEvent(BaseModel):
@@ -159,6 +210,16 @@ class NodeRemovedEvent(BaseModel):
     id: str
 
 
+class EscalationsEvent(BaseModel):
+    """The open escalations at or below the focused node changed."""
+
+    type: Literal["escalations"] = "escalations"
+    escalations: list[OpenEscalation] = Field(
+        description="The complete new list, in the snapshot's order."
+    )
+
+
 OrgEvent = Annotated[
-    SnapshotEvent | NodeUpsertEvent | NodeRemovedEvent, Field(discriminator="type")
+    SnapshotEvent | NodeUpsertEvent | NodeRemovedEvent | EscalationsEvent,
+    Field(discriminator="type"),
 ]

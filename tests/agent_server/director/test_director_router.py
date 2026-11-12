@@ -20,7 +20,11 @@ from openhands.agent_server.director.org_persistence import (
 from openhands.agent_server.director.org_store import OrgStore
 from openhands.agent_server.director.service import DirectorService
 from openhands.sdk.errors import NotFound
-from tests.agent_server.director.conftest import make_node, small_tree
+from tests.agent_server.director.conftest import (
+    make_escalation,
+    make_node,
+    small_tree,
+)
 
 
 def make_client(repo_dir: Path, **config) -> TestClient:
@@ -183,9 +187,11 @@ class TestTreeStream:
 
     @staticmethod
     async def open_stream(
-        service: DirectorService, node: str | None = None
+        service: DirectorService,
+        node: str | None = None,
+        expanded: list[str] | None = None,
     ) -> AsyncIterator[str]:
-        response = await director_router.stream_org_tree(service, node)
+        response = await director_router.stream_org_tree(service, node, expanded)
         assert response.media_type == "text/event-stream"
         body = response.body_iterator
         assert isinstance(body, AsyncIterator)
@@ -243,6 +249,55 @@ class TestTreeStream:
         assert [node["id"] for node in snapshot["nodes"]] == ["root", "b"]
         # The change to a1 only reaches this viewer as root's new rollup.
         assert first_change["node"]["id"] == "root"
+
+    async def test_follows_the_reports_of_expanded_nodes(
+        self, service: DirectorService
+    ):
+        body = await self.open_stream(service, expanded=["a", "missing"])
+
+        _, snapshot = await self.next_event(body)
+        service.store.upsert(make_node("a1", "a", health="pruned"))
+        _, change = await self.next_event(body)
+
+        assert [node["id"] for node in snapshot["nodes"]] == [
+            "root",
+            "a",
+            "b",
+            "a1",
+            "a2",
+        ]
+        assert change["node"]["id"] == "a1"
+
+    async def test_sends_open_escalations_and_each_change_to_them(
+        self, service: DirectorService
+    ):
+        service.store.upsert(make_node("a1", "a", escalations=[make_escalation("jwt")]))
+        body = await self.open_stream(service)
+
+        _, snapshot = await self.next_event(body)
+        # a1 is outside this viewer's nodes; only the escalation reaches it.
+        service.store.upsert(make_node("a1", "a"))
+        events = [await self.next_event(body) for _ in range(3)]
+
+        assert snapshot["escalations"] == [
+            {
+                "node_id": "a1",
+                "escalation": make_escalation("jwt").model_dump(),
+                "path": [
+                    {"id": "root", "title": "root"},
+                    {"id": "a", "title": "a"},
+                    {"id": "a1", "title": "a1"},
+                ],
+            }
+        ]
+        assert [node["escalation_count"] for node in snapshot["nodes"]] == [1, 1, 0]
+        # a's and root's rollups, then the now-empty list.
+        assert [name for name, _ in events] == [
+            "node_upsert",
+            "node_upsert",
+            "escalations",
+        ]
+        assert events[-1][1] == {"type": "escalations", "escalations": []}
 
     async def test_an_idle_stream_sends_heartbeats(
         self, service: DirectorService, monkeypatch: pytest.MonkeyPatch

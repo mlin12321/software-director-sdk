@@ -17,7 +17,12 @@ from openhands.agent_server.director.org_store import (
     OrgStore,
     OrgStoreError,
 )
-from tests.agent_server.director.conftest import make_node, run_git, small_tree
+from tests.agent_server.director.conftest import (
+    make_escalation,
+    make_node,
+    run_git,
+    small_tree,
+)
 
 
 @pytest.fixture
@@ -35,10 +40,16 @@ def record(store: OrgStore, focus_id: str) -> list[OrgChange]:
 
 
 def describe(events: list[OrgChange]) -> list[tuple[str, str]]:
-    return [
-        (event.type, event.node.id if event.type == "node_upsert" else event.id)
-        for event in events
-    ]
+    described: list[tuple[str, str]] = []
+    for event in events:
+        if event.type == "node_upsert":
+            described.append((event.type, event.node.id))
+        elif event.type == "node_removed":
+            described.append((event.type, event.id))
+        else:
+            ids = ",".join(item.escalation.id for item in event.escalations)
+            described.append((event.type, ids))
+    return described
 
 
 def test_derives_children_ancestors_and_subtree_rollups(store: OrgStore):
@@ -61,6 +72,149 @@ def test_snapshot_holds_the_focus_its_ancestors_and_direct_reports(store: OrgSto
     assert snapshot.focus_id == "a"
     assert [node.id for node in snapshot.nodes] == ["root", "a", "a1", "a2"]
     assert store.snapshot("missing") is None
+
+
+def test_snapshot_adds_the_reports_of_expanded_nodes(store: OrgStore):
+    snapshot = store.snapshot("root", ["a", "b", "missing"])
+
+    assert snapshot is not None
+    assert [node.id for node in snapshot.nodes] == ["root", "a", "b", "a1", "a2"]
+
+
+def test_subscribers_hear_about_the_reports_of_nodes_they_expanded(store: OrgStore):
+    collapsed: list[OrgChange] = []
+    expanded: list[OrgChange] = []
+    store.subscribe("root", collapsed.append)
+    store.subscribe("root", expanded.append, ["a"])
+
+    store.upsert(make_node("a1", "a", health="done", path="renamed"))
+    store.remove("a2")
+
+    assert describe(collapsed) == [("node_upsert", "a"), ("node_upsert", "root")]
+    assert describe(expanded) == [
+        ("node_upsert", "a1"),
+        ("node_removed", "a2"),
+        ("node_upsert", "a"),
+        ("node_upsert", "root"),
+    ]
+
+
+class TestEscalations:
+    @pytest.fixture
+    def store(self, store: OrgStore) -> OrgStore:
+        store.upsert(
+            make_node(
+                "a2",
+                "a",
+                escalations=[make_escalation("late", raised_at="2026-11-12T00:00:00Z")],
+            )
+        )
+        store.upsert(
+            make_node(
+                "b",
+                "root",
+                escalations=[
+                    make_escalation("early"),
+                    make_escalation(
+                        "broken",
+                        kind="critical_issue",
+                        raised_at="2026-11-13T00:00:00Z",
+                    ),
+                ],
+            )
+        )
+        return store
+
+    def test_every_node_counts_the_escalations_at_or_below_it(self, store: OrgStore):
+        counts = {node.id: node.escalation_count for node in store.all()}
+
+        assert counts == {"root": 3, "a": 1, "b": 2, "a1": 0, "a2": 1}
+
+    def test_lists_critical_issues_first_then_the_longest_waiting(
+        self, store: OrgStore
+    ):
+        listed = store.escalations("root")
+
+        assert [item.escalation.id for item in listed] == ["broken", "early", "late"]
+        assert [step.id for step in listed[-1].path] == ["root", "a", "a2"]
+        assert listed[-1].node_id == "a2"
+
+    def test_lists_only_what_is_at_or_below_the_focused_node(self, store: OrgStore):
+        assert [item.escalation.id for item in store.escalations("a")] == ["late"]
+        assert store.escalations("a1") == []
+        assert store.escalations("missing") == []
+
+    def test_a_snapshot_carries_the_escalations(self, store: OrgStore):
+        snapshot = store.snapshot("a")
+
+        assert snapshot is not None
+        assert [item.escalation.id for item in snapshot.escalations] == ["late"]
+
+    def test_raising_and_settling_announce_the_new_list(self, store: OrgStore):
+        events = record(store, "a")
+
+        store.upsert(
+            make_node(
+                "a1", "a", escalations=[make_escalation("new", kind="critical_issue")]
+            )
+        )
+        store.upsert(make_node("a2", "a"))
+
+        assert describe(events) == [
+            ("node_upsert", "a1"),
+            ("node_upsert", "a"),
+            ("node_upsert", "root"),
+            ("escalations", "new,late"),
+            ("node_upsert", "a2"),
+            ("node_upsert", "a"),
+            ("node_upsert", "root"),
+            ("escalations", "new"),
+        ]
+
+    def test_changes_that_leave_the_list_alone_announce_nothing(self, store: OrgStore):
+        events = record(store, "a")
+
+        store.upsert(make_node("b", "root"))
+        store.upsert(make_node("a1", "a", health="pruned"))
+
+        assert "escalations" not in [event.type for event in events]
+
+    def test_removing_a_subtree_drops_its_escalations(self, store: OrgStore):
+        events = record(store, "root")
+
+        store.remove("a")
+
+        root = store.get("root")
+        assert root is not None
+        assert root.escalation_count == 2
+        assert describe(events)[-1] == ("escalations", "broken,early")
+
+    def test_renaming_a_node_on_the_path_announces_the_new_path(self, store: OrgStore):
+        events = record(store, "root")
+
+        store.upsert(
+            make_node("a", "root", health="collision").model_copy(
+                update={"title": "renamed"}
+            )
+        )
+
+        last = events[-1]
+        assert last.type == "escalations"
+        assert [step.title for step in last.escalations[-1].path] == [
+            "root",
+            "renamed",
+            "a2",
+        ]
+
+    def test_escalations_survive_a_save_and_load(self, store: OrgStore, repo: Path):
+        board = create_org_board(repo)
+        save_org(board, store)
+        loaded = OrgStore()
+
+        load_org(board, loaded)
+
+        assert loaded.all() == store.all()
+        assert loaded.escalations("root") == store.escalations("root")
 
 
 def test_a_health_change_announces_each_ancestor_whose_rollup_changed(
@@ -235,6 +389,13 @@ def test_the_fixture_is_one_consistent_deterministic_tree():
     assert len(store) == 487
     assert sum(root.descendant_counts.model_dump().values()) == 486
     assert len(root.child_ids) == 6
+    assert root.escalation_count == 4
+    assert [item.node_id for item in store.escalations("root")] == [
+        "data.worker.module-03",
+        "payments.gateway.module-07",
+        "search.storage",
+        "identity",
+    ]
     assert build_fixture_nodes() == build_fixture_nodes()
 
 

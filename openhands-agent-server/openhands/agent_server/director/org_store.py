@@ -1,19 +1,23 @@
 """In-memory org tree.
 
-The store owns the two derived fields on every node (``child_ids`` and
-``descendant_counts``) and is the only thing that emits org events, so every
-subscriber sees one consistent tree.
+The store owns the derived fields on every node (``child_ids``,
+``descendant_counts`` and ``escalation_count``) and is the only thing that
+emits org events, so every subscriber sees one consistent tree.
 """
 
 import threading
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Collection, Iterable
+from dataclasses import dataclass, field
 from typing import get_args
 
 from openhands.agent_server.director.models import (
+    EscalationPathStep,
+    EscalationsEvent,
     HealthCounts,
     NodeHealth,
     NodeRemovedEvent,
     NodeUpsertEvent,
+    OpenEscalation,
     OrgNode,
     OrgNodeInput,
     SnapshotEvent,
@@ -23,8 +27,17 @@ from openhands.sdk.errors import Invalid
 
 NODE_HEALTHS: tuple[NodeHealth, ...] = get_args(NodeHealth)
 
-type OrgChange = NodeUpsertEvent | NodeRemovedEvent
+type OrgChange = NodeUpsertEvent | NodeRemovedEvent | EscalationsEvent
 type OrgListener = Callable[[OrgChange], None]
+
+
+@dataclass
+class _Subscription:
+    focus_id: str
+    # Nodes whose direct reports the subscriber also follows.
+    expanded: frozenset[str]
+    # What the subscriber was last told, to announce only real changes.
+    escalations: list[OpenEscalation] = field(default_factory=list)
 
 
 class OrgStoreError(Invalid):
@@ -42,8 +55,7 @@ class OrgStore:
         self._lock = threading.RLock()
         self._nodes: dict[str, OrgNode] = {}
         self._root_id: str | None = None
-        # Listener -> the node its subscription is focused on.
-        self._listeners: dict[OrgListener, str] = {}
+        self._listeners: dict[OrgListener, _Subscription] = {}
 
     @property
     def root_id(self) -> str | None:
@@ -108,12 +120,15 @@ class OrgStore:
                     f"Parent {parent_id} of node {node_input.id} does not exist"
                 )
 
+            child_ids = existing.child_ids if existing else []
             node = OrgNode(
                 **node_input.model_dump(),
-                child_ids=existing.child_ids if existing else [],
+                child_ids=child_ids,
                 descendant_counts=(
                     existing.descendant_counts if existing else HealthCounts()
                 ),
+                escalation_count=len(node_input.escalations)
+                + sum(self._nodes[c].escalation_count for c in child_ids),
             )
             self._nodes[node.id] = node
             if existing is None:
@@ -129,6 +144,7 @@ class OrgStore:
             # A new child changes its parent's ``child_ids``, so the parent is
             # always re-announced on insert; above that, only changed rollups.
             self._refresh_ancestors(parent_id, always_announce_first=existing is None)
+            self._announce_escalations()
             return node
 
     def remove(self, node_id: str) -> bool:
@@ -168,6 +184,7 @@ class OrgStore:
                     update={"child_ids": [c for c in parent.child_ids if c != node_id]}
                 )
             self._refresh_ancestors(node.parent_id, always_announce_first=True)
+            self._announce_escalations()
             return True
 
     def replace_all(self, inputs: Iterable[OrgNodeInput]) -> None:
@@ -207,27 +224,80 @@ class OrgStore:
         if len(ordered) != len(nodes):
             raise OrgStoreError("The tree contains a cycle")
         for node in reversed(ordered):
-            node.descendant_counts = self._rollup(nodes, node)
+            node.descendant_counts, node.escalation_count = self._rollup(nodes, node)
 
         with self._lock:
             self._nodes = nodes
             self._root_id = root_id
 
-    def snapshot(self, focus_id: str) -> SnapshotEvent | None:
-        """The focused node, its ancestors and its direct reports."""
+    def escalations(self, focus_id: str) -> list[OpenEscalation]:
+        """Every open escalation at or below ``focus_id``.
+
+        Critical issues come first, then the longest waiting.
+        """
+        with self._lock:
+            found: list[OpenEscalation] = []
+            focus = self._nodes.get(focus_id)
+            stack = [] if focus is None else [focus]
+            while stack:
+                node = stack.pop()
+                # The rollup lets whole quiet subtrees be skipped.
+                if node.escalation_count == 0:
+                    continue
+                if node.escalations:
+                    path = [
+                        EscalationPathStep(id=step.id, title=step.title)
+                        for step in (*self.ancestors(node.id), node)
+                    ]
+                    found.extend(
+                        OpenEscalation(node_id=node.id, escalation=e, path=path)
+                        for e in node.escalations
+                    )
+                stack.extend(self._nodes[c] for c in reversed(node.child_ids))
+            found.sort(
+                key=lambda item: (
+                    item.escalation.kind != "critical_issue",
+                    item.escalation.raised_at,
+                )
+            )
+            return found
+
+    def snapshot(
+        self, focus_id: str, expanded: Collection[str] = ()
+    ) -> SnapshotEvent | None:
+        """The focused node, its ancestors, and the direct reports of the
+        focused node and of every node in ``expanded``.
+
+        Unknown ids in ``expanded`` are ignored.
+        """
         with self._lock:
             focus = self._nodes.get(focus_id)
             if focus is None:
                 return None
+            nodes = {
+                node.id: node
+                for node in (
+                    *self.ancestors(focus_id),
+                    focus,
+                    *self.children(focus_id),
+                )
+            }
+            for node_id in expanded:
+                for child in self.children(node_id):
+                    nodes[child.id] = child
             return SnapshotEvent(
                 focus_id=focus_id,
-                nodes=[*self.ancestors(focus_id), focus, *self.children(focus_id)],
+                nodes=list(nodes.values()),
+                escalations=self.escalations(focus_id),
             )
 
     def subscribe(
-        self, focus_id: str, listener: OrgListener
+        self,
+        focus_id: str,
+        listener: OrgListener,
+        expanded: Collection[str] = (),
     ) -> tuple[SnapshotEvent | None, Callable[[], None]]:
-        """Receive changes to the nodes a snapshot of ``focus_id`` contains.
+        """Receive changes to what a snapshot of ``focus_id`` contains.
 
         The snapshot and the subscription are taken together, so no change
         falls between them.
@@ -237,9 +307,11 @@ class OrgStore:
             case nothing is subscribed) and a function that unsubscribes.
         """
         with self._lock:
-            snapshot = self.snapshot(focus_id)
+            snapshot = self.snapshot(focus_id, expanded)
             if snapshot is not None:
-                self._listeners[listener] = focus_id
+                self._listeners[listener] = _Subscription(
+                    focus_id, frozenset(expanded), snapshot.escalations
+                )
 
         def unsubscribe() -> None:
             with self._lock:
@@ -258,14 +330,17 @@ class OrgStore:
         return ordered
 
     @staticmethod
-    def _rollup(nodes: dict[str, OrgNode], node: OrgNode) -> HealthCounts:
+    def _rollup(nodes: dict[str, OrgNode], node: OrgNode) -> tuple[HealthCounts, int]:
+        """The node's ``descendant_counts`` and ``escalation_count``."""
         counts = dict.fromkeys(NODE_HEALTHS, 0)
+        escalation_count = len(node.escalations)
         for child_id in node.child_ids:
             child = nodes[child_id]
             counts[child.health] += 1
             for health in NODE_HEALTHS:
                 counts[health] += getattr(child.descendant_counts, health)
-        return HealthCounts(**counts)
+            escalation_count += child.escalation_count
+        return HealthCounts(**counts), escalation_count
 
     def _refresh_ancestors(
         self, start_id: str | None, *, always_announce_first: bool
@@ -278,10 +353,18 @@ class OrgStore:
         first = True
         while current_id is not None:
             current = self._nodes[current_id]
-            counts = self._rollup(self._nodes, current)
-            changed = counts != current.descendant_counts
+            counts, escalation_count = self._rollup(self._nodes, current)
+            changed = (
+                counts != current.descendant_counts
+                or escalation_count != current.escalation_count
+            )
             if changed:
-                current = current.model_copy(update={"descendant_counts": counts})
+                current = current.model_copy(
+                    update={
+                        "descendant_counts": counts,
+                        "escalation_count": escalation_count,
+                    }
+                )
                 self._nodes[current_id] = current
             if changed or (first and always_announce_first):
                 self._emit(NodeUpsertEvent(node=current), current.id, current.parent_id)
@@ -289,11 +372,26 @@ class OrgStore:
             current_id = current.parent_id
 
     def _emit(self, event: OrgChange, node_id: str, parent_id: str | None) -> None:
-        for listener, focus_id in list(self._listeners.items()):
-            if self._visible_from(focus_id, node_id, parent_id):
+        for listener, subscription in list(self._listeners.items()):
+            if self._visible_to(subscription, node_id, parent_id):
                 listener(event)
 
-    def _visible_from(self, focus_id: str, node_id: str, parent_id: str | None) -> bool:
+    def _visible_to(
+        self, subscription: _Subscription, node_id: str, parent_id: str | None
+    ) -> bool:
+        focus_id = subscription.focus_id
         if node_id == focus_id or parent_id == focus_id:
             return True
+        if parent_id in subscription.expanded:
+            return True
         return any(ancestor.id == node_id for ancestor in self.ancestors(focus_id))
+
+    def _announce_escalations(self) -> None:
+        """Tell each subscriber whose list of escalations just changed."""
+        for listener, subscription in list(self._listeners.items()):
+            if subscription.focus_id not in self._nodes:
+                continue
+            current = self.escalations(subscription.focus_id)
+            if current != subscription.escalations:
+                subscription.escalations = current
+                listener(EscalationsEvent(escalations=current))

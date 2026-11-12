@@ -6,6 +6,7 @@ blackboard that applies to each node. State lives in ``director/``.
 
 import asyncio
 from collections.abc import AsyncIterator
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import StreamingResponse
@@ -59,8 +60,11 @@ def _sse(event: SnapshotEvent | OrgChange) -> str:
         200: {
             "description": (
                 "Server-sent events. The first is a `snapshot` of the focused "
-                "node, its ancestors and its direct reports; `node_upsert` and "
-                "`node_removed` events for those same nodes follow."
+                "node, its ancestors, its direct reports, the direct reports of "
+                "every expanded node, and the open escalations at or below the "
+                "focused node. `node_upsert` and `node_removed` events for "
+                "those same nodes follow, and an `escalations` event carries "
+                "the whole new list whenever it changes."
             ),
             "content": {"text/event-stream": {"schema": {"type": "string"}}},
         },
@@ -74,11 +78,22 @@ async def stream_org_tree(
     node: str | None = Query(
         default=None, description="Node to focus on. Defaults to the root."
     ),
+    expanded: Annotated[
+        list[str] | None,
+        Query(
+            description=(
+                "Nodes whose direct reports to follow as well. Repeat the "
+                "parameter for each one; unknown ids are ignored."
+            ),
+        ),
+    ] = None,
 ) -> StreamingResponse:
-    """Stream one node's neighborhood of the org tree as server-sent events.
+    """Stream the part of the org tree a client has open as server-sent events.
 
-    A client that shows one node at a time subscribes to that node only, so
-    its traffic does not grow with the size of the tree.
+    A client subscribes to the node it shows as the root of its chart plus
+    the nodes it has expanded, so its traffic grows with what is on screen
+    and not with the size of the tree. To expand or collapse a node, open a
+    new stream with the new set.
     """
     store = service.store
     focus_id = node if node is not None else store.root_id
@@ -91,7 +106,7 @@ async def stream_org_tree(
     def on_change(event: OrgChange) -> None:
         loop.call_soon_threadsafe(queue.put_nowait, event)
 
-    snapshot, unsubscribe = store.subscribe(focus_id, on_change)
+    snapshot, unsubscribe = store.subscribe(focus_id, on_change, expanded or ())
     if snapshot is None:
         raise NotFound(f"Unknown node: {focus_id}")
 
