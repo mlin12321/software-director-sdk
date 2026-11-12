@@ -6,6 +6,7 @@ import { HttpClient } from '../client/http-client';
 import { ConversationClient } from '../client/conversation-client';
 import { AgentProfilesClient } from '../client/agent-profiles-client';
 import { FileClient } from '../client/file-client';
+import { DirectorClient } from '../client/director-client';
 import { HooksClient } from '../client/hooks-client';
 import { LLMMetadataClient } from '../client/llm-client';
 import { MCPClient } from '../client/mcp-client';
@@ -95,6 +96,7 @@ export class ConversationManager {
   public readonly workspaces: WorkspacesClient;
   public readonly shared: SharedClient;
   public readonly hooks: HooksClient;
+  public readonly director: DirectorClient;
   public readonly mcp: MCPClient;
   public readonly acp: ACPConversationNamespace;
 
@@ -127,6 +129,7 @@ export class ConversationManager {
     this.workspaces = new WorkspacesClient(clientOptions);
     this.shared = new SharedClient(clientOptions);
     this.hooks = new HooksClient(clientOptions);
+    this.director = new DirectorClient(clientOptions);
     this.mcp = new MCPClient(clientOptions);
     this.acp = new ACPConversationNamespace(this);
   }
@@ -412,6 +415,7 @@ export class ConversationManager {
     this.workspaces.close();
     this.shared.close();
     this.hooks.close();
+    this.director.close();
     this.mcp.close();
     this.client.close();
   }
