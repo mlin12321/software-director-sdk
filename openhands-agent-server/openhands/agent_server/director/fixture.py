@@ -80,7 +80,7 @@ _ESCALATIONS: dict[str, list[Escalation]] = {
             id="pii-in-logs",
             kind="critical_issue",
             title="Export job writes customer emails to debug logs",
-            detail="Found by the reviewer; three attempts to fix it were pruned.",
+            detail="Found in review; three attempts to fix it were pruned.",
             raised_at="2026-11-11T08:20:00Z",
             held_by=None,
             handoffs=[
@@ -130,15 +130,11 @@ class _Wheel:
         return _HEALTH_WHEEL[(self._state >> 16) % len(_HEALTH_WHEEL)]
 
 
-def _pod(*, leaf: bool) -> list[AgentRef]:
-    agents = [
-        AgentRef(role="lead_ic", status="running"),
+def _pod() -> list[AgentRef]:
+    return [
+        AgentRef(role="ic", status="running"),
         AgentRef(role="manager", status="idle"),
-        AgentRef(role="reviewer", status="idle"),
     ]
-    if leaf:
-        agents.append(AgentRef(role="worker", status="running"))
-    return agents
 
 
 def build_fixture_nodes() -> list[OrgNodeInput]:
@@ -153,7 +149,7 @@ def build_fixture_nodes() -> list[OrgNodeInput]:
             isolation="worktree",
             worktree_path=".",
             branch="main",
-            agents=_pod(leaf=False),
+            agents=_pod(),
             health="converging",
             spec_summary="Owns cross-domain contracts and the release plan.",
         )
@@ -173,7 +169,7 @@ def build_fixture_nodes() -> list[OrgNodeInput]:
                 isolation="worktree",
                 worktree_path=f".worktrees/{domain}",
                 branch=f"agents/{domain}",
-                agents=_pod(leaf=False),
+                agents=_pod(),
                 health=wheel.pick(),
                 spec_summary=f"Interface contracts between the {domain} services.",
                 escalations=_ESCALATIONS.get(domain, []),
@@ -195,7 +191,7 @@ def build_fixture_nodes() -> list[OrgNodeInput]:
                     isolation="worktree",
                     worktree_path=f".worktrees/{domain}-{service}",
                     branch=f"agents/{domain}/{service}",
-                    agents=_pod(leaf=False),
+                    agents=_pod(),
                     health=wheel.pick(),
                     spec_summary=f"Implements the {service} service for {domain}.",
                     escalations=_ESCALATIONS.get(service_id, []),
@@ -219,7 +215,7 @@ def build_fixture_nodes() -> list[OrgNodeInput]:
                         isolation="shared",
                         worktree_path=f".worktrees/{domain}-{service}",
                         branch=f"agents/{domain}/{service}",
-                        agents=_pod(leaf=True),
+                        agents=_pod(),
                         health=wheel.pick(),
                         spec_summary=f"Leaf module {index} of {domain}/{service}.",
                         escalations=_ESCALATIONS.get(f"{service_id}.{module}", []),

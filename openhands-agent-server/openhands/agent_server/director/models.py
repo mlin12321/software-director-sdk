@@ -5,7 +5,11 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, Field
 
 
-AgentRole = Literal["lead_ic", "manager", "reviewer", "worker"]
+# A pod has an IC and a Manager, and no other kind of agent. "Lead" and
+# "worker" are not roles: the IC of a team leads it and is at the same time
+# a report of the team above, and it does whatever code work in its boundary
+# no sub-team has taken on. Review is handled outside the pod.
+AgentRole = Literal["ic", "manager"]
 
 NodeHealth = Literal[
     "converging",

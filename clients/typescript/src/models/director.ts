@@ -8,7 +8,11 @@
 
 export type DirectorNodeId = string;
 
-export type DirectorAgentRole = 'lead_ic' | 'manager' | 'reviewer' | 'worker';
+/**
+ * A pod has an IC and a Manager. Whether an IC leads or does the work
+ * depends on the team it is seen from, so neither is a role.
+ */
+export type DirectorAgentRole = 'ic' | 'manager';
 
 export type DirectorNodeHealth =
   'converging' | 'negotiating_split' | 'collision' | 'needs_attention' | 'pruned' | 'done';

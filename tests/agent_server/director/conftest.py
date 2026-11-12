@@ -50,7 +50,7 @@ def make_node(
         isolation="worktree",
         worktree_path=".",
         branch="main",
-        agents=[AgentRef(role="lead_ic", status="idle")],
+        agents=[AgentRef(role="ic", status="idle")],
         health=health,
         escalations=escalations or [],
     )
