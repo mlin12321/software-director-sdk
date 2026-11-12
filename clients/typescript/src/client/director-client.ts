@@ -18,6 +18,8 @@ export interface StreamOrgTreeOptions {
   node?: DirectorNodeId;
   /** Nodes whose direct reports to follow as well. */
   expanded?: readonly DirectorNodeId[];
+  /** Follow every node below `node`, for drawing the whole chart. */
+  full?: boolean;
   /** Abort to stop following. */
   signal?: AbortSignal;
 }
@@ -120,6 +122,7 @@ export class DirectorClient {
     const url = new URL(`${this.host}${DIRECTOR_PATH}/org/tree-stream`);
     if (options.node !== undefined) url.searchParams.set('node', options.node);
     for (const nodeId of options.expanded ?? []) url.searchParams.append('expanded', nodeId);
+    if (options.full) url.searchParams.set('full', 'true');
 
     const headers: Record<string, string> = { Accept: 'text/event-stream' };
     if (this.apiKey) headers['X-Session-API-Key'] = this.apiKey;

@@ -7,6 +7,7 @@ from openhands.agent_server.director.models import (
     AgentRef,
     Boundary,
     Escalation,
+    EscalationHandoff,
     EscalationKind,
     NodeHealth,
     OrgNodeInput,
@@ -60,9 +61,26 @@ def make_escalation(
     *,
     kind: EscalationKind = "design_decision",
     raised_at: str = "2026-11-10T00:00:00Z",
+    passed_up_by: tuple[str, ...] = (),
+    held_by: str | None = None,
 ) -> Escalation:
+    """An escalation that ``passed_up_by`` (nearest node first) each passed up.
+
+    Leave ``held_by`` unset when that is every node above: it then waits on
+    the human.
+    """
     return Escalation(
-        id=escalation_id, kind=kind, title=escalation_id, raised_at=raised_at
+        id=escalation_id,
+        kind=kind,
+        title=escalation_id,
+        raised_at=raised_at,
+        held_by=held_by,
+        handoffs=[
+            EscalationHandoff(
+                node_id=node_id, reason=f"{node_id} could not", at=raised_at
+            )
+            for node_id in passed_up_by
+        ],
     )
 
 

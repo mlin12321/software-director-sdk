@@ -46,14 +46,40 @@ class AgentRef(BaseModel):
     status: str
 
 
+class EscalationHandoff(BaseModel):
+    """A node that tried to settle an escalation, could not, and passed it up."""
+
+    node_id: str
+    reason: str = Field(min_length=1, description="Why this node could not settle it.")
+    at: str = Field(description="ISO 8601 timestamp.")
+
+
 class Escalation(BaseModel):
-    """Something a node cannot settle itself and has sent up to the human."""
+    """Something a node cannot settle itself.
+
+    It goes to the node above, which settles it or passes it up in turn. It
+    waits on the human only once every node above the one that raised it has
+    passed it up.
+    """
 
     id: str = Field(description="Unique within the node that raised it.")
     kind: EscalationKind
     title: str
     detail: str = ""
     raised_at: str = Field(description="ISO 8601 timestamp.")
+    held_by: str | None = Field(
+        description=(
+            "The node whose agents are working on it now: the parent of the "
+            "last node that passed it up. None when it waits on the human."
+        )
+    )
+    handoffs: list[EscalationHandoff] = Field(
+        default_factory=list,
+        description=(
+            "The nodes that passed it up, nearest to the node that raised it "
+            "first. Always the unbroken chain from that node's parent."
+        ),
+    )
 
 
 class HealthCounts(BaseModel):
@@ -87,7 +113,10 @@ class OrgNodeInput(BaseModel):
     spec_summary: str = ""
     escalations: list[Escalation] = Field(
         default_factory=list,
-        description="Open escalations this node raised, oldest first.",
+        description=(
+            "Open escalations this node raised, oldest first, wherever in the "
+            "chain above they are held."
+        ),
     )
 
 
@@ -105,8 +134,8 @@ class OrgNode(OrgNodeInput):
     escalation_count: int = Field(
         default=0,
         description=(
-            "Open escalations on this node and every node below it, so a "
-            "collapsed parent still shows that something below needs the human."
+            "Escalations raised by this node or a node below it that wait on "
+            "the human. Those still held by a node are not counted."
         ),
     )
 
@@ -168,7 +197,7 @@ class EscalationPathStep(BaseModel):
 
 
 class OpenEscalation(BaseModel):
-    """An escalation with the chain of nodes it travelled up."""
+    """An escalation that waits on the human, with the nodes it came up through."""
 
     node_id: str = Field(description="The node that raised it.")
     escalation: Escalation
@@ -181,7 +210,8 @@ class SnapshotEvent(BaseModel):
     """The part of the tree one subscriber follows.
 
     ``nodes`` holds the focused node, its ancestors, its direct reports and
-    the direct reports of every expanded node.
+    the direct reports of every expanded node; or, for a full subscription,
+    the focused node, its ancestors and every node below it.
     """
 
     type: Literal["snapshot"] = "snapshot"
@@ -190,8 +220,9 @@ class SnapshotEvent(BaseModel):
     escalations: list[OpenEscalation] = Field(
         default_factory=list,
         description=(
-            "Every open escalation at or below the focused node, critical "
-            "issues first, then longest waiting first."
+            "Every escalation in the tree that waits on the human, wherever "
+            "the subscriber is focused: critical issues first, then longest "
+            "waiting first."
         ),
     )
 
@@ -211,7 +242,7 @@ class NodeRemovedEvent(BaseModel):
 
 
 class EscalationsEvent(BaseModel):
-    """The open escalations at or below the focused node changed."""
+    """The escalations that wait on the human changed."""
 
     type: Literal["escalations"] = "escalations"
     escalations: list[OpenEscalation] = Field(

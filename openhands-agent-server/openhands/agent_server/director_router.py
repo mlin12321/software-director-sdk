@@ -61,10 +61,11 @@ def _sse(event: SnapshotEvent | OrgChange) -> str:
             "description": (
                 "Server-sent events. The first is a `snapshot` of the focused "
                 "node, its ancestors, its direct reports, the direct reports of "
-                "every expanded node, and the open escalations at or below the "
-                "focused node. `node_upsert` and `node_removed` events for "
-                "those same nodes follow, and an `escalations` event carries "
-                "the whole new list whenever it changes."
+                "every expanded node, and every escalation in the tree that "
+                "waits on the human. `node_upsert` and "
+                "`node_removed` events for those same nodes follow, and an "
+                "`escalations` event carries the whole new list whenever it "
+                "changes."
             ),
             "content": {"text/event-stream": {"schema": {"type": "string"}}},
         },
@@ -87,13 +88,22 @@ async def stream_org_tree(
             ),
         ),
     ] = None,
+    full: Annotated[
+        bool,
+        Query(
+            description=(
+                "Follow every node below the focused one, for a client that "
+                "draws the whole chart."
+            ),
+        ),
+    ] = False,
 ) -> StreamingResponse:
     """Stream the part of the org tree a client has open as server-sent events.
 
     A client subscribes to the node it shows as the root of its chart plus
     the nodes it has expanded, so its traffic grows with what is on screen
     and not with the size of the tree. To expand or collapse a node, open a
-    new stream with the new set.
+    new stream with the new set. `full` follows the whole subtree instead.
     """
     store = service.store
     focus_id = node if node is not None else store.root_id
@@ -106,7 +116,9 @@ async def stream_org_tree(
     def on_change(event: OrgChange) -> None:
         loop.call_soon_threadsafe(queue.put_nowait, event)
 
-    snapshot, unsubscribe = store.subscribe(focus_id, on_change, expanded or ())
+    snapshot, unsubscribe = store.subscribe(
+        focus_id, on_change, expanded or (), full=full
+    )
     if snapshot is None:
         raise NotFound(f"Unknown node: {focus_id}")
 

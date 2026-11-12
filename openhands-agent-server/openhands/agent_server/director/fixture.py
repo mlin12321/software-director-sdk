@@ -1,4 +1,5 @@
-"""A deterministic 487-node org tree with four open escalations.
+"""A deterministic 487-node org tree with four open escalations, one of
+which has reached the human.
 
 Used to develop clients and exercise the event stream before real pods exist.
 No agent in it has a live conversation.
@@ -8,6 +9,7 @@ from openhands.agent_server.director.models import (
     AgentRef,
     Boundary,
     Escalation,
+    EscalationHandoff,
     NodeHealth,
     OrgNodeInput,
 )
@@ -33,8 +35,9 @@ _HEALTH_WHEEL: tuple[NodeHealth, ...] = (
 )
 
 
-# The few things in the tree that wait on the human, by the node that raised
-# them. Everything else an agent team settles on its own.
+# What teams in the tree could not settle themselves, by the node that raised
+# it. Each is held by a node above; only the last has been passed up by every
+# one of them and waits on the human.
 _ESCALATIONS: dict[str, list[Escalation]] = {
     "identity": [
         Escalation(
@@ -46,6 +49,7 @@ _ESCALATIONS: dict[str, list[Escalation]] = {
                 "request; opaque sessions can be revoked immediately."
             ),
             raised_at="2026-11-10T09:12:00Z",
+            held_by="root",
         )
     ],
     "payments.gateway.module-07": [
@@ -58,6 +62,7 @@ _ESCALATIONS: dict[str, list[Escalation]] = {
                 "schema change outside this module's boundary."
             ),
             raised_at="2026-11-11T16:40:00Z",
+            held_by="payments.gateway",
         )
     ],
     "search.storage": [
@@ -67,6 +72,7 @@ _ESCALATIONS: dict[str, list[Escalation]] = {
             title="Keep the v1 index format readable for one more release?",
             detail="Dropping it removes 4 modules; keeping it delays the migration.",
             raised_at="2026-11-09T13:05:00Z",
+            held_by="search",
         )
     ],
     "data.worker.module-03": [
@@ -76,6 +82,34 @@ _ESCALATIONS: dict[str, list[Escalation]] = {
             title="Export job writes customer emails to debug logs",
             detail="Found by the reviewer; three attempts to fix it were pruned.",
             raised_at="2026-11-11T08:20:00Z",
+            held_by=None,
+            handoffs=[
+                EscalationHandoff(
+                    node_id="data.worker",
+                    reason=(
+                        "The logger is shared by every data service; changing "
+                        "it is outside this team's boundary."
+                    ),
+                    at="2026-11-11T09:02:00Z",
+                ),
+                EscalationHandoff(
+                    node_id="data",
+                    reason=(
+                        "The shared logger belongs to the platform domain, "
+                        "which this domain cannot write to."
+                    ),
+                    at="2026-11-11T09:40:00Z",
+                ),
+                EscalationHandoff(
+                    node_id="root",
+                    reason=(
+                        "Logs already shipped contain the emails. Whether to "
+                        "purge them and notify customers is not a call an "
+                        "agent can make."
+                    ),
+                    at="2026-11-11T10:15:00Z",
+                ),
+            ],
         )
     ],
 }

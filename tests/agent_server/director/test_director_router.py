@@ -190,8 +190,9 @@ class TestTreeStream:
         service: DirectorService,
         node: str | None = None,
         expanded: list[str] | None = None,
+        full: bool = False,
     ) -> AsyncIterator[str]:
-        response = await director_router.stream_org_tree(service, node, expanded)
+        response = await director_router.stream_org_tree(service, node, expanded, full)
         assert response.media_type == "text/event-stream"
         body = response.body_iterator
         assert isinstance(body, AsyncIterator)
@@ -268,10 +269,28 @@ class TestTreeStream:
         ]
         assert change["node"]["id"] == "a1"
 
-    async def test_sends_open_escalations_and_each_change_to_them(
+    async def test_a_full_stream_follows_every_node_below_the_focus(
         self, service: DirectorService
     ):
-        service.store.upsert(make_node("a1", "a", escalations=[make_escalation("jwt")]))
+        body = await self.open_stream(service, "a", full=True)
+
+        _, snapshot = await self.next_event(body)
+        service.store.upsert(make_node("deep", "a1"))
+        _, change = await self.next_event(body)
+
+        assert [node["id"] for node in snapshot["nodes"]] == ["root", "a", "a1", "a2"]
+        assert change["node"]["id"] == "deep"
+
+    async def test_sends_what_waits_on_the_human_and_each_change_to_it(
+        self, service: DirectorService
+    ):
+        service.store.upsert(
+            make_node(
+                "a1",
+                "a",
+                escalations=[make_escalation("jwt", passed_up_by=("a", "root"))],
+            )
+        )
         body = await self.open_stream(service)
 
         _, snapshot = await self.next_event(body)
@@ -282,7 +301,9 @@ class TestTreeStream:
         assert snapshot["escalations"] == [
             {
                 "node_id": "a1",
-                "escalation": make_escalation("jwt").model_dump(),
+                "escalation": make_escalation(
+                    "jwt", passed_up_by=("a", "root")
+                ).model_dump(),
                 "path": [
                     {"id": "root", "title": "root"},
                     {"id": "a", "title": "a"},

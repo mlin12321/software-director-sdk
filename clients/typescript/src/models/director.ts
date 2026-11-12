@@ -33,7 +33,20 @@ export interface DirectorAgentRef {
   status: string;
 }
 
-/** Something a node cannot settle itself and has sent up to the human. */
+/** A node that tried to settle an escalation, could not, and passed it up. */
+export interface DirectorEscalationHandoff {
+  node_id: DirectorNodeId;
+  /** Why this node could not settle it. */
+  reason: string;
+  /** ISO 8601 timestamp. */
+  at: string;
+}
+
+/**
+ * Something a node cannot settle itself. It goes to the node above, which
+ * settles it or passes it up in turn; it waits on the human only once every
+ * node above the one that raised it has passed it up.
+ */
 export interface DirectorEscalation {
   /** Unique within the node that raised it. */
   id: string;
@@ -42,6 +55,10 @@ export interface DirectorEscalation {
   detail: string;
   /** ISO 8601 timestamp. */
   raised_at: string;
+  /** The node working on it now; `null` when it waits on the human. */
+  held_by: DirectorNodeId | null;
+  /** The nodes that passed it up, nearest to the one that raised it first. */
+  handoffs: DirectorEscalationHandoff[];
 }
 
 export type DirectorHealthCounts = Record<DirectorNodeHealth, number>;
@@ -58,11 +75,11 @@ export interface DirectorOrgNode {
   agents: DirectorAgentRef[];
   health: DirectorNodeHealth;
   spec_summary: string;
-  /** Open escalations this node raised, oldest first. */
+  /** Open escalations this node raised, wherever above they are held. */
   escalations: DirectorEscalation[];
   /** Health of every node below this one. */
   descendant_counts: DirectorHealthCounts;
-  /** Open escalations on this node and every node below it. */
+  /** Escalations from this node or below that wait on the human. */
   escalation_count: number;
 }
 
@@ -78,7 +95,7 @@ export interface DirectorEscalationPathStep {
   title: string;
 }
 
-/** An escalation with the chain of nodes it travelled up. */
+/** An escalation that waits on the human, with the nodes it came up through. */
 export interface DirectorOpenEscalation {
   /** The node that raised it. */
   node_id: DirectorNodeId;
@@ -115,8 +132,9 @@ export interface DirectorNodeBlackboard {
  * What `GET /api/director/org/tree-stream` sends.
  *
  * A `snapshot` holds the focused node, its ancestors, its direct reports and
- * the direct reports of every expanded node, plus every open escalation at
- * or below the focused node. `node_upsert` and `node_removed` are limited to
+ * the direct reports of every expanded node (or, for a full stream, every
+ * node below the focused one), plus every escalation in the tree that waits
+ * on the human, wherever the stream is focused. `node_upsert` and `node_removed` are limited to
  * those nodes. `escalations` carries the whole new list.
  */
 export type DirectorOrgEvent =

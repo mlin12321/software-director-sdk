@@ -89,7 +89,7 @@ describe('DirectorClient', () => {
         signal: controller.signal,
       })
     );
-    await collect(new DirectorClient({ host: 'http://example.com' }).streamOrgTree());
+    await collect(new DirectorClient({ host: 'http://example.com' }).streamOrgTree({ full: true }));
 
     const [[url, init], [rootUrl, rootInit]] = fetchMock.mock.calls;
     expect(url).toBe(
@@ -97,7 +97,7 @@ describe('DirectorClient', () => {
     );
     expect(init.headers['X-Session-API-Key']).toBe('secret');
     expect(init.signal).toBe(controller.signal);
-    expect(rootUrl).toBe('http://example.com/api/director/org/tree-stream');
+    expect(rootUrl).toBe('http://example.com/api/director/org/tree-stream?full=true');
     expect(rootInit.headers).not.toHaveProperty('X-Session-API-Key');
   });
 

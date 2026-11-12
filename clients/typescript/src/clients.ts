@@ -64,6 +64,7 @@ export type {
   DirectorBoundary,
   DirectorBoundaryMemory,
   DirectorEscalation,
+  DirectorEscalationHandoff,
   DirectorEscalationKind,
   DirectorEscalationPathStep,
   DirectorHealthCounts,

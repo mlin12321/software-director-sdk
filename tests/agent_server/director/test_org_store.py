@@ -17,6 +17,7 @@ from openhands.agent_server.director.org_store import (
     OrgStore,
     OrgStoreError,
 )
+from openhands.sdk.errors import NotFound
 from tests.agent_server.director.conftest import (
     make_escalation,
     make_node,
@@ -106,7 +107,13 @@ class TestEscalations:
             make_node(
                 "a2",
                 "a",
-                escalations=[make_escalation("late", raised_at="2026-11-12T00:00:00Z")],
+                escalations=[
+                    make_escalation(
+                        "late",
+                        raised_at="2026-11-12T00:00:00Z",
+                        passed_up_by=("a", "root"),
+                    )
+                ],
             )
         )
         store.upsert(
@@ -114,11 +121,12 @@ class TestEscalations:
                 "b",
                 "root",
                 escalations=[
-                    make_escalation("early"),
+                    make_escalation("early", passed_up_by=("root",)),
                     make_escalation(
                         "broken",
                         kind="critical_issue",
                         raised_at="2026-11-13T00:00:00Z",
+                        passed_up_by=("root",),
                     ),
                 ],
             )
@@ -144,18 +152,30 @@ class TestEscalations:
         assert store.escalations("a1") == []
         assert store.escalations("missing") == []
 
-    def test_a_snapshot_carries_the_escalations(self, store: OrgStore):
+    def test_a_snapshot_carries_what_waits_on_the_human_anywhere_in_the_tree(
+        self, store: OrgStore
+    ):
         snapshot = store.snapshot("a")
 
         assert snapshot is not None
-        assert [item.escalation.id for item in snapshot.escalations] == ["late"]
+        assert [item.escalation.id for item in snapshot.escalations] == [
+            "broken",
+            "early",
+            "late",
+        ]
 
     def test_raising_and_settling_announce_the_new_list(self, store: OrgStore):
         events = record(store, "a")
 
         store.upsert(
             make_node(
-                "a1", "a", escalations=[make_escalation("new", kind="critical_issue")]
+                "a1",
+                "a",
+                escalations=[
+                    make_escalation(
+                        "new", kind="critical_issue", passed_up_by=("a", "root")
+                    )
+                ],
             )
         )
         store.upsert(make_node("a2", "a"))
@@ -164,18 +184,21 @@ class TestEscalations:
             ("node_upsert", "a1"),
             ("node_upsert", "a"),
             ("node_upsert", "root"),
-            ("escalations", "new,late"),
+            ("escalations", "new,broken,early,late"),
             ("node_upsert", "a2"),
             ("node_upsert", "a"),
             ("node_upsert", "root"),
-            ("escalations", "new"),
+            ("escalations", "new,broken,early"),
         ]
 
     def test_changes_that_leave_the_list_alone_announce_nothing(self, store: OrgStore):
         events = record(store, "a")
 
-        store.upsert(make_node("b", "root"))
         store.upsert(make_node("a1", "a", health="pruned"))
+        # Held by the node above: not the human's business yet.
+        store.upsert(
+            make_node("a1", "a", escalations=[make_escalation("held", held_by="a")])
+        )
 
         assert "escalations" not in [event.type for event in events]
 
@@ -206,6 +229,16 @@ class TestEscalations:
             "a2",
         ]
 
+    def test_only_what_waits_on_the_human_is_listed_and_counted(self, store: OrgStore):
+        store.upsert(
+            make_node("a1", "a", escalations=[make_escalation("held", held_by="a")])
+        )
+
+        root = store.get("root")
+        assert root is not None
+        assert root.escalation_count == 3
+        assert "held" not in [e.escalation.id for e in store.escalations("root")]
+
     def test_escalations_survive_a_save_and_load(self, store: OrgStore, repo: Path):
         board = create_org_board(repo)
         save_org(board, store)
@@ -215,6 +248,169 @@ class TestEscalations:
 
         assert loaded.all() == store.all()
         assert loaded.escalations("root") == store.escalations("root")
+
+
+class TestEscalationChain:
+    """An escalation climbs one node at a time and reaches the human last."""
+
+    def test_a_raised_escalation_goes_to_the_node_above_not_to_the_human(
+        self, store: OrgStore
+    ):
+        events = record(store, "root")
+
+        raised = store.raise_escalation(
+            "a2", "jwt", kind="design_decision", title="JWT or opaque?"
+        )
+
+        root = store.get("root")
+        assert root is not None
+        assert (raised.held_by, raised.handoffs) == ("a", [])
+        assert root.escalation_count == 0
+        assert store.escalations("root") == []
+        assert "escalations" not in [event.type for event in events]
+
+    def test_reaches_the_human_only_after_every_node_above_passed_it_up(
+        self, store: OrgStore
+    ):
+        store.raise_escalation("a2", "jwt", kind="design_decision", title="t")
+        events = record(store, "root")
+
+        first = store.pass_up_escalation("a2", "jwt", reason="  needs b too ")
+        waiting_after_first = store.escalations("root")
+        second = store.pass_up_escalation("a2", "jwt", reason="needs a human")
+
+        assert first.held_by == "root"
+        assert waiting_after_first == []
+        assert second.held_by is None
+        assert [(h.node_id, h.reason) for h in second.handoffs] == [
+            ("a", "needs b too"),
+            ("root", "needs a human"),
+        ]
+        assert [e.escalation.id for e in store.escalations("root")] == ["jwt"]
+        assert {node.id: node.escalation_count for node in store.all()} == {
+            "root": 1,
+            "a": 1,
+            "b": 0,
+            "a1": 0,
+            "a2": 1,
+        }
+        assert describe(events)[-1] == ("escalations", "jwt")
+
+    def test_an_escalation_raised_by_the_root_has_only_the_human_above_it(
+        self, store: OrgStore
+    ):
+        raised = store.raise_escalation(
+            "root", "budget", kind="critical_issue", title="t"
+        )
+
+        assert raised.held_by is None
+        assert [e.escalation.id for e in store.escalations("root")] == ["budget"]
+
+    def test_settling_closes_it_wherever_it_is_held(self, store: OrgStore):
+        store.raise_escalation("a2", "jwt", kind="design_decision", title="t")
+        store.raise_escalation("b", "leak", kind="critical_issue", title="t")
+        store.pass_up_escalation("b", "leak", reason="cannot")
+
+        store.settle_escalation("a2", "jwt")
+        store.settle_escalation("b", "leak")
+
+        assert [node.escalations for node in store.all()] == [[]] * 5
+        assert store.escalations("root") == []
+
+    def test_cannot_be_passed_up_past_the_human_or_without_a_reason(
+        self, store: OrgStore
+    ):
+        store.raise_escalation("b", "leak", kind="critical_issue", title="t")
+
+        with pytest.raises(OrgStoreError, match="needs a reason"):
+            store.pass_up_escalation("b", "leak", reason="   ")
+        store.pass_up_escalation("b", "leak", reason="cannot")
+        with pytest.raises(OrgStoreError, match="already waits on the human"):
+            store.pass_up_escalation("b", "leak", reason="again")
+
+    def test_refuses_a_duplicate_id_and_unknown_nodes_or_escalations(
+        self, store: OrgStore
+    ):
+        store.raise_escalation("b", "leak", kind="critical_issue", title="t")
+
+        with pytest.raises(OrgStoreError, match="already has an escalation"):
+            store.raise_escalation("b", "leak", kind="critical_issue", title="t")
+        with pytest.raises(NotFound):
+            store.raise_escalation("nope", "x", kind="critical_issue", title="t")
+        with pytest.raises(NotFound):
+            store.pass_up_escalation("b", "nope", reason="r")
+        with pytest.raises(NotFound):
+            store.settle_escalation("b", "nope")
+
+    @pytest.mark.parametrize(
+        "escalation",
+        [
+            # Straight to the human.
+            make_escalation("x"),
+            # Skipped its parent.
+            make_escalation("x", passed_up_by=("root",)),
+            # Passed up by its parent but still held by it.
+            make_escalation("x", passed_up_by=("a",), held_by="a"),
+            # Held by a node that is not above it.
+            make_escalation("x", held_by="b"),
+        ],
+        ids=["no-handoffs", "skipped-parent", "wrong-holder", "holder-not-above"],
+    )
+    def test_refuses_an_escalation_that_skipped_a_node_on_its_way_up(
+        self, store: OrgStore, escalation
+    ):
+        before = store.all()
+
+        with pytest.raises(OrgStoreError, match="must be passed up through"):
+            store.upsert(make_node("a2", "a", escalations=[escalation]))
+        with pytest.raises(OrgStoreError, match="must be passed up through"):
+            OrgStore().replace_all(
+                [
+                    *small_tree()[:4],
+                    make_node("a2", "a", escalations=[escalation]),
+                ]
+            )
+
+        assert store.all() == before
+
+
+class TestFullSubscription:
+    def test_a_full_snapshot_holds_every_node_below_the_focus(self, store: OrgStore):
+        whole = store.snapshot("root", full=True)
+        below_a = store.snapshot("a", full=True)
+
+        assert whole is not None and below_a is not None
+        assert [node.id for node in whole.nodes] == ["root", "a", "b", "a1", "a2"]
+        assert [node.id for node in below_a.nodes] == ["root", "a", "a1", "a2"]
+
+    def test_a_full_subscriber_hears_about_every_node_below_its_focus(
+        self, store: OrgStore
+    ):
+        events: list[OrgChange] = []
+        store.subscribe("a", events.append, full=True)
+
+        store.upsert(make_node("deep", "a1"))
+        store.upsert(make_node("deeper", "deep"))
+        store.upsert(make_node("elsewhere", "b"))
+        store.remove("deep")
+
+        assert describe(events) == [
+            ("node_upsert", "deep"),
+            ("node_upsert", "a1"),
+            ("node_upsert", "a"),
+            ("node_upsert", "root"),
+            ("node_upsert", "deeper"),
+            ("node_upsert", "deep"),
+            ("node_upsert", "a1"),
+            ("node_upsert", "a"),
+            ("node_upsert", "root"),
+            ("node_upsert", "root"),
+            ("node_removed", "deeper"),
+            ("node_removed", "deep"),
+            ("node_upsert", "a1"),
+            ("node_upsert", "a"),
+            ("node_upsert", "root"),
+        ]
 
 
 def test_a_health_change_announces_each_ancestor_whose_rollup_changed(
@@ -389,12 +585,12 @@ def test_the_fixture_is_one_consistent_deterministic_tree():
     assert len(store) == 487
     assert sum(root.descendant_counts.model_dump().values()) == 486
     assert len(root.child_ids) == 6
-    assert root.escalation_count == 4
+    # Four are open; three are still held by a node above the one that
+    # raised them.
+    assert sum(len(node.escalations) for node in store.all()) == 4
+    assert root.escalation_count == 1
     assert [item.node_id for item in store.escalations("root")] == [
-        "data.worker.module-03",
-        "payments.gateway.module-07",
-        "search.storage",
-        "identity",
+        "data.worker.module-03"
     ]
     assert build_fixture_nodes() == build_fixture_nodes()
 
