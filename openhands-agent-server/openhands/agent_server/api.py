@@ -59,6 +59,8 @@ from openhands.agent_server.dependencies import (
     check_session_api_key,
     check_workspace_session,
 )
+from openhands.agent_server.director import DirectorService
+from openhands.agent_server.director_router import director_router
 from openhands.agent_server.errors import status_for
 from openhands.agent_server.experimental_features_router import (
     experimental_features_router,
@@ -659,6 +661,7 @@ def _add_api_routes(app: FastAPI) -> None:
     api_router.include_router(plugins_router)
     api_router.include_router(canvas_extensions_router)
     api_router.include_router(hooks_router)
+    api_router.include_router(director_router)
     api_router.include_router(llm_router)
     api_router.include_router(acp_router)
     api_router.include_router(provider_connections_router)
@@ -952,6 +955,7 @@ def create_app(config: Config | None = None) -> FastAPI:
     app.state.conversation_registry = create_conversation_registry(config)
     app.state.canvas_extension_backend_manager = CanvasExtensionBackendManager()
     app.state.app_backend_session_store = AppBackendSessionStore()
+    app.state.director_service = DirectorService.from_config(config)
 
     _add_api_routes(app)
     _setup_static_files(app, config)

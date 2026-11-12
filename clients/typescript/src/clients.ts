@@ -12,6 +12,7 @@ export { ServerClient } from './client/server-client';
 export { BashClient } from './client/bash-client';
 export { CanvasExtensionsClient } from './client/canvas-extensions-client';
 export { ConversationClient } from './client/conversation-client';
+export { DirectorClient } from './client/director-client';
 export { FileClient } from './client/file-client';
 export { HooksClient } from './client/hooks-client';
 export { GitClient } from './client/git-client';
@@ -55,6 +56,28 @@ export type {
   CreateConversationPayload,
   SendConversationEventOptions,
 } from './client/conversation-client';
+export type { DirectorClientOptions, StreamOrgTreeOptions } from './client/director-client';
+export type {
+  DirectorAgentRef,
+  DirectorAgentRole,
+  DirectorAutopsy,
+  DirectorBoundary,
+  DirectorBoundaryMemory,
+  DirectorEscalation,
+  DirectorEscalationHandoff,
+  DirectorEscalationKind,
+  DirectorEscalationPathStep,
+  DirectorStatusCounts,
+  DirectorInheritedSpec,
+  DirectorIsolationMode,
+  DirectorNodeBlackboard,
+  DirectorNodeStatus,
+  DirectorNodeId,
+  DirectorOpenEscalation,
+  DirectorOrgEvent,
+  DirectorOrgNode,
+  DirectorOrgNodeDetail,
+} from './models/director';
 export type { FileClientOptions, FileUploadContent } from './client/file-client';
 export type { HooksClientOptions } from './client/hooks-client';
 export type { GitClientOptions, SearchRepositoriesOptions } from './client/git-client';
