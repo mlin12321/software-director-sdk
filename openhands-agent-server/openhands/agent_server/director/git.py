@@ -69,3 +69,15 @@ def is_git_repository(repo_dir: Path) -> bool:
     except (GitError, OSError):
         return False
     return True
+
+
+def enclosing_repository(repo_dir: Path) -> Path | None:
+    """The checkout that has the repository of ``repo_dir`` as a submodule.
+
+    None when there is none, or when it cannot be read.
+    """
+    try:
+        top = git(repo_dir, ["rev-parse", "--show-superproject-working-tree"]).strip()
+    except (GitError, OSError):
+        return None
+    return Path(top) if top else None

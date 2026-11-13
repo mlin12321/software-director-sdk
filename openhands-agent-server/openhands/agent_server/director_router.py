@@ -229,9 +229,12 @@ async def route_message(
     """Say something to the org from a directory of the repository.
 
     The message goes to the IC of the nearest team: the search starts at
-    `path` and moves up one directory at a time until it reaches a directory
-    a team owns, skipping a team whose IC is gone or that may only read
-    `path`. The root team takes what no team below it does.
+    `path` (by default the directory the server was started for) and moves
+    up one directory at a time until it reaches a directory a team owns,
+    skipping a team whose IC is gone or that may only read `path`. The root
+    team takes what no team below it does. A server started in a git
+    submodule that has no org of its own searches on through the repository
+    that has the submodule.
 
     When there is no org yet, the message starts one: the root team is
     briefed with it as its task and named by a model that summarizes it.

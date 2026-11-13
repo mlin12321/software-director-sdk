@@ -20,7 +20,12 @@ from openhands.agent_server.director.boundary import (
     written_paths,
 )
 from openhands.agent_server.director.fixture import build_fixture_nodes
-from openhands.agent_server.director.git import GitError, git, is_git_repository
+from openhands.agent_server.director.git import (
+    GitError,
+    enclosing_repository,
+    git,
+    is_git_repository,
+)
 from openhands.agent_server.director.git_blackboard import SPEC_FILE, GitBlackboard
 from openhands.agent_server.director.headline import provisional_summary
 from openhands.agent_server.director.models import (
@@ -138,6 +143,10 @@ def _is_in(path: Path, directory: Path) -> bool:
 class DirectorService:
     """Owns the org tree and the blackboard of one repository.
 
+    That is the repository of the directory the server was started for,
+    unless that one has no org and is a submodule of a repository that has:
+    the director then joins the org of the nearest such repository above.
+
     Nothing is read from disk until the tree or the blackboard is first used,
     so creating the service is free for servers that never use the director.
 
@@ -166,6 +175,8 @@ class DirectorService:
             find_sandbox: Returns the bubblewrap binary to confine the
                 agents' shells with, or None to leave them unconfined.
         """
+        self._directory = repo_dir
+        # Where the org is; moves up when the store is loaded from above.
         self._repo_dir = repo_dir
         self._fixture = fixture
         self._worktree_root = worktree_root
@@ -209,6 +220,7 @@ class DirectorService:
         Raises:
             Unavailable: The director's directory is not a git repository.
         """
+        _ = self.store  # settles which repository the org is in
         if not is_git_repository(self._repo_dir):
             raise Unavailable(
                 f"The director has no blackboard: {self._repo_dir} is not a git "
@@ -222,6 +234,7 @@ class DirectorService:
             root_id=store.root_id,
             node_count=len(store),
             repo_path=str(self._repo_dir),
+            directory=self._home(),
             is_git_repository=is_git_repository(self._repo_dir),
             fixture=self._fixture,
             boundary_enforcement="sandbox" if self._bwrap else "checks",
@@ -367,8 +380,8 @@ class DirectorService:
         Without an org the message starts one and becomes its task.
 
         Raises:
-            Unprocessable: The path is outside the repository, or there is no
-                org and the request does not say how to start one.
+            Unprocessable: The path is outside the org's repository, or there
+                is no org and the request does not say how to start one.
             Conflict: No team of the org can take the message.
             Unavailable: The director is not running.
         """
@@ -388,7 +401,13 @@ class DirectorService:
                 conversation_id=agent_conversation(root, "ic") or "",
                 started_org=True,
             )
-        path = await asyncio.to_thread(self._repo_relative, request.path or "")
+        path = await asyncio.to_thread(
+            lambda: (
+                self._home()
+                if request.path is None
+                else self._repo_relative(request.path)
+            )
+        )
         node = nearest_team(store.all(), path, lost=AGENT_LOST)
         conversation_id = agent_conversation(node, "ic") if node else None
         if node is None or conversation_id is None:
@@ -498,6 +517,13 @@ class DirectorService:
         ]
         return [Path(os.path.realpath(root)) for root in roots]
 
+    def _home(self) -> str:
+        """The directory the server was started for, relative to the org's
+        repository; '' when it is not below its root."""
+        home = Path(os.path.realpath(self._directory))
+        top = _checkout_root(str(self._repo_dir))
+        return home.relative_to(top).as_posix() if top in home.parents else ""
+
     def _repo_relative(self, path: str) -> str:
         """``path`` as a clean path relative to the repository.
 
@@ -567,10 +593,13 @@ class DirectorService:
             store.replace_all(build_fixture_nodes())
             logger.info("Director serving the fixture tree (%d nodes)", len(store))
             return store
-        if is_git_repository(self._repo_dir) and load_org(
-            create_org_board(self._repo_dir), store
-        ):
-            logger.info("Director loaded %d nodes from %s", len(store), self._repo_dir)
+        repository: Path | None = self._directory
+        while repository is not None and is_git_repository(repository):
+            if load_org(create_org_board(repository), store):
+                self._repo_dir = repository
+                logger.info("Director loaded %d nodes from %s", len(store), repository)
+                break
+            repository = enclosing_repository(repository)
         store.on_change(self._schedule_save)
         if self._loop is not None:
             self._enqueue(self._resync)

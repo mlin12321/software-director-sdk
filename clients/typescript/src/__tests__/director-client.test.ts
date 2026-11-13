@@ -45,6 +45,7 @@ describe('DirectorClient', () => {
       root_id: null,
       node_count: 0,
       repo_path: '/repo',
+      directory: '',
       is_git_repository: true,
       fixture: false,
       boundary_enforcement: 'sandbox',

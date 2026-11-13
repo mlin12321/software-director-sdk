@@ -1,5 +1,6 @@
 """DirectorService running an org through a launcher."""
 
+import subprocess
 from collections.abc import AsyncIterator
 from pathlib import Path
 from types import SimpleNamespace
@@ -665,6 +666,86 @@ async def test_a_message_from_outside_the_repository_is_refused(
 
     with pytest.raises(Unprocessable):
         await service.route_message(RouteMessageRequest(text="Hello", path=path))
+
+
+async def test_a_server_in_a_submodule_joins_the_org_of_the_repository_above(
+    repo: Path, submodule: Path, launcher: FakeLauncher
+):
+    above = DirectorService(repo, save_delay=0)
+    await above.start(launcher)
+    await above.create_org(org_request(repo))
+    await above.settled()
+    await split_root(above, SplitChild(title="Libraries", path="libs", task="Libs"))
+    await above.aclose()
+
+    service = DirectorService(submodule, save_delay=0)
+    await service.start(launcher)
+    try:
+        summary = service.summary()
+        from_here = await service.route_message(RouteMessageRequest(text="Refunds"))
+        by_path = await service.route_message(
+            RouteMessageRequest(text="Refunds", path=str(submodule / "src"))
+        )
+        further_up = await service.route_message(
+            RouteMessageRequest(text="Refunds", path="docs")
+        )
+        await service.settled()
+    finally:
+        await service.aclose()
+
+    assert (summary.repo_path, summary.directory) == (str(repo), "libs/payments")
+    assert (from_here.node_id, by_path.node_id, further_up.node_id) == (
+        "libs",
+        "libs",
+        "root",
+    )
+    assert launcher.messages_to(from_here.conversation_id) == [
+        "Refunds\n\n(The human sent this from libs/payments.)",
+        "Refunds\n\n(The human sent this from libs/payments/src.)",
+    ]
+    with pytest.raises(subprocess.CalledProcessError):
+        run_git(submodule, "rev-parse", "--verify", "--quiet", ORG_REF)
+
+
+async def test_a_submodule_with_an_org_of_its_own_keeps_it(
+    repo: Path, submodule: Path, launcher: FakeLauncher
+):
+    for directory in (submodule, repo):
+        service = DirectorService(directory, save_delay=0)
+        await service.start(launcher)
+        await service.create_org(org_request(directory))
+        await service.settled()
+        await service.aclose()
+
+    service = DirectorService(submodule, save_delay=0)
+
+    assert (service.summary().repo_path, service.summary().directory) == (
+        str(submodule),
+        "",
+    )
+    assert team(service, "root").worktree_path == str(submodule)
+
+
+async def test_the_first_message_in_a_submodule_starts_its_org_there_when_none_is_above(
+    repo: Path, submodule: Path, launcher: FakeLauncher
+):
+    service = DirectorService(submodule, save_delay=0)
+    await service.start(launcher)
+    try:
+        routed = await service.route_message(
+            RouteMessageRequest(
+                text="Add refunds", conversation=root_conversation(submodule)
+            )
+        )
+        await service.settled()
+    finally:
+        await service.aclose()
+
+    assert routed.started_org
+    assert service.summary().repo_path == str(submodule)
+    assert run_git(submodule, "rev-parse", ORG_REF).strip()
+    with pytest.raises(subprocess.CalledProcessError):
+        run_git(repo, "rev-parse", "--verify", "--quiet", ORG_REF)
 
 
 @pytest.fixture

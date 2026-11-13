@@ -49,8 +49,8 @@ export interface CreateOrgRequest {
 export interface RouteMessageRequest {
   text: string;
   /**
-   * The directory the message is about: repo-relative, or absolute inside
-   * the director's `repo_path`. Defaults to the repository root.
+   * The directory the message is about: relative to the org's `repo_path`,
+   * or absolute inside it. Defaults to the org summary's `directory`.
    */
   path?: string;
   /**

@@ -241,7 +241,20 @@ class OrgSummary(BaseModel):
 
     root_id: str | None = Field(description="None when no org has been started.")
     node_count: int
-    repo_path: str = Field(description="The directory the org works in.")
+    repo_path: str = Field(
+        description=(
+            "The directory the org works in. When the server was started in a "
+            "git submodule that has no org, this is the nearest repository "
+            "above it that has one."
+        )
+    )
+    directory: str = Field(
+        description=(
+            "The directory the server was started for, relative to "
+            "`repo_path`; '' when they are the same. A message to the org "
+            "that names no path is taken to come from here."
+        )
+    )
     is_git_repository: bool = Field(
         description="An org can only be started in a git repository."
     )
@@ -286,8 +299,10 @@ class RouteMessageRequest(BaseModel):
     path: str | None = Field(
         default=None,
         description=(
-            "The directory the message is about: repo-relative, or absolute "
-            "inside the director's directory. Defaults to the repository root."
+            "The directory the message is about: relative to the org's "
+            "`repo_path`, or absolute inside it (a submodule's directory is "
+            "inside the repository that has the submodule). Defaults to the "
+            "org summary's `directory`."
         ),
     )
     conversation: StartConversationRequest | None = Field(

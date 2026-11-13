@@ -396,6 +396,7 @@ def test_the_summary_says_there_is_no_org_yet_and_where_one_would_work(repo: Pat
         "root_id": None,
         "node_count": 0,
         "repo_path": str(repo),
+        "directory": "",
         "is_git_repository": True,
         "fixture": False,
         "boundary_enforcement": "checks",

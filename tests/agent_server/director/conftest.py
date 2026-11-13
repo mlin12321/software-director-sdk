@@ -55,6 +55,26 @@ def repo(tmp_path: Path) -> Path:
     return path
 
 
+@pytest.fixture
+def submodule(repo: Path, tmp_path: Path) -> Path:
+    """A repository checked out as the submodule ``libs/payments`` of ``repo``."""
+    source = tmp_path / "payments"
+    source.mkdir()
+    run_git(source, "init", "--quiet", "--initial-branch=main")
+    run_git(source, "config", "user.name", "Test")
+    run_git(source, "config", "user.email", "test@example.invalid")
+    (source / "charge.py").write_text("amount = 1\n")
+    run_git(source, "add", "charge.py")
+    run_git(source, "commit", "--quiet", "-m", "init")
+    run_git(
+        repo,
+        *("-c", "protocol.file.allow=always"),
+        *("submodule", "--quiet", "add", str(source), "libs/payments"),
+    )
+    run_git(repo, "commit", "--quiet", "-m", "add payments")
+    return repo / "libs" / "payments"
+
+
 def make_node(
     node_id: str,
     parent_id: str | None,
