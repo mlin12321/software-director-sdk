@@ -654,10 +654,14 @@ class ResolveMergeRequest(BaseModel):
 class StartAgainRequest(BaseModel):
     """How to start a team whose agents have no conversation here."""
 
-    conversation: StartConversationRequest = Field(
+    conversation: StartConversationRequest | None = Field(
+        default=None,
         description=(
             "How to start the team's IC. Its workspace is replaced by the "
-            "team's own checkout; the team's Manager is derived from it."
+            "team's own checkout; the team's Manager is derived from it. "
+            "Without one the IC is started like the IC of the team above, or "
+            "from the team's own agent profile, which needs the team above "
+            "to have its IC here."
         ),
     )
 
@@ -804,6 +808,13 @@ class SnapshotEvent(BaseModel):
     type: Literal["snapshot"] = "snapshot"
     focus_id: str
     nodes: list[OrgNode]
+    paused: PauseReason | None = Field(
+        default=None, description="Why the org is paused; null while it runs."
+    )
+    merging: bool = Field(
+        default=False,
+        description="A pull stopped on conflicts and waits for choices.",
+    )
     escalations: list[OpenEscalation] = Field(
         default_factory=list,
         description=(
@@ -826,6 +837,21 @@ class NodeRemovedEvent(BaseModel):
 
     type: Literal["node_removed"] = "node_removed"
     id: str
+
+
+class OrgStateEvent(BaseModel):
+    """Whether the org is paused, and whether a pull waits for choices.
+
+    Sent whenever either changes; the snapshot has them as they were.
+    """
+
+    type: Literal["org_state"] = "org_state"
+    paused: PauseReason | None = Field(
+        description="Why the org is paused; null while it runs."
+    )
+    merging: bool = Field(
+        description="A pull stopped on conflicts and waits for choices."
+    )
 
 
 class EscalationsEvent(BaseModel):

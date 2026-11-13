@@ -30,6 +30,7 @@ from openhands.agent_server.director.models import (
     OrgMerge,
     OrgNode,
     OrgNodeDetail,
+    OrgStateEvent,
     OrgSummary,
     OrgSync,
     OrgSyncRequest,
@@ -113,7 +114,7 @@ def _require_node(service: DirectorService, node_id: str) -> OrgNode:
     return node
 
 
-def _sse(event: SnapshotEvent | OrgChange) -> str:
+def _sse(event: SnapshotEvent | OrgChange | OrgStateEvent) -> str:
     return f"event: {event.type}\ndata: {event.model_dump_json()}\n\n"
 
 
@@ -129,7 +130,9 @@ def _sse(event: SnapshotEvent | OrgChange) -> str:
                 "waits on the human. `node_upsert` and "
                 "`node_removed` events for those same nodes follow, and an "
                 "`escalations` event carries the whole new list whenever it "
-                "changes."
+                "changes. The snapshot says whether the org is paused and "
+                "whether a pull waits for choices; an `org_state` event "
+                "follows whenever either changes."
             ),
             "content": {"text/event-stream": {"schema": {"type": "string"}}},
         },
@@ -176,9 +179,9 @@ async def stream_org_tree(
         raise NotFound("The org tree is empty")
 
     loop = asyncio.get_running_loop()
-    queue: asyncio.Queue[OrgChange] = asyncio.Queue()
+    queue: asyncio.Queue[OrgChange | OrgStateEvent] = asyncio.Queue()
 
-    def on_change(event: OrgChange) -> None:
+    def on_change(event: OrgChange | OrgStateEvent) -> None:
         loop.call_soon_threadsafe(queue.put_nowait, event)
 
     snapshot, unsubscribe = store.subscribe(
@@ -186,10 +189,16 @@ async def stream_org_tree(
     )
     if snapshot is None:
         raise NotFound(f"Unknown node: {focus_id}")
+    unwatch = service.watch_state(on_change)
+    state = await asyncio.to_thread(service.state)
 
     async def events() -> AsyncIterator[str]:
         try:
-            yield _sse(snapshot)
+            yield _sse(
+                snapshot.model_copy(
+                    update={"paused": state.paused, "merging": state.merging}
+                )
+            )
             while True:
                 try:
                     event = await asyncio.wait_for(
@@ -201,6 +210,7 @@ async def stream_org_tree(
                 yield _sse(event)
         finally:
             unsubscribe()
+            unwatch()
 
     return StreamingResponse(
         events(),

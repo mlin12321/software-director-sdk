@@ -455,6 +455,42 @@ async def test_a_team_without_agents_here_is_started_again_on_its_work(
     await there.aclose()
 
 
+async def test_a_lost_team_is_started_again_like_the_ic_above_in_its_own_checkout(
+    repo: Path, launcher: FakeLauncher, remote: Path, tmp_path: Path
+):
+    here, there = await an_org_on_two_machines(repo, launcher, remote, tmp_path)
+    clone = Path(node(there, "root").worktree_path)
+    fake = there._require_launcher()
+    assert isinstance(fake, FakeLauncher)
+
+    with pytest.raises(Conflict, match="top of the org"):
+        await there.start_again("root", StartAgainRequest())
+    with pytest.raises(Conflict, match="Start that team again first"):
+        await there.start_again(API, StartAgainRequest())
+    assert {agent.status for agent in node(there, API).agents} == {AGENT_LOST}
+
+    await there.start_again(
+        "root", StartAgainRequest(conversation=root_conversation(clone))
+    )
+    await there.settled()
+    before = len(fake.derived)
+    await there.start_again(API, StartAgainRequest())
+    await there.settled()
+
+    team, manager = fake.derived[before:]
+    assert (team.title, manager.title) == ("API (IC)", "API (Manager)")
+    assert str(team.parent_id) == ic(there) and str(team.conversation_id) == ic(
+        there, API
+    )
+    assert team.checkout == node(there, API).worktree_path
+    assert "worked on before" in team.task
+    assert str(manager.parent_id) == ic(there, API)
+    assert {agent.status for agent in node(there, API).agents} != {AGENT_LOST}
+    assert node(there, API).branch == node(here, API).branch
+    await here.aclose()
+    await there.aclose()
+
+
 async def test_a_message_with_a_conversation_starts_the_nearest_lost_team_again(
     repo: Path, launcher: FakeLauncher, remote: Path, tmp_path: Path
 ):

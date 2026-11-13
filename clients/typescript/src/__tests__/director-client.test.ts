@@ -212,6 +212,7 @@ describe('DirectorClient', () => {
     await client.resolveMerge({ choices: { 'field:api:headline': 'theirs' }, rest: 'mine' });
     await client.abortMerge();
     await client.pushOrg('upstream');
+    await client.startAgain('services.api');
 
     const calls = fetchMock.mock.calls.map(
       ([url, init]) => `${init.method} ${url} ${init.body ?? ''}`
@@ -222,6 +223,7 @@ describe('DirectorClient', () => {
       'POST http://example.com/api/director/org/merge/resolve {"choices":{"field:api:headline":"theirs"},"rest":"mine"}',
       'POST http://example.com/api/director/org/merge/abort ',
       'POST http://example.com/api/director/org/push {"remote":"upstream"}',
+      'POST http://example.com/api/director/org/nodes/services.api/start_again {}',
     ]);
     expect(pulled).toEqual(sync);
   });

@@ -66,6 +66,7 @@ from openhands.agent_server.director.models import (
     OrgMerge,
     OrgNode,
     OrgNodeInput,
+    OrgStateEvent,
     OrgSummary,
     OrgSync,
     PauseReason,
@@ -339,6 +340,7 @@ class DirectorService:
         self._run: RunState | None = None
         self._run_of: Path | None = None
         self._paused: PauseReason | None = None
+        self._state_listeners: list[Callable[[OrgStateEvent], None]] = []
         # The intents and messages being carried out right now, so that
         # resuming does not carry one out a second time.
         self._in_flight: set[int] = set()
@@ -435,6 +437,43 @@ class DirectorService:
                 "repository. Point OH_DIRECTOR_REPO_PATH at one."
             )
         return GitBlackboard(self._repo_dir)
+
+    def state(self) -> OrgStateEvent:
+        """Whether the org is paused or in the middle of a merge."""
+        run = self._runs()
+        return OrgStateEvent(paused=self._paused, merging=run.get("merge") is not None)
+
+    def watch_state(
+        self, listener: Callable[[OrgStateEvent], None]
+    ) -> Callable[[], None]:
+        """Call ``listener`` whenever the org is paused, resumed, or begins
+        or ends a merge. It may be called from any thread.
+
+        Returns:
+            A function that stops the calls.
+        """
+        with self._lock:
+            self._state_listeners.append(listener)
+
+        def unwatch() -> None:
+            with self._lock:
+                if listener in self._state_listeners:
+                    self._state_listeners.remove(listener)
+
+        return unwatch
+
+    def _announce_state(self) -> None:
+        with self._lock:
+            listeners = list(self._state_listeners)
+        if not listeners:
+            return
+        state = self.state()
+        for listener in listeners:
+            listener(state)
+
+    def _set_merge(self, state: dict[str, Any] | None) -> None:
+        self._runs().put("merge", json.dumps(state) if state is not None else None)
+        self._announce_state()
 
     def summary(self) -> OrgSummary:
         store = self.store
@@ -1221,7 +1260,7 @@ class DirectorService:
             state = self._merging()
             if state is None:
                 raise Conflict("No merge waits for choices")
-            self._runs().put("merge", None)
+            self._set_merge(None)
             if state["resume"]:
                 await self.resume()
             return OrgSync(
@@ -1234,13 +1273,16 @@ class DirectorService:
         """Start afresh a team whose agents have no conversation on this
         server, on the work its branch has.
 
-        The team's IC starts as the given conversation, in the team's own
-        checkout, and is briefed from the team's spec and last headline; its
-        Manager is derived from it.
+        The team's IC starts in the team's own checkout and is briefed from
+        the team's spec and last headline; its Manager is derived from it.
+        The IC starts as the given conversation, or without one like the IC
+        of the team above (from the team's own agent profile if it has one).
 
         Raises:
             NotFound: There is no such team.
-            Conflict: The team is done, or its IC has a conversation here.
+            Conflict: The team is done, its IC has a conversation here, or
+                no conversation was given and the team above has no IC here
+                to start it like.
             Unavailable: The director is not running.
         """
         launcher = self._require_launcher()
@@ -1253,10 +1295,33 @@ class DirectorService:
         ic = agent_conversation(node, "ic")
         if ic is not None and await launcher.started(UUID(ic)) is not None:
             raise Conflict(f"The IC of team {node.title} has a conversation here")
+        conversation = request.conversation
+        if conversation is None:
+            above = store.get(node.parent_id) if node.parent_id else None
+            if above is None:
+                raise Conflict(
+                    f"Team {node.title} is the top of the org: it is started "
+                    "again by a conversation started in its folder"
+                )
+            above_ic = agent_conversation(above, "ic")
+            if above_ic is None or await launcher.started(UUID(above_ic)) is None:
+                raise Conflict(
+                    f"Team {above.title} above it has no IC here. Start that "
+                    "team again first."
+                )
         await asyncio.to_thread(restore_worktrees, self._repo_dir, [node], self._home())
         ic_id = uuid4()
         task = await asyncio.to_thread(self._task_of, node)
-        conversation = request.conversation
+        if conversation is None:
+            store.update_node(node_id, agents=_new_pod(ic_id), status="idle")
+            self._begin(
+                "start_team",
+                node_id,
+                task=task,
+                parent=node.parent_id,
+                checkout=node.worktree_path,
+            )
+            return store.get(node_id) or node
         additions = conversation.agent_launch_additions or AgentLaunchAdditions()
         suffix = "\n\n".join(
             part
@@ -1367,12 +1432,11 @@ class DirectorService:
 
     async def _merge(self, state: dict[str, Any]) -> OrgSync:
         """Carry a merge as far as its choices allow."""
-        run = self._runs()
         outcome = await asyncio.to_thread(self._weigh, state, True)
         if outcome.result == "conflicts":
-            run.put("merge", json.dumps(state))
+            self._set_merge(state)
             return outcome
-        run.put("merge", None)
+        self._set_merge(None)
         await self._resync()
         store = self.store
         for branch in outcome.branches:
@@ -1530,12 +1594,14 @@ class DirectorService:
     def _hold(self, reason: PauseReason) -> None:
         self._runs().put("paused", reason)
         self._paused = reason
+        self._announce_state()
 
     def _release(self) -> None:
         run = self._runs()
         run.put("paused", None)
         run.put("dropped", None)
         self._paused = None
+        self._announce_state()
 
     def _dropped(self) -> list[RecoveryItem]:
         kept = self._runs().get("dropped")
@@ -1567,6 +1633,7 @@ class DirectorService:
         if run.get("paused") is None:
             # Nothing that was left is this server's to take up.
             self._paused = None
+            self._announce_state()
         if dropped:
             run.put(
                 "dropped",
@@ -1878,6 +1945,11 @@ class DirectorService:
             logger.exception("A director action failed")
             run.finish(intent.id)
         else:
+            if intent.kind in _SAVED_BEFORE_FORGOTTEN:
+                # What it changed in the tree is saved before it is
+                # forgotten: a server that ends in between does the step
+                # again, never loses it.
+                await self._save()
             run.finish(intent.id)
         finally:
             self._in_flight.discard(intent.id)
@@ -2133,8 +2205,13 @@ class DirectorService:
         role: AgentRole,
         parent_conversation: str | None,
         task: str,
+        checkout: str | None = None,
     ) -> bool:
         """Start one agent of a node from ``parent_conversation``.
+
+        Args:
+            checkout: The team's checkout when it has one already and the
+                agent is to work on in it.
 
         Returns:
             Whether it runs. A failure is recorded on the node.
@@ -2149,7 +2226,7 @@ class DirectorService:
             started = await launcher.started(UUID(conversation_id))
             if started is None:
                 started = await self._start_new(
-                    node, role, conversation_id, parent_conversation, task
+                    node, role, conversation_id, parent_conversation, task, checkout
                 )
                 if self._paused is not None:
                     self._note_running(conversation_id, node_id, True)
@@ -2181,6 +2258,7 @@ class DirectorService:
         conversation_id: str,
         parent_conversation: str | None,
         task: str,
+        checkout: str | None = None,
     ) -> StartedAgent:
         """Start the conversation of an agent that has none yet.
 
@@ -2224,6 +2302,7 @@ class DirectorService:
                     suffixes=[POD_PROTOCOL],
                     tool_params=tool_params,
                     adapt_agent=adapt,
+                    checkout=checkout,
                 )
             return await launcher.start_derived(
                 parent_id,
@@ -2234,6 +2313,7 @@ class DirectorService:
                 suffixes=[] if role == "ic" else [MANAGER_ROLE],
                 tool_params=tool_params,
                 adapt_agent=adapt,
+                checkout=checkout,
             )
 
         return await self._when_there_is_room(node_id, start)
@@ -2257,7 +2337,8 @@ class DirectorService:
         node_id, task = intent.node_id, intent.payload["task"]
         above = self.store.get(intent.payload["parent"])
         parent_ic = agent_conversation(above, "ic") if above else None
-        if await self._start_agent(node_id, "ic", parent_ic, task):
+        checkout = intent.payload.get("checkout")
+        if await self._start_agent(node_id, "ic", parent_ic, task, checkout):
             await self._launch_manager(node_id, task)
         self._enqueue(lambda: self._summarize(node_id, task, first=True), node_id)
 
@@ -2847,6 +2928,12 @@ def _shared_root(nodes: list[dict[str, Any]]) -> str | None:
     if root is None or root["isolation"] != "shared":
         return None
     return root["worktree_path"]
+
+
+# Steps whose outcome is in the tree alone. The steps that start agents are
+# not among them: their outcome is the conversation, and nothing may come
+# between an IC's start and its Manager's.
+_SAVED_BEFORE_FORGOTTEN = frozenset({"accept", "request_review", "halt"})
 
 
 def _lane_for(intent: Intent) -> str:

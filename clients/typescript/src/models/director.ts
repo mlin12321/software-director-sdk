@@ -451,7 +451,9 @@ export interface DirectorNodeOwnership {
  * the direct reports of every expanded node (or, for a full stream, every
  * node below the focused one), plus every escalation in the tree that waits
  * on the human, wherever the stream is focused. `node_upsert` and `node_removed` are limited to
- * those nodes. `escalations` carries the whole new list.
+ * those nodes. `escalations` carries the whole new list. The snapshot says
+ * whether the org is paused and whether a pull waits for choices; `org_state`
+ * follows whenever either changes.
  */
 export type DirectorOrgEvent =
   | {
@@ -459,7 +461,10 @@ export type DirectorOrgEvent =
       focus_id: DirectorNodeId;
       nodes: DirectorOrgNode[];
       escalations: DirectorOpenEscalation[];
+      paused?: DirectorPauseReason | null;
+      merging?: boolean;
     }
+  | { type: 'org_state'; paused: DirectorPauseReason | null; merging: boolean }
   | { type: 'node_upsert'; node: DirectorOrgNode }
   | { type: 'node_removed'; id: DirectorNodeId }
   | { type: 'escalations'; escalations: DirectorOpenEscalation[] };
