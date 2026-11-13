@@ -232,6 +232,8 @@ class DirectorService:
         self._remembered = remembered
         self._find_review_instructions = find_review_instructions
         self._model_call_timeout = model_call_timeout
+        # Teams that had reported done and are working again only to review.
+        self._done_reviewers: set[str] = set()
         self._consolidate_every = consolidate_every
         self._consolidator: asyncio.Task[None] | None = None
         self._bwrap: str | None = None
@@ -631,16 +633,41 @@ class DirectorService:
         review = node.review.model_copy(
             update={"state": "changes_requested", "findings": findings, "at": _now()}
         )
+        above = store.get(node.parent_id) if node.parent_id else None
         if review.round >= MAX_REVIEW_ROUNDS:
             store.update_node(node_id, status="blocked", review=review)
             self._enqueue(lambda: self._halt(node_id))
+            self._reviewed(above)
             return True
         store.update_node(node_id, status="working", review=review)
-        above = store.get(node.parent_id) if node.parent_id else None
+        self._reviewed(above)
         self.notify(
             agent_conversation(node, "ic"), changes_requested(above or node, findings)
         )
         return False
+
+    def declared_status(self, node_id: str) -> None:
+        """A team declared its own status, which now stands."""
+        self._done_reviewers.discard(node_id)
+
+    def _reviewed(self, reviewer: OrgNode | None) -> None:
+        """Put a team that was done before it reviewed back to done, once
+        none of its teams waits for it."""
+        if reviewer is None or reviewer.id not in self._done_reviewers:
+            return
+        store = self.store
+        waiting = any(
+            team is not None
+            and team.review is not None
+            and team.review.state == "pending"
+            for team in map(store.get, reviewer.child_ids)
+        )
+        if waiting:
+            return
+        self._done_reviewers.discard(reviewer.id)
+        now = store.get(reviewer.id)
+        if now is not None and now.status in ("working", "idle"):
+            store.update_node(reviewer.id, status="done")
 
     def accept_review(self, node_id: str, needed_above: str) -> None:
         """Take a team's reviewed work into the team above. Safe from any
@@ -1124,42 +1151,58 @@ class DirectorService:
             + f"; {outcome}.",
         )
 
-    async def _automated_review(self, node: OrgNode) -> list[ReviewFinding] | None:
-        """What a model finds in the diff of a team's work.
+    async def _own_account(
+        self, node: OrgNode
+    ) -> tuple[str, list[ReviewFinding] | None]:
+        """What a team's IC says of the work its team reported done.
 
         Returns:
-            None when it gave no usable answer, or was not asked.
+            Its description of the changes, '' when it gave none, and what
+            it found reviewing them, None when it gave no usable answer or
+            was not asked.
         """
         ic = agent_conversation(node, "ic")
         if ic is None or not node.base_commit:
-            return None
-        diff = await asyncio.to_thread(
-            bugbot.diff_or_none,
+            return "", None
+        files = await asyncio.to_thread(
+            bugbot.changed_files,
             Path(node.worktree_path),
             node.base_commit,
             node.boundary.path,
         )
-        if diff is None:
-            return None
-        if not diff.strip():
-            return []
+        if files is None:
+            return "", None
+        if not files:
+            return "", []
+        description = await self._ask_agent(ic, bugbot.write_up_question(files))
         instructions = await asyncio.to_thread(self._find_review_instructions)
         if instructions is None:
-            return None
+            return description or "", None
         above = self.store.get(node.parent_id) if node.parent_id else None
         specs, contracts = await asyncio.to_thread(
             GitBlackboard(self._repo_dir).applies_to,
             node.boundary.path,
             above.boundary.path if above else None,
         )
-        system, user = bugbot.review_prompt(
-            instructions,
-            specs[0].spec if specs else None,
-            [agreed.contracts for agreed in contracts],
-            diff,
+        answer = await self._ask_agent(
+            ic,
+            bugbot.review_question(
+                instructions,
+                specs[0].spec if specs else None,
+                [agreed.contracts for agreed in contracts],
+                files,
+            ),
         )
-        answer = await self._ask(ic, system, user, bugbot.USAGE_ID)
-        return bugbot.parse_findings(answer) if answer else None
+        return description or "", bugbot.parse_findings(answer) if answer else None
+
+    async def _ask_agent(self, conversation_id: str, question: str) -> str | None:
+        try:
+            return await asyncio.wait_for(
+                self._require_launcher().ask_agent(UUID(conversation_id), question),
+                timeout=self._model_call_timeout,
+            )
+        except (NotFound, TimeoutError):
+            return None
 
     async def _ask(
         self, conversation_id: str, system: str, user: str, usage_id: str
@@ -1182,22 +1225,31 @@ class DirectorService:
             return
         if asked.state not in ("pending", "unreviewed"):
             return
-        found = await self._automated_review(node)
+        description, found = await self._own_account(node)
         node = store.get(node_id)
         if node is None or node.review != asked:
             return
         review = asked.model_copy(
-            update={"automated_ran": found is not None, "automated": found or []}
+            update={
+                "description": description,
+                "automated_ran": found is not None,
+                "automated": found or [],
+            }
         )
         node = store.update_node(node_id, review=review)
         above = store.get(node.parent_id) if node.parent_id else None
         if above is not None:
+            if above.status == "done":
+                # Reviewing is work; it is done again once it has decided.
+                self._done_reviewers.add(above.id)
+                store.update_node(above.id, status="working")
             self.notify(agent_conversation(above, "ic"), review_request(node, review))
         elif found:
             self.notify(
                 agent_conversation(node, "ic"),
-                "An automated review of your team's work found, for you to "
-                "verify:\n" + "\n".join(f"- {finding.issue}" for finding in found),
+                "Asked to review your team's work by the code review "
+                "instructions, you found, for you to verify:\n"
+                + "\n".join(f"- {finding.issue}" for finding in found),
             )
 
     async def _accept(self, node_id: str, needed_above: str) -> None:
@@ -1263,6 +1315,7 @@ class DirectorService:
             review=node.review.model_copy(update={"state": "accepted", "at": _now()}),
             base_commit=tip or node.base_commit,
         )
+        self._reviewed(above)
         self.notify(
             agent_conversation(node, "ic"),
             f"The IC of {above.title!r} accepted your team's work"

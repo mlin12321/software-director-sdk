@@ -138,8 +138,9 @@ class ReviewFinding(BaseModel):
 class Review(BaseModel):
     """The review of the work a team reported as done.
 
-    The IC of the team above reviews it. Before that, a model reads the
-    team's diff once on its own and its findings are handed to that IC.
+    The IC of the team above reviews it. Before that, the team's own IC is
+    asked to describe the changes and to review them, and both answers are
+    handed to that IC.
     """
 
     state: ReviewState
@@ -149,12 +150,18 @@ class Review(BaseModel):
         "each time it comes back after changes were requested.",
     )
     summary: str = Field(default="", description="What the team said it delivered.")
+    description: str = Field(
+        default="",
+        description="The team's own account of what it changed, written as "
+        "a pull request description; '' when it gave none.",
+    )
     automated_ran: bool = Field(
         default=False,
-        description="Whether the model's own pass over the diff gave an answer.",
+        description="Whether the team's IC, asked to review the changes by "
+        "the code review instructions, gave an answer.",
     )
     automated: list[ReviewFinding] = Field(
-        default_factory=list, description="What that pass found."
+        default_factory=list, description="What it found."
     )
     findings: list[ReviewFinding] = Field(
         default_factory=list,

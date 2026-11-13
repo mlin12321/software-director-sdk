@@ -11,10 +11,10 @@ from pathlib import Path
 _TIMEOUT_SECONDS = 30
 # Who the commits the director makes itself are by.
 DIRECTOR_IDENTITY = {
-    "GIT_AUTHOR_NAME": "Agency Director",
-    "GIT_AUTHOR_EMAIL": "director@agency.invalid",
-    "GIT_COMMITTER_NAME": "Agency Director",
-    "GIT_COMMITTER_EMAIL": "director@agency.invalid",
+    "GIT_AUTHOR_NAME": "Agent Director",
+    "GIT_AUTHOR_EMAIL": "director@agent-director.invalid",
+    "GIT_COMMITTER_NAME": "Agent Director",
+    "GIT_COMMITTER_EMAIL": "director@agent-director.invalid",
 }
 
 

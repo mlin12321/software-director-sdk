@@ -347,6 +347,7 @@ def set_status(
         )
     elif review is not None and review.state == "pending":
         review = None
+    service.declared_status(node.id)
     node = store.update_node(node.id, status=status, review=review)
     if status == "done":
         service.request_review(node.id)

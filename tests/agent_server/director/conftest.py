@@ -175,6 +175,10 @@ class FakeLauncher:
     # What the model answers to a question of the director, by usage id.
     answers: dict[str, str | None] = field(default_factory=dict)
     asked: list[tuple[UUID, str, str, str]] = field(default_factory=list)
+    # What an agent answers to a question on top of its conversation, by a
+    # text the question contains.
+    agent_answers: dict[str, str | None] = field(default_factory=dict)
+    agents_asked: list[tuple[UUID, str]] = field(default_factory=list)
 
     async def start_root(
         self,
@@ -275,6 +279,15 @@ class FakeLauncher:
             raise NotFound(f"Conversation {conversation_id} does not exist")
         self.asked.append((conversation_id, usage_id, system, user))
         return self.answers.get(usage_id)
+
+    async def ask_agent(self, conversation_id: UUID, question: str) -> str | None:
+        if conversation_id not in self.known:
+            raise NotFound(f"Conversation {conversation_id} does not exist")
+        self.agents_asked.append((conversation_id, question))
+        for part, answer in self.agent_answers.items():
+            if part in question:
+                return answer
+        return None
 
     async def rename(self, conversation_id: UUID, title: str) -> None:
         if conversation_id not in self.known:

@@ -139,23 +139,36 @@ def review_request(team: OrgNode, review: Review) -> str:
     ]
     if review.summary:
         lines += ["", "What it says it delivered:", review.summary]
+    if review.description:
+        lines += ["", "Its own account of what it changed:", review.description]
+    else:
+        lines += ["", "It gave no account of what it changed."]
     lines += [
         "",
-        "Its changes: run this in " + team.worktree_path,
+        "Its changes: run these in " + team.worktree_path,
+        f"  git diff --stat {team.base_commit} HEAD -- {directory}",
         f"  git diff {team.base_commit} HEAD -- {directory}",
+        "Name a file in place of the directory to read that file alone.",
         "",
     ]
     if not review.automated_ran:
-        lines.append("The automated review of the diff did not run.")
+        lines.append("The team's own review of the changes did not run.")
     elif review.automated:
-        lines.append("An automated review of the diff found, for you to verify:")
+        lines.append(
+            "Asked to review the changes by the code review instructions, "
+            "the team's IC found, for you to verify:"
+        )
         lines += _finding_lines(review.automated)
     else:
-        lines.append("An automated review of the diff found nothing.")
+        lines.append(
+            "Asked to review the changes by the code review instructions, "
+            "the team's IC found nothing."
+        )
     lines += [
         "",
-        "Read the diff, run the repository's checks on it, and compare it with "
-        "the contracts you set and with the team's task. Then call "
+        "The account and that review are the team's own. Read the diff of "
+        "what you rely on, run the repository's checks on it, and compare it "
+        "with the contracts you set and with the team's task. Then call "
         f"`review_team` for node {team.id}: `accept`, or `reject` with what "
         "must change. Set `needed_above` only if a team above yours waits on "
         "this work.",

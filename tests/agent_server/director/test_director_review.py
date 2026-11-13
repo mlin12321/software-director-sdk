@@ -7,7 +7,6 @@ from uuid import UUID
 
 import pytest
 
-from openhands.agent_server.director import bugbot
 from openhands.agent_server.director.models import (
     CreateOrgRequest,
     ReviewFinding,
@@ -43,6 +42,8 @@ from tests.agent_server.director.test_director_tools import (
 
 
 INSTRUCTIONS = "Review the diff for bugs."
+WRITE_UP = "pull request description"
+ACCOUNT = "Adds the checkout endpoint in app.py."
 FINDING = ReviewFinding(path="services/api/app.py", line=1, issue="Returns a string.")
 DONE = SetStatusAction(status="done", summary="Endpoint shipped.")
 
@@ -96,11 +97,14 @@ def accept(node_id: str = "services.api", needed_above: str = "") -> ReviewTeamA
     )
 
 
-async def test_done_work_goes_to_the_ic_above_with_what_the_model_found(
+async def test_done_work_goes_to_the_ic_above_with_the_teams_own_account(
     service: DirectorService, launcher: FakeLauncher, repo: Path
 ):
     await split_root(service)
-    launcher.answers[bugbot.USAGE_ID] = json.dumps({"findings": [FINDING.model_dump()]})
+    launcher.agent_answers = {
+        WRITE_UP: ACCOUNT,
+        INSTRUCTIONS: json.dumps({"findings": [FINDING.model_dump()]}),
+    }
     base = node(service, "services.api").base_commit
     to_manager = len(launcher.messages_to(manager(service)))
 
@@ -112,14 +116,17 @@ async def test_done_work_goes_to_the_ic_above_with_what_the_model_found(
     assert (api.review.state, api.review.round) == ("pending", 1)
     assert api.review.automated == [FINDING]
     request = launcher.messages_to(ic(service))[-1]
+    assert api.review.description == ACCOUNT
     assert "Review mode" in request and "Endpoint shipped." in request
     assert f"git diff {base} HEAD -- services/api" in request
-    assert "Returns a string." in request
+    assert ACCOUNT in request and "Returns a string." in request
     assert len(launcher.messages_to(manager(service))) == to_manager
-    _, usage_id, system, user = launcher.asked[-1]
-    assert usage_id == bugbot.USAGE_ID
-    assert INSTRUCTIONS in system
-    assert "+order_id = '1'" in user and "POST /checkout" in user
+    (first, write_up), (second, review) = launcher.agents_asked
+    assert str(first) == str(second) == ic(service, "services.api")
+    assert WRITE_UP in write_up and "services/api/app.py" in write_up
+    assert INSTRUCTIONS in review and "POST /checkout" in review
+    assert "order_id = '1'" not in write_up + review
+    assert launcher.asked == []
 
 
 async def test_work_that_is_not_committed_cannot_be_reported_done(
@@ -136,20 +143,22 @@ async def test_work_that_is_not_committed_cannot_be_reported_done(
 
 
 @pytest.mark.parametrize("answer", [None, "I could not tell."])
-async def test_a_review_request_says_when_the_model_gave_no_answer(
+async def test_a_review_request_says_what_the_team_did_not_answer(
     service: DirectorService, launcher: FakeLauncher, repo: Path, answer: str | None
 ):
     await split_root(service)
-    launcher.answers[bugbot.USAGE_ID] = answer
+    launcher.agent_answers = {INSTRUCTIONS: answer}
 
     await api_reports_done(service, repo)
 
     review = node(service, "services.api").review
     assert review is not None and not review.automated_ran
-    assert "did not run" in launcher.messages_to(ic(service))[-1]
+    assert review.description == ""
+    request = launcher.messages_to(ic(service))[-1]
+    assert "did not run" in request and "gave no account" in request
 
 
-async def test_without_review_instructions_the_model_is_not_asked(
+async def test_without_review_instructions_the_team_is_only_asked_for_its_account(
     repo: Path, launcher: FakeLauncher
 ):
     service = DirectorService(repo, save_delay=0, run_limit_retry=0)
@@ -165,7 +174,8 @@ async def test_without_review_instructions_the_model_is_not_asked(
 
         await api_reports_done(service, repo)
 
-        assert launcher.asked == []
+        asked = [WRITE_UP in question for _, question in launcher.agents_asked]
+        assert asked == [True]
         assert "Review mode" in launcher.messages_to(ic(service))[-1]
     finally:
         await service.aclose()
@@ -383,7 +393,9 @@ async def test_a_merge_the_checkout_above_is_not_ready_for_waits_for_its_ic(
 async def test_the_root_team_is_done_without_a_review_and_hears_the_findings(
     service: DirectorService, launcher: FakeLauncher, repo: Path
 ):
-    launcher.answers[bugbot.USAGE_ID] = json.dumps({"findings": [FINDING.model_dump()]})
+    launcher.agent_answers = {
+        INSTRUCTIONS: json.dumps({"findings": [FINDING.model_dump()]})
+    }
     commit(repo, "app.py", "x = 1\n")
 
     done = await use(service, ic(service), SetStatusTool, DONE)
@@ -430,3 +442,22 @@ async def test_an_agent_records_a_rule_for_its_own_boundary(service: DirectorSer
     ]
     assert service.blackboard.memory("").rules == []
     assert blank.is_error
+
+
+async def test_a_team_that_was_done_works_while_it_reviews_and_is_done_again(
+    service: DirectorService, repo: Path
+):
+    await split_root(service)
+    await split_api(service)
+    schema = "services.api.schema"
+    await api_reports_done(service, repo)
+    assert node(service, "services.api").status == "done"
+
+    commit(repo, "services/api/schema/order.py", "id: int\n")
+    await use(service, ic(service, schema), SetStatusTool, DONE)
+
+    assert node(service, "services.api").status == "working"
+
+    await use(service, ic(service, "services.api"), ReviewTeamTool, reject(schema))
+
+    assert node(service, "services.api").status == "done"

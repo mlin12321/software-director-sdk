@@ -1,8 +1,10 @@
-"""A model's own pass over a team's diff, before the IC above reviews it.
+"""What a team's IC is asked about its own work before the IC above reviews
+it: to write up what changed, and to review it.
 
-The instructions are OpenHands' public code review skill, the one its pull
-request reviewer runs with. Here the model is given the diff directly and
-answers with findings instead of commenting on a pull request.
+Both are questions put on top of the IC's conversation, which already holds
+the work, so no diff is sent to a model. The review instructions are
+OpenHands' public code review skill, the one its pull request reviewer runs
+with; the IC answers with findings instead of commenting on a pull request.
 """
 
 import json
@@ -20,20 +22,34 @@ from openhands.sdk.skills import KeywordTrigger, Skill, TaskTrigger, load_public
 
 logger = logging.getLogger(__name__)
 
-# As much of a diff as the model is shown.
-MAX_DIFF_LENGTH = 60_000
-USAGE_ID = "director-bugbot"
 _SKILL_NAMES = ("codereview", "code-review")
 _SKILL_TRIGGER = "/codereview"
 
-_ANSWER_FORMAT = """\
-You are given the diff of one team's work, the spec the team wrote for it \
-and the contracts it must keep with other teams. Review the diff by the \
-instructions above. You cannot run anything or open other files: report only \
-what the diff itself shows, and nothing you would have to guess.
+_WRITE_UP = """\
+Your team reported its work done, and the IC of the team above reviews it \
+next. Write the pull request description of everything your team changed \
+since it started, for that reviewer. It has not seen your conversation.
+
+Cover, in this order:
+- What changed and why, in a few sentences.
+- Each file that matters, with what now behaves differently in it. Files \
+that only follow from another change can share one line.
+- Anything that touches a contract with another team, or that another team \
+will notice.
+- How the work was tested, and what was not.
+- What the reviewer should look at first.
+
+Say only what you know from your work. git lists these changed files; \
+account for all of them:
+"""
+
+_REVIEW = """\
+Review the change your team just reported done by the instructions below, \
+as its reviewer would. Report only what you know is in the committed code, \
+and nothing you would have to guess.
 
 Answer with one JSON object and nothing else:
-{"findings": [{"path": "<file>", "line": <line in the new file, or null>, \
+{"findings": [{"path": "<file>", "line": <line in the file, or null>, \
 "issue": "<what is wrong and what it breaks>", "evidence": "<the code that \
 shows it>"}]}
 An empty list means you found nothing that must change."""
@@ -68,33 +84,47 @@ def _keywords(skill: Skill) -> list[str]:
     return []
 
 
-def team_diff(checkout: Path, base: str, directory: str) -> str:
-    """What a team committed under ``directory`` since ``base``.
+def changed_files(checkout: Path, base: str, directory: str) -> str | None:
+    """git's list of what a team committed under ``directory`` since
+    ``base``, with the lines added and removed in each file.
 
-    Raises:
-        GitError: ``base`` is not a commit of the checkout.
+    Returns:
+        '' when nothing changed; None when git cannot tell.
     """
-    return git(checkout, ["diff", base, "HEAD", "--", pathspec(directory)])
+    try:
+        return git(
+            checkout, ["diff", "--stat=200", base, "HEAD", "--"] + [pathspec(directory)]
+        ).rstrip()
+    except (GitError, OSError):
+        logger.warning("Could not diff %s against %s", checkout, base, exc_info=True)
+        return None
 
 
-def review_prompt(
-    instructions: str, spec: str | None, contracts: list[str], diff: str
-) -> tuple[str, str]:
-    """The system and the user message of the review call."""
-    shown = diff[:MAX_DIFF_LENGTH]
+def write_up_question(files: str) -> str:
+    """Asks a team's IC to describe its team's changes for the reviewer."""
+    return f"{_WRITE_UP}\n{files}"
+
+
+def review_question(
+    instructions: str, spec: str | None, contracts: list[str], files: str
+) -> str:
+    """Asks a team's IC to review its team's changes."""
     parts = [
+        _REVIEW,
+        "",
+        "The review instructions:",
+        instructions.strip(),
+        "",
         "The team's spec:",
         spec or "(the team wrote none)",
         "",
         "Contracts the team must keep:",
         "\n\n".join(contracts) or "(none)",
         "",
-        "The diff:"
-        if len(diff) <= MAX_DIFF_LENGTH
-        else f"The diff (the first {MAX_DIFF_LENGTH} of {len(diff)} characters):",
-        shown,
+        "The changed files:",
+        files,
     ]
-    return f"{instructions.strip()}\n\n{_ANSWER_FORMAT}", "\n".join(parts)
+    return "\n".join(parts)
 
 
 def parse_findings(answer: str) -> list[ReviewFinding] | None:
@@ -106,13 +136,4 @@ def parse_findings(answer: str) -> list[ReviewFinding] | None:
     try:
         return _Answer.model_validate(json.loads(match.group(0))).findings
     except (ValueError, ValidationError):
-        return None
-
-
-def diff_or_none(checkout: Path, base: str, directory: str) -> str | None:
-    """:func:`team_diff`, or None when it cannot be made."""
-    try:
-        return team_diff(checkout, base, directory)
-    except (GitError, OSError):
-        logger.warning("Could not diff %s against %s", checkout, base, exc_info=True)
         return None

@@ -154,6 +154,20 @@ class PodLauncher(Protocol):
         """
         ...
 
+    async def ask_agent(self, conversation_id: UUID, question: str) -> str | None:
+        """Ask an agent one question on top of its conversation so far.
+
+        Nothing of it is kept in the conversation, and the agent's work is
+        not disturbed.
+
+        Returns:
+            The answer; None when the agent gave none.
+
+        Raises:
+            NotFound: The conversation does not exist.
+        """
+        ...
+
     async def rename(self, conversation_id: UUID, title: str) -> None:
         """Give a conversation a new title.
 
@@ -274,6 +288,17 @@ class ConversationPodLauncher:
             return None
         llm = agent.llm.model_copy(update={"usage_id": usage_id})
         return await asyncio.to_thread(_ask, llm, system, user)
+
+    async def ask_agent(self, conversation_id: UUID, question: str) -> str | None:
+        event_service = await self._conversations.get_event_service(conversation_id)
+        if event_service is None:
+            raise NotFound(f"Conversation {conversation_id} does not exist")
+        try:
+            answer = await event_service.ask_agent(question)
+        except Exception:
+            logger.warning("An agent did not answer the director", exc_info=True)
+            return None
+        return strip_reasoning_blocks(answer).strip() or None
 
     async def rename(self, conversation_id: UUID, title: str) -> None:
         updated = await self._conversations.update_conversation(
