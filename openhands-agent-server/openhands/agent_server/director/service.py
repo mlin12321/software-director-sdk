@@ -9,16 +9,17 @@ import secrets
 import shutil
 import threading
 from collections import deque
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Collection
 from contextlib import suppress
 from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path
+from typing import Any
 from uuid import UUID, uuid4
 
 from openhands.agent_server.config import Config
 from openhands.agent_server.conversation_service import ToolParams
-from openhands.agent_server.director import bugbot, memory
+from openhands.agent_server.director import bugbot, memory, org_sync
 from openhands.agent_server.director.acp import (
     agent_token,
     as_org_agent,
@@ -55,28 +56,45 @@ from openhands.agent_server.director.models import (
     AgentRef,
     AgentRole,
     Autopsy,
+    BlackboardSync,
     Boundary,
     CreateOrgRequest,
     DirectorSettings,
     DirectorSettingsState,
     DirectorSettingsUpdate,
+    OrgConflict,
+    OrgMerge,
     OrgNode,
     OrgNodeInput,
     OrgSummary,
+    OrgSync,
     PauseReason,
     Recovery,
     RecoveryItem,
+    ResolveMergeRequest,
     ReviewFinding,
     RoutedMessage,
     RouteMessageRequest,
+    Side,
     SplitChild,
+    StartAgainRequest,
+    SyncResult,
     TeamEnforcement,
     TeamMatch,
+)
+from openhands.agent_server.director.org_merge import (
+    Nodes,
+    by_id,
+    merge_orgs,
+    rehomed,
 )
 from openhands.agent_server.director.org_persistence import (
     create_org_board,
     load_org,
+    org_file,
     save_org,
+    saved_nodes,
+    stored_nodes,
 )
 from openhands.agent_server.director.org_store import OrgStore, OrgStoreError
 from openhands.agent_server.director.pods import PodLauncher, StartedAgent
@@ -178,6 +196,14 @@ RESTART_NOTE = (
     "you were in the middle of may not have finished: check what is there "
     "before you carry on with your task."
 )
+# What a team's IC is told when a pull found other commits for its branch.
+OTHER_WORK_NOTE = (
+    "A pull brought other commits for your team's branch {branch} from "
+    "{remote}. They are at {ref} and are not in your checkout. Merge them "
+    "into your branch (`git merge {ref}`), settle what clashes, and carry on."
+)
+# How often a merge is made again because the org was saved meanwhile.
+_MERGE_ATTEMPTS = 4
 # Where, in the repository's git directory, the director keeps what it is in
 # the middle of.
 _RUN_STATE = "director/state.db"
@@ -370,6 +396,8 @@ class DirectorService:
         self._stop_status: Callable[[], None] | None = None
         self._create_lock = asyncio.Lock()
         self._first_message_lock = asyncio.Lock()
+        # Held by a pull, a push or a step of a merge, one at a time.
+        self._sync_lock = asyncio.Lock()
 
     @classmethod
     def from_config(cls, config: Config) -> "DirectorService":
@@ -419,6 +447,7 @@ class DirectorService:
             fixture=self._fixture,
             boundary_enforcement="sandbox" if self._bwrap else "checks",
             paused=self._paused if self._runs() else None,
+            merging=self._runs().get("merge") is not None,
         )
 
     @property
@@ -762,6 +791,14 @@ class DirectorService:
             )
         )
         node = nearest_team(store.all(), path, lost=AGENT_LOST)
+        if node is None and request.conversation is not None:
+            # Nobody here can take it: the nearest team whose agents have no
+            # conversation on this server is started again to take it.
+            gone = nearest_team(store.all(), path, lost="")
+            if gone is not None and gone.status != "done":
+                node = await self.start_again(
+                    gone.id, StartAgainRequest(conversation=request.conversation)
+                )
         conversation_id = agent_conversation(node, "ic") if node else None
         if node is None or conversation_id is None:
             raise Conflict(
@@ -1064,6 +1101,408 @@ class DirectorService:
             items=[*items, *self._dropped()],
             messages_held=len(run.held()),
         )
+
+    async def pull_org(self, remote: str) -> OrgSync:
+        """Take in the org a remote of the repository has, as a merge.
+
+        The org is paused while it is merged and, unless the merge stops on
+        conflicts, resumed if it was running. What only the remote changed
+        is taken; what both changed in the same place is left as a conflict
+        and nothing is written until each has a choice (:meth:`resolve_merge`)
+        or the merge is abandoned (:meth:`abort_merge`).
+
+        Raises:
+            Conflict: A merge waits for choices, or this is the fixture.
+            NotFound: The repository has no such remote.
+            UpstreamFailed: The remote could not be reached.
+            Unavailable: The director is not running, or has no repository.
+        """
+        self._require_launcher()
+        if self._fixture:
+            raise Conflict("The director serves a fixture tree; it has no remote")
+        store = await asyncio.to_thread(lambda: self.store)
+        async with self._sync_lock:
+            if self._merging() is not None:
+                raise Conflict(
+                    "A merge waits for choices. Resolve it or abandon it first."
+                )
+            repo = await asyncio.to_thread(self._repository)
+            await asyncio.to_thread(org_sync.fetch, repo, remote)
+            theirs = await asyncio.to_thread(
+                org_sync.commit_at, repo, org_sync.remote_org(remote)
+            )
+            if store.root_id is None:
+                return await self._take_org(repo, remote, theirs)
+            resume = self._paused is None
+            if resume:
+                await self.pause()
+                await self._after(PAUSE_LANE)
+            return await self._merge(
+                {"remote": remote, "theirs": theirs, "choices": {}, "resume": resume}
+            )
+
+    async def push_org(self, remote: str) -> OrgSync:
+        """Give a remote of the repository the org, the blackboard and the
+        branches of the teams' work.
+
+        Raises:
+            Conflict: There is no org, a merge waits for choices, or the
+                remote has changes that were not pulled.
+            NotFound: The repository has no such remote.
+            UpstreamFailed: The remote could not be reached or refused.
+        """
+        store = await asyncio.to_thread(lambda: self.store)
+        if store.root_id is None or self._fixture:
+            raise Conflict("There is no org to push")
+        async with self._sync_lock:
+            if self._merging() is not None:
+                raise Conflict(
+                    "A merge waits for choices. Resolve it or abandon it first."
+                )
+            repo = self._repo_dir
+
+            def push() -> OrgSync:
+                self._save_tree(store)
+                org_sync.fetch(repo, remote)
+                if org_sync.behind(repo, remote):
+                    raise Conflict(
+                        f"{remote} has changes of the org that are not here. "
+                        "Pull first."
+                    )
+                branches = org_sync.push(repo, remote, store.all())
+                return OrgSync(
+                    remote=remote,
+                    result="pushed",
+                    head=create_org_board(repo).head(),
+                    branches=branches,
+                )
+
+            return await asyncio.to_thread(push)
+
+    async def merge(self) -> OrgMerge | None:
+        """The merge that waits for choices, if there is one."""
+        state = self._merging()
+        if state is None:
+            return None
+        return (await asyncio.to_thread(self._weigh, state)).merge
+
+    async def resolve_merge(self, request: ResolveMergeRequest) -> OrgSync:
+        """Choose a side for conflicts of the merge that waits. When every
+        conflict has a choice the merge is finished.
+
+        Raises:
+            Conflict: No merge waits for choices.
+            Unprocessable: A choice names no conflict of the merge.
+        """
+        self._require_launcher()
+        async with self._sync_lock:
+            state = self._merging()
+            if state is None:
+                raise Conflict("No merge waits for choices")
+            open_ = (await asyncio.to_thread(self._weigh, state)).merge
+            known = {conflict.id for conflict in open_.conflicts} if open_ else set()
+            unknown = sorted(set(request.choices) - known)
+            if unknown:
+                raise Unprocessable(
+                    f"The merge has no conflict named {', '.join(unknown)}"
+                )
+            choices: dict[str, str] = {**state["choices"], **request.choices}
+            if request.rest is not None:
+                choices = {each: request.rest for each in known} | choices
+            return await self._merge({**state, "choices": choices})
+
+    async def abort_merge(self) -> OrgSync:
+        """Abandon the merge that waits; the org stays as it was.
+
+        Raises:
+            Conflict: No merge waits for choices.
+        """
+        async with self._sync_lock:
+            state = self._merging()
+            if state is None:
+                raise Conflict("No merge waits for choices")
+            self._runs().put("merge", None)
+            if state["resume"]:
+                await self.resume()
+            return OrgSync(
+                remote=state["remote"],
+                result="up_to_date",
+                head=await asyncio.to_thread(create_org_board(self._repo_dir).head),
+            )
+
+    async def start_again(self, node_id: str, request: StartAgainRequest) -> OrgNode:
+        """Start afresh a team whose agents have no conversation on this
+        server, on the work its branch has.
+
+        The team's IC starts as the given conversation, in the team's own
+        checkout, and is briefed from the team's spec and last headline; its
+        Manager is derived from it.
+
+        Raises:
+            NotFound: There is no such team.
+            Conflict: The team is done, or its IC has a conversation here.
+            Unavailable: The director is not running.
+        """
+        launcher = self._require_launcher()
+        store = await asyncio.to_thread(lambda: self.store)
+        node = store.get(node_id)
+        if node is None:
+            raise NotFound(f"There is no team {node_id}")
+        if node.status == "done":
+            raise Conflict(f"Team {node.title} is done")
+        ic = agent_conversation(node, "ic")
+        if ic is not None and await launcher.started(UUID(ic)) is not None:
+            raise Conflict(f"The IC of team {node.title} has a conversation here")
+        await asyncio.to_thread(restore_worktrees, self._repo_dir, [node], self._home())
+        ic_id = uuid4()
+        task = await asyncio.to_thread(self._task_of, node)
+        conversation = request.conversation
+        additions = conversation.agent_launch_additions or AgentLaunchAdditions()
+        suffix = "\n\n".join(
+            part
+            for part in (additions.system_message_suffix_append, POD_PROTOCOL)
+            if part
+        )
+        store.update_node(node_id, agents=_new_pod(ic_id), status="idle")
+        try:
+            started = await launcher.start_root(
+                conversation.model_copy(
+                    update={
+                        "conversation_id": ic_id,
+                        "initial_message": None,
+                        "autotitle": False,
+                        "worktree": False,
+                        "workspace": conversation.workspace.model_copy(
+                            update={"working_dir": node.worktree_path}
+                        ),
+                        "agent_launch_additions": additions.model_copy(
+                            update={"system_message_suffix_append": suffix}
+                        ),
+                    }
+                ),
+                [Tool(name=name) for name in DIRECTOR_TOOL_NAMES],
+                title=_agent_title(node.title, "ic"),
+                tool_params=await asyncio.to_thread(self._confine, node_id, "ic"),
+                adapt_agent=await asyncio.to_thread(self._adapter, str(ic_id)),
+            )
+        except BaseException:
+            store.update_node(node_id, agents=node.agents, status=node.status)
+            raise
+        store.set_agent(node_id, "ic", kind=started.kind, acp_server=started.acp_server)
+        self._begin("brief", node_id, role="ic", task=task)
+        self._begin("launch_manager", node_id, task=task)
+        return store.get(node_id) or node
+
+    def _task_of(self, node: OrgNode) -> str:
+        """What a team that is started again is to do, from what the org
+        kept of it."""
+        above = self.store.get(node.parent_id) if node.parent_id else None
+        specs, _ = self.blackboard.applies_to(
+            node.boundary.path, above.boundary.path if above else None
+        )
+        task = specs[0].spec if specs else node.spec_summary
+        if node.headline and node.headline not in task:
+            task = f"{task}\n\nWhere the team last was: {node.headline}"
+        return (
+            f"{task}\n\nThis team was worked on before, on another machine. "
+            "What it committed is in your checkout: look at it first and "
+            "carry on from there."
+        )
+
+    def _repository(self) -> Path:
+        """The repository the org is in, or would be in.
+
+        Raises:
+            Unavailable: The director's directory is not in a git repository.
+        """
+        if self.store.root_id is not None:
+            return self._repo_dir
+        if not is_git_repository(self._directory):
+            raise Unavailable(
+                f"An org needs a git repository; {self._directory} is not one"
+            )
+        return _checkout_root(str(self._directory))
+
+    def _merging(self) -> dict[str, Any] | None:
+        kept = self._runs().get("merge")
+        return json.loads(kept) if kept else None
+
+    async def _after(self, lane: str) -> None:
+        """Wait until what ``lane`` was asked to do so far is done."""
+        done = asyncio.Event()
+
+        async def reached() -> None:
+            done.set()
+
+        self._enqueue(reached, lane)
+        await done.wait()
+
+    async def _take_org(self, repo: Path, remote: str, theirs: str | None) -> OrgSync:
+        """Take the remote's org as the org of a repository that has none."""
+        if theirs is None:
+            return OrgSync(remote=remote, result="up_to_date", head=None)
+
+        def take() -> OrgSync:
+            board = create_org_board(repo)
+            if not board.move_to(theirs):
+                raise Conflict("The org was changed meanwhile. Pull once more.")
+            nodes = saved_nodes(board, theirs)
+            here = rehomed(nodes, {}, _shared_root(nodes), str(repo))
+            if here != nodes:
+                board.land([org_file(here)], f"org: at home in {repo.name}")
+            blackboard = self._pull_blackboard(repo, remote, ())
+            self._join(repo)
+            return OrgSync(
+                remote=remote,
+                result="fast_forward",
+                head=board.head(),
+                blackboard=blackboard,
+                branches=org_sync.take_in_branches(repo, remote, self.store.all()),
+            )
+
+        outcome = await asyncio.to_thread(take)
+        await asyncio.to_thread(self._working)
+        await self._came_back()
+        return outcome
+
+    async def _merge(self, state: dict[str, Any]) -> OrgSync:
+        """Carry a merge as far as its choices allow."""
+        run = self._runs()
+        outcome = await asyncio.to_thread(self._weigh, state, True)
+        if outcome.result == "conflicts":
+            run.put("merge", json.dumps(state))
+            return outcome
+        run.put("merge", None)
+        await self._resync()
+        store = self.store
+        for branch in outcome.branches:
+            node = store.get(branch.node_id)
+            ic = agent_conversation(node, "ic") if node else None
+            if branch.result == "diverged" and ic is not None and branch.ref:
+                self._post(
+                    ic,
+                    OTHER_WORK_NOTE.format(
+                        branch=branch.branch, remote=outcome.remote, ref=branch.ref
+                    ),
+                )
+        if state["resume"]:
+            await self.resume()
+        return outcome
+
+    def _weigh(self, state: dict[str, Any], land: bool = False) -> OrgSync:
+        """Work a merge out and, when ``land`` is set and no conflict is
+        open, write it."""
+        store = self.store
+        repo, remote = self._repo_dir, state["remote"]
+        theirs: str | None = state["theirs"]
+        choices: dict[str, Side] = state["choices"]
+        board = create_org_board(repo)
+        blackboard = GitBlackboard(repo)
+        their_board = org_sync.commit_at(repo, org_sync.remote_blackboard(remote))
+        files = [
+            OrgConflict(
+                id=f"file:{clash.path}",
+                kind="file",
+                node_id="",
+                title="",
+                field=clash.path,
+                mine=clash.ours,
+                theirs=clash.theirs,
+                choice=choices.get(f"file:{clash.path}"),
+            )
+            for clash in (blackboard.clashes(their_board) if their_board else [])
+        ]
+        for _ in range(_MERGE_ATTEMPTS):
+            save_org(board, store)
+            head = board.head()
+            mine = by_id(saved_nodes(board, head))
+            merged = None
+            other: Nodes = {}
+            if theirs is not None and not board.contains(theirs):
+                other = by_id(saved_nodes(board, theirs))
+                base = by_id(saved_nodes(board, board.base_with(theirs)))
+                merged = merge_orgs(base, mine, other, choices)
+            conflicts = [*(merged.conflicts if merged else []), *files]
+            if any(conflict.choice is None for conflict in conflicts):
+                return OrgSync(
+                    remote=remote,
+                    result="conflicts",
+                    head=head,
+                    merge=OrgMerge(
+                        remote=remote, theirs=theirs or "", conflicts=conflicts
+                    ),
+                )
+            if not land:
+                return OrgSync(remote=remote, result="up_to_date", head=head)
+            result: SyncResult = "up_to_date"
+            if merged is not None and theirs is not None:
+                nodes = rehomed(
+                    merged.nodes, mine, _shared_root(list(other.values())), str(repo)
+                )
+                if by_id(nodes) == other:
+                    landed, result = board.move_to(theirs), "fast_forward"
+                else:
+                    landed = board.land(
+                        [org_file(nodes)], f"org: merge {remote}", merging=theirs
+                    )
+                    result = "merged"
+                if not landed:
+                    continue
+                before = {node.id: fingerprint(node) for node in store.all()}
+                self._apply(store, nodes)
+                run = self._runs()
+                # What the run state was written for, so that what the merge
+                # changed under it is found.
+                run.replace_marks(TEAM, before)
+                run.put("org_commit", head)
+            break
+        else:
+            raise Conflict("The org kept changing while it was merged. Pull once more.")
+        taken = [conflict.field for conflict in files if conflict.choice == "theirs"]
+        synced = self._pull_blackboard(repo, remote, taken)
+        if result == "up_to_date" and synced is not None and synced.changed:
+            result = "merged"
+        branches = org_sync.take_in_branches(repo, remote, store.all())
+        already = len(self._dropped())
+        self._put_aside_stale()
+        self._save_tree(store)
+        return OrgSync(
+            remote=remote,
+            result=result,
+            head=board.head(),
+            blackboard=synced,
+            branches=branches,
+            put_aside=self._dropped()[already:],
+        )
+
+    def _pull_blackboard(
+        self, repo: Path, remote: str, take_theirs: Collection[str]
+    ) -> BlackboardSync | None:
+        ref = org_sync.remote_blackboard(remote)
+        if org_sync.commit_at(repo, ref) is None:
+            return None
+        board = GitBlackboard(repo)
+        before = board.head()
+        merged = board.merge(ref, take_theirs)
+        return BlackboardSync(
+            remote=remote,
+            head=merged.head,
+            changed=merged.head != before,
+            kept_local=merged.kept_local,
+            pushed=False,
+        )
+
+    def _apply(self, store: OrgStore, nodes: list[dict[str, Any]]) -> None:
+        """Make ``store`` hold the merged tree, announcing what changed."""
+        wanted = by_id(nodes)
+        for node in store.all():
+            moved = node.id in wanted and wanted[node.id]["parent_id"] != node.parent_id
+            if (node.id not in wanted or moved) and store.get(node.id) is not None:
+                store.remove(node.id)
+        current = by_id(stored_nodes(store))
+        for node in nodes:
+            if current.get(node["id"]) != node:
+                store.upsert(OrgNodeInput.model_validate(node))
 
     def _runs(self) -> RunState:
         """What the director is in the middle of, in the org's repository."""
@@ -2399,6 +2838,15 @@ def _child_node(taken: set[str], parent: OrgNode, child: SplitChild) -> OrgNodeI
         headline=provisional_summary(child.task).headline,
         spec_summary=_summary_of(child.task),
     )
+
+
+def _shared_root(nodes: list[dict[str, Any]]) -> str | None:
+    """Where the repository is on the machine that saved ``nodes``, when
+    their root team works in the repository's own checkout."""
+    root = next((node for node in nodes if node["parent_id"] is None), None)
+    if root is None or root["isolation"] != "shared":
+        return None
+    return root["worktree_path"]
 
 
 def _lane_for(intent: Intent) -> str:

@@ -455,6 +455,7 @@ def test_the_summary_says_there_is_no_org_yet_and_where_one_would_work(repo: Pat
         "fixture": False,
         "boundary_enforcement": "checks",
         "paused": None,
+        "merging": False,
     }
 
 
@@ -536,6 +537,35 @@ async def test_an_org_is_paused_asked_what_it_holds_and_resumed(running, repo):
     assert resumed.json() == {"paused": None, "items": [], "messages_held": 0}
     assert launcher.messages_to(root_ic)[-1] == "Add a cart"
     assert (await client.get("/api/director/org/recovery")).json()["items"] == []
+
+
+async def test_an_org_is_pushed_pulled_and_its_merge_asked_for(running, repo, tmp_path):
+    client, _, service = running
+    nothing = await client.post("/api/director/org/push")
+    await client.post("/api/director/org", json=org_body(repo))
+    await service.settled()
+    no_remote = await client.post("/api/director/org/pull", json={"remote": "nope"})
+    bare = tmp_path / "remote.git"
+    run_git(tmp_path, "init", "--quiet", "--bare", str(bare))
+    run_git(repo, "remote", "add", "origin", str(bare))
+
+    pushed = await client.post("/api/director/org/push")
+    pulled = await client.post("/api/director/org/pull", json={"remote": "origin"})
+    merge = await client.get("/api/director/org/merge")
+    resolve = await client.post("/api/director/org/merge/resolve", json={})
+    abort = await client.post("/api/director/org/merge/abort")
+    again = await client.post(
+        "/api/director/org/nodes/root/start_again",
+        json={"conversation": org_body(repo)["conversation"]},
+    )
+
+    assert nothing.status_code == 409 and no_remote.status_code == 404
+    assert pushed.status_code == 200 and pushed.json()["result"] == "pushed"
+    assert pulled.json()["result"] == "up_to_date" and pulled.json()["merge"] is None
+    assert merge.status_code == 200 and merge.json() is None
+    assert resolve.status_code == 409 and abort.status_code == 409
+    assert again.status_code == 409
+    assert (await client.get("/api/director/org")).json()["merging"] is False
 
 
 async def test_answering_an_escalation_settles_it_and_tells_the_team(running, repo):

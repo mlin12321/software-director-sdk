@@ -11,7 +11,10 @@ import type {
   DirectorOrgNodeDetail,
   DirectorOrgSummary,
   DirectorRoutedMessage,
+  DirectorOrgMerge,
+  DirectorOrgSync,
   DirectorRecovery,
+  DirectorResolveMerge,
   DirectorSettings,
   DirectorSettingsState,
   DirectorTeamMatch,
@@ -251,6 +254,62 @@ export class DirectorClient {
       `${DIRECTOR_PATH}/org/blackboard/push`,
       { remote }
     );
+    return response.data;
+  }
+
+  /**
+   * Take in the org a remote of the repository has, as a merge: the tree,
+   * the blackboard and the branches of the teams' work. When both sides
+   * changed the same thing the result is `conflicts` and nothing is written
+   * until `resolveMerge` has a choice for each, or `abortMerge` is called.
+   *
+   * @throws HttpError 404 when the repository has no such remote, 409 when a
+   *   merge already waits, 502 when the remote cannot be reached.
+   */
+  async pullOrg(remote = 'origin'): Promise<DirectorOrgSync> {
+    const response = await this.client.post<DirectorOrgSync>(`${DIRECTOR_PATH}/org/pull`, {
+      remote,
+    });
+    return response.data;
+  }
+
+  /**
+   * Give a remote of the repository the org, the blackboard and the branches
+   * of the teams' work.
+   *
+   * @throws HttpError 409 when there is no org, a merge waits, or the remote
+   *   has changes that were not pulled.
+   */
+  async pushOrg(remote = 'origin'): Promise<DirectorOrgSync> {
+    const response = await this.client.post<DirectorOrgSync>(`${DIRECTOR_PATH}/org/push`, {
+      remote,
+    });
+    return response.data;
+  }
+
+  /** The merge that waits for choices; `null` when none does. */
+  async getMerge(): Promise<DirectorOrgMerge | null> {
+    const response = await this.client.get<DirectorOrgMerge | null>(`${DIRECTOR_PATH}/org/merge`);
+    return response.data;
+  }
+
+  /**
+   * Choose a side for conflicts of the merge that waits. It is finished once
+   * every conflict has a choice.
+   *
+   * @throws HttpError 409 when no merge waits.
+   */
+  async resolveMerge(request: DirectorResolveMerge): Promise<DirectorOrgSync> {
+    const response = await this.client.post<DirectorOrgSync>(
+      `${DIRECTOR_PATH}/org/merge/resolve`,
+      request
+    );
+    return response.data;
+  }
+
+  /** Abandon the merge that waits; the org stays as it was. */
+  async abortMerge(): Promise<DirectorOrgSync> {
+    const response = await this.client.post<DirectorOrgSync>(`${DIRECTOR_PATH}/org/merge/abort`);
     return response.data;
   }
 

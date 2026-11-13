@@ -27,13 +27,18 @@ from openhands.agent_server.director.models import (
     DirectorSettingsUpdate,
     NodeBlackboard,
     NodeOwnership,
+    OrgMerge,
     OrgNode,
     OrgNodeDetail,
     OrgSummary,
+    OrgSync,
+    OrgSyncRequest,
     Recovery,
+    ResolveMergeRequest,
     RoutedMessage,
     RouteMessageRequest,
     SnapshotEvent,
+    StartAgainRequest,
     TeachRequest,
     TeamMatch,
 )
@@ -540,6 +545,128 @@ def push_blackboard(
     """
     remote = (request or BlackboardSyncRequest()).remote
     return blackboard_sync.push(service.blackboard, remote)
+
+
+@director_router.post(
+    "/org/pull",
+    response_model=OrgSync,
+    responses=error_responses(
+        {
+            **_NO_REMOTE,
+            Conflict: "A merge waits for choices, or this is the fixture",
+            Unavailable: "The director is not running, or has no repository",
+        }
+    ),
+)
+async def pull_org(
+    request: OrgSyncRequest | None = None,
+    service: DirectorService = Depends(get_director_service),
+) -> OrgSync:
+    """Take in the org a remote of the repository has, as git merges a branch.
+
+    The tree, the blackboard and the branches of the teams' work are
+    fetched. A team changed on one side only is taken from that side, and so
+    is a field of a team; a repository without an org takes the remote's.
+    Where both sides changed the same thing the result is `conflicts`:
+    nothing is written, the org stays paused, and `merge` lists what to
+    choose with `POST /org/merge/resolve`.
+    """
+    return await service.pull_org((request or OrgSyncRequest()).remote)
+
+
+@director_router.post(
+    "/org/push",
+    response_model=OrgSync,
+    responses=error_responses(
+        {
+            **_NO_REMOTE,
+            Conflict: (
+                "There is no org, a merge waits for choices, or the remote has "
+                "changes that were not pulled"
+            ),
+        }
+    ),
+)
+async def push_org(
+    request: OrgSyncRequest | None = None,
+    service: DirectorService = Depends(get_director_service),
+) -> OrgSync:
+    """Give a remote of the repository the org, the blackboard and the
+    branches of the teams' work.
+
+    The branches are kept on the remote under `refs/agents/teams/`. A push
+    is refused while the remote has changes of the org that are not here.
+    """
+    return await service.push_org((request or OrgSyncRequest()).remote)
+
+
+@director_router.get("/org/merge", response_model=OrgMerge | None)
+async def get_merge(
+    service: DirectorService = Depends(get_director_service),
+) -> OrgMerge | None:
+    """The merge that waits for choices; null when none does."""
+    return await service.merge()
+
+
+@director_router.post(
+    "/org/merge/resolve",
+    response_model=OrgSync,
+    responses=error_responses(
+        {
+            Conflict: "No merge waits for choices",
+            Invalid: "A choice names no conflict of the merge",
+        }
+    ),
+)
+async def resolve_merge(
+    request: ResolveMergeRequest,
+    service: DirectorService = Depends(get_director_service),
+) -> OrgSync:
+    """Choose `mine` or `theirs` for conflicts of the merge that waits.
+
+    When every conflict has a choice the merge is written, as a commit with
+    both sides as parents, and the org is resumed if the pull had paused it.
+    Until then the result is `conflicts` with what is still open.
+    """
+    return await service.resolve_merge(request)
+
+
+@director_router.post(
+    "/org/merge/abort",
+    response_model=OrgSync,
+    responses=error_responses({Conflict: "No merge waits for choices"}),
+)
+async def abort_merge(
+    service: DirectorService = Depends(get_director_service),
+) -> OrgSync:
+    """Abandon the merge that waits. The org is as it was before the pull."""
+    return await service.abort_merge()
+
+
+@director_router.post(
+    "/org/nodes/{node_id}/start_again",
+    response_model=OrgNode,
+    responses=error_responses(
+        {
+            NotFound: "There is no such team",
+            Conflict: "The team is done, or its IC has a conversation here",
+            Unavailable: "The director is not running agents",
+        }
+    ),
+)
+async def start_team_again(
+    node_id: str,
+    request: StartAgainRequest,
+    service: DirectorService = Depends(get_director_service),
+) -> OrgNode:
+    """Start afresh a team whose agents have no conversation on this server.
+
+    That is the state of every team after its org was pulled into another
+    clone: the tree, the specs and the teams' branches travel, the agents'
+    conversations do not. The team's IC starts as the given conversation in
+    the team's own checkout and is briefed from the team's spec.
+    """
+    return await service.start_again(node_id, request)
 
 
 @director_tools_router.get("", dependencies=[Depends(_calling_agent)])

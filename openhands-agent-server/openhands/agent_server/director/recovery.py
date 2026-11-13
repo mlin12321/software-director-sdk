@@ -246,7 +246,9 @@ def describe(
                     _item(
                         node,
                         "cannot_resume",
-                        f"Its {name} has no conversation on this server.",
+                        f"Its {name} has no conversation on this server. A "
+                        "conversation started in the team's folder starts the "
+                        "team again on its work.",
                     )
                 )
     return items

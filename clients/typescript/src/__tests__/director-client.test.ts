@@ -194,6 +194,38 @@ describe('DirectorClient', () => {
     expect(read).toEqual(recovery);
   });
 
+  it('pulls and pushes the org and settles a merge', async () => {
+    const sync = {
+      remote: 'origin',
+      result: 'conflicts',
+      head: 'abc',
+      merge: { remote: 'origin', theirs: 'def', conflicts: [] },
+      blackboard: null,
+      branches: [],
+      put_aside: [],
+    };
+    const fetchMock = mockFetch(() => jsonResponse(sync));
+    const client = new DirectorClient({ host: 'http://example.com' });
+
+    const pulled = await client.pullOrg();
+    await client.getMerge();
+    await client.resolveMerge({ choices: { 'field:api:headline': 'theirs' }, rest: 'mine' });
+    await client.abortMerge();
+    await client.pushOrg('upstream');
+
+    const calls = fetchMock.mock.calls.map(
+      ([url, init]) => `${init.method} ${url} ${init.body ?? ''}`
+    );
+    expect(calls).toEqual([
+      'POST http://example.com/api/director/org/pull {"remote":"origin"}',
+      'GET http://example.com/api/director/org/merge ',
+      'POST http://example.com/api/director/org/merge/resolve {"choices":{"field:api:headline":"theirs"},"rest":"mine"}',
+      'POST http://example.com/api/director/org/merge/abort ',
+      'POST http://example.com/api/director/org/push {"remote":"upstream"}',
+    ]);
+    expect(pulled).toEqual(sync);
+  });
+
   it('streams events, across chunk boundaries and past keep-alives', async () => {
     const snapshot = { type: 'snapshot', focus_id: 'root', nodes: [], escalations: [] };
     const removed = { type: 'node_removed', id: 'a' };

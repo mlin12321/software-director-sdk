@@ -231,6 +231,8 @@ export interface DirectorOrgSummary {
    * when the org runs. Absent from servers that cannot pause an org.
    */
   paused?: DirectorPauseReason | null;
+  /** A pull stopped on conflicts and waits for choices. */
+  merging?: boolean;
 }
 
 /**
@@ -267,6 +269,70 @@ export interface DirectorRecovery {
   items: DirectorRecoveryItem[];
   /** How many messages to agents wait for the org to resume. */
   messages_held: number;
+}
+
+export type DirectorSide = 'mine' | 'theirs';
+
+/**
+ * Something both sides of a pull changed. `field`: one field of a team.
+ * `team`: one side removed a team the other changed. `file`: both changed the
+ * same lines of a spec or of contracts.
+ */
+export interface DirectorOrgConflict {
+  /** Names the conflict in a resolve request. */
+  id: string;
+  kind: 'field' | 'team' | 'file';
+  /** The team; '' for a file of the blackboard. */
+  node_id: string;
+  title: string;
+  /** The field, or the file's path. */
+  field: string;
+  /** What is here; `null` when removed here. */
+  mine: string | null;
+  /** What the remote has; `null` when removed there. */
+  theirs: string | null;
+  /** `null` while it is open. */
+  choice: DirectorSide | null;
+}
+
+/** A pull that stopped because both sides changed the same thing. */
+export interface DirectorOrgMerge {
+  remote: string;
+  theirs: string;
+  conflicts: DirectorOrgConflict[];
+}
+
+/** What a pull or a push did with the branch of one team's work. */
+export interface DirectorBranchSync {
+  node_id: string;
+  title: string;
+  branch: string;
+  result: 'created' | 'fast_forwarded' | 'diverged' | 'pushed';
+  /** Where the remote's commits are kept, when a pull found it diverged. */
+  ref: string | null;
+}
+
+/** What a pull or a push of the org did. */
+export interface DirectorOrgSync {
+  remote: string;
+  result: 'up_to_date' | 'fast_forward' | 'merged' | 'conflicts' | 'pushed';
+  /** The local org's commit afterwards. */
+  head: string | null;
+  /** The merge waiting for choices, when `result` is `conflicts`. */
+  merge: DirectorOrgMerge | null;
+  blackboard: DirectorBlackboardSync | null;
+  /** The teams' branches that changed. */
+  branches: DirectorBranchSync[];
+  /** Unfinished work dropped because its team was changed. */
+  put_aside: DirectorRecoveryItem[];
+}
+
+/** Choices for the conflicts of a merge. */
+export interface DirectorResolveMerge {
+  /** A side per conflict id. */
+  choices?: Record<string, DirectorSide>;
+  /** The side for every conflict not named. */
+  rest?: DirectorSide | null;
 }
 
 /**
