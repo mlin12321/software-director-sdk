@@ -200,12 +200,26 @@ export interface DirectorBoundaryMemory {
 export interface DirectorInheritedSpec {
   path: string;
   spec: string;
-  /** Ancestor specs are invariants; only the node's own spec is writable. */
+  /** False for the spec of the node's own boundary, which its IC writes. */
   readonly: boolean;
 }
 
+/** What the sub-teams of one boundary must keep between them. */
+export interface DirectorBoundaryContracts {
+  /** The boundary that was split. */
+  path: string;
+  contracts: string;
+  /**
+   * True for the contracts between the node's own sub-teams; false for the
+   * ones the team above set, which the node keeps with the teams beside it.
+   */
+  own: boolean;
+}
+
 export interface DirectorNodeBlackboard {
+  /** The spec of the node's own boundary, when it has one. */
   specs: DirectorInheritedSpec[];
+  contracts?: DirectorBoundaryContracts[];
   memory: DirectorBoundaryMemory;
   autopsies: DirectorAutopsy[];
 }

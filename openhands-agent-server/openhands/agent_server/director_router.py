@@ -300,11 +300,19 @@ def get_org_node(
 def get_node_blackboard(
     node_id: str, service: DirectorService = Depends(get_director_service)
 ) -> NodeBlackboard:
-    """Get the specs, memory and autopsies that apply to a node's boundary."""
-    path = _require_node(service, node_id).boundary.path
+    """Get what a node works to: the spec of its boundary, the contracts
+    between its sub-teams and the ones the team above set for it, its
+    memory and its autopsies."""
+    node = _require_node(service, node_id)
+    path = node.boundary.path
+    above = service.store.get(node.parent_id) if node.parent_id else None
     blackboard = service.blackboard
+    specs, contracts = blackboard.applies_to(
+        path, above.boundary.path if above else None
+    )
     return NodeBlackboard(
-        specs=blackboard.inherited(path),
+        specs=specs,
+        contracts=contracts,
         memory=blackboard.memory(path),
         autopsies=blackboard.autopsies(path),
     )

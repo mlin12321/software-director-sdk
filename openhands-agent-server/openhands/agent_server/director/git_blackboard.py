@@ -21,6 +21,7 @@ from openhands.agent_server.director.git import (
 )
 from openhands.agent_server.director.models import (
     Autopsy,
+    BoundaryContracts,
     BoundaryMemory,
     InheritedSpec,
 )
@@ -29,6 +30,7 @@ from openhands.sdk.errors import Conflict, Invalid, NotSupported, OperationFaile
 
 BLACKBOARD_REF = "refs/agents/blackboard"
 SPEC_FILE = "spec.md"
+CONTRACTS_FILE = "contracts.md"
 MEMORY_FILE = "memory.json"
 AUTOPSIES_FILE = "autopsies.json"
 
@@ -117,26 +119,31 @@ class GitBlackboard:
         """The content of ``path`` at the ref head, or None if it is absent."""
         return self._read_at(self.head(), path)
 
-    def inherited(self, boundary_path: str) -> list[InheritedSpec]:
-        """Specs from the repository root down to ``boundary_path``.
+    def applies_to(
+        self, boundary_path: str, above: str | None
+    ) -> tuple[list[InheritedSpec], list[BoundaryContracts]]:
+        """The spec and the contracts a team works to.
 
-        Ancestor specs come back read-only; only the boundary's own spec is
-        writable by its agents.
+        That is the spec of its own boundary, the contracts between its own
+        sub-teams, and the contracts the team above set between this team
+        and the ones beside it. The specs of the teams above are theirs
+        alone.
+
+        Args:
+            above: The boundary of the team above; None for the root team.
         """
-        target = normalize_board_path(boundary_path)
-        segments = target.split("/") if target else []
-        directories = ["", *("/".join(segments[: i + 1]) for i in range(len(segments)))]
+        own = normalize_board_path(boundary_path)
         commit = self.head()
-        specs = []
-        for directory in directories:
-            spec = self._read_at(commit, _join(directory, SPEC_FILE))
-            if spec is not None:
-                specs.append(
-                    InheritedSpec(
-                        path=directory, spec=spec, readonly=directory != target
-                    )
-                )
-        return specs
+        spec = self._read_at(commit, _join(own, SPEC_FILE))
+        contracts = [
+            BoundaryContracts(path=path, contracts=text, own=path == own)
+            for path in ([] if above is None else [normalize_board_path(above)]) + [own]
+            if (text := self._read_at(commit, _join(path, CONTRACTS_FILE)))
+        ]
+        specs = (
+            [] if spec is None else [InheritedSpec(path=own, spec=spec, readonly=False)]
+        )
+        return specs, contracts
 
     def write(self, scope_path: str, file: str, content: str) -> str | None:
         """Write one file inside ``scope_path`` and return the new commit.

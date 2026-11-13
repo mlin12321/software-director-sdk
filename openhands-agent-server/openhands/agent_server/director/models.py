@@ -218,13 +218,27 @@ class BoundaryMemory(BaseModel):
 
 
 class InheritedSpec(BaseModel):
-    """A spec that applies to a boundary."""
+    """The spec of a boundary."""
 
     path: str
     spec: str
     readonly: bool = Field(
         description=(
-            "Ancestor specs are invariants; only the boundary's own spec is writable."
+            "False for the spec of the node's own boundary, which its IC writes."
+        )
+    )
+
+
+class BoundaryContracts(BaseModel):
+    """What the sub-teams of one boundary must keep between them."""
+
+    path: str = Field(description="The boundary that was split.")
+    contracts: str
+    own: bool = Field(
+        description=(
+            "True for the contracts between the node's own sub-teams. False "
+            "for the ones the team above set, which the node must keep with "
+            "the teams beside it."
         )
     )
 
@@ -232,7 +246,10 @@ class InheritedSpec(BaseModel):
 class NodeBlackboard(BaseModel):
     """Everything on the blackboard that applies to one node."""
 
-    specs: list[InheritedSpec]
+    specs: list[InheritedSpec] = Field(
+        description="The spec of the node's own boundary, when it has one."
+    )
+    contracts: list[BoundaryContracts] = Field(default_factory=list)
     memory: BoundaryMemory
     autopsies: list[Autopsy]
 

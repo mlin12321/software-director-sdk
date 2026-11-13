@@ -191,7 +191,7 @@ export class DirectorClient {
     return response.data;
   }
 
-  /** The specs, memory and autopsies that apply to a node's boundary. */
+  /** The spec, contracts, memory and autopsies a node works to. */
   async getNodeBlackboard(nodeId: DirectorNodeId): Promise<DirectorNodeBlackboard> {
     const response = await this.client.get<DirectorNodeBlackboard>(nodePath(nodeId, 'blackboard'));
     return response.data;

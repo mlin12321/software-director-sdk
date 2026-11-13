@@ -3,6 +3,7 @@
 from openhands.agent_server.director.models import (
     AgentRole,
     Autopsy,
+    BoundaryContracts,
     InheritedSpec,
     OrgNode,
 )
@@ -17,13 +18,16 @@ the two you are; `read_node_context` repeats it at any time.
 
 The IC owns the technical work of the team's boundary:
 - It writes the team's spec with `write_spec` and does the code work itself.
+  The spec is the team's own; no other team reads it.
 - It writes only inside the team's boundary, and the org's runtime refuses
   a write anywhere else in the repository. Files of another team change
   through that team, by raising an escalation.
 - When the boundary is too much for one agent, it proposes to hand parts of
   it to sub-teams with `propose_boundary_split`. Each sub-team gets a
   directory inside the boundary, a task, and the contracts it must keep with
-  the others. The IC keeps whatever no sub-team takes.
+  the others. The contracts are all a sub-team is told of the team above, so
+  they must say everything it has to respect. The IC keeps whatever no
+  sub-team takes.
 - It reports with `set_status` when the team's work is done or blocked.
 
 The Manager owns the team's make-up and unblocks it. It does not edit files;
@@ -60,10 +64,11 @@ def brief(
     role: AgentRole,
     task: str,
     specs: list[InheritedSpec],
+    contracts: list[BoundaryContracts],
     rules: list[str],
     autopsies: list[Autopsy],
 ) -> str:
-    """The first message of an agent: who it is and what it inherits."""
+    """The first message of an agent: who it is and what it works to."""
     boundary = node.boundary.path or "the whole repository"
     lines = [
         f"{DIRECTOR_PREFIX} You are the {'IC' if role == 'ic' else 'Manager'} of "
@@ -75,8 +80,15 @@ def brief(
         lines.append(f"Read-only: {', '.join(node.boundary.readonly)}")
     lines += ["", "Task of the team:", task]
     for spec in specs:
-        owner = "your own spec" if not spec.readonly else "read-only, from above"
-        lines += ["", f"Spec of {spec.path or 'the repository'} ({owner}):", spec.spec]
+        lines += ["", "Your team's spec:", spec.spec]
+    for agreed in contracts:
+        heading = (
+            "Contracts between your sub-teams:"
+            if agreed.own
+            else "Contracts your team must keep with the teams beside it "
+            "(set by the team above; read-only):"
+        )
+        lines += ["", heading, agreed.contracts]
     if rules:
         lines += ["", "Rules that apply in this boundary:"]
         lines += [f"- {rule}" for rule in rules]

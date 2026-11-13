@@ -44,7 +44,8 @@ class ProposeBoundarySplitAction(Action):
     contracts: str = Field(
         description=(
             "The interfaces the sub-teams must keep between them: types, "
-            "endpoints, file formats. They cannot see each other's work."
+            "endpoints, file formats. They cannot see each other's work or "
+            "your spec, so include all of it they must respect."
         )
     )
 
@@ -151,8 +152,9 @@ class _DirectorTool[ActionT: Action](ToolDefinition[ActionT, DirectorObservation
 
 class ReadNodeContextTool(_DirectorTool[ReadNodeContextAction]):
     summary = (
-        "Read your place in the org: your team, role and boundary, the specs "
-        "and rules you inherit, your sub-teams and their status, a split that "
+        "Read your place in the org: your team, role and boundary, your spec, "
+        "the contracts you keep and the rules you inherit, your sub-teams "
+        "and their status, a split that "
         "is waiting, and the escalations you raised or must settle."
     )
     read_only = True
@@ -171,8 +173,8 @@ class ReadNodeContextTool(_DirectorTool[ReadNodeContextAction]):
 class WriteSpecTool(_DirectorTool[WriteSpecAction]):
     summary = (
         "IC only. Replace the spec of your boundary. It is kept outside the "
-        "working tree and every team below inherits it read-only, so write "
-        "what they must respect."
+        "working tree and is your team's own: sub-teams do not see it, only "
+        "the contracts of the split that made them."
     )
 
     @classmethod

@@ -29,7 +29,10 @@ from openhands.agent_server.director.git import (
     is_git_repository,
     save_and_discard,
 )
-from openhands.agent_server.director.git_blackboard import SPEC_FILE, GitBlackboard
+from openhands.agent_server.director.git_blackboard import (
+    CONTRACTS_FILE,
+    GitBlackboard,
+)
 from openhands.agent_server.director.git_index import (
     excludes_file,
     git_script,
@@ -827,11 +830,16 @@ class DirectorService:
     def _briefing(self, node: OrgNode, role: AgentRole, task: str) -> str:
         blackboard = GitBlackboard(self._repo_dir)
         path = node.boundary.path
+        above = self.store.get(node.parent_id) if node.parent_id else None
+        specs, contracts = blackboard.applies_to(
+            path, above.boundary.path if above else None
+        )
         return brief(
             node,
             role,
             task,
-            blackboard.inherited(path),
+            specs,
+            contracts,
             blackboard.inherited_rules(path),
             blackboard.autopsies(path),
         )
@@ -1126,14 +1134,17 @@ class DirectorService:
                     )
 
     def _record_contracts(self, node: OrgNode, contracts: str) -> None:
+        """Add the contracts of a split to those of the node's boundary."""
         blackboard = GitBlackboard(self._repo_dir)
         path = node.boundary.path
-        own = next(
-            (spec.spec for spec in blackboard.inherited(path) if not spec.readonly), ""
+        earlier = blackboard.read(
+            f"{path}/{CONTRACTS_FILE}" if path else CONTRACTS_FILE
         )
-        section = f"## Contracts between sub-teams\n\n{contracts.strip()}\n"
+        text = f"{contracts.strip()}\n"
         blackboard.write(
-            path, SPEC_FILE, f"{own.rstrip()}\n\n{section}" if own.strip() else section
+            path,
+            CONTRACTS_FILE,
+            f"{earlier.rstrip()}\n\n{text}" if earlier and earlier.strip() else text,
         )
 
     @staticmethod

@@ -170,6 +170,7 @@ class TestBlackboard:
         board.write("", "spec.md", "root spec")
         board.write("svc/a", "spec.md", "a spec")
         board.write("svc/b", "spec.md", "b spec")
+        board.write("", "contracts.md", "a serves b")
         board.teach("svc/a", "Rule for a.")
         autopsy = Autopsy(
             node_id="a", at="2026-11-01T00:00:00Z", approach="x", why_failed="y"
@@ -180,10 +181,8 @@ class TestBlackboard:
 
         assert response.status_code == 200
         assert response.json() == {
-            "specs": [
-                {"path": "", "spec": "root spec", "readonly": True},
-                {"path": "svc/a", "spec": "a spec", "readonly": False},
-            ],
+            "specs": [{"path": "svc/a", "spec": "a spec", "readonly": False}],
+            "contracts": [{"path": "", "contracts": "a serves b", "own": False}],
             "memory": {"rules": ["Rule for a."]},
             "autopsies": [autopsy.model_dump()],
         }

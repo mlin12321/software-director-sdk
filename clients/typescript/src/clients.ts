@@ -67,6 +67,7 @@ export type {
   DirectorAgentRole,
   DirectorAutopsy,
   DirectorBoundary,
+  DirectorBoundaryContracts,
   DirectorBoundaryEnforcement,
   DirectorBoundaryMemory,
   DirectorEscalation,

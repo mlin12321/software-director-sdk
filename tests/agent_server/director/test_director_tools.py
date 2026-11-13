@@ -163,8 +163,8 @@ async def test_the_ic_writes_the_spec_its_sub_teams_inherit(service: DirectorSer
 
     assert not written.is_error and refused.is_error
     assert node(service, "root").spec_summary == "Checkout"
-    [spec] = service.blackboard.inherited("services/api")
-    assert spec.readonly and "integer cents" in spec.spec
+    [spec], _ = service.blackboard.applies_to("", None)
+    assert not spec.readonly and "integer cents" in spec.spec
 
 
 async def test_a_proposed_split_waits_for_the_manager(
@@ -262,8 +262,9 @@ async def test_an_approved_split_starts_a_pod_for_each_sub_team(
 
     assert node(service, "root").pending_split is None
     assert "API (services/api)" in launcher.messages_to(ic(service))[-1]
-    [contracts] = service.blackboard.inherited("services/api")
-    assert contracts.readonly and "POST /checkout" in contracts.spec
+    specs, [contracts] = service.blackboard.applies_to("services/api", "")
+    assert specs == []
+    assert not contracts.own and "POST /checkout" in contracts.contracts
 
 
 async def test_a_sub_team_that_cannot_start_is_shown_as_blocked(
@@ -529,3 +530,45 @@ async def test_a_prune_is_refused_and_the_team_stays(
     assert answer.is_error and refusal in answer.text
     assert service.store.get("services.api") is not None
     assert launcher.deleted == []
+
+
+async def test_a_sub_team_is_told_the_contracts_and_not_the_spec_of_the_team_above(
+    service: DirectorService, launcher: FakeLauncher
+):
+    await use(
+        service,
+        ic(service),
+        WriteSpecTool,
+        WriteSpecAction(content="# Checkout\n\nInternal notes of the root team."),
+    )
+    await split_root(service)
+    api_ic = ic(service, "services.api")
+    await use(
+        service, api_ic, WriteSpecTool, WriteSpecAction(content="# API\n\nUses Flask.")
+    )
+
+    starts = {str(start.conversation_id): start for start in launcher.derived}
+    briefing = starts[str(api_ic)].task
+    context = json.loads(
+        (await use(service, api_ic, ReadNodeContextTool, ReadNodeContextAction())).text
+    )
+    root_context = json.loads(
+        (
+            await use(
+                service, ic(service), ReadNodeContextTool, ReadNodeContextAction()
+            )
+        ).text
+    )
+
+    assert "POST /checkout returns {order_id}" in briefing
+    assert "Internal notes of the root team." not in briefing
+    assert context["spec"] == "# API\n\nUses Flask."
+    assert context["contracts_with_the_teams_beside_you"] == [
+        "POST /checkout returns {order_id}\n"
+    ]
+    assert context["contracts_between_your_sub_teams"] == []
+    assert "Internal notes of the root team." not in json.dumps(context)
+    assert root_context["contracts_between_your_sub_teams"] == [
+        "POST /checkout returns {order_id}\n"
+    ]
+    assert root_context["contracts_with_the_teams_beside_you"] == []

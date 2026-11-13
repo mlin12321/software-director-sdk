@@ -3665,7 +3665,8 @@ def test_director_runs_an_org_whose_root_splits_into_sub_teams(
                 == child_ic
             )
         specs = client.get("/api/director/org/nodes/services.api/blackboard").json()
-        assert "POST /checkout" in specs["specs"][0]["spec"]
+        assert specs["specs"] == []
+        assert "POST /checkout" in specs["contracts"][0]["contracts"]
         # Everything the org keeps is in hidden refs, not in the working tree.
         assert run_git_command(["git", "status", "--porcelain"], repo) == ""
 

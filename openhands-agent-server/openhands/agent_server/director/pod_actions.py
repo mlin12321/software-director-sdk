@@ -60,6 +60,10 @@ def node_context(service: DirectorService, caller: Caller) -> str:
     store = service.store
     node = caller.node
     blackboard = service.blackboard
+    above = store.get(node.parent_id) if node.parent_id else None
+    specs, contracts = blackboard.applies_to(
+        node.boundary.path, above.boundary.path if above else None
+    )
     to_settle = [
         {
             "node_id": other.id,
@@ -87,8 +91,12 @@ def node_context(service: DirectorService, caller: Caller) -> str:
             "branch": node.branch,
             "isolation": node.isolation,
         },
-        "specs": [
-            spec.model_dump() for spec in blackboard.inherited(node.boundary.path)
+        "spec": specs[0].spec if specs else None,
+        "contracts_with_the_teams_beside_you": [
+            agreed.contracts for agreed in contracts if not agreed.own
+        ],
+        "contracts_between_your_sub_teams": [
+            agreed.contracts for agreed in contracts if agreed.own
         ],
         "rules": blackboard.inherited_rules(node.boundary.path),
         "failed_here_before": [
