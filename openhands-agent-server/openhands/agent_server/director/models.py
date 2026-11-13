@@ -4,6 +4,8 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field
 
+from openhands.agent_server.models import StartConversationRequest
+
 
 # A pod has an IC and a Manager. The IC of a team leads it, is a report of
 # the team above, and does the code work in its boundary that no sub-team
@@ -15,6 +17,8 @@ NodeStatus = Literal["idle", "working", "done", "blocked"]
 IsolationMode = Literal["worktree", "shared"]
 
 EscalationKind = Literal["critical_issue", "design_decision"]
+
+SplitStatus = Literal["proposed", "refine_requested", "approved"]
 
 
 class Boundary(BaseModel):
@@ -78,6 +82,40 @@ class Escalation(BaseModel):
     )
 
 
+class SplitChild(BaseModel):
+    """A sub-team an IC proposes to hand part of its boundary to."""
+
+    title: str = Field(min_length=1)
+    path: str = Field(
+        description=(
+            "Directory the sub-team owns, repo-relative and strictly inside "
+            "the proposing node's boundary."
+        )
+    )
+    writable: list[str] = Field(
+        default_factory=list,
+        description="Globs under `path` the sub-team may write. Empty: all of it.",
+    )
+    readonly: list[str] = Field(default_factory=list)
+    isolation: IsolationMode = "shared"
+    task: str = Field(min_length=1, description="What the sub-team is to deliver.")
+
+
+class SplitProposal(BaseModel):
+    """An IC's proposal to split its boundary, for its Manager to decide."""
+
+    children: list[SplitChild] = Field(min_length=1)
+    contracts: str = Field(
+        default="",
+        description="The interfaces the sub-teams must keep between them.",
+    )
+    status: SplitStatus = "proposed"
+    feedback: str = Field(
+        default="", description="What the Manager wants changed, when it asked."
+    )
+    proposed_at: str = Field(description="ISO 8601 timestamp.")
+
+
 class StatusCounts(BaseModel):
     """Number of nodes in each status."""
 
@@ -111,6 +149,10 @@ class OrgNodeInput(BaseModel):
             "Open escalations this node raised, oldest first, wherever in the "
             "chain above they are held."
         ),
+    )
+    pending_split: SplitProposal | None = Field(
+        default=None,
+        description="A split of this node's boundary that is not carried out yet.",
     )
 
 
@@ -181,6 +223,40 @@ class TeachRequest(BaseModel):
     """A rule to add to a boundary's permanent memory."""
 
     rule: str = Field(min_length=1, description="The rule, in plain English.")
+
+
+class OrgSummary(BaseModel):
+    """Whether the director has an org, and where it would keep one."""
+
+    root_id: str | None = Field(description="None when no org has been started.")
+    node_count: int
+    repo_path: str = Field(description="The directory the org works in.")
+    is_git_repository: bool = Field(
+        description="An org can only be started in a git repository."
+    )
+    fixture: bool = Field(
+        description="The tree is a fixed sample; its agents are not running."
+    )
+
+
+class CreateOrgRequest(BaseModel):
+    """Start an org: a root team that works on ``task``."""
+
+    title: str = Field(min_length=1)
+    task: str = Field(min_length=1, description="What the org is to deliver.")
+    conversation: StartConversationRequest = Field(
+        description=(
+            "How to start the root team's IC. Every other agent of the org is "
+            "derived from it. Its workspace must be the director's directory, "
+            "and its initial message is ignored: the IC is briefed with `task`."
+        )
+    )
+
+
+class AnswerEscalationRequest(BaseModel):
+    """The human's answer to an escalation that waits on them."""
+
+    answer: str = Field(min_length=1)
 
 
 class EscalationPathStep(BaseModel):

@@ -12,6 +12,8 @@ from datetime import UTC, datetime
 from typing import get_args
 
 from openhands.agent_server.director.models import (
+    AgentRef,
+    AgentRole,
     Escalation,
     EscalationHandoff,
     EscalationKind,
@@ -33,6 +35,8 @@ NODE_STATUSES: tuple[NodeStatus, ...] = get_args(NodeStatus)
 
 type OrgChange = NodeUpsertEvent | NodeRemovedEvent | EscalationsEvent
 type OrgListener = Callable[[OrgChange], None]
+
+_DERIVED_FIELDS = {"child_ids", "descendant_counts", "escalation_count"}
 
 
 @dataclass
@@ -66,6 +70,8 @@ class OrgStore:
         self._nodes: dict[str, OrgNode] = {}
         self._root_id: str | None = None
         self._listeners: dict[OrgListener, _Subscription] = {}
+        self._change_listeners: list[Callable[[], None]] = []
+        self._agents: dict[str, tuple[str, AgentRole]] = {}
 
     @property
     def root_id(self) -> str | None:
@@ -100,6 +106,78 @@ class OrgStore:
         """Every node, parents before children."""
         with self._lock:
             return self._ordered(self._nodes, self._root_id)
+
+    def find_by_conversation(
+        self, conversation_id: str
+    ) -> tuple[OrgNode, AgentRole] | None:
+        """The node an agent's conversation belongs to, and the agent's role."""
+        with self._lock:
+            found = self._agents.get(conversation_id)
+            if found is None:
+                return None
+            node_id, role = found
+            return self._nodes[node_id], role
+
+    def on_change(self, listener: Callable[[], None]) -> Callable[[], None]:
+        """Call ``listener`` after every change to the tree.
+
+        Like stream listeners it runs while the store is locked.
+
+        Returns:
+            A function that stops the calls.
+        """
+        with self._lock:
+            self._change_listeners.append(listener)
+
+        def stop() -> None:
+            with self._lock:
+                if listener in self._change_listeners:
+                    self._change_listeners.remove(listener)
+
+        return stop
+
+    def update_node(self, node_id: str, **changes: object) -> OrgNode:
+        """Change fields of an existing node.
+
+        Raises:
+            NotFound: The node does not exist.
+            OrgStoreError: The changed node would not fit into the tree.
+        """
+        with self._lock:
+            node = self._require(node_id)
+            current = node.model_dump(exclude=_DERIVED_FIELDS)
+            return self.upsert(OrgNodeInput.model_validate({**current, **changes}))
+
+    def set_agent(
+        self,
+        node_id: str,
+        role: AgentRole,
+        *,
+        conversation_id: str | None = None,
+        status: str | None = None,
+    ) -> OrgNode:
+        """Change the conversation or the status of one agent of a node.
+
+        Raises:
+            NotFound: The node does not exist or has no agent in that role.
+        """
+        with self._lock:
+            node = self._require(node_id)
+            if all(agent.role != role for agent in node.agents):
+                raise NotFound(f"Node {node_id} has no {role} agent")
+            agents = [
+                agent
+                if agent.role != role
+                else AgentRef(
+                    role=role,
+                    conversation_id=conversation_id or agent.conversation_id,
+                    status=status or agent.status,
+                )
+                for agent in node.agents
+            ]
+            if agents == node.agents:
+                return node
+            return self.update_node(node_id, agents=agents)
 
     def upsert(self, node_input: OrgNodeInput) -> OrgNode:
         """Insert a node or update an existing one.
@@ -142,6 +220,7 @@ class OrgStore:
                 + sum(self._nodes[c].escalation_count for c in child_ids),
             )
             self._nodes[node.id] = node
+            self._index_agents(existing, node)
             if existing is None:
                 if parent_id is None:
                     self._root_id = node.id
@@ -156,6 +235,7 @@ class OrgStore:
             # always re-announced on insert; above that, only changed rollups.
             self._refresh_ancestors(parent_id, always_announce_first=existing is None)
             self._announce_escalations()
+            self._changed()
             return node
 
     def remove(self, node_id: str) -> bool:
@@ -185,6 +265,7 @@ class OrgStore:
             for gone in doomed:
                 self._emit(NodeRemovedEvent(id=gone.id), gone.id, gone.parent_id)
             for gone in doomed:
+                self._index_agents(gone, None)
                 del self._nodes[gone.id]
 
             if node.parent_id is None:
@@ -196,6 +277,7 @@ class OrgStore:
                 )
             self._refresh_ancestors(node.parent_id, always_announce_first=True)
             self._announce_escalations()
+            self._changed()
             return True
 
     def replace_all(self, inputs: Iterable[OrgNodeInput]) -> None:
@@ -241,6 +323,9 @@ class OrgStore:
         with self._lock:
             self._nodes = nodes
             self._root_id = root_id
+            self._agents = {}
+            for node in nodes.values():
+                self._index_agents(None, node)
 
     def raise_escalation(
         self,
@@ -562,19 +647,21 @@ class OrgStore:
         raise NotFound(f"Node {node.id} has no escalation {escalation_id}")
 
     def _set_escalations(self, node: OrgNode, escalations: list[Escalation]) -> None:
-        self.upsert(
-            OrgNodeInput(
-                **node.model_dump(
-                    exclude={
-                        "child_ids",
-                        "descendant_counts",
-                        "escalation_count",
-                        "escalations",
-                    }
-                ),
-                escalations=escalations,
-            )
-        )
+        self.update_node(node.id, escalations=escalations)
+
+    def _index_agents(self, old: OrgNode | None, new: OrgNode | None) -> None:
+        if old is not None:
+            for agent in old.agents:
+                if agent.conversation_id is not None:
+                    self._agents.pop(agent.conversation_id, None)
+        if new is not None:
+            for agent in new.agents:
+                if agent.conversation_id is not None:
+                    self._agents[agent.conversation_id] = (new.id, agent.role)
+
+    def _changed(self) -> None:
+        for listener in list(self._change_listeners):
+            listener()
 
     def _announce_escalations(self) -> None:
         """Tell each subscriber when what waits on the human has changed."""

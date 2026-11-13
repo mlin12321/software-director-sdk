@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from openhands.agent_server.director.fixture import build_fixture_nodes
-from openhands.agent_server.director.models import StatusCounts
+from openhands.agent_server.director.models import AgentRef, StatusCounts
 from openhands.agent_server.director.org_persistence import (
     ORG_REF,
     create_org_board,
@@ -244,7 +244,9 @@ class TestEscalations:
 
         load_org(board, loaded)
 
-        assert loaded.all() == store.all()
+        assert [node.escalations for node in loaded.all()] == [
+            node.escalations for node in store.all()
+        ]
         assert loaded.escalations("root") == store.escalations("root")
 
 
@@ -596,6 +598,8 @@ class TestPersistence:
         self, repo: Path, store: OrgStore
     ):
         board = create_org_board(repo)
+        # Whether a node is working is not saved; see the test for that below.
+        store.update_node("root", status="idle")
 
         save_org(board, store)
         head = board.head()
@@ -622,3 +626,112 @@ class TestPersistence:
 
         with pytest.raises(ValueError, match="99"):
             load_org(board, OrgStore())
+
+
+def with_pod(node_id: str, parent_id: str | None, path: str, ic: str, manager: str):
+    return make_node(node_id, parent_id, path=path).model_copy(
+        update={
+            "agents": [
+                AgentRef(role="ic", conversation_id=ic, status="idle"),
+                AgentRef(role="manager", conversation_id=manager, status="idle"),
+            ]
+        }
+    )
+
+
+def test_an_agents_conversation_leads_back_to_its_node_and_role():
+    store = OrgStore()
+    store.upsert(with_pod("root", None, "", "conv-ic", "conv-mgr"))
+
+    found = store.find_by_conversation("conv-mgr")
+
+    assert found is not None
+    node, role = found
+    assert (node.id, role) == ("root", "manager")
+    assert store.find_by_conversation("conv-unknown") is None
+
+
+def test_a_removed_or_replaced_conversation_no_longer_leads_to_a_node():
+    store = OrgStore()
+    store.upsert(with_pod("root", None, "", "conv-ic", "conv-mgr"))
+    store.upsert(with_pod("a", "root", "svc/a", "conv-a-ic", "conv-a-mgr"))
+
+    store.set_agent("root", "ic", conversation_id="conv-ic-2")
+    store.remove("a")
+
+    assert store.find_by_conversation("conv-ic") is None
+    assert store.find_by_conversation("conv-a-ic") is None
+    found = store.find_by_conversation("conv-ic-2")
+    assert found is not None and found[1] == "ic"
+
+
+def test_a_loaded_tree_knows_its_agents_conversations():
+    store = OrgStore()
+
+    store.replace_all([with_pod("root", None, "", "conv-ic", "conv-mgr")])
+
+    assert store.find_by_conversation("conv-ic") is not None
+
+
+def test_setting_an_agent_status_announces_the_node_once(store: OrgStore):
+    events = record(store, "a")
+
+    store.set_agent("a", "ic", status="working")
+    store.set_agent("a", "ic", status="working")
+
+    assert describe(events) == [("node_upsert", "a")]
+    node = store.get("a")
+    assert node is not None and node.agents[0].status == "working"
+
+
+def test_setting_an_agent_a_node_does_not_have_is_refused(store: OrgStore):
+    with pytest.raises(NotFound):
+        store.set_agent("a", "manager", status="working")
+    with pytest.raises(NotFound):
+        store.set_agent("nowhere", "ic", status="working")
+
+
+def test_updating_a_node_keeps_its_other_fields_and_rollups(store: OrgStore):
+    store.update_node("a1", status="blocked", spec_summary="stuck on the schema")
+
+    node = store.get("a1")
+    assert node is not None
+    assert (node.status, node.spec_summary) == ("blocked", "stuck on the schema")
+    assert node.boundary.path == "svc/a/one"
+    parent = store.get("a")
+    assert parent is not None and parent.descendant_counts.blocked == 1
+
+
+def test_updating_a_node_cannot_move_it(store: OrgStore):
+    with pytest.raises(OrgStoreError):
+        store.update_node("a1", parent_id="b")
+
+
+def test_change_listeners_hear_every_change_until_stopped(store: OrgStore):
+    calls: list[int] = []
+    stop = store.on_change(lambda: calls.append(1))
+
+    store.update_node("b", status="idle")
+    store.remove("a2")
+    stop()
+    store.update_node("b", status="done")
+
+    assert len(calls) == 2
+
+
+def test_saving_does_not_record_whether_agents_are_running(repo: Path):
+    store = OrgStore()
+    store.upsert(with_pod("root", None, "", "conv-ic", "conv-mgr"))
+    board = create_org_board(repo)
+    save_org(board, store)
+    saved = run_git(repo, "rev-parse", ORG_REF)
+
+    store.set_agent("root", "ic", status="working")
+    store.update_node("root", status="idle")
+    store.update_node("root", status="working")
+    save_org(board, store)
+
+    assert run_git(repo, "rev-parse", ORG_REF) == saved
+    loaded = OrgStore()
+    assert load_org(board, loaded)
+    assert loaded.find_by_conversation("conv-ic") is not None
