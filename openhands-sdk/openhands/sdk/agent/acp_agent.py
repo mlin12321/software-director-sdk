@@ -509,18 +509,20 @@ def _npx_packages(command: list[str]) -> list[str]:
     ``--package=<spec>`` flags when present — pi pins its ACP adapter and the
     engine it spawns separately, and its positional argument is the bare binary
     name, which would warm an unpinned package. Otherwise the first positional,
-    which is the package for the single-package providers.
+    which is the package for the single-package providers. ``npx`` may follow
+    a launcher that runs the rest of the command, such as a sandbox script.
     """
-    if not command or command[0] != "npx":
+    if "npx" not in command:
         return []
+    arguments = command[command.index("npx") + 1 :]
     pinned = [
         arg.removeprefix("--package=")
-        for arg in command[1:]
+        for arg in arguments
         if arg.startswith("--package=")
     ]
     if pinned:
         return pinned
-    for arg in command[1:]:
+    for arg in arguments:
         if not arg.startswith("-"):
             return [arg]
     return []
@@ -3310,6 +3312,7 @@ class ACPAgent(AgentBase):
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 env=env,
+                cwd=working_dir if os.path.isdir(working_dir) else None,
                 limit=_STREAM_READER_LIMIT,
             )
             assert process.stdin is not None

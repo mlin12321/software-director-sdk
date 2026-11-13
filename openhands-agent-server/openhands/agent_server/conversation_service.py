@@ -583,6 +583,20 @@ def _with_tool_params(
     return replace(launched, agent=launched.agent.model_copy(update={"tools": tools}))
 
 
+def _to_derive_from(agent: AgentBase) -> AgentBase:
+    """``agent`` as a child conversation starts from it.
+
+    A copy of a running ACP agent still holds that agent's process and
+    session, and would end them as it starts its own, so the child gets one
+    that holds neither.
+    """
+    if not isinstance(agent, ACPAgent):
+        return agent
+    return type(agent).model_validate(
+        agent.model_dump(context={"expose_secrets": True})
+    )
+
+
 def _adapted(
     launched: LaunchedAgent, adapt_agent: AgentAdapter | None
 ) -> LaunchedAgent:
@@ -2350,7 +2364,9 @@ class ConversationService:
         # launch before a worktree or the child's persistence directory exists.
         with await RunSlot.acquire(self._run_semaphore) as run_slot:
             parent_stored = parent_service.stored
-            parent_agent = cast(AgentBase, parent_service.get_conversation().agent)
+            parent_agent = _to_derive_from(
+                cast(AgentBase, parent_service.get_conversation().agent)
+            )
             # A child spends under the same cap as its parent.
             max_budget_per_run = parent_service.get_conversation().max_budget_per_run
             child_id = child_id or uuid4()
