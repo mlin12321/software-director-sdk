@@ -46,6 +46,8 @@ class _Subscription:
     expanded: frozenset[str]
     # Whether the subscriber follows every node below the focused one.
     full: bool
+    # The nodes above the focused one. A node never changes parent.
+    above: frozenset[str]
     # What the subscriber was last told, to announce only real changes.
     escalations: list[OpenEscalation] = field(default_factory=list)
 
@@ -255,7 +257,13 @@ class OrgStore:
             # A new child changes its parent's ``child_ids``, so the parent is
             # always re-announced on insert; above that, only changed rollups.
             self._refresh_ancestors(parent_id, always_announce_first=existing is None)
-            self._announce_escalations()
+            # What waits on the human names the teams on the way to it.
+            if (
+                existing is None
+                or existing.escalations != node.escalations
+                or existing.title != node.title
+            ):
+                self._announce_escalations()
             self._changed()
             return node
 
@@ -531,7 +539,13 @@ class OrgStore:
             snapshot = self.snapshot(focus_id, expanded, full=full)
             if snapshot is not None:
                 self._listeners[listener] = _Subscription(
-                    focus_id, frozenset(expanded), full, snapshot.escalations
+                    focus_id,
+                    frozenset(expanded),
+                    full,
+                    frozenset(
+                        self._chain(self._nodes, self._nodes[focus_id].parent_id)
+                    ),
+                    snapshot.escalations,
                 )
 
         def unsubscribe() -> None:
@@ -593,23 +607,19 @@ class OrgStore:
             current_id = current.parent_id
 
     def _emit(self, event: OrgChange, node_id: str, parent_id: str | None) -> None:
+        if not self._listeners:
+            return
+        above = self._chain(self._nodes, parent_id)
         for listener, subscription in list(self._listeners.items()):
-            if self._visible_to(subscription, node_id, parent_id):
+            focus_id = subscription.focus_id
+            if (
+                node_id == focus_id
+                or parent_id == focus_id
+                or parent_id in subscription.expanded
+                or (node_id in subscription.above and focus_id in self._nodes)
+                or (subscription.full and focus_id in above)
+            ):
                 listener(event)
-
-    def _visible_to(
-        self, subscription: _Subscription, node_id: str, parent_id: str | None
-    ) -> bool:
-        focus_id = subscription.focus_id
-        if node_id == focus_id or parent_id == focus_id:
-            return True
-        if parent_id in subscription.expanded:
-            return True
-        if subscription.full and any(
-            ancestor.id == focus_id for ancestor in self.ancestors(node_id)
-        ):
-            return True
-        return any(ancestor.id == node_id for ancestor in self.ancestors(focus_id))
 
     def _waiting_anywhere(self) -> list[OpenEscalation]:
         """What waits on the human in the whole tree.

@@ -227,6 +227,14 @@ class OrgNodeInput(BaseModel):
         default=None,
         description="The review of what the team last reported as done.",
     )
+    waiting_to_start: bool = Field(
+        default=False,
+        description=(
+            "An agent of the team could not be started yet because the "
+            "server runs as many conversations as it may; it starts when "
+            "one of them ends."
+        ),
+    )
 
 
 class OrgNode(OrgNodeInput):
@@ -397,6 +405,57 @@ class BlackboardSync(BaseModel):
         ),
     )
     pushed: bool = Field(description="The remote now has the local blackboard.")
+
+
+class DirectorSettings(BaseModel):
+    """Limits on the teams an org may still add.
+
+    They are checked when a team splits. Teams that exist are never removed
+    for exceeding a limit that was lowered.
+    """
+
+    max_agents: int = Field(
+        default=64,
+        ge=2,
+        description=(
+            "The most agents a team may have together with every team "
+            "below it. Each team has two."
+        ),
+    )
+    max_depth: int = Field(
+        default=8,
+        ge=1,
+        description="The most levels of teams; the root team is level 1.",
+    )
+
+
+class DirectorSettingsUpdate(BaseModel):
+    """New values for some of the settings; what is left out stays."""
+
+    max_agents: int | None = Field(default=None, ge=2)
+    max_depth: int | None = Field(default=None, ge=1)
+
+
+class DirectorSettingsState(DirectorSettings):
+    """The settings, beside what the org has now."""
+
+    agents: int = Field(description="How many agents the org has.")
+    depth: int = Field(description="How many levels of teams the org has.")
+    max_concurrent_runs: int | None = Field(
+        description=(
+            "How many conversations the server runs at once, the org's "
+            "agents among them; teams beyond that wait to start. None when "
+            "the director was not told."
+        )
+    )
+
+
+class TeamMatch(BaseModel):
+    """A team found by its title or its directory."""
+
+    id: str
+    title: str
+    path: str = Field(description="The directory the team owns; '' at the root.")
 
 
 class OrgSummary(BaseModel):

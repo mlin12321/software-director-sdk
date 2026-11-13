@@ -154,6 +154,11 @@ export interface DirectorOrgNode {
   base_commit: string;
   /** The review of what the team last reported as done. */
   review: DirectorReview | null;
+  /**
+   * An agent of the team could not be started yet because the server runs
+   * as many conversations as it may; it starts when one of them ends.
+   */
+  waiting_to_start: boolean;
   /** Status of every node below this one. */
   descendant_counts: DirectorStatusCounts;
   /** Escalations from this node or below that wait on the human. */
@@ -320,6 +325,36 @@ export type DirectorOrgEvent =
   | { type: 'node_upsert'; node: DirectorOrgNode }
   | { type: 'node_removed'; id: DirectorNodeId }
   | { type: 'escalations'; escalations: DirectorOpenEscalation[] };
+
+/**
+ * Limits on the teams an org may still add. They are checked when a team
+ * splits; teams that exist are never removed for exceeding one.
+ */
+export interface DirectorSettings {
+  /** The most agents a team may have together with every team below it. */
+  max_agents: number;
+  /** The most levels of teams; the root team is level 1. */
+  max_depth: number;
+}
+
+/** The settings, beside what the org has now. */
+export interface DirectorSettingsState extends DirectorSettings {
+  agents: number;
+  depth: number;
+  /**
+   * How many conversations the server runs at once; teams beyond that wait
+   * to start. `null` when the director was not told.
+   */
+  max_concurrent_runs: number | null;
+}
+
+/** A team found by its title or its directory. */
+export interface DirectorTeamMatch {
+  id: DirectorNodeId;
+  title: string;
+  /** The directory the team owns; '' at the root. */
+  path: string;
+}
 
 /** What a pull or a push of the blackboard did. */
 export interface DirectorBlackboardSync {

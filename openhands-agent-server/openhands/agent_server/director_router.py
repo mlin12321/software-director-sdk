@@ -20,6 +20,8 @@ from openhands.agent_server.director.models import (
     BlackboardSyncRequest,
     BoundaryMemory,
     CreateOrgRequest,
+    DirectorSettingsState,
+    DirectorSettingsUpdate,
     NodeBlackboard,
     NodeOwnership,
     OrgNode,
@@ -29,6 +31,7 @@ from openhands.agent_server.director.models import (
     RouteMessageRequest,
     SnapshotEvent,
     TeachRequest,
+    TeamMatch,
 )
 from openhands.agent_server.director.org_store import OrgChange
 from openhands.agent_server.director.ownership import node_ownership
@@ -186,6 +189,47 @@ def get_org(service: DirectorService = Depends(get_director_service)) -> OrgSumm
     one with `POST /org`.
     """
     return service.summary()
+
+
+@director_router.get("/settings", response_model=DirectorSettingsState)
+def get_settings(
+    service: DirectorService = Depends(get_director_service),
+) -> DirectorSettingsState:
+    """Get the limits on new teams, beside how large the org is now."""
+    return service.settings_state()
+
+
+@director_router.patch("/settings", response_model=DirectorSettingsState)
+def update_settings(
+    request: DirectorSettingsUpdate,
+    service: DirectorService = Depends(get_director_service),
+) -> DirectorSettingsState:
+    """Change the limits on new teams.
+
+    A limit is checked only when a team splits. Lowering one below what the
+    org already has removes nothing; it refuses the next split. The values
+    are kept for the server's next start.
+    """
+    return service.update_settings(request)
+
+
+@director_router.get("/org/search", response_model=list[TeamMatch])
+def search_org(
+    q: Annotated[
+        str,
+        Query(
+            description=(
+                "Words to find; a team matches when its title or its "
+                "directory has all of them, in any case."
+            ),
+            max_length=200,
+        ),
+    ],
+    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+    service: DirectorService = Depends(get_director_service),
+) -> list[TeamMatch]:
+    """Find teams by title or directory, parents before their sub-teams."""
+    return service.search(q, limit)
 
 
 @director_router.post(

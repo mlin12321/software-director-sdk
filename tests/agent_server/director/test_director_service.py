@@ -477,7 +477,7 @@ async def test_every_sub_team_gets_a_headline_and_keeps_the_title_its_ic_gave(
 
     api = team(service, "services.api")
     assert (api.title, api.headline) == ("API", "Serves the checkout over HTTP.")
-    assert [task for _, task in launcher.summarized[-2:]] == [API.task, WEB.task]
+    assert {task for _, task in launcher.summarized[-2:]} == {API.task, WEB.task}
 
 
 async def test_a_report_made_before_the_first_summary_is_not_overwritten_by_it(

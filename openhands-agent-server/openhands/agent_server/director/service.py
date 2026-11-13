@@ -7,6 +7,7 @@ import os
 import re
 import shutil
 import threading
+from collections import deque
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from datetime import UTC, datetime
@@ -48,6 +49,9 @@ from openhands.agent_server.director.models import (
     Autopsy,
     Boundary,
     CreateOrgRequest,
+    DirectorSettings,
+    DirectorSettingsState,
+    DirectorSettingsUpdate,
     OrgNode,
     OrgNodeInput,
     OrgSummary,
@@ -55,13 +59,14 @@ from openhands.agent_server.director.models import (
     RoutedMessage,
     RouteMessageRequest,
     SplitChild,
+    TeamMatch,
 )
 from openhands.agent_server.director.org_persistence import (
     create_org_board,
     load_org,
     save_org,
 )
-from openhands.agent_server.director.org_store import OrgStore
+from openhands.agent_server.director.org_store import OrgStore, OrgStoreError
 from openhands.agent_server.director.pods import PodLauncher
 from openhands.agent_server.director.prompts import (
     MANAGER_ROLE,
@@ -77,7 +82,12 @@ from openhands.agent_server.director.sandbox import (
     shell_script,
     write_shell,
 )
-from openhands.agent_server.director.split import child_boundary, clean_path
+from openhands.agent_server.director.split import (
+    AGENTS_PER_TEAM,
+    check_limits,
+    child_boundary,
+    clean_path,
+)
 from openhands.agent_server.event_service import ConversationRunLimitExceeded
 from openhands.sdk.conversation.request import AgentLaunchAdditions
 from openhands.sdk.conversation.state import ConversationExecutionStatus
@@ -131,6 +141,12 @@ AGENT_LOST = "lost"
 # its agents' terminals start, and what those shells need.
 _SHELLS_DIR = "director-shells"
 _REMEMBERED_FILE = "director.json"
+# The lane of what concerns the org as a whole, such as saving its tree.
+ORG_LANE = "org"
+# The lane of the rules' consolidation.
+MODELS_LANE = "models"
+# How many of the director's own model calls run at once.
+MODEL_CALLS_AT_ONCE = 2
 
 _AGENT_STATUS: dict[ConversationExecutionStatus, str] = {
     ConversationExecutionStatus.RUNNING: "working",
@@ -187,9 +203,10 @@ class DirectorService:
 
     The tree can be read and taught without :meth:`start`. Running agents
     needs it: starting them, sending them messages and saving the tree all
-    happen on one worker task, in the order they were asked for, so nothing
-    that asks (a route, an agent's tool on its own thread) waits on a
-    conversation.
+    happen on worker tasks, so nothing that asks (a route, an agent's tool
+    on its own thread) waits on a conversation. What is asked for goes into
+    a lane, usually its team's: a lane's work is carried out in the order it
+    was asked for, and lanes do not wait for each other.
     """
 
     def __init__(
@@ -206,9 +223,12 @@ class DirectorService:
         find_review_instructions: Callable[[], str | None] = lambda: None,
         model_call_timeout: float = MODEL_CALL_TIMEOUT_SECONDS,
         consolidate_every: float = 0,
+        max_concurrent_runs: int | None = None,
     ) -> None:
         """
         Args:
+            max_concurrent_runs: How many conversations the server runs at
+                once, to tell the human; None when not known.
             find_review_instructions: Returns what a model is told when it
                 reads a team's diff before the IC above reviews it, or None
                 to leave that pass out.
@@ -244,10 +264,21 @@ class DirectorService:
         self._store: OrgStore | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._launcher: PodLauncher | None = None
-        self._effects: asyncio.Queue[Effect] = asyncio.Queue()
+        self._max_concurrent_runs = max_concurrent_runs
+        self._settings: DirectorSettings | None = None
+        # What each lane still has to carry out; a lane exists while it works.
+        self._lanes: dict[str, deque[Effect]] = {}
+        self._workers: set[asyncio.Task[None]] = set()
         # Effects asked for and not carried out yet.
         self._unsettled = 0
-        self._worker: asyncio.Task[None] | None = None
+        self._quiet = asyncio.Event()
+        self._quiet.set()
+        self._model_calls = asyncio.Semaphore(MODEL_CALLS_AT_ONCE)
+        # Set when a conversation stopped running, so a start may fit now.
+        self._room = asyncio.Event()
+        # Held by the start that waits for room, so that starts are served
+        # in the order they began to wait.
+        self._start_gate = asyncio.Lock()
         self._save_timer: asyncio.TimerHandle | None = None
         self._stop_status: Callable[[], None] | None = None
         self._create_lock = asyncio.Lock()
@@ -263,6 +294,7 @@ class DirectorService:
             remembered=config.conversations_path.parent / _REMEMBERED_FILE,
             find_review_instructions=bugbot.review_instructions,
             consolidate_every=config.director_consolidation_seconds,
+            max_concurrent_runs=config.max_concurrent_runs,
         )
 
     @property
@@ -300,13 +332,62 @@ class DirectorService:
             boundary_enforcement="sandbox" if self._bwrap else "checks",
         )
 
+    @property
+    def settings(self) -> DirectorSettings:
+        """The limits on new teams, as last saved."""
+        with self._lock:
+            if self._settings is None:
+                saved = self._read_remembered().get("settings")
+                try:
+                    self._settings = DirectorSettings.model_validate(saved or {})
+                except ValueError:
+                    logger.warning("Ignoring the saved director settings: %r", saved)
+                    self._settings = DirectorSettings()
+            return self._settings
+
+    def settings_state(self) -> DirectorSettingsState:
+        """The settings, with how large the org is now."""
+        levels: dict[str, int] = {}
+        for node in self.store.all():
+            levels[node.id] = levels.get(node.parent_id or "", 0) + 1
+        return DirectorSettingsState(
+            **self.settings.model_dump(),
+            agents=len(levels) * AGENTS_PER_TEAM,
+            depth=max(levels.values(), default=0),
+            max_concurrent_runs=self._max_concurrent_runs,
+        )
+
+    def update_settings(self, update: DirectorSettingsUpdate) -> DirectorSettingsState:
+        """Change the limits on new teams. Existing teams are left alone."""
+        changed = self.settings.model_copy(update=update.model_dump(exclude_none=True))
+        with self._lock:
+            self._settings = changed
+        self._remember(settings=changed.model_dump())
+        return self.settings_state()
+
+    def search(self, query: str, limit: int) -> list[TeamMatch]:
+        """Teams whose title or directory has every word of ``query``."""
+        words = query.lower().split()
+        found: list[TeamMatch] = []
+        if not words:
+            return found
+        for node in self.store.all():
+            text = f"{node.title}\n{node.boundary.path}".lower()
+            if all(word in text for word in words):
+                found.append(
+                    TeamMatch(id=node.id, title=node.title, path=node.boundary.path)
+                )
+                if len(found) == limit:
+                    break
+        return found
+
     async def start(self, launcher: PodLauncher) -> None:
         """Begin running agents through ``launcher``, on the running loop."""
         self._loop = asyncio.get_running_loop()
         self._launcher = launcher
-        self._effects = asyncio.Queue()
+        self._lanes = {}
         self._unsettled = 0
-        self._worker = asyncio.create_task(self._work(), name="director-effects")
+        self._quiet.set()
         self._stop_status = launcher.on_status(self._on_status)
         self._stop_guard = launcher.on_action(self.guard_action)
         self._bwrap = await asyncio.to_thread(self._find_sandbox)
@@ -333,10 +414,10 @@ class DirectorService:
             self._consolidator.cancel()
             await asyncio.gather(self._consolidator, return_exceptions=True)
             self._consolidator = None
-        if self._worker is not None:
-            self._worker.cancel()
-            await asyncio.gather(self._worker, return_exceptions=True)
-            self._worker = None
+        workers = list(self._workers)
+        for worker in workers:
+            worker.cancel()
+        await asyncio.gather(*workers, return_exceptions=True)
         if self._save_timer is not None:
             self._save_timer.cancel()
             self._save_timer = None
@@ -350,7 +431,7 @@ class DirectorService:
         await asyncio.sleep(0)
         # What is carried out may ask for more.
         while self._unsettled:
-            await self._effects.join()
+            await self._quiet.wait()
             await asyncio.sleep(0)
 
     async def create_org(self, request: CreateOrgRequest) -> OrgNode:
@@ -426,7 +507,7 @@ class DirectorService:
                 store.remove(ROOT_ID)
                 self._repo_dir = configured
                 raise
-            await asyncio.to_thread(self._remember)
+            await asyncio.to_thread(self._remember, repo_path=str(self._repo_dir))
             root = store.update_node(
                 ROOT_ID,
                 worktree_path=started.workspace,
@@ -438,10 +519,11 @@ class DirectorService:
         self._enqueue(
             lambda: self._summarize(
                 ROOT_ID, request.task, rename=request.title is None, first=True
-            )
+            ),
+            ROOT_ID,
         )
-        self._enqueue(lambda: self._brief(ROOT_ID, "ic", request.task))
-        self._enqueue(lambda: self._launch_manager(ROOT_ID, request.task))
+        self._enqueue(lambda: self._brief(ROOT_ID, "ic", request.task), ROOT_ID)
+        self._enqueue(lambda: self._launch_manager(ROOT_ID, request.task), ROOT_ID)
         return root
 
     async def route_message(self, request: RouteMessageRequest) -> RoutedMessage:
@@ -497,7 +579,7 @@ class DirectorService:
         text = request.text
         if path != node.boundary.path:
             text = f"{text}\n\n(The human sent this from {path}.)"
-        self._enqueue(lambda: self._send(conversation_id, text))
+        self._enqueue(lambda: self._send(conversation_id, text), node.id)
         return RoutedMessage(
             node_id=node.id, conversation_id=conversation_id, started_org=False
         )
@@ -507,7 +589,7 @@ class DirectorService:
         node = self.store.get(node_id)
         if node is not None:
             task = f"{node.spec_summary}\n\nLatest report of the team: {report}"
-            self._enqueue(lambda: self._summarize(node_id, task))
+            self._enqueue(lambda: self._summarize(node_id, task), f"headline:{node_id}")
 
     def guard_action(self, conversation_id: UUID, event: ActionEvent) -> str | None:
         """Why an agent of the org may not carry out an action, if it may not.
@@ -582,11 +664,14 @@ class DirectorService:
         """Send an agent a message from the director. Safe from any thread."""
         if conversation_id is None:
             return
-        self._enqueue(lambda: self._send(conversation_id, from_director(text)))
+        self._enqueue(
+            lambda: self._send(conversation_id, from_director(text)),
+            self._lane_of(conversation_id),
+        )
 
     def carry_out_split(self, node_id: str) -> None:
         """Start the sub-teams of a node's approved split. Safe from any thread."""
-        self._enqueue(lambda: self._carry_out_split(node_id))
+        self._enqueue(lambda: self._carry_out_split(node_id), node_id)
 
     def prune(
         self,
@@ -604,12 +689,13 @@ class DirectorService:
         """
         self.store.update_node(node_id, status="blocked")
         self._enqueue(
-            lambda: self._prune(node_id, approach, why_failed, replacement_task)
+            lambda: self._prune(node_id, approach, why_failed, replacement_task),
+            node_id,
         )
 
     def request_review(self, node_id: str) -> None:
         """Have the work a team reported done reviewed. Safe from any thread."""
-        self._enqueue(lambda: self._request_review(node_id))
+        self._enqueue(lambda: self._request_review(node_id), f"review:{node_id}")
 
     def request_changes(self, node_id: str, findings: list[ReviewFinding]) -> bool:
         """Send a team's work back to it with what must change.
@@ -636,7 +722,7 @@ class DirectorService:
         above = store.get(node.parent_id) if node.parent_id else None
         if review.round >= MAX_REVIEW_ROUNDS:
             store.update_node(node_id, status="blocked", review=review)
-            self._enqueue(lambda: self._halt(node_id))
+            self._enqueue(lambda: self._halt(node_id), node_id)
             self._reviewed(above)
             return True
         store.update_node(node_id, status="working", review=review)
@@ -677,7 +763,7 @@ class DirectorService:
             needed_above: Why a team further up waits on the work; '' when
                 none does.
         """
-        self._enqueue(lambda: self._accept(node_id, needed_above))
+        self._enqueue(lambda: self._accept(node_id, needed_above), f"review:{node_id}")
 
     def _checkouts(self) -> list[Path]:
         """Where the org's checkouts are: the repository and the worktrees."""
@@ -793,7 +879,7 @@ class DirectorService:
             store.replace_all(build_fixture_nodes())
             logger.info("Director serving the fixture tree (%d nodes)", len(store))
             return store
-        remembered = self._read_remembered()
+        remembered = self._remembered_repo()
         if remembered is None or not self._load_from(remembered, store):
             self._load_from(self._directory, store)
         store.on_change(self._schedule_save)
@@ -821,58 +907,103 @@ class DirectorService:
         """Take up the org saved at or above ``workspace``, if there is one."""
         if not self._load_from(workspace, self.store):
             return False
-        self._remember()
+        self._remember(repo_path=str(self._repo_dir))
         return True
 
-    def _read_remembered(self) -> Path | None:
+    def _read_remembered(self) -> dict[str, object]:
+        """What the director keeps between starts of the server."""
         if self._remembered is None:
-            return None
+            return {}
         try:
-            return Path(json.loads(self._remembered.read_text())["repo_path"])
-        except (OSError, ValueError, KeyError, TypeError):
-            return None
+            kept = json.loads(self._remembered.read_text())
+        except (OSError, ValueError):
+            return {}
+        return kept if isinstance(kept, dict) else {}
 
-    def _remember(self) -> None:
-        """Keep the org's repository for the next start of the server."""
+    def _remembered_repo(self) -> Path | None:
+        repo_path = self._read_remembered().get("repo_path")
+        return Path(repo_path) if isinstance(repo_path, str) else None
+
+    def _remember(self, **changes: object) -> None:
+        """Keep ``changes`` for the next start of the server."""
         if self._remembered is None:
             return
         try:
             self._remembered.parent.mkdir(parents=True, exist_ok=True)
             atomic_write_text(
-                self._remembered, json.dumps({"repo_path": str(self._repo_dir)}) + "\n"
+                self._remembered,
+                json.dumps({**self._read_remembered(), **changes}) + "\n",
             )
         except OSError:
-            logger.exception("Could not remember the org's repository")
+            logger.exception("Could not write %s", self._remembered)
 
-    def _enqueue(self, effect: Effect) -> None:
+    def _enqueue(self, effect: Effect, lane: str = ORG_LANE) -> None:
         loop = self._loop
         if loop is None:
             raise Unavailable("The director is not running agents on this server")
-        loop.call_soon_threadsafe(self._put, effect)
+        loop.call_soon_threadsafe(self._put, effect, lane)
 
-    def _put(self, effect: Effect) -> None:
+    def _put(self, effect: Effect, lane: str) -> None:
         self._unsettled += 1
-        self._effects.put_nowait(effect)
+        self._quiet.clear()
+        waiting = self._lanes.get(lane)
+        if waiting is not None:
+            waiting.append(effect)
+            return
+        self._lanes[lane] = deque([effect])
+        worker = asyncio.create_task(self._work(lane), name=f"director-{lane}")
+        self._workers.add(worker)
+        worker.add_done_callback(self._workers.discard)
 
-    async def _work(self) -> None:
-        while True:
-            effect = await self._effects.get()
-            try:
-                await effect()
-            except Exception:
-                logger.exception("A director action failed")
-            finally:
-                self._unsettled -= 1
-                self._effects.task_done()
+    async def _work(self, lane: str) -> None:
+        waiting = self._lanes[lane]
+        try:
+            while waiting:
+                effect = waiting.popleft()
+                try:
+                    await effect()
+                except Exception:
+                    logger.exception("A director action failed")
+                finally:
+                    self._unsettled -= 1
+                    if not self._unsettled:
+                        self._quiet.set()
+        finally:
+            del self._lanes[lane]
 
-    async def _when_there_is_room[T](self, start: Callable[[], Awaitable[T]]) -> T:
-        """Run ``start``, again after a pause for as long as the server is full."""
-        while True:
-            try:
-                return await start()
-            except ConversationRunLimitExceeded:
-                logger.info("Server is at its run limit; the director waits")
-                await asyncio.sleep(self._run_limit_retry)
+    def _lane_of(self, conversation_id: str) -> str:
+        """The lane of the team an agent's conversation belongs to."""
+        found = self.store.find_by_conversation(conversation_id)
+        return found[0].id if found else ORG_LANE
+
+    async def _when_there_is_room[T](
+        self, node_id: str, start: Callable[[], Awaitable[T]]
+    ) -> T:
+        """Run ``start`` for a team; while the server is full, wait in line
+        for a conversation to stop running and try again."""
+        try:
+            return await start()
+        except ConversationRunLimitExceeded:
+            logger.info("Server is at its run limit; node %s waits", node_id)
+        store = self.store
+        with suppress(NotFound):
+            store.update_node(node_id, waiting_to_start=True)
+        try:
+            async with self._start_gate:
+                while True:
+                    self._room.clear()
+                    try:
+                        return await start()
+                    except ConversationRunLimitExceeded:
+                        pass
+                    # Also after a pause: not every conversation is the org's.
+                    with suppress(TimeoutError):
+                        await asyncio.wait_for(
+                            self._room.wait(), timeout=self._run_limit_retry
+                        )
+        finally:
+            with suppress(NotFound):
+                store.update_node(node_id, waiting_to_start=False)
 
     def _schedule_save(self) -> None:
         loop = self._loop
@@ -903,6 +1034,8 @@ class DirectorService:
     def _on_status(
         self, conversation_id: UUID, status: ConversationExecutionStatus
     ) -> None:
+        if status != ConversationExecutionStatus.RUNNING and self._loop is not None:
+            self._loop.call_soon_threadsafe(self._room.set)
         store = self._store
         if store is None:
             return
@@ -1000,6 +1133,7 @@ class DirectorService:
                 raise NotFound(f"Node {node_id} has nobody to derive its {role} from")
             parent_id = UUID(parent_conversation)
             started = await self._when_there_is_room(
+                node_id,
                 lambda: launcher.start_derived(
                     parent_id,
                     UUID(conversation_id),
@@ -1008,7 +1142,7 @@ class DirectorService:
                     isolation=node.isolation if role == "ic" else "shared",
                     suffixes=[] if role == "ic" else [MANAGER_ROLE],
                     tool_params=tool_params,
-                )
+                ),
             )
         except Exception:
             logger.exception("Could not start the %s of node %s", role, node_id)
@@ -1038,30 +1172,63 @@ class DirectorService:
         proposal = node.pending_split if node else None
         if node is None or proposal is None or proposal.status != "approved":
             return
+        parent_ic = agent_conversation(node, "ic")
+        try:
+            # The org may have grown since the split was proposed.
+            check_limits(store, node, len(proposal.children), self.settings)
+        except OrgStoreError as error:
+            store.update_node(
+                node_id,
+                pending_split=proposal.model_copy(
+                    update={"status": "refine_requested", "feedback": str(error)}
+                ),
+            )
+            for conversation_id in (parent_ic, agent_conversation(node, "manager")):
+                self.notify(
+                    conversation_id,
+                    f"The approved split cannot be carried out: {error}",
+                )
+            return
         if proposal.contracts.strip():
             await asyncio.to_thread(self._record_contracts, node, proposal.contracts)
 
-        parent_ic = agent_conversation(node, "ic")
         started: list[str] = []
-        summarized: list[tuple[str, str]] = []
+        teams: list[tuple[str, str]] = []
         for child in proposal.children:
             child_node = store.upsert(self._child_node(store, node, child))
-            if await self._start_agent(child_node.id, "ic", parent_ic, child.task):
-                await self._launch_manager(child_node.id, child.task)
             started.append(f"{child.title} ({child.path})")
-            summarized.append((child_node.id, child.task))
+            teams.append((child_node.id, child.task))
+        # The sub-teams start side by side, each in its own lane; the split
+        # is over when the last of them has.
+        left = len(teams)
+
+        async def start(child_id: str, task: str) -> None:
+            nonlocal left
+            try:
+                if await self._start_agent(child_id, "ic", parent_ic, task):
+                    await self._launch_manager(child_id, task)
+            finally:
+                left -= 1
+                if not left:
+                    self._enqueue(lambda: self._finish_split(node_id, started), node_id)
+            await self._summarize(child_id, task, first=True)
+
+        for child_id, task in teams:
+            self._enqueue(
+                lambda child_id=child_id, task=task: start(child_id, task), child_id
+            )
+
+    async def _finish_split(self, node_id: str, started: list[str]) -> None:
+        store = self.store
+        node = store.get(node_id)
+        if node is None:
+            return
         store.update_node(node_id, pending_split=None)
         # The shell the IC starts next can no longer write what it gave away.
         with suppress(GitError, OSError):
             await asyncio.to_thread(self._confine, node_id, "ic")
-        for child_id, task in summarized:
-            self._enqueue(
-                lambda child_id=child_id, task=task: self._summarize(
-                    child_id, task, first=True
-                )
-            )
         self.notify(
-            parent_ic,
+            agent_conversation(node, "ic"),
             "Your split was approved and these sub-teams now own their "
             f"directories: {', '.join(started)}. You can no longer write "
             "there; carry on with what remains in your boundary.",
@@ -1140,7 +1307,8 @@ class DirectorService:
             if await self._start_agent(node_id, "ic", parent_ic, replacement_task):
                 await self._launch_manager(node_id, replacement_task)
             self._enqueue(
-                lambda: self._summarize(node_id, replacement_task, first=True)
+                lambda: self._summarize(node_id, replacement_task, first=True),
+                node_id,
             )
             outcome = f"a fresh team now works in {where}"
         self.notify(
@@ -1349,7 +1517,7 @@ class DirectorService:
     async def _consolidate_regularly(self) -> None:
         while True:
             await asyncio.sleep(self._consolidate_every)
-            # One pass at a time, behind whatever the agents asked for.
+            # One pass at a time.
             done = asyncio.Event()
 
             async def consolidate(done: asyncio.Event = done) -> None:
@@ -1358,7 +1526,7 @@ class DirectorService:
                 finally:
                     done.set()
 
-            self._enqueue(consolidate)
+            self._enqueue(consolidate, MODELS_LANE)
             await done.wait()
 
     async def _consolidate(self) -> None:
@@ -1461,10 +1629,11 @@ class DirectorService:
             return
         launcher = self._require_launcher()
         try:
-            summary = await asyncio.wait_for(
-                launcher.summarize(UUID(conversation_id), task),
-                timeout=self._summary_timeout,
-            )
+            async with self._model_calls:
+                summary = await asyncio.wait_for(
+                    launcher.summarize(UUID(conversation_id), task),
+                    timeout=self._summary_timeout,
+                )
         except (NotFound, TimeoutError):
             return
         if summary is None or reported():

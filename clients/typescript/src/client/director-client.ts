@@ -11,6 +11,9 @@ import type {
   DirectorOrgNodeDetail,
   DirectorOrgSummary,
   DirectorRoutedMessage,
+  DirectorSettings,
+  DirectorSettingsState,
+  DirectorTeamMatch,
 } from '../models/director';
 
 export interface DirectorClientOptions {
@@ -247,6 +250,35 @@ export class DirectorClient {
       `${DIRECTOR_PATH}/org/blackboard/push`,
       { remote }
     );
+    return response.data;
+  }
+
+  /** The limits on new teams, beside how large the org is now. */
+  async getSettings(): Promise<DirectorSettingsState> {
+    const response = await this.client.get<DirectorSettingsState>(`${DIRECTOR_PATH}/settings`);
+    return response.data;
+  }
+
+  /**
+   * Change the limits on new teams. A limit is checked only when a team
+   * splits, so lowering one below what the org has removes nothing.
+   */
+  async updateSettings(settings: Partial<DirectorSettings>): Promise<DirectorSettingsState> {
+    const response = await this.client.patch<DirectorSettingsState>(
+      `${DIRECTOR_PATH}/settings`,
+      settings
+    );
+    return response.data;
+  }
+
+  /**
+   * Teams whose title or directory has every word of `query`, parents
+   * before their sub-teams.
+   */
+  async searchTeams(query: string, limit = 20): Promise<DirectorTeamMatch[]> {
+    const response = await this.client.get<DirectorTeamMatch[]>(`${DIRECTOR_PATH}/org/search`, {
+      params: { q: query, limit },
+    });
     return response.data;
   }
 

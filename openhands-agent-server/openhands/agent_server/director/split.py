@@ -10,13 +10,60 @@ from pathlib import PurePosixPath
 
 from openhands.agent_server.director.models import (
     Boundary,
+    DirectorSettings,
     OrgNode,
     SplitChild,
 )
-from openhands.agent_server.director.org_store import OrgStoreError
+from openhands.agent_server.director.org_store import (
+    NODE_STATUSES,
+    OrgStore,
+    OrgStoreError,
+)
 
 
 MAX_SPLIT_CHILDREN = 16
+# An IC and a Manager.
+AGENTS_PER_TEAM = 2
+
+
+def teams_below(node: OrgNode) -> int:
+    """How many teams there are below ``node``, at any depth."""
+    counts = node.descendant_counts.model_dump()
+    return sum(counts[status] for status in NODE_STATUSES)
+
+
+def check_limits(
+    store: OrgStore, node: OrgNode, added: int, settings: DirectorSettings
+) -> None:
+    """Refuse ``added`` new sub-teams of ``node`` that the org has no room for.
+
+    Raises:
+        OrgStoreError: They would be too deep, or give ``node`` or a team
+            above it more agents than a team may have with those below it.
+    """
+    above = store.ancestors(node.id)
+    level = len(above) + 2
+    if level > settings.max_depth:
+        raise OrgStoreError(
+            f"An org may have at most {settings.max_depth} levels of teams, "
+            f"and sub-teams of {node.title!r} would be level {level}. Do the "
+            "work in your own team."
+        )
+    for team in (node, *reversed(above)):
+        agents = (1 + teams_below(team)) * AGENTS_PER_TEAM
+        room = (settings.max_agents - agents) // AGENTS_PER_TEAM
+        if added > room:
+            raise OrgStoreError(
+                f"A team may have at most {settings.max_agents} agents "
+                f"together with the teams below it. {team.title!r} has "
+                f"{agents}, and {added} more sub-teams would add "
+                f"{added * AGENTS_PER_TEAM}. "
+                + (
+                    f"At most {room} more sub-teams fit."
+                    if room > 0
+                    else "No more sub-teams fit."
+                )
+            )
 
 
 def normalize_split(
