@@ -16,7 +16,7 @@ from uuid import UUID, uuid4
 
 from openhands.agent_server.config import Config
 from openhands.agent_server.conversation_service import ToolParams
-from openhands.agent_server.director import bugbot
+from openhands.agent_server.director import bugbot, memory
 from openhands.agent_server.director.boundary import (
     nearest_team,
     write_refusal,
@@ -116,10 +116,12 @@ RUN_LIMIT_RETRY_SECONDS = 5.0
 # How long a model may take to name a team before the team keeps the name
 # it has; the root's agents are not briefed until then.
 SUMMARY_TIMEOUT_SECONDS = 20.0
-# How long a model may take over a team's diff.
+# How long a model may take over a team's diff, or over a boundary's rules.
 MODEL_CALL_TIMEOUT_SECONDS = 120.0
 # A team whose work is sent back this many times is stopped.
 MAX_REVIEW_ROUNDS = 3
+# How often the rules of the blackboard are looked over for consolidation.
+CONSOLIDATION_SECONDS = 900.0
 # Where, in the org's repository, the uncommitted work a prune discarded is
 # kept.
 PRUNED_REFS = "refs/agents/pruned"
@@ -203,12 +205,15 @@ class DirectorService:
         remembered: Path | None = None,
         find_review_instructions: Callable[[], str | None] = lambda: None,
         model_call_timeout: float = MODEL_CALL_TIMEOUT_SECONDS,
+        consolidate_every: float = 0,
     ) -> None:
         """
         Args:
             find_review_instructions: Returns what a model is told when it
                 reads a team's diff before the IC above reviews it, or None
                 to leave that pass out.
+            consolidate_every: Seconds between looks at the blackboard's
+                rules for boundaries to consolidate; 0 for never.
             remembered: A file to keep the org's repository in, so that an
                 org started outside ``repo_dir`` is found again after a
                 restart.
@@ -227,6 +232,8 @@ class DirectorService:
         self._remembered = remembered
         self._find_review_instructions = find_review_instructions
         self._model_call_timeout = model_call_timeout
+        self._consolidate_every = consolidate_every
+        self._consolidator: asyncio.Task[None] | None = None
         self._bwrap: str | None = None
         self._stop_guard: Callable[[], None] | None = None
         self._save_delay = save_delay
@@ -253,6 +260,7 @@ class DirectorService:
             find_sandbox=find_bwrap,
             remembered=config.conversations_path.parent / _REMEMBERED_FILE,
             find_review_instructions=bugbot.review_instructions,
+            consolidate_every=config.director_consolidation_seconds,
         )
 
     @property
@@ -303,6 +311,10 @@ class DirectorService:
         if self._bwrap is None:
             logger.info("Director cannot confine shells here; it checks file tools")
         bind_director(self)
+        if self._consolidate_every > 0 and not self._fixture:
+            self._consolidator = asyncio.create_task(
+                self._consolidate_regularly(), name="director-consolidation"
+            )
         if self._store is not None:
             self._enqueue(self._resync)
 
@@ -315,6 +327,10 @@ class DirectorService:
         if self._stop_guard is not None:
             self._stop_guard()
             self._stop_guard = None
+        if self._consolidator is not None:
+            self._consolidator.cancel()
+            await asyncio.gather(self._consolidator, return_exceptions=True)
+            self._consolidator = None
         if self._worker is not None:
             self._worker.cancel()
             await asyncio.gather(self._worker, return_exceptions=True)
@@ -1276,6 +1292,40 @@ class DirectorService:
         for agent in node.agents:
             if agent.conversation_id is not None:
                 await launcher.stop(UUID(agent.conversation_id))
+
+    async def _consolidate_regularly(self) -> None:
+        while True:
+            await asyncio.sleep(self._consolidate_every)
+            # One pass at a time, behind whatever the agents asked for.
+            done = asyncio.Event()
+
+            async def consolidate(done: asyncio.Event = done) -> None:
+                try:
+                    await self._consolidate()
+                finally:
+                    done.set()
+
+            self._enqueue(consolidate)
+            await done.wait()
+
+    async def _consolidate(self) -> None:
+        """Have a model rewrite the rules of every boundary that has gained
+        enough of them."""
+        store = self._store
+        root = store.get(store.root_id) if store and store.root_id else None
+        asker = agent_conversation(root, "ic") if root else None
+        if asker is None or not is_git_repository(self._repo_dir):
+            return
+        board = GitBlackboard(self._repo_dir)
+        for item in await asyncio.to_thread(memory.due, board):
+            answer = await self._ask(asker, *memory.prompt(item), memory.USAGE_ID)
+            rules = memory.parse_rules(answer, item) if answer else None
+            if rules is None:
+                logger.warning(
+                    "No usable consolidation of the rules of %r", item.directory
+                )
+                continue
+            await asyncio.to_thread(memory.apply, board, item, rules)
 
     def _discard_work(self, teams: list[OrgNode], stamp: str) -> str | None:
         """Discard the uncommitted work of ``teams``, the pruned team first.
