@@ -1,17 +1,30 @@
 import subprocess
+from collections.abc import Callable, Collection, Sequence
+from dataclasses import dataclass, field
 from pathlib import Path
+from uuid import UUID
 
 import pytest
 
+from openhands.agent_server.conversation_service import ExecutionStatusListener
 from openhands.agent_server.director.models import (
     AgentRef,
     Boundary,
     Escalation,
     EscalationHandoff,
     EscalationKind,
+    IsolationMode,
     NodeStatus,
     OrgNodeInput,
 )
+from openhands.agent_server.director.pods import StartedAgent
+from openhands.agent_server.event_service import ConversationRunLimitExceeded
+from openhands.agent_server.models import StartConversationRequest
+from openhands.sdk import LLM, Agent
+from openhands.sdk.conversation.state import ConversationExecutionStatus
+from openhands.sdk.errors import NotFound
+from openhands.sdk.tool.spec import Tool
+from openhands.sdk.workspace import LocalWorkspace
 
 
 def run_git(repo: Path, *args: str) -> str:
@@ -93,3 +106,103 @@ def small_tree() -> list[OrgNodeInput]:
         make_node("a1", "a", status="done", path="svc/a/one"),
         make_node("a2", "a", status="idle", path="svc/a/two"),
     ]
+
+
+@dataclass
+class DerivedStart:
+    parent_id: UUID
+    conversation_id: UUID
+    title: str
+    task: str
+    isolation: IsolationMode
+    suffixes: list[str]
+
+
+@dataclass
+class FakeLauncher:
+    """Stands in for the server's conversations: records, runs nothing."""
+
+    root: StartConversationRequest | None = None
+    root_tools: list[str] = field(default_factory=list)
+    root_title: str | None = None
+    derived: list[DerivedStart] = field(default_factory=list)
+    sent: list[tuple[UUID, str]] = field(default_factory=list)
+    known: dict[UUID, ConversationExecutionStatus] = field(default_factory=dict)
+    listeners: list[ExecutionStatusListener] = field(default_factory=list)
+    # How many of the next derived starts the server is too full for.
+    full_for: int = 0
+    root_error: Exception | None = None
+
+    async def start_root(
+        self, request: StartConversationRequest, tools: Sequence[Tool], *, title: str
+    ) -> StartedAgent:
+        if self.root_error is not None:
+            raise self.root_error
+        assert request.conversation_id is not None
+        self.root = request
+        self.root_tools = [tool.name for tool in tools]
+        self.root_title = title
+        self.known[request.conversation_id] = ConversationExecutionStatus.IDLE
+        return StartedAgent(
+            workspace=str(request.workspace.working_dir), isolation="shared"
+        )
+
+    async def start_derived(
+        self,
+        parent_id: UUID,
+        conversation_id: UUID,
+        *,
+        title: str,
+        task: str,
+        isolation: IsolationMode,
+        suffixes: Sequence[str] = (),
+    ) -> StartedAgent:
+        if self.full_for > 0:
+            self.full_for -= 1
+            raise ConversationRunLimitExceeded("full")
+        if parent_id not in self.known:
+            raise NotFound(f"Conversation {parent_id} does not exist")
+        self.derived.append(
+            DerivedStart(
+                parent_id, conversation_id, title, task, isolation, list(suffixes)
+            )
+        )
+        self.known[conversation_id] = ConversationExecutionStatus.IDLE
+        assert self.root is not None
+        return StartedAgent(
+            workspace=str(self.root.workspace.working_dir), isolation=isolation
+        )
+
+    async def send(self, conversation_id: UUID, text: str) -> None:
+        if conversation_id not in self.known:
+            raise NotFound(f"Conversation {conversation_id} does not exist")
+        self.sent.append((conversation_id, text))
+
+    async def statuses(
+        self, conversation_ids: Collection[UUID]
+    ) -> dict[UUID, ConversationExecutionStatus]:
+        return {
+            conversation_id: self.known[conversation_id]
+            for conversation_id in conversation_ids
+            if conversation_id in self.known
+        }
+
+    def on_status(self, listener: ExecutionStatusListener) -> Callable[[], None]:
+        self.listeners.append(listener)
+        return lambda: self.listeners.remove(listener)
+
+    def report(self, conversation_id: str, status: ConversationExecutionStatus) -> None:
+        """A conversation changed status."""
+        self.known[UUID(conversation_id)] = status
+        for listener in list(self.listeners):
+            listener(UUID(conversation_id), status)
+
+    def messages_to(self, conversation_id: str | None) -> list[str]:
+        return [text for target, text in self.sent if str(target) == conversation_id]
+
+
+def root_conversation(workspace: Path) -> StartConversationRequest:
+    return StartConversationRequest(
+        agent=Agent(llm=LLM(model="gpt-4o", usage_id="test-llm"), tools=[]),
+        workspace=LocalWorkspace(working_dir=str(workspace)),
+    )

@@ -56,7 +56,11 @@ export type {
   CreateConversationPayload,
   SendConversationEventOptions,
 } from './client/conversation-client';
-export type { DirectorClientOptions, StreamOrgTreeOptions } from './client/director-client';
+export type {
+  CreateOrgRequest,
+  DirectorClientOptions,
+  StreamOrgTreeOptions,
+} from './client/director-client';
 export type {
   DirectorAgentRef,
   DirectorAgentRole,
@@ -77,6 +81,10 @@ export type {
   DirectorOrgEvent,
   DirectorOrgNode,
   DirectorOrgNodeDetail,
+  DirectorOrgSummary,
+  DirectorSplitChild,
+  DirectorSplitProposal,
+  DirectorSplitStatus,
 } from './models/director';
 export type { FileClientOptions, FileUploadContent } from './client/file-client';
 export type { HooksClientOptions } from './client/hooks-client';

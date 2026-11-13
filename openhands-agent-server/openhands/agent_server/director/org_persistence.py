@@ -14,7 +14,7 @@ from openhands.agent_server.director.git_blackboard import (
     BoardReader,
     GitBlackboard,
 )
-from openhands.agent_server.director.models import OrgNodeInput
+from openhands.agent_server.director.models import OrgNode, OrgNodeInput
 from openhands.agent_server.director.org_store import OrgStore
 
 
@@ -33,12 +33,25 @@ def create_org_board(repo_dir: Path) -> GitBlackboard:
     return GitBlackboard(repo_dir, ref=ORG_REF)
 
 
+def _persisted(node: OrgNode) -> dict[str, object]:
+    """A node without what its agents' conversations determine.
+
+    Whether an agent is running changes many times a minute and is read back
+    from the conversations on load, so it is not worth a commit each time.
+    """
+    data = node.model_dump(
+        exclude={"child_ids", "descendant_counts", "escalation_count"}
+    )
+    for agent in data["agents"]:
+        agent["status"] = "idle"
+    if data["status"] == "working":
+        data["status"] = "idle"
+    return data
+
+
 def save_org(board: GitBlackboard, store: OrgStore) -> None:
     """Write the tree to ``board`` unless it is already stored unchanged."""
-    nodes = [
-        node.model_dump(exclude={"child_ids", "descendant_counts", "escalation_count"})
-        for node in store.all()
-    ]
+    nodes = [_persisted(node) for node in store.all()]
     content = json.dumps({"version": _VERSION, "nodes": nodes}, indent=2) + "\n"
 
     def mutate(read: BoardReader) -> list[BoardChange]:

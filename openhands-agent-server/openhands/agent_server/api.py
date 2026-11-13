@@ -60,6 +60,7 @@ from openhands.agent_server.dependencies import (
     check_workspace_session,
 )
 from openhands.agent_server.director import DirectorService
+from openhands.agent_server.director.pods import ConversationPodLauncher
 from openhands.agent_server.director_router import director_router
 from openhands.agent_server.errors import status_for
 from openhands.agent_server.experimental_features_router import (
@@ -437,6 +438,11 @@ async def api_lifespan(api: FastAPI) -> AsyncIterator[None]:
 
         async with service:
             api.state.conversation_service = service
+            director: DirectorService | None = getattr(
+                api.state, "director_service", None
+            )
+            if director is not None:
+                await director.start(ConversationPodLauncher(service))
 
             config = api.state.config
             retention_task: asyncio.Task | None = None
@@ -454,6 +460,8 @@ async def api_lifespan(api: FastAPI) -> AsyncIterator[None]:
             try:
                 yield
             finally:
+                if director is not None:
+                    await director.aclose()
                 session_store = getattr(api.state, "app_backend_session_store", None)
                 if session_store is not None:
                     await session_store.shutdown()

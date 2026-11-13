@@ -241,3 +241,19 @@ class TestMerge:
 
         assert board.merge(theirs.ref) == theirs.head()
         assert json.loads(board.read("svc/b/memory.json") or "")["rules"] == ["B"]
+
+
+def test_a_boundary_inherits_the_rules_of_every_boundary_above_it(repo: Path):
+    board = GitBlackboard(repo)
+    board.teach("", "Never log card numbers")
+    board.teach("services", "Every endpoint is versioned")
+    board.teach("services/api", "Never log card numbers")
+    board.teach("services/api", "Totals are integer cents")
+    board.teach("apps", "Pages are server-rendered")
+
+    assert board.inherited_rules("services/api") == [
+        "Never log card numbers",
+        "Every endpoint is versioned",
+        "Totals are integer cents",
+    ]
+    assert board.inherited_rules("docs") == ["Never log card numbers"]

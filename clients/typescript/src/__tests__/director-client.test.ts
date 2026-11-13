@@ -40,6 +40,57 @@ describe('DirectorClient', () => {
     vi.restoreAllMocks();
   });
 
+  it('reads whether there is an org and starts one', async () => {
+    const summary = {
+      root_id: null,
+      node_count: 0,
+      repo_path: '/repo',
+      is_git_repository: true,
+      fixture: false,
+    };
+    const fetchMock = mockFetch(() => jsonResponse(summary));
+    const client = new DirectorClient({ host: 'http://example.com' });
+    const conversation = { workspace: { working_dir: '/repo' }, agent_profile_id: 'default' };
+
+    const before = await client.getOrg();
+    await client.createOrg({ title: 'Checkout', task: 'Build the checkout flow', conversation });
+
+    const calls = fetchMock.mock.calls;
+    expect(before).toEqual(summary);
+    expect(calls.map(([url, init]) => `${init.method} ${url}`)).toEqual([
+      'GET http://example.com/api/director/org',
+      'POST http://example.com/api/director/org',
+    ]);
+    expect(JSON.parse(calls[1][1].body)).toEqual({
+      title: 'Checkout',
+      task: 'Build the checkout flow',
+      conversation,
+    });
+  });
+
+  it('answers an escalation of the node that raised it', async () => {
+    const fetchMock = mockFetch(() => jsonResponse({ id: 'payments.api', escalations: [] }));
+    const client = new DirectorClient({ host: 'http://example.com' });
+
+    const node = await client.answerEscalation('payments.api', 'jwt/1', 'Opaque tokens.');
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(`${init.method} ${url}`).toBe(
+      'POST http://example.com/api/director/org/nodes/payments.api/escalations/jwt%2F1/answer'
+    );
+    expect(JSON.parse(init.body)).toEqual({ answer: 'Opaque tokens.' });
+    expect(node.escalations).toEqual([]);
+  });
+
+  it('reports a refused answer as an HTTP error', async () => {
+    mockFetch(() => jsonResponse({ detail: 'still with team root' }, 409));
+    const client = new DirectorClient({ host: 'http://example.com' });
+
+    const refusal = await client.answerEscalation('api', 'jwt', 'x').catch((error) => error);
+
+    expect(isHttpError(refusal) && refusal.status).toBe(409);
+  });
+
   it('calls the node routes with the node id escaped and the session key', async () => {
     const fetchMock = mockFetch(() => jsonResponse({ rules: ['Never mock the clock'] }));
     const client = new DirectorClient({ host: 'http://example.com/', apiKey: 'secret' });

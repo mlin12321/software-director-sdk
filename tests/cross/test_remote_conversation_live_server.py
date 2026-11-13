@@ -60,6 +60,8 @@ from openhands.sdk.git.utils import run_git_command
 from openhands.sdk.hooks import HookConfig, HookDefinition, HookMatcher
 from openhands.sdk.io.local import LocalFileStore
 from openhands.sdk.llm import MessageToolCall
+from openhands.sdk.llm.llm_response import LLMResponse
+from openhands.sdk.llm.utils.metrics import MetricsSnapshot
 from openhands.sdk.security.llm_analyzer import LLMSecurityAnalyzer
 from openhands.sdk.skills import Skill
 from openhands.sdk.subagent import AgentDefinition
@@ -3503,3 +3505,137 @@ def test_max_budget_per_run_set_updated_and_cleared_over_live_server(
             assert llm_calls == 18
     finally:
         conv.close()
+
+
+def _scripted_org_llm(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Agents of an org that split the root once: the IC proposes when it is
+    briefed, its Manager approves when it is told, everyone else just replies."""
+
+    def tool_call(name: str, arguments: dict) -> dict:
+        return {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": f"call_{name}",
+                    "type": "function",
+                    "function": {"name": name, "arguments": json.dumps(arguments)},
+                }
+            ],
+        }
+
+    def reply_to(messages: list[Message]) -> dict:
+        last = messages[-1]
+        text = "".join(
+            content.text for content in last.content if isinstance(content, TextContent)
+        )
+        if last.role == "user" and "You are the IC of the team 'Checkout'" in text:
+            return tool_call(
+                "propose_boundary_split",
+                {
+                    "children": [
+                        {"title": "API", "path": "services/api", "task": "Serve it"},
+                        {"title": "Web", "path": "apps/web", "task": "Show it"},
+                    ],
+                    "contracts": "POST /checkout returns an order id",
+                },
+            )
+        if last.role == "user" and "Your IC proposes to split" in text:
+            return tool_call("decide_split", {"decision": "approve"})
+        return {"role": "assistant", "content": "Understood."}
+
+    def fake_completion(self, messages, tools=None, **kwargs):  # type: ignore[no-untyped-def]
+        litellm_msg = LiteLLMMessage.model_validate(reply_to(messages))
+        return LLMResponse(
+            message=Message.from_llm_chat_message(litellm_msg),
+            metrics=MetricsSnapshot(
+                model_name="test-model",
+                accumulated_cost=0.0,
+                max_budget_per_task=None,
+                accumulated_token_usage=None,
+            ),
+            raw_response=ModelResponse(
+                id="test-resp",
+                created=int(time.time()),
+                model="test-model",
+                choices=[Choices(index=0, finish_reason="stop", message=litellm_msg)],
+            ),
+        )
+
+    async def fake_acompletion(self, messages, tools=None, **kwargs):  # type: ignore[no-untyped-def]
+        return fake_completion(self, messages, tools, **kwargs)
+
+    monkeypatch.setattr(LLM, "completion", fake_completion, raising=True)
+    monkeypatch.setattr(LLM, "acompletion", fake_acompletion, raising=True)
+
+
+def test_director_runs_an_org_whose_root_splits_into_sub_teams(
+    server_env, monkeypatch: pytest.MonkeyPatch
+):
+    _scripted_org_llm(monkeypatch)
+    repo = server_env["workspace_path"]
+    run_git_command(["git", "init", "-b", "main"], repo)
+    run_git_command(
+        ["git", "-c", "user.name=T", "-c", "user.email=t@example.com", "commit"]
+        + ["--allow-empty", "-m", "init"],
+        repo,
+    )
+
+    with httpx.Client(base_url=server_env["host"], timeout=30) as client:
+        before = client.get("/api/director/org").json()
+        created = client.post(
+            "/api/director/org",
+            json={
+                "title": "Checkout",
+                "task": "Build the checkout flow",
+                "conversation": {
+                    "agent": {
+                        "llm": {"model": "gpt-4o-mini", "api_key": "test"},
+                        "tools": [],
+                    },
+                    "workspace": {"working_dir": str(repo)},
+                    "autotitle": False,
+                },
+            },
+        )
+        assert created.status_code == 201, created.text
+        root = created.json()
+
+        deadline = time.time() + 30
+        detail = client.get("/api/director/org/nodes/root").json()
+        while time.time() < deadline and (
+            len(detail["children"]) < 2 or detail["node"]["pending_split"]
+        ):
+            time.sleep(0.2)
+            detail = client.get("/api/director/org/nodes/root").json()
+
+        assert (before["root_id"], before["is_git_repository"]) == (None, True)
+        assert [child["id"] for child in detail["children"]] == [
+            "services.api",
+            "apps.web",
+        ]
+        assert detail["node"]["pending_split"] is None
+        root_ic, root_manager = (agent["conversation_id"] for agent in root["agents"])
+        manager = client.get(f"/api/conversations/{root_manager}").json()
+        assert manager["parent_conversation_id"] == root_ic
+        assert [
+            client.get(f"/api/conversations/{root_ic}").json()["title"],
+            manager["title"],
+        ] == ["Checkout (IC)", "Checkout (Manager)"]
+        for child in detail["children"]:
+            child_ic, child_manager = (
+                agent["conversation_id"] for agent in child["agents"]
+            )
+            ic = client.get(f"/api/conversations/{child_ic}")
+            assert ic.status_code == 200, child
+            assert ic.json()["parent_conversation_id"] == root_ic
+            assert (
+                client.get(f"/api/conversations/{child_manager}").json()[
+                    "parent_conversation_id"
+                ]
+                == child_ic
+            )
+        specs = client.get("/api/director/org/nodes/services.api/blackboard").json()
+        assert "POST /checkout" in specs["specs"][0]["spec"]
+        # Everything the org keeps is in hidden refs, not in the working tree.
+        assert run_git_command(["git", "status", "--porcelain"], repo) == ""

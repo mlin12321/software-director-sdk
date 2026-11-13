@@ -8,21 +8,33 @@ import asyncio
 from collections.abc import AsyncIterator
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, Query, Request, status
 from fastapi.responses import StreamingResponse
 
+# The org's agents get their tools from this server, so it registers them.
+import openhands.agent_server.director.tools  # noqa: F401
 from openhands.agent_server.director.models import (
+    AnswerEscalationRequest,
     BoundaryMemory,
+    CreateOrgRequest,
     NodeBlackboard,
     OrgNode,
     OrgNodeDetail,
+    OrgSummary,
     SnapshotEvent,
     TeachRequest,
 )
 from openhands.agent_server.director.org_store import OrgChange
 from openhands.agent_server.director.service import DirectorService
 from openhands.agent_server.errors import error_responses
-from openhands.sdk.errors import DomainError, Invalid, NotFound, Unavailable
+from openhands.sdk.errors import (
+    Conflict,
+    DomainError,
+    Invalid,
+    NotFound,
+    RateLimited,
+    Unavailable,
+)
 
 
 director_router = APIRouter(prefix="/director", tags=["Director"])
@@ -105,7 +117,8 @@ async def stream_org_tree(
     and not with the size of the tree. To expand or collapse a node, open a
     new stream with the new set. `full` follows the whole subtree instead.
     """
-    store = service.store
+    # The first use reads the tree from git.
+    store = await asyncio.to_thread(lambda: service.store)
     focus_id = node if node is not None else store.root_id
     if focus_id is None:
         raise NotFound("The org tree is empty")
@@ -146,6 +159,70 @@ async def stream_org_tree(
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@director_router.get("/org", response_model=OrgSummary)
+def get_org(service: DirectorService = Depends(get_director_service)) -> OrgSummary:
+    """Get whether an org exists and where one would work.
+
+    Without an org `root_id` is null and the tree stream answers 404; start
+    one with `POST /org`.
+    """
+    return service.summary()
+
+
+@director_router.post(
+    "/org",
+    response_model=OrgNode,
+    status_code=status.HTTP_201_CREATED,
+    responses=error_responses(
+        {
+            Conflict: "The director already has an org, or serves the fixture",
+            Invalid: (
+                "The conversation cannot lead an org: its workspace is outside "
+                "the director's directory, it runs in Docker, or its agent is "
+                "an ACP agent"
+            ),
+            RateLimited: "The server cannot run another conversation now",
+            Unavailable: "The director's directory is not a git repository",
+        }
+    ),
+)
+async def create_org(
+    request: CreateOrgRequest,
+    service: DirectorService = Depends(get_director_service),
+) -> OrgNode:
+    """Start an org: a root team whose IC is briefed with the task.
+
+    The IC runs as the given conversation and its Manager, like every agent of
+    the teams it later splits into, is derived from it. Follow the org on the
+    tree stream.
+    """
+    return await service.create_org(request)
+
+
+@director_router.post(
+    "/org/nodes/{node_id}/escalations/{escalation_id}/answer",
+    response_model=OrgNode,
+    responses=error_responses(
+        {
+            NotFound: "No such node, or it has no such escalation",
+            Conflict: "The escalation is still with a team, not with the human",
+            Unavailable: "The director is not running agents",
+        }
+    ),
+)
+def answer_escalation(
+    node_id: str,
+    escalation_id: str,
+    request: AnswerEscalationRequest,
+    service: DirectorService = Depends(get_director_service),
+) -> OrgNode:
+    """Answer an escalation that waits on the human, which settles it.
+
+    The answer is sent to the IC of the team that raised it.
+    """
+    return service.answer_escalation(node_id, escalation_id, request.answer)
 
 
 @director_router.get(

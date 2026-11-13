@@ -5035,3 +5035,63 @@ async def test_settings_launch_builds_the_agent_once(conversation_service, tmp_p
 
     create_agent.assert_called_once()
     assert "browser_tool_set" in [t.name for t in captured["agent"].tools]
+
+
+def _plain_request(workspace_dir: Path) -> StartConversationRequest:
+    return StartConversationRequest(
+        agent=Agent(llm=LLM(model="gpt-4o", usage_id="test-llm"), tools=[]),
+        workspace=LocalWorkspace(working_dir=str(workspace_dir)),
+    )
+
+
+@pytest.mark.asyncio
+async def test_execution_status_listeners_hear_every_conversation_until_stopped(
+    tmp_path,
+):
+    heard: list[tuple[UUID, ConversationExecutionStatus]] = []
+    async with ConversationService(
+        conversations_dir=tmp_path / "conversations"
+    ) as service:
+        stop = service.add_execution_status_listener(
+            lambda conversation_id, status: heard.append((conversation_id, status))
+        )
+        first, _ = await service.start_conversation(_plain_request(tmp_path))
+        second, _ = await service.start_conversation(_plain_request(tmp_path))
+        await service.pause_conversation(second.id)
+        stop()
+        await service.pause_conversation(first.id)
+
+    assert (first.id, ConversationExecutionStatus.IDLE) in heard
+    assert heard[-1] == (second.id, ConversationExecutionStatus.PAUSED)
+    assert (first.id, ConversationExecutionStatus.PAUSED) not in heard
+
+
+@pytest.mark.asyncio
+async def test_a_failing_execution_status_listener_does_not_break_the_conversation(
+    tmp_path,
+):
+    def explode(conversation_id: UUID, status: ConversationExecutionStatus) -> None:
+        raise RuntimeError("listener bug")
+
+    async with ConversationService(
+        conversations_dir=tmp_path / "conversations"
+    ) as service:
+        service.add_execution_status_listener(explode)
+
+        info, _ = await service.start_conversation(_plain_request(tmp_path))
+
+        assert await service.pause_conversation(info.id)
+
+
+@pytest.mark.asyncio
+async def test_get_execution_statuses_covers_unloaded_conversations(tmp_path):
+    conversations_dir = tmp_path / "conversations"
+    async with ConversationService(conversations_dir=conversations_dir) as service:
+        info, _ = await service.start_conversation(_plain_request(tmp_path))
+        await service.pause_conversation(info.id)
+    unknown = uuid4()
+
+    async with ConversationService(conversations_dir=conversations_dir) as reloaded:
+        statuses = await reloaded.get_execution_statuses([info.id, unknown])
+
+    assert statuses == {info.id: ConversationExecutionStatus.PAUSED}
