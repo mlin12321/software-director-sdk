@@ -35,7 +35,26 @@ export interface DirectorAgentRef {
   /** `null` until a conversation has been started for this agent. */
   conversation_id: string | null;
   status: string;
+  kind: DirectorAgentKind;
+  /**
+   * Which external agent an `acp` agent is, such as `claude-code` or
+   * `codex`; `null` when the server could not tell.
+   */
+  acp_server: string | null;
 }
+
+/**
+ * `acp`: an external agent, such as Claude Code or Codex, that runs its own
+ * tools and reaches the director's through an MCP server.
+ */
+export type DirectorAgentKind = 'openhands' | 'acp';
+
+/**
+ * How one team is held to its boundary. `merge`: its agent runs its own
+ * tools and no sandbox holds it, so what it commits outside its directory is
+ * refused only when its work is merged into the team above.
+ */
+export type DirectorTeamEnforcement = 'sandbox' | 'checks' | 'merge';
 
 /** A node that tried to settle an escalation, could not, and passed it up. */
 export interface DirectorEscalationHandoff {
@@ -79,6 +98,11 @@ export interface DirectorSplitChild {
   isolation: DirectorIsolationMode;
   /** What the sub-team is to deliver. */
   task: string;
+  /**
+   * Name of the agent profile the sub-team's agents run on; `null` for the
+   * same agent as the proposing team's.
+   */
+  agent_profile: string | null;
 }
 
 /** An IC's proposal to split its boundary, for its Manager to decide. */
@@ -159,6 +183,13 @@ export interface DirectorOrgNode {
    * as many conversations as it may; it starts when one of them ends.
    */
   waiting_to_start: boolean;
+  /**
+   * The agent profile the team's agents were started from; `null` when
+   * they were derived from the team above.
+   */
+  agent_profile: string | null;
+  /** How this team is held to its boundary; `null` until its IC ran. */
+  boundary_enforcement: DirectorTeamEnforcement | null;
   /** Status of every node below this one. */
   descendant_counts: DirectorStatusCounts;
   /** Escalations from this node or below that wait on the human. */
@@ -335,6 +366,11 @@ export interface DirectorSettings {
   max_agents: number;
   /** The most levels of teams; the root team is level 1. */
   max_depth: number;
+  /**
+   * Names of the agent profiles a team may give a sub-team in place of its
+   * own agent. Empty: every team runs on the agent of the team above.
+   */
+  allowed_profiles: string[];
 }
 
 /** The settings, beside what the org has now. */

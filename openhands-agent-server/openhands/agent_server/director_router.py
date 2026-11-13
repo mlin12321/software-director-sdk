@@ -6,14 +6,17 @@ blackboard that applies to each node. State lives in ``director/``.
 
 import asyncio
 from collections.abc import AsyncIterator
-from typing import Annotated
+from typing import Annotated, Any
+from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
 
 # The org's agents get their tools from this server, so it registers them.
 import openhands.agent_server.director.tools  # noqa: F401
 from openhands.agent_server.director import blackboard_sync
+from openhands.agent_server.director.acp import TOOLS_PATH
+from openhands.agent_server.director.mcp_shim import TOKEN_HEADER
 from openhands.agent_server.director.models import (
     AnswerEscalationRequest,
     BlackboardSync,
@@ -36,6 +39,12 @@ from openhands.agent_server.director.models import (
 from openhands.agent_server.director.org_store import OrgChange
 from openhands.agent_server.director.ownership import node_ownership
 from openhands.agent_server.director.service import DirectorService
+from openhands.agent_server.director.tools.remote import (
+    RemoteTool,
+    ToolAnswer,
+    call_tool,
+    list_tools,
+)
 from openhands.agent_server.errors import error_responses
 from openhands.sdk.errors import (
     Conflict,
@@ -50,6 +59,9 @@ from openhands.sdk.errors import (
 
 
 director_router = APIRouter(prefix="/director", tags=["Director"])
+# For agents that run their own tools. They have no session key of the
+# server; each is known by its own token.
+director_tools_router = APIRouter(prefix=TOOLS_PATH, tags=["Director"])
 
 # How often an idle stream sends a comment, so proxies keep it open.
 STREAM_HEARTBEAT_SECONDS = 15.0
@@ -71,7 +83,21 @@ _NO_REMOTE: dict[type[DomainError], str] = {
 
 
 def get_director_service(request: Request) -> DirectorService:
-    return request.app.state.director_service
+    service: DirectorService = request.app.state.director_service
+    service.reached_at(str(request.base_url).rstrip("/"))
+    return service
+
+
+def _calling_agent(
+    request: Request,
+    token: Annotated[str | None, Header(alias=TOKEN_HEADER)] = None,
+) -> UUID:
+    """The conversation of the agent that shows its token."""
+    service: DirectorService = request.app.state.director_service
+    try:
+        return service.agent_of(token or "")
+    except NotFound as error:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, str(error)) from error
 
 
 def _require_node(service: DirectorService, node_id: str) -> OrgNode:
@@ -456,3 +482,27 @@ def push_blackboard(
     """
     remote = (request or BlackboardSyncRequest()).remote
     return blackboard_sync.push(service.blackboard, remote)
+
+
+@director_tools_router.get("", dependencies=[Depends(_calling_agent)])
+def list_agent_tools() -> list[RemoteTool]:
+    """The director's tools, for an agent that runs its own tools."""
+    return list_tools()
+
+
+@director_tools_router.post(
+    "/{name}", responses=error_responses({NotFound: "The director has no such tool"})
+)
+async def call_agent_tool(
+    name: str,
+    arguments: dict[str, Any],
+    request: Request,
+    conversation_id: UUID = Depends(_calling_agent),
+) -> ToolAnswer:
+    """Run one of the director's tools for the agent that calls it.
+
+    What the director refuses comes back in the answer, for the agent to
+    read and act on.
+    """
+    service: DirectorService = request.app.state.director_service
+    return await asyncio.to_thread(call_tool, service, conversation_id, name, arguments)

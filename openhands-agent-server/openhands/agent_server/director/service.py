@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import re
+import secrets
 import shutil
 import threading
 from collections import deque
@@ -18,6 +19,12 @@ from uuid import UUID, uuid4
 from openhands.agent_server.config import Config
 from openhands.agent_server.conversation_service import ToolParams
 from openhands.agent_server.director import bugbot, memory
+from openhands.agent_server.director.acp import (
+    agent_token,
+    as_org_agent,
+    conversation_of,
+    tools_server,
+)
 from openhands.agent_server.director.boundary import (
     nearest_team,
     write_refusal,
@@ -44,6 +51,7 @@ from openhands.agent_server.director.git_index import (
 from openhands.agent_server.director.headline import provisional_summary
 from openhands.agent_server.director.merge_back import merge_back
 from openhands.agent_server.director.models import (
+    AgentKind,
     AgentRef,
     AgentRole,
     Autopsy,
@@ -59,6 +67,7 @@ from openhands.agent_server.director.models import (
     RoutedMessage,
     RouteMessageRequest,
     SplitChild,
+    TeamEnforcement,
     TeamMatch,
 )
 from openhands.agent_server.director.org_persistence import (
@@ -67,7 +76,7 @@ from openhands.agent_server.director.org_persistence import (
     save_org,
 )
 from openhands.agent_server.director.org_store import OrgStore, OrgStoreError
-from openhands.agent_server.director.pods import PodLauncher
+from openhands.agent_server.director.pods import PodLauncher, StartedAgent
 from openhands.agent_server.director.prompts import (
     MANAGER_ROLE,
     POD_PROTOCOL,
@@ -78,6 +87,7 @@ from openhands.agent_server.director.prompts import (
 )
 from openhands.agent_server.director.runtime import bind_director
 from openhands.agent_server.director.sandbox import (
+    command_script,
     find_bwrap,
     shell_script,
     write_shell,
@@ -89,6 +99,8 @@ from openhands.agent_server.director.split import (
     clean_path,
 )
 from openhands.agent_server.event_service import ConversationRunLimitExceeded
+from openhands.sdk.agent import ACPAgent
+from openhands.sdk.agent.base import AgentBase
 from openhands.sdk.conversation.request import AgentLaunchAdditions
 from openhands.sdk.conversation.state import ConversationExecutionStatus
 from openhands.sdk.errors import (
@@ -140,6 +152,8 @@ AGENT_LOST = "lost"
 # Where, in the repository's git directory, the director keeps the shells
 # its agents' terminals start, and what those shells need.
 _SHELLS_DIR = "director-shells"
+# After a conversation id: the script an ACP agent's process is started by.
+_ACP_LAUNCHER = ".acp.sh"
 _REMEMBERED_FILE = "director.json"
 # The lane of what concerns the org as a whole, such as saving its tree.
 ORG_LANE = "org"
@@ -224,9 +238,13 @@ class DirectorService:
         model_call_timeout: float = MODEL_CALL_TIMEOUT_SECONDS,
         consolidate_every: float = 0,
         max_concurrent_runs: int | None = None,
+        server_url: str | None = None,
     ) -> None:
         """
         Args:
+            server_url: Where this server answers, for agents that reach the
+                director's tools from a process of their own; None to take
+                it from the requests the director gets.
             max_concurrent_runs: How many conversations the server runs at
                 once, to tell the human; None when not known.
             find_review_instructions: Returns what a model is told when it
@@ -266,6 +284,9 @@ class DirectorService:
         self._launcher: PodLauncher | None = None
         self._max_concurrent_runs = max_concurrent_runs
         self._settings: DirectorSettings | None = None
+        self._configured_url = server_url
+        self._server_url = server_url
+        self._tool_key: bytes | None = None
         # What each lane still has to carry out; a lane exists while it works.
         self._lanes: dict[str, deque[Effect]] = {}
         self._workers: set[asyncio.Task[None]] = set()
@@ -295,6 +316,7 @@ class DirectorService:
             find_review_instructions=bugbot.review_instructions,
             consolidate_every=config.director_consolidation_seconds,
             max_concurrent_runs=config.max_concurrent_runs,
+            server_url=config.director_server_url,
         )
 
     @property
@@ -364,6 +386,85 @@ class DirectorService:
             self._settings = changed
         self._remember(settings=changed.model_dump())
         return self.settings_state()
+
+    def reached_at(self, url: str) -> None:
+        """Note the address a request reached this server at.
+
+        An agent that runs its own tools calls the director's from its own
+        process and is given this address to do so.
+        """
+        if self._configured_url is not None or url == self._url():
+            return
+        self._server_url = url
+        self._remember(server_url=url)
+
+    def agent_of(self, token: str) -> UUID:
+        """The conversation of the agent a tool call comes from.
+
+        Raises:
+            NotFound: The token was not given out by this director.
+        """
+        conversation_id = conversation_of(self._key(), token)
+        if conversation_id is None:
+            raise NotFound("That is not the token of an agent of this org")
+        return UUID(conversation_id)
+
+    def _url(self) -> str | None:
+        if self._server_url is None:
+            kept = self._read_remembered().get("server_url")
+            self._server_url = kept if isinstance(kept, str) else None
+        return self._server_url
+
+    def _key(self) -> bytes:
+        """What the tokens of the org's agents are signed with. It is kept
+        beside the server's conversations, never in the repository."""
+        with self._lock:
+            if self._tool_key is None:
+                kept = self._read_remembered().get("tool_key")
+                if not isinstance(kept, str):
+                    kept = secrets.token_hex(32)
+                    self._remember(tool_key=kept)
+                self._tool_key = kept.encode()
+            return self._tool_key
+
+    def _adapter(self, conversation_id: str) -> Callable[[AgentBase], AgentBase]:
+        """What is changed on an agent as its conversation starts.
+
+        An agent that runs its own tools gets the director's through an MCP
+        server and is started by the script that holds its process to its
+        team's directory. Any other agent is left as it is.
+        """
+        launchers = self._shells()
+        launcher = launchers / f"{conversation_id}{_ACP_LAUNCHER}"
+
+        def adapt(agent: AgentBase) -> AgentBase:
+            if not isinstance(agent, ACPAgent):
+                return agent
+            url = self._url()
+            if url is None:
+                raise Unavailable(
+                    "The director does not know the address of its own "
+                    "server, which an ACP agent needs to reach its tools"
+                )
+            return as_org_agent(
+                agent,
+                tools=tools_server(url, agent_token(self._key(), conversation_id)),
+                launcher=launcher if launcher.exists() else None,
+                launchers=launchers,
+            )
+
+        return adapt
+
+    def _shells(self) -> Path:
+        git_dir = git(
+            self._repo_dir, ["rev-parse", "--path-format=absolute", "--git-common-dir"]
+        ).strip()
+        return Path(git_dir) / _SHELLS_DIR
+
+    def _enforcement(self, kind: AgentKind) -> TeamEnforcement:
+        if self._bwrap is not None:
+            return "sandbox"
+        return "merge" if kind == "acp" else "checks"
 
     def search(self, query: str, limit: int) -> list[TeamMatch]:
         """Teams whose title or directory has every word of ``query``."""
@@ -502,18 +603,23 @@ class DirectorService:
                     [Tool(name=name) for name in DIRECTOR_TOOL_NAMES],
                     title=_agent_title(title, "ic"),
                     tool_params=tool_params,
+                    adapt_agent=await asyncio.to_thread(self._adapter, str(ic_id)),
                 )
             except BaseException:
                 store.remove(ROOT_ID)
                 self._repo_dir = configured
                 raise
             await asyncio.to_thread(self._remember, repo_path=str(self._repo_dir))
+            store.set_agent(
+                ROOT_ID, "ic", kind=started.kind, acp_server=started.acp_server
+            )
             root = store.update_node(
                 ROOT_ID,
                 worktree_path=started.workspace,
                 isolation=started.isolation,
                 branch=await asyncio.to_thread(_branch_of, started.workspace),
                 base_commit=await asyncio.to_thread(_base_of, started.workspace),
+                boundary_enforcement=self._enforcement(started.kind),
             )
         # First, so that both agents are told the name the team keeps.
         self._enqueue(
@@ -817,12 +923,11 @@ class DirectorService:
         own_git = role == "ic" and os.name != "nt" and bash and real_git
         if self._bwrap is None and not own_git:
             return None
-        git_dir = git(
-            self._repo_dir, ["rev-parse", "--path-format=absolute", "--git-common-dir"]
-        ).strip()
-        shells = Path(git_dir) / _SHELLS_DIR
+        shells = self._shells()
+        git_dir = str(shells.parent)
         sub_teams = [child.boundary.path for child in self.store.children(node_id)]
         rc: Path | None = None
+        bin_dir: Path | None = None
         if own_git and real_git:
             directory = node.boundary.path
             rc = shells / f"{conversation_id}.rc"
@@ -855,6 +960,19 @@ class DirectorService:
                 directory=node.boundary.path if role == "ic" else None,
                 sub_team_directories=sub_teams,
                 rcfile=rc,
+            ),
+        )
+        # An agent that runs its own tools has no terminal of the server's;
+        # its whole process is started by this instead.
+        write_shell(
+            shells / f"{conversation_id}{_ACP_LAUNCHER}",
+            command_script(
+                self._bwrap,
+                checkouts=self._checkouts(),
+                private=shells,
+                directory=node.boundary.path if role == "ic" else None,
+                sub_team_directories=sub_teams,
+                first_on_path=bin_dir,
             ),
         )
         # Only the subprocess terminal starts the shell it is given.
@@ -1132,23 +1250,54 @@ class DirectorService:
             if parent_conversation is None:
                 raise NotFound(f"Node {node_id} has nobody to derive its {role} from")
             parent_id = UUID(parent_conversation)
-            started = await self._when_there_is_room(
-                node_id,
-                lambda: launcher.start_derived(
+            # A team given a profile of its own starts its IC from it; its
+            # Manager, like every Manager, is derived from the IC.
+            profile = node.agent_profile if role == "ic" else None
+            kind = await (
+                launcher.profile_kind(profile)
+                if profile
+                else launcher.agent_kind(parent_id)
+            )
+            isolation = node.isolation if role == "ic" else "shared"
+            if kind == "acp" and role == "ic" and self._bwrap is None:
+                # Nothing holds its process to the team's directory, so its
+                # work is kept apart and checked when it is merged.
+                isolation = "worktree"
+            adapt = await asyncio.to_thread(self._adapter, conversation_id)
+            title = _agent_title(node.title, role)
+
+            async def start() -> StartedAgent:
+                if profile:
+                    return await launcher.start_from_profile(
+                        profile,
+                        parent_id,
+                        UUID(conversation_id),
+                        [Tool(name=name) for name in DIRECTOR_TOOL_NAMES],
+                        title=title,
+                        task=text,
+                        isolation=isolation,
+                        suffixes=[POD_PROTOCOL],
+                        tool_params=tool_params,
+                        adapt_agent=adapt,
+                    )
+                return await launcher.start_derived(
                     parent_id,
                     UUID(conversation_id),
-                    title=_agent_title(node.title, role),
+                    title=title,
                     task=text,
-                    isolation=node.isolation if role == "ic" else "shared",
+                    isolation=isolation,
                     suffixes=[] if role == "ic" else [MANAGER_ROLE],
                     tool_params=tool_params,
-                ),
-            )
+                    adapt_agent=adapt,
+                )
+
+            started = await self._when_there_is_room(node_id, start)
         except Exception:
             logger.exception("Could not start the %s of node %s", role, node_id)
             store.set_agent(node_id, role, status=AGENT_LOST)
             store.update_node(node_id, status="blocked")
             return False
+        store.set_agent(node_id, role, kind=started.kind, acp_server=started.acp_server)
         if role == "ic":
             store.update_node(
                 node_id,
@@ -1156,6 +1305,7 @@ class DirectorService:
                 isolation=started.isolation,
                 branch=await asyncio.to_thread(_branch_of, started.workspace),
                 base_commit=await asyncio.to_thread(_base_of, started.workspace),
+                boundary_enforcement=self._enforcement(started.kind),
             )
         return True
 
@@ -1687,6 +1837,7 @@ class DirectorService:
             title=child.title,
             boundary=child_boundary(child),
             isolation=child.isolation,
+            agent_profile=child.agent_profile,
             worktree_path=parent.worktree_path,
             branch=parent.branch,
             agents=_new_pod(uuid4()),

@@ -61,7 +61,10 @@ from openhands.agent_server.dependencies import (
 )
 from openhands.agent_server.director import DirectorService
 from openhands.agent_server.director.pods import ConversationPodLauncher
-from openhands.agent_server.director_router import director_router
+from openhands.agent_server.director_router import (
+    director_router,
+    director_tools_router,
+)
 from openhands.agent_server.errors import status_for
 from openhands.agent_server.experimental_features_router import (
     experimental_features_router,
@@ -638,6 +641,12 @@ def _add_api_routes(app: FastAPI) -> None:
     init_api_router = APIRouter(prefix="/api")
     init_api_router.include_router(init_router)
     app.include_router(init_api_router)
+    # Agents of an org that run their own tools call the director's from
+    # their own process. They are not given the session key; each shows a
+    # token of its own.
+    app.include_router(
+        director_tools_router, dependencies=[Depends(require_initialized)]
+    )
 
     # Header-only auth: applied to every /api/* route EXCEPT the workspace
     # static-file routes (handled separately below). Cookies are NOT honored

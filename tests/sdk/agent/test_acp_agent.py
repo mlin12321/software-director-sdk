@@ -201,6 +201,13 @@ def test_npx_packages_skips_prefer_offline():
     ) == ["@agentclientprotocol/codex-acp@1.10.0"]
 
 
+def test_npx_packages_looks_past_a_launcher():
+    assert _npx_packages(
+        ["/sandbox/launcher.sh", "npx", "-y", "@agentclientprotocol/x@1.2.3"]
+    ) == ["@agentclientprotocol/x@1.2.3"]
+    assert _npx_packages(["/sandbox/launcher.sh", "codex-acp"]) == []
+
+
 def test_npx_packages_prefers_pinned_package_flags():
     """A multi-package spec's positional argument is the bare binary name;
     warming that would fetch an unpinned package, so the ``--package=`` pins

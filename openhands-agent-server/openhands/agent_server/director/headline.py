@@ -67,6 +67,13 @@ def parse_summary(answer: str) -> TeamSummary | None:
     )
 
 
+def summary_question(task: str) -> str:
+    """The same request as one message, for an agent that is asked itself."""
+    return (
+        f"{_INSTRUCTIONS}\n\nWhat the team was asked to do:\n{task[:_MAX_TASK_LENGTH]}"
+    )
+
+
 def summarize_team(llm: LLM, task: str) -> TeamSummary | None:
     """Ask ``llm`` for a title and a headline of ``task``.
 

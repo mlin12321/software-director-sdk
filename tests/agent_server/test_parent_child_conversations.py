@@ -16,6 +16,7 @@ from openhands.agent_server.conversation_router import conversation_router
 from openhands.agent_server.conversation_service import (
     ConversationService,
     InvalidParentConversation,
+    _to_derive_from,
 )
 from openhands.agent_server.dependencies import get_conversation_service
 from openhands.agent_server.event_service import (
@@ -30,6 +31,7 @@ from openhands.agent_server.models import (
     StartConversationRequest,
 )
 from openhands.sdk import LLM, Agent, Message, TextContent
+from openhands.sdk.agent import ACPAgent
 from openhands.sdk.agent.base import AgentBase
 from openhands.sdk.conversation.request import ConversationWorktreeOptions
 from openhands.sdk.conversation.state import (
@@ -713,3 +715,25 @@ def test_router_rejects_child_with_empty_task():
 
     assert response.status_code == 422
     service.start_child_conversation.assert_not_awaited()
+
+
+def test_a_child_of_a_running_acp_agent_holds_none_of_its_process():
+    parent = ACPAgent(acp_command=["npx", "-y", "some-acp-agent"])
+    parent._executor = object()
+    parent._process = object()
+    parent._session_id = "the-parents-session"
+
+    child = _to_derive_from(parent.model_copy(update={"acp_args": ["--flag"]}))
+
+    assert isinstance(child, ACPAgent)
+    assert child.acp_command == parent.acp_command
+    assert child.acp_args == ["--flag"]
+    assert child._executor is None
+    assert child._process is None
+    assert child._session_id is None
+
+
+def test_a_child_of_any_other_agent_starts_from_that_agent():
+    agent = Agent(llm=LLM(model="gpt-4o", usage_id="test"), tools=[])
+
+    assert _to_derive_from(agent) is agent

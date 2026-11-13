@@ -12,7 +12,7 @@ from datetime import UTC, datetime
 from typing import get_args
 
 from openhands.agent_server.director.models import (
-    AgentRef,
+    AgentKind,
     AgentRole,
     Escalation,
     EscalationHandoff,
@@ -157,8 +157,11 @@ class OrgStore:
         *,
         conversation_id: str | None = None,
         status: str | None = None,
+        kind: AgentKind | None = None,
+        acp_server: str | None = None,
     ) -> OrgNode:
-        """Change the conversation or the status of one agent of a node.
+        """Change the conversation, the status or the kind of one agent of a
+        node.
 
         The node's own status follows its agents: it works while one of them
         does and idles when none does. An agent that is ``blocked`` blocks it
@@ -175,10 +178,13 @@ class OrgStore:
             agents = [
                 agent
                 if agent.role != role
-                else AgentRef(
-                    role=role,
-                    conversation_id=conversation_id or agent.conversation_id,
-                    status=status or agent.status,
+                else agent.model_copy(
+                    update={
+                        "conversation_id": conversation_id or agent.conversation_id,
+                        "status": status or agent.status,
+                        "kind": kind or agent.kind,
+                        "acp_server": acp_server or agent.acp_server,
+                    }
                 )
                 for agent in node.agents
             ]

@@ -66,8 +66,66 @@ def shell_script(
     """
     quote = shlex.quote
     start = f"{quote(shell)} --rcfile {quote(str(rcfile))}" if rcfile else quote(shell)
+    return _confined(
+        bwrap,
+        start,
+        checkouts=checkouts,
+        private=private,
+        directory=directory,
+        sub_team_directories=sub_team_directories,
+    )
+
+
+def command_script(
+    bwrap: str | None,
+    *,
+    checkouts: Sequence[Path],
+    private: Path,
+    directory: str | None,
+    sub_team_directories: Sequence[str] = (),
+    first_on_path: Path | None = None,
+) -> str:
+    """A script that runs the command it is given confined like a shell of
+    ``shell_script``, for an agent whose whole process is to be held.
+
+    Args:
+        first_on_path: A directory of programs the command finds before any
+            other of the same name.
+    """
+    start = (
+        f'env PATH={shlex.quote(str(first_on_path))}:"$PATH"' if first_on_path else ""
+    )
+    return _confined(
+        bwrap,
+        start,
+        checkouts=checkouts,
+        private=private,
+        directory=directory,
+        sub_team_directories=sub_team_directories,
+        stay=True,
+    )
+
+
+def _confined(
+    bwrap: str | None,
+    start: str,
+    *,
+    checkouts: Sequence[Path],
+    private: Path,
+    directory: str | None,
+    sub_team_directories: Sequence[str],
+    stay: bool = False,
+) -> str:
+    """``start`` followed by the script's own arguments, under ``bwrap``.
+
+    Args:
+        stay: Keep the directory the script was started in, instead of
+            moving to the team's.
+    """
+    quote = shlex.quote
+    run = f'{start} "$@"'.strip()
     if bwrap is None:
-        return f'#!/bin/sh\nexec {start} "$@"\n'
+        return f"#!/bin/sh\nexec {run}\n"
 
     def read_only(path: Path) -> str:
         return f"--ro-bind-try {quote(str(path))} {quote(str(path))}"
@@ -92,11 +150,12 @@ def shell_script(
         ]
         # Committing writes the repository's git directory.
         mounts += ['--bind "$git_dir" "$git_dir"', read_only(private)]
-        mounts.append('--chdir "$own"')
+        if not stay:
+            mounts.append('--chdir "$own"')
     command = [
         f"exec {quote(bwrap)} --dev-bind / /",
         *mounts,
-        f'-- {start} "$@"',
+        f"-- {run}",
     ]
     lines.append(" \\\n  ".join(command))
     return "\n".join(lines) + "\n"

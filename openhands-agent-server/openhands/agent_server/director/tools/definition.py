@@ -151,11 +151,11 @@ class _DirectorTool[ActionT: Action](ToolDefinition[ActionT, DirectorObservation
     read_only: ClassVar[bool] = False
 
     @classmethod
-    def _action_type(cls) -> type[ActionT]:
+    def action(cls) -> type[ActionT]:
         raise NotImplementedError
 
     @classmethod
-    def _act(cls) -> Callable[[DirectorService, Caller, ActionT], str]:
+    def act(cls) -> Callable[[DirectorService, Caller, ActionT], str]:
         raise NotImplementedError
 
     @classmethod
@@ -165,9 +165,9 @@ class _DirectorTool[ActionT: Action](ToolDefinition[ActionT, DirectorObservation
         return [
             cls(
                 description=cls.summary,
-                action_type=cls._action_type(),
+                action_type=cls.action(),
                 observation_type=DirectorObservation,
-                executor=DirectorExecutor(conv_state.id, cls._act()),
+                executor=DirectorExecutor(conv_state.id, cls.act()),
                 annotations=ToolAnnotations(
                     readOnlyHint=cls.read_only,
                     destructiveHint=False,
@@ -188,11 +188,11 @@ class ReadNodeContextTool(_DirectorTool[ReadNodeContextAction]):
     read_only = True
 
     @classmethod
-    def _action_type(cls):
+    def action(cls):
         return ReadNodeContextAction
 
     @classmethod
-    def _act(cls):
+    def act(cls):
         return lambda service, caller, _action: pod_actions.node_context(
             service, caller
         )
@@ -206,11 +206,11 @@ class WriteSpecTool(_DirectorTool[WriteSpecAction]):
     )
 
     @classmethod
-    def _action_type(cls):
+    def action(cls):
         return WriteSpecAction
 
     @classmethod
-    def _act(cls):
+    def act(cls):
         return lambda service, caller, action: pod_actions.write_spec(
             service, caller, action.content
         )
@@ -224,11 +224,11 @@ class ProposeBoundarySplitTool(_DirectorTool[ProposeBoundarySplitAction]):
     )
 
     @classmethod
-    def _action_type(cls):
+    def action(cls):
         return ProposeBoundarySplitAction
 
     @classmethod
-    def _act(cls):
+    def act(cls):
         return lambda service, caller, action: pod_actions.propose_split(
             service, caller, action.children, action.contracts
         )
@@ -241,11 +241,11 @@ class DecideSplitTool(_DirectorTool[DecideSplitAction]):
     )
 
     @classmethod
-    def _action_type(cls):
+    def action(cls):
         return DecideSplitAction
 
     @classmethod
-    def _act(cls):
+    def act(cls):
         return lambda service, caller, action: pod_actions.decide_split(
             service, caller, action.decision, action.feedback
         )
@@ -259,11 +259,11 @@ class RaiseEscalationTool(_DirectorTool[RaiseEscalationAction]):
     )
 
     @classmethod
-    def _action_type(cls):
+    def action(cls):
         return RaiseEscalationAction
 
     @classmethod
-    def _act(cls):
+    def act(cls):
         return lambda service, caller, action: pod_actions.raise_escalation(
             service, caller, action.category, action.title, action.detail
         )
@@ -277,11 +277,11 @@ class ResolveEscalationTool(_DirectorTool[ResolveEscalationAction]):
     )
 
     @classmethod
-    def _action_type(cls):
+    def action(cls):
         return ResolveEscalationAction
 
     @classmethod
-    def _act(cls):
+    def act(cls):
         return lambda service, caller, action: pod_actions.resolve_escalation(
             service,
             caller,
@@ -300,11 +300,11 @@ class SetStatusTool(_DirectorTool[SetStatusAction]):
     )
 
     @classmethod
-    def _action_type(cls):
+    def action(cls):
         return SetStatusAction
 
     @classmethod
-    def _act(cls):
+    def act(cls):
         return lambda service, caller, action: pod_actions.set_status(
             service, caller, action.status, action.summary
         )
@@ -319,11 +319,11 @@ class ReviewTeamTool(_DirectorTool[ReviewTeamAction]):
     )
 
     @classmethod
-    def _action_type(cls):
+    def action(cls):
         return ReviewTeamAction
 
     @classmethod
-    def _act(cls):
+    def act(cls):
         return lambda service, caller, action: pod_actions.review_team(
             service,
             caller,
@@ -342,11 +342,11 @@ class RecordRuleTool(_DirectorTool[RecordRuleAction]):
     )
 
     @classmethod
-    def _action_type(cls):
+    def action(cls):
         return RecordRuleAction
 
     @classmethod
-    def _act(cls):
+    def act(cls):
         return lambda service, caller, action: pod_actions.record_rule(
             service, caller, action.rule
         )
@@ -362,11 +362,11 @@ class PruneTeamTool(_DirectorTool[PruneTeamAction]):
     )
 
     @classmethod
-    def _action_type(cls):
+    def action(cls):
         return PruneTeamAction
 
     @classmethod
-    def _act(cls):
+    def act(cls):
         return lambda service, caller, action: pod_actions.prune_team(
             service,
             caller,
@@ -387,3 +387,20 @@ register_tool(SetStatusTool.name, SetStatusTool)
 register_tool(PruneTeamTool.name, PruneTeamTool)
 register_tool(ReviewTeamTool.name, ReviewTeamTool)
 register_tool(RecordRuleTool.name, RecordRuleTool)
+
+
+DIRECTOR_TOOLS: dict[str, type[_DirectorTool]] = {
+    tool.name: tool
+    for tool in (
+        ReadNodeContextTool,
+        WriteSpecTool,
+        ProposeBoundarySplitTool,
+        DecideSplitTool,
+        RaiseEscalationTool,
+        ResolveEscalationTool,
+        SetStatusTool,
+        ReviewTeamTool,
+        RecordRuleTool,
+        PruneTeamTool,
+    )
+}

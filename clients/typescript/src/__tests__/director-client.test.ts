@@ -148,7 +148,14 @@ describe('DirectorClient', () => {
   });
 
   it('reads and changes the limits on new teams, and searches teams', async () => {
-    const state = { max_agents: 64, max_depth: 8, agents: 6, depth: 2, max_concurrent_runs: 10 };
+    const state = {
+      max_agents: 64,
+      max_depth: 8,
+      allowed_profiles: ['codex'],
+      agents: 6,
+      depth: 2,
+      max_concurrent_runs: 10,
+    };
     const fetchMock = mockFetch(() => jsonResponse(state));
     const client = new DirectorClient({ host: 'http://example.com' });
 

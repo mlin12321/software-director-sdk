@@ -620,6 +620,7 @@ def test_the_limits_on_new_teams_are_read_changed_and_kept(saved_tree: Path):
     assert before == {
         "max_agents": 64,
         "max_depth": 8,
+        "allowed_profiles": [],
         "agents": 10,
         "depth": 3,
         "max_concurrent_runs": 7,
