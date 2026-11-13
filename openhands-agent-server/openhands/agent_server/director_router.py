@@ -16,6 +16,7 @@ from fastapi.responses import StreamingResponse
 import openhands.agent_server.director.tools  # noqa: F401
 from openhands.agent_server.director import blackboard_sync
 from openhands.agent_server.director.acp import TOOLS_PATH
+from openhands.agent_server.director.changes import file_sides, team_changes
 from openhands.agent_server.director.mcp_shim import TOKEN_HEADER
 from openhands.agent_server.director.models import (
     AnswerEscalationRequest,
@@ -25,6 +26,9 @@ from openhands.agent_server.director.models import (
     CreateOrgRequest,
     DirectorSettingsState,
     DirectorSettingsUpdate,
+    EditFileRequest,
+    FileEdit,
+    FileSides,
     NodeBlackboard,
     NodeOwnership,
     OrgMerge,
@@ -41,6 +45,7 @@ from openhands.agent_server.director.models import (
     SnapshotEvent,
     StartAgainRequest,
     TeachRequest,
+    TeamChanges,
     TeamMatch,
 )
 from openhands.agent_server.director.org_store import OrgChange
@@ -56,6 +61,7 @@ from openhands.agent_server.errors import error_responses
 from openhands.sdk.errors import (
     Conflict,
     DomainError,
+    Forbidden,
     Invalid,
     NotFound,
     NotSupported,
@@ -490,6 +496,72 @@ def get_node_ownership(
     """
     node = _require_node(service, node_id)
     return node_ownership(node, service.store.children(node_id))
+
+
+_NO_CHECKOUT: dict[type[DomainError], str] = {
+    NotFound: "No such node, or its checkout is not on this server",
+}
+
+
+@director_router.get(
+    "/org/nodes/{node_id}/changes",
+    response_model=TeamChanges,
+    responses=error_responses(_NO_CHECKOUT),
+)
+def get_node_changes(
+    node_id: str, service: DirectorService = Depends(get_director_service)
+) -> TeamChanges:
+    """List the files a team changed in its directory since its work
+    started or was last accepted, uncommitted and new files included."""
+    return team_changes(_require_node(service, node_id))
+
+
+@director_router.get(
+    "/org/nodes/{node_id}/changes/file",
+    response_model=FileSides,
+    responses=error_responses(
+        {
+            **_NO_CHECKOUT,
+            Invalid: "The path does not name a file of a checkout",
+            Forbidden: "The file is not in the team's directory",
+        }
+    ),
+)
+def get_node_changed_file(
+    node_id: str,
+    path: Annotated[str, Query(description="Relative to the top of the repository.")],
+    service: DirectorService = Depends(get_director_service),
+) -> FileSides:
+    """Get one file as it was at the team's base commit and as it is in the
+    team's checkout now."""
+    return file_sides(_require_node(service, node_id), path)
+
+
+@director_router.put(
+    "/org/nodes/{node_id}/files",
+    response_model=FileEdit,
+    responses=error_responses(
+        {
+            **_NO_CHECKOUT,
+            Invalid: "The path does not name a file that can be committed",
+            Forbidden: "The team's agents may not write the file either",
+            Conflict: "An agent of the team is in the middle of a turn",
+        }
+    ),
+)
+async def edit_node_file(
+    node_id: str,
+    request: EditFileRequest,
+    path: Annotated[str, Query(description="Relative to the top of the repository.")],
+    service: DirectorService = Depends(get_director_service),
+) -> FileEdit:
+    """Write one file of a team by hand.
+
+    The file is committed alone in the team's checkout and the team's IC is
+    told. Refused while an agent of the team is in the middle of a turn, and
+    for a file the team's own agents may not write.
+    """
+    return await service.edit_file(node_id, path, request.content)
 
 
 @director_router.post(
