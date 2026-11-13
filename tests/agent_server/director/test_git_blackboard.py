@@ -14,7 +14,6 @@ from openhands.agent_server.director.git import (
 )
 from openhands.agent_server.director.git_blackboard import (
     BLACKBOARD_REF,
-    BlackboardMergeConflictError,
     BlackboardScopeError,
     BoardChange,
     GitBlackboard,
@@ -237,18 +236,54 @@ class TestMerge:
         assert board.memory("svc/a").rules == ["A"]
         assert board.memory("svc/b").rules == ["B"]
 
-    def test_a_conflict_leaves_the_ref_unchanged(
+    def test_rules_and_autopsies_both_sides_added_are_all_kept(
         self, board: GitBlackboard, theirs: GitBlackboard, merge_supported: bool
     ):
         if not merge_supported:
             pytest.skip("needs git 2.38")
-        head = board.write("svc/a", "spec.md", "ours")
+        board.teach("svc/a", "Ours")
+        theirs.teach("svc/a", "Theirs")
+        theirs.teach("svc/a", "Ours")
+        ours_autopsy = Autopsy(
+            node_id="a", at="2026-11-10T00:00:00Z", approach="x", why_failed="y"
+        )
+        theirs_autopsy = ours_autopsy.model_copy(update={"approach": "z"})
+        board.append_autopsy("svc/a", ours_autopsy)
+        theirs.append_autopsy("svc/a", theirs_autopsy)
+
+        merged = board.merge(theirs.ref)
+
+        assert merged.kept_local == []
+        assert board.memory("svc/a").rules == ["Ours", "Theirs"]
+        assert board.autopsies("svc/a") == [ours_autopsy, theirs_autopsy]
+
+    def test_of_a_spec_both_sides_changed_ours_is_kept_and_named(
+        self, board: GitBlackboard, theirs: GitBlackboard, merge_supported: bool
+    ):
+        if not merge_supported:
+            pytest.skip("needs git 2.38")
+        board.write("svc/a", "spec.md", "ours")
         theirs.write("svc/a", "spec.md", "theirs")
+        theirs.write("svc/b", "spec.md", "only theirs")
 
-        with pytest.raises(BlackboardMergeConflictError):
-            board.merge(theirs.ref)
+        merged = board.merge(theirs.ref)
 
-        assert board.head() == head
+        assert merged.kept_local == ["svc/a/spec.md"]
+        assert board.read("svc/a/spec.md") == "ours"
+        assert board.read("svc/b/spec.md") == "only theirs"
+        history = git(board.repo_dir, ["log", "--format=%H", board.ref]).split()
+        assert theirs.head() in history
+
+    def test_merging_what_is_already_merged_changes_nothing(
+        self, board: GitBlackboard, theirs: GitBlackboard, merge_supported: bool
+    ):
+        if not merge_supported:
+            pytest.skip("needs git 2.38")
+        board.teach("svc/a", "A")
+        theirs.teach("svc/b", "B")
+        head = board.merge(theirs.ref).head
+
+        assert board.merge(theirs.ref).head == head
 
     def test_an_empty_blackboard_adopts_the_other_ref(
         self, board: GitBlackboard, theirs: GitBlackboard, merge_supported: bool
@@ -257,7 +292,7 @@ class TestMerge:
             pytest.skip("needs git 2.38")
         theirs.teach("svc/b", "B")
 
-        assert board.merge(theirs.ref) == theirs.head()
+        assert board.merge(theirs.ref).head == theirs.head()
         assert json.loads(board.read("svc/b/memory.json") or "")["rules"] == ["B"]
 
 

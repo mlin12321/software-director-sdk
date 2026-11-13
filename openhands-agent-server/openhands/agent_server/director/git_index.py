@@ -27,6 +27,9 @@ _IN_PROGRESS = (
     "MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD BISECT_LOG rebase-merge rebase-apply"
 )
 _LOCK_WAIT_SECONDS = 120
+# In the repository's git directory. Whoever moves HEAD of a checkout the
+# agents work in holds a lock on it.
+LOCK_FILE = "director-git.lock"
 
 
 def _pathspec(path: str, *, exclude: bool = False) -> str:
@@ -79,7 +82,7 @@ def git_script(
     ]
     lock = (
         [
-            '  exec 9>>"$common/director-git.lock"',
+            f'  exec 9>>"$common/{LOCK_FILE}"',
             f"  {quote(flock)} -w {_LOCK_WAIT_SECONDS} 9",
         ]
         if flock

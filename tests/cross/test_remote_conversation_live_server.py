@@ -3562,6 +3562,10 @@ def _scripted_org_llm(
             )
         if last.role == "user" and "Your IC proposes to split" in text:
             return tool_call("decide_split", {"decision": "approve"})
+        if last.role == "user" and "Review mode. Team 'API'" in text:
+            return tool_call(
+                "review_team", {"node_id": "services.api", "decision": "accept"}
+            )
         if last.role == "user" and "Team 'API'" in text and "it is blocked" in text:
             return tool_call(
                 "prune_team",
@@ -3669,6 +3673,62 @@ def test_director_runs_an_org_whose_root_splits_into_sub_teams(
         assert "POST /checkout" in specs["contracts"][0]["contracts"]
         # Everything the org keeps is in hidden refs, not in the working tree.
         assert run_git_command(["git", "status", "--porcelain"], repo) == ""
+
+
+def test_director_has_done_work_reviewed_by_the_ic_above(
+    server_env, monkeypatch: pytest.MonkeyPatch
+):
+    repo = server_env["workspace_path"]
+    _scripted_org_llm(
+        monkeypatch,
+        api_ic=[("set_status", {"status": "done", "summary": "Served."})],
+    )
+    run_git_command(["git", "init", "-b", "main"], repo)
+    run_git_command(
+        ["git", "-c", "user.name=T", "-c", "user.email=t@example.com", "commit"]
+        + ["--allow-empty", "-m", "init"],
+        repo,
+    )
+
+    with httpx.Client(base_url=server_env["host"], timeout=30) as client:
+        created = client.post(
+            "/api/director/org",
+            json={
+                "title": "Checkout",
+                "task": "Build the checkout flow",
+                "conversation": {
+                    "agent": {
+                        "llm": {"model": "gpt-4o-mini", "api_key": "test"},
+                        "tools": [],
+                    },
+                    "workspace": {"working_dir": str(repo)},
+                    "autotitle": False,
+                },
+            },
+        )
+        assert created.status_code == 201, created.text
+
+        def api() -> dict:
+            response = client.get("/api/director/org/nodes/services.api")
+            return response.json()["node"] if response.status_code == 200 else {}
+
+        states: list[str] = []
+        deadline = time.time() + 30
+        while time.time() < deadline and states[-1:] != ["accepted"]:
+            review = api().get("review")
+            if review and states[-1:] != [review["state"]]:
+                states.append(review["state"])
+            time.sleep(0.05)
+
+        assert states[-1:] == ["accepted"], states
+        node = api()
+        assert node["status"] == "done"
+        assert node["review"]["summary"] == "Served."
+        assert node["base_commit"] == run_git_command(
+            ["git", "rev-parse", "HEAD"], repo
+        )
+        pulled = client.post("/api/director/org/blackboard/pull")
+        assert pulled.status_code == 404, pulled.text
 
 
 def test_director_prunes_a_blocked_team_and_maps_who_owns_what(

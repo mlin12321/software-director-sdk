@@ -1,6 +1,7 @@
 import { HttpClient, HttpError } from './http-client';
 import type { CreateConversationPayload } from './conversation-client';
 import type {
+  DirectorBlackboardSync,
   DirectorBoundaryMemory,
   DirectorNodeBlackboard,
   DirectorNodeOwnership,
@@ -215,6 +216,37 @@ export class DirectorClient {
     const response = await this.client.post<DirectorBoundaryMemory>(nodePath(nodeId, 'teach'), {
       rule,
     });
+    return response.data;
+  }
+
+  /**
+   * Take in the blackboard a remote of the repository has. Rules and
+   * autopsies of both sides are kept; of a spec or contracts both changed,
+   * the local text is, and the file is named in `kept_local`.
+   *
+   * @throws HttpError 404 when the repository has no such remote, 502 when
+   *   it cannot be reached.
+   */
+  async pullBlackboard(remote = 'origin'): Promise<DirectorBlackboardSync> {
+    const response = await this.client.post<DirectorBlackboardSync>(
+      `${DIRECTOR_PATH}/org/blackboard/pull`,
+      { remote }
+    );
+    return response.data;
+  }
+
+  /**
+   * Give a remote of the repository the local blackboard. What the remote
+   * has that the local blackboard lacks is pulled in first.
+   *
+   * @throws HttpError 404 when the repository has no such remote, 409 when
+   *   there is no blackboard yet, 502 when the remote cannot be reached.
+   */
+  async pushBlackboard(remote = 'origin'): Promise<DirectorBlackboardSync> {
+    const response = await this.client.post<DirectorBlackboardSync>(
+      `${DIRECTOR_PATH}/org/blackboard/push`,
+      { remote }
+    );
     return response.data;
   }
 

@@ -7,14 +7,18 @@ node does not allow, so a tool cannot reach past its own team.
 import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Literal
 from uuid import UUID, uuid4
 
+from openhands.agent_server.director.git import uncommitted
 from openhands.agent_server.director.git_blackboard import SPEC_FILE
 from openhands.agent_server.director.models import (
     AgentRole,
     EscalationKind,
     OrgNode,
+    Review,
+    ReviewFinding,
     SplitChild,
     SplitProposal,
 )
@@ -111,9 +115,11 @@ def node_context(service: DirectorService, caller: Caller) -> str:
                 "status": child.status,
                 "headline": child.headline,
                 "summary": child.spec_summary,
+                "review": child.review.state if child.review else None,
             }
             for child in store.children(node.id)
         ],
+        "review_of_your_work": node.review.model_dump() if node.review else None,
         "pending_split": (
             node.pending_split.model_dump() if node.pending_split else None
         ),
@@ -313,19 +319,90 @@ def _hand_to(
 def set_status(
     service: DirectorService, caller: Caller, status: DeclaredStatus, summary: str
 ) -> str:
-    """Declare the state of the caller's team and tell the team above."""
+    """Declare the state of the caller's team.
+
+    Done work goes to the IC of the team above for review; a block is told
+    to the Manager there.
+    """
     store = service.store
-    node = store.update_node(caller.node.id, status=status)
+    node = caller.node
     parent = store.get(node.parent_id) if node.parent_id else None
-    if parent is not None and status != "working":
+    summary = summary.strip()
+    review = node.review
+    if status == "done":
+        if parent is not None:
+            left = uncommitted(Path(node.worktree_path), node.boundary.path)
+            if left:
+                raise Conflict(
+                    "Commit your team's work before you report it done. Not "
+                    f"committed: {', '.join(left[:10])}"
+                    + (f" and {len(left) - 10} more" if len(left) > 10 else "")
+                )
+        again = review is not None and review.state == "changes_requested"
+        review = Review(
+            state="unreviewed" if parent is None else "pending",
+            round=review.round + 1 if review is not None and again else 1,
+            summary=summary,
+            at=datetime.now(UTC).isoformat(timespec="seconds"),
+        )
+    elif review is not None and review.state == "pending":
+        review = None
+    service.declared_status(node.id)
+    node = store.update_node(node.id, status=status, review=review)
+    if status == "done":
+        service.request_review(node.id)
+    if parent is not None and status == "blocked":
         service.notify(
             agent_conversation(parent, "manager"),
-            f"Team {node.title!r} (node {node.id}) reports it is {status}."
-            + (f"\n{summary.strip()}" if summary.strip() else ""),
+            f"Team {node.title!r} (node {node.id}) reports it is blocked."
+            + (f"\n{summary}" if summary else ""),
         )
-    if summary.strip():
-        service.refresh_headline(node.id, f"it is {status}. {summary.strip()}")
+    if summary:
+        service.refresh_headline(node.id, f"it is {status}. {summary}")
+    if status == "done" and parent is not None:
+        return (
+            "Your team is now done. The IC of the team above reviews the work; "
+            "you are told if it wants changes."
+        )
     return f"Your team is now {status}."
+
+
+def review_team(
+    service: DirectorService,
+    caller: Caller,
+    node_id: str,
+    decision: Literal["accept", "reject"],
+    findings: list[ReviewFinding],
+    needed_above: str,
+) -> str:
+    """Accept the work a team directly below reported done, or send it back."""
+    _only(caller, "ic", "review the work of a team")
+    team = service.store.get(node_id)
+    if team is None or team.parent_id != caller.node.id:
+        raise Invalid(f"{node_id} is not a team directly below yours")
+    if team.review is None or team.review.state != "pending":
+        raise Conflict(f"Team {node_id} has no work waiting for your review")
+    if decision == "reject":
+        if not findings:
+            raise Invalid("Say what must change before you can accept the work")
+        if service.request_changes(node_id, findings):
+            return (
+                f"Sent back for the last time: {team.title!r} did not get its "
+                "work accepted and is now stopped and blocked."
+            )
+        return f"Sent back to {team.title!r} with what must change."
+    service.accept_review(node_id, needed_above.strip())
+    return (
+        f"Accepting the work of {team.title!r}. You are told if it cannot be "
+        "brought into your checkout."
+    )
+
+
+def record_rule(service: DirectorService, caller: Caller, rule: str) -> str:
+    """Add a rule to the permanent memory of the caller's boundary."""
+    path = caller.node.boundary.path
+    service.blackboard.teach(path, rule)
+    return f"Recorded for everyone who works in {path or 'the repository'}."
 
 
 def prune_team(

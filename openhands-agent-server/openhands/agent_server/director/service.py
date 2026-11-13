@@ -16,6 +16,7 @@ from uuid import UUID, uuid4
 
 from openhands.agent_server.config import Config
 from openhands.agent_server.conversation_service import ToolParams
+from openhands.agent_server.director import bugbot, memory
 from openhands.agent_server.director.boundary import (
     nearest_team,
     write_refusal,
@@ -26,6 +27,7 @@ from openhands.agent_server.director.git import (
     GitError,
     enclosing_repository,
     git,
+    head_of,
     is_git_repository,
     save_and_discard,
 )
@@ -39,6 +41,7 @@ from openhands.agent_server.director.git_index import (
     rcfile,
 )
 from openhands.agent_server.director.headline import provisional_summary
+from openhands.agent_server.director.merge_back import merge_back
 from openhands.agent_server.director.models import (
     AgentRef,
     AgentRole,
@@ -48,6 +51,7 @@ from openhands.agent_server.director.models import (
     OrgNode,
     OrgNodeInput,
     OrgSummary,
+    ReviewFinding,
     RoutedMessage,
     RouteMessageRequest,
     SplitChild,
@@ -63,7 +67,9 @@ from openhands.agent_server.director.prompts import (
     MANAGER_ROLE,
     POD_PROTOCOL,
     brief,
+    changes_requested,
     from_director,
+    review_request,
 )
 from openhands.agent_server.director.runtime import bind_director
 from openhands.agent_server.director.sandbox import (
@@ -99,6 +105,8 @@ DIRECTOR_TOOL_NAMES = (
     "raise_escalation",
     "resolve_escalation",
     "set_status",
+    "review_team",
+    "record_rule",
     "prune_team",
 )
 # How long tree changes are gathered before they are saved as one commit.
@@ -108,6 +116,12 @@ RUN_LIMIT_RETRY_SECONDS = 5.0
 # How long a model may take to name a team before the team keeps the name
 # it has; the root's agents are not briefed until then.
 SUMMARY_TIMEOUT_SECONDS = 20.0
+# How long a model may take over a team's diff, or over a boundary's rules.
+MODEL_CALL_TIMEOUT_SECONDS = 120.0
+# A team whose work is sent back this many times is stopped.
+MAX_REVIEW_ROUNDS = 3
+# How often the rules of the blackboard are looked over for consolidation.
+CONSOLIDATION_SECONDS = 900.0
 # Where, in the org's repository, the uncommitted work a prune discarded is
 # kept.
 PRUNED_REFS = "refs/agents/pruned"
@@ -189,9 +203,17 @@ class DirectorService:
         find_sandbox: Callable[[], str | None] = lambda: None,
         summary_timeout: float = SUMMARY_TIMEOUT_SECONDS,
         remembered: Path | None = None,
+        find_review_instructions: Callable[[], str | None] = lambda: None,
+        model_call_timeout: float = MODEL_CALL_TIMEOUT_SECONDS,
+        consolidate_every: float = 0,
     ) -> None:
         """
         Args:
+            find_review_instructions: Returns what a model is told when it
+                reads a team's diff before the IC above reviews it, or None
+                to leave that pass out.
+            consolidate_every: Seconds between looks at the blackboard's
+                rules for boundaries to consolidate; 0 for never.
             remembered: A file to keep the org's repository in, so that an
                 org started outside ``repo_dir`` is found again after a
                 restart.
@@ -208,6 +230,12 @@ class DirectorService:
         self._find_sandbox = find_sandbox
         self._summary_timeout = summary_timeout
         self._remembered = remembered
+        self._find_review_instructions = find_review_instructions
+        self._model_call_timeout = model_call_timeout
+        # Teams that had reported done and are working again only to review.
+        self._done_reviewers: set[str] = set()
+        self._consolidate_every = consolidate_every
+        self._consolidator: asyncio.Task[None] | None = None
         self._bwrap: str | None = None
         self._stop_guard: Callable[[], None] | None = None
         self._save_delay = save_delay
@@ -217,6 +245,8 @@ class DirectorService:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._launcher: PodLauncher | None = None
         self._effects: asyncio.Queue[Effect] = asyncio.Queue()
+        # Effects asked for and not carried out yet.
+        self._unsettled = 0
         self._worker: asyncio.Task[None] | None = None
         self._save_timer: asyncio.TimerHandle | None = None
         self._stop_status: Callable[[], None] | None = None
@@ -231,6 +261,8 @@ class DirectorService:
             worktree_root=config.conversation_worktree_root,
             find_sandbox=find_bwrap,
             remembered=config.conversations_path.parent / _REMEMBERED_FILE,
+            find_review_instructions=bugbot.review_instructions,
+            consolidate_every=config.director_consolidation_seconds,
         )
 
     @property
@@ -273,6 +305,7 @@ class DirectorService:
         self._loop = asyncio.get_running_loop()
         self._launcher = launcher
         self._effects = asyncio.Queue()
+        self._unsettled = 0
         self._worker = asyncio.create_task(self._work(), name="director-effects")
         self._stop_status = launcher.on_status(self._on_status)
         self._stop_guard = launcher.on_action(self.guard_action)
@@ -280,6 +313,10 @@ class DirectorService:
         if self._bwrap is None:
             logger.info("Director cannot confine shells here; it checks file tools")
         bind_director(self)
+        if self._consolidate_every > 0 and not self._fixture:
+            self._consolidator = asyncio.create_task(
+                self._consolidate_regularly(), name="director-consolidation"
+            )
         if self._store is not None:
             self._enqueue(self._resync)
 
@@ -292,6 +329,10 @@ class DirectorService:
         if self._stop_guard is not None:
             self._stop_guard()
             self._stop_guard = None
+        if self._consolidator is not None:
+            self._consolidator.cancel()
+            await asyncio.gather(self._consolidator, return_exceptions=True)
+            self._consolidator = None
         if self._worker is not None:
             self._worker.cancel()
             await asyncio.gather(self._worker, return_exceptions=True)
@@ -307,7 +348,10 @@ class DirectorService:
         """Wait until everything asked for so far has been carried out."""
         # Let what other threads asked for reach the queue first.
         await asyncio.sleep(0)
-        await self._effects.join()
+        # What is carried out may ask for more.
+        while self._unsettled:
+            await self._effects.join()
+            await asyncio.sleep(0)
 
     async def create_org(self, request: CreateOrgRequest) -> OrgNode:
         """Start the root team of a new org and brief its IC with the task.
@@ -388,6 +432,7 @@ class DirectorService:
                 worktree_path=started.workspace,
                 isolation=started.isolation,
                 branch=await asyncio.to_thread(_branch_of, started.workspace),
+                base_commit=await asyncio.to_thread(_base_of, started.workspace),
             )
         # First, so that both agents are told the name the team keeps.
         self._enqueue(
@@ -562,6 +607,78 @@ class DirectorService:
             lambda: self._prune(node_id, approach, why_failed, replacement_task)
         )
 
+    def request_review(self, node_id: str) -> None:
+        """Have the work a team reported done reviewed. Safe from any thread."""
+        self._enqueue(lambda: self._request_review(node_id))
+
+    def request_changes(self, node_id: str, findings: list[ReviewFinding]) -> bool:
+        """Send a team's work back to it with what must change.
+
+        Safe from any thread.
+
+        Returns:
+            Whether this was once too often: the team is then stopped and
+            left blocked instead.
+
+        Raises:
+            NotFound: The node does not exist.
+            Conflict: None of its work waits for a review.
+        """
+        store = self.store
+        node = store.get(node_id)
+        if node is None:
+            raise NotFound(f"Node {node_id} does not exist")
+        if node.review is None or node.review.state != "pending":
+            raise Conflict(f"Team {node_id} has no work waiting for a review")
+        review = node.review.model_copy(
+            update={"state": "changes_requested", "findings": findings, "at": _now()}
+        )
+        above = store.get(node.parent_id) if node.parent_id else None
+        if review.round >= MAX_REVIEW_ROUNDS:
+            store.update_node(node_id, status="blocked", review=review)
+            self._enqueue(lambda: self._halt(node_id))
+            self._reviewed(above)
+            return True
+        store.update_node(node_id, status="working", review=review)
+        self._reviewed(above)
+        self.notify(
+            agent_conversation(node, "ic"), changes_requested(above or node, findings)
+        )
+        return False
+
+    def declared_status(self, node_id: str) -> None:
+        """A team declared its own status, which now stands."""
+        self._done_reviewers.discard(node_id)
+
+    def _reviewed(self, reviewer: OrgNode | None) -> None:
+        """Put a team that was done before it reviewed back to done, once
+        none of its teams waits for it."""
+        if reviewer is None or reviewer.id not in self._done_reviewers:
+            return
+        store = self.store
+        waiting = any(
+            team is not None
+            and team.review is not None
+            and team.review.state == "pending"
+            for team in map(store.get, reviewer.child_ids)
+        )
+        if waiting:
+            return
+        self._done_reviewers.discard(reviewer.id)
+        now = store.get(reviewer.id)
+        if now is not None and now.status in ("working", "idle"):
+            store.update_node(reviewer.id, status="done")
+
+    def accept_review(self, node_id: str, needed_above: str) -> None:
+        """Take a team's reviewed work into the team above. Safe from any
+        thread.
+
+        Args:
+            needed_above: Why a team further up waits on the work; '' when
+                none does.
+        """
+        self._enqueue(lambda: self._accept(node_id, needed_above))
+
     def _checkouts(self) -> list[Path]:
         """Where the org's checkouts are: the repository and the worktrees."""
         roots = [
@@ -731,7 +848,11 @@ class DirectorService:
         loop = self._loop
         if loop is None:
             raise Unavailable("The director is not running agents on this server")
-        loop.call_soon_threadsafe(self._effects.put_nowait, effect)
+        loop.call_soon_threadsafe(self._put, effect)
+
+    def _put(self, effect: Effect) -> None:
+        self._unsettled += 1
+        self._effects.put_nowait(effect)
 
     async def _work(self) -> None:
         while True:
@@ -741,6 +862,7 @@ class DirectorService:
             except Exception:
                 logger.exception("A director action failed")
             finally:
+                self._unsettled -= 1
                 self._effects.task_done()
 
     async def _when_there_is_room[T](self, start: Callable[[], Awaitable[T]]) -> T:
@@ -899,6 +1021,7 @@ class DirectorService:
                 worktree_path=started.workspace,
                 isolation=started.isolation,
                 branch=await asyncio.to_thread(_branch_of, started.workspace),
+                base_commit=await asyncio.to_thread(_base_of, started.workspace),
             )
         return True
 
@@ -1010,6 +1133,7 @@ class DirectorService:
                 branch=parent.branch,
                 escalations=[],
                 pending_split=None,
+                review=None,
                 headline=provisional_summary(replacement_task).headline,
                 spec_summary=_summary_of(replacement_task),
             )
@@ -1026,6 +1150,235 @@ class DirectorService:
             + (f" (kept in git as {saved})" if saved else "")
             + f"; {outcome}.",
         )
+
+    async def _own_account(
+        self, node: OrgNode
+    ) -> tuple[str, list[ReviewFinding] | None]:
+        """What a team's IC says of the work its team reported done.
+
+        Returns:
+            Its description of the changes, '' when it gave none, and what
+            it found reviewing them, None when it gave no usable answer or
+            was not asked.
+        """
+        ic = agent_conversation(node, "ic")
+        if ic is None or not node.base_commit:
+            return "", None
+        files = await asyncio.to_thread(
+            bugbot.changed_files,
+            Path(node.worktree_path),
+            node.base_commit,
+            node.boundary.path,
+        )
+        if files is None:
+            return "", None
+        if not files:
+            return "", []
+        description = await self._ask_agent(ic, bugbot.write_up_question(files))
+        instructions = await asyncio.to_thread(self._find_review_instructions)
+        if instructions is None:
+            return description or "", None
+        above = self.store.get(node.parent_id) if node.parent_id else None
+        specs, contracts = await asyncio.to_thread(
+            GitBlackboard(self._repo_dir).applies_to,
+            node.boundary.path,
+            above.boundary.path if above else None,
+        )
+        answer = await self._ask_agent(
+            ic,
+            bugbot.review_question(
+                instructions,
+                specs[0].spec if specs else None,
+                [agreed.contracts for agreed in contracts],
+                files,
+            ),
+        )
+        return description or "", bugbot.parse_findings(answer) if answer else None
+
+    async def _ask_agent(self, conversation_id: str, question: str) -> str | None:
+        try:
+            return await asyncio.wait_for(
+                self._require_launcher().ask_agent(UUID(conversation_id), question),
+                timeout=self._model_call_timeout,
+            )
+        except (NotFound, TimeoutError):
+            return None
+
+    async def _ask(
+        self, conversation_id: str, system: str, user: str, usage_id: str
+    ) -> str | None:
+        try:
+            return await asyncio.wait_for(
+                self._require_launcher().ask(
+                    UUID(conversation_id), system, user, usage_id=usage_id
+                ),
+                timeout=self._model_call_timeout,
+            )
+        except (NotFound, TimeoutError):
+            return None
+
+    async def _request_review(self, node_id: str) -> None:
+        store = self.store
+        node = store.get(node_id)
+        asked = node.review if node else None
+        if node is None or asked is None:
+            return
+        if asked.state not in ("pending", "unreviewed"):
+            return
+        description, found = await self._own_account(node)
+        node = store.get(node_id)
+        if node is None or node.review != asked:
+            return
+        review = asked.model_copy(
+            update={
+                "description": description,
+                "automated_ran": found is not None,
+                "automated": found or [],
+            }
+        )
+        node = store.update_node(node_id, review=review)
+        above = store.get(node.parent_id) if node.parent_id else None
+        if above is not None:
+            if above.status == "done":
+                # Reviewing is work; it is done again once it has decided.
+                self._done_reviewers.add(above.id)
+                store.update_node(above.id, status="working")
+            self.notify(agent_conversation(above, "ic"), review_request(node, review))
+        elif found:
+            self.notify(
+                agent_conversation(node, "ic"),
+                "Asked to review your team's work by the code review "
+                "instructions, you found, for you to verify:\n"
+                + "\n".join(f"- {finding.issue}" for finding in found),
+            )
+
+    async def _accept(self, node_id: str, needed_above: str) -> None:
+        store = self.store
+        node = store.get(node_id)
+        above = store.get(node.parent_id) if node and node.parent_id else None
+        if node is None or above is None:
+            return
+        if node.review is None or node.review.state != "pending":
+            return
+        reviewer = agent_conversation(above, "ic")
+        where = node.boundary.path or "the repository"
+        team, checkout = Path(node.worktree_path), Path(above.worktree_path)
+        merged = False
+        if _checkout_root(str(team)) != _checkout_root(str(checkout)):
+            try:
+                result = await asyncio.to_thread(
+                    merge_back, checkout, team, node.boundary.path, node.title
+                )
+            except (GitError, OSError) as error:
+                self.notify(
+                    reviewer,
+                    f"The work of {node.title!r} could not be merged into your "
+                    f"checkout, and still waits for your review: {error}",
+                )
+                return
+            if result.outcome == "refused":
+                self.notify(
+                    reviewer,
+                    f"git would not merge the work of {node.title!r} into your "
+                    f"checkout as it is:\n{result.detail}\nCommit or put aside "
+                    "what is in the way, then accept it again with `review_team`.",
+                )
+                return
+            if result.outcome in ("conflicts", "outside"):
+                issue = (
+                    "These files do not merge with the checkout of the team "
+                    "above. Merge its branch into yours, resolve them and "
+                    "commit."
+                    if result.outcome == "conflicts"
+                    else f"These files are outside {where}, which is all your "
+                    "team owns. Take them out of your commits."
+                )
+                halted = self.request_changes(
+                    node_id, [ReviewFinding(path=", ".join(result.files), issue=issue)]
+                )
+                self.notify(
+                    reviewer,
+                    f"The work of {node.title!r} was not taken into your "
+                    f"checkout: {issue} ({', '.join(result.files)}) "
+                    + (
+                        "It was sent back for the last time; the team is "
+                        "stopped and blocked."
+                        if halted
+                        else "It was sent back to the team."
+                    ),
+                )
+                return
+            merged = result.outcome == "merged"
+        tip = await asyncio.to_thread(head_of, team)
+        store.update_node(
+            node_id,
+            review=node.review.model_copy(update={"state": "accepted", "at": _now()}),
+            base_commit=tip or node.base_commit,
+        )
+        self._reviewed(above)
+        self.notify(
+            agent_conversation(node, "ic"),
+            f"The IC of {above.title!r} accepted your team's work"
+            + (" and it is merged into that team's checkout." if merged else "."),
+        )
+        if merged:
+            self.notify(
+                reviewer, f"The work of {node.title!r} is merged into your checkout."
+            )
+        further = store.get(above.parent_id) if above.parent_id else None
+        if needed_above and further is not None:
+            self.notify(
+                agent_conversation(further, "ic"),
+                f"Team {above.title!r} (node {above.id}) below you accepted the "
+                f"work of its sub-team {node.title!r} in {where} and says a team "
+                f"above it waits on that work: {needed_above}\nIt is in "
+                f"{above.worktree_path}"
+                + (f" on branch {above.branch}." if above.branch else "."),
+            )
+
+    async def _halt(self, node_id: str) -> None:
+        """Stop the agents of a team where they are."""
+        node = self.store.get(node_id)
+        if node is None:
+            return
+        launcher = self._require_launcher()
+        for agent in node.agents:
+            if agent.conversation_id is not None:
+                await launcher.stop(UUID(agent.conversation_id))
+
+    async def _consolidate_regularly(self) -> None:
+        while True:
+            await asyncio.sleep(self._consolidate_every)
+            # One pass at a time, behind whatever the agents asked for.
+            done = asyncio.Event()
+
+            async def consolidate(done: asyncio.Event = done) -> None:
+                try:
+                    await self._consolidate()
+                finally:
+                    done.set()
+
+            self._enqueue(consolidate)
+            await done.wait()
+
+    async def _consolidate(self) -> None:
+        """Have a model rewrite the rules of every boundary that has gained
+        enough of them."""
+        store = self._store
+        root = store.get(store.root_id) if store and store.root_id else None
+        asker = agent_conversation(root, "ic") if root else None
+        if asker is None or not is_git_repository(self._repo_dir):
+            return
+        board = GitBlackboard(self._repo_dir)
+        for item in await asyncio.to_thread(memory.due, board):
+            answer = await self._ask(asker, *memory.prompt(item), memory.USAGE_ID)
+            rules = memory.parse_rules(answer, item) if answer else None
+            if rules is None:
+                logger.warning(
+                    "No usable consolidation of the rules of %r", item.directory
+                )
+                continue
+            await asyncio.to_thread(memory.apply, board, item, rules)
 
     def _discard_work(self, teams: list[OrgNode], stamp: str) -> str | None:
         """Discard the uncommitted work of ``teams``, the pruned team first.
@@ -1179,6 +1532,14 @@ def _new_pod(ic_id: UUID) -> list[AgentRef]:
         AgentRef(role="ic", conversation_id=str(ic_id), status="idle"),
         AgentRef(role="manager", conversation_id=str(uuid4()), status="idle"),
     ]
+
+
+def _base_of(workspace: str) -> str:
+    return head_of(Path(workspace)) or ""
+
+
+def _now() -> str:
+    return datetime.now(UTC).isoformat(timespec="seconds")
 
 
 def _branch_of(workspace: str) -> str:

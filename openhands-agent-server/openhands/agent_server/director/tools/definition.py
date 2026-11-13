@@ -6,7 +6,11 @@ from typing import TYPE_CHECKING, ClassVar, Literal, Self
 from pydantic import Field
 
 from openhands.agent_server.director import pod_actions
-from openhands.agent_server.director.models import EscalationKind, SplitChild
+from openhands.agent_server.director.models import (
+    EscalationKind,
+    ReviewFinding,
+    SplitChild,
+)
 from openhands.agent_server.director.pod_actions import Caller, DeclaredStatus
 from openhands.agent_server.director.service import DirectorService
 from openhands.agent_server.director.tools.impl import (
@@ -95,6 +99,30 @@ class SetStatusAction(Action):
     summary: str = Field(
         default="", description="What was delivered, or what blocks the team."
     )
+
+
+class ReviewTeamAction(Action):
+    """Decide on the work a team below yours reported done."""
+
+    node_id: str = Field(description="A team directly below yours.")
+    decision: Literal["accept", "reject"]
+    findings: list[ReviewFinding] = Field(
+        default_factory=list,
+        description="What must change; required to reject.",
+    )
+    needed_above: str = Field(
+        default="",
+        description=(
+            "Only when a team above yours waits on this work: which one and "
+            "for what. Leave empty otherwise."
+        ),
+    )
+
+
+class RecordRuleAction(Action):
+    """Record a rule for everyone who works in your boundary later."""
+
+    rule: str = Field(description="The rule, in plain English.")
 
 
 class PruneTeamAction(Action):
@@ -266,8 +294,9 @@ class ResolveEscalationTool(_DirectorTool[ResolveEscalationAction]):
 
 class SetStatusTool(_DirectorTool[SetStatusAction]):
     summary = (
-        "Declare that your team is done or blocked, or working again. The "
-        "Manager of the team above is told."
+        "Declare that your team is done or blocked, or working again. Commit "
+        "the work first: done work is reviewed by the IC of the team above. "
+        "The Manager of the team above is told of a block."
     )
 
     @classmethod
@@ -278,6 +307,48 @@ class SetStatusTool(_DirectorTool[SetStatusAction]):
     def _act(cls):
         return lambda service, caller, action: pod_actions.set_status(
             service, caller, action.status, action.summary
+        )
+
+
+class ReviewTeamTool(_DirectorTool[ReviewTeamAction]):
+    summary = (
+        "IC only. Accept the work a team directly below yours reported done, "
+        "or reject it with what must change. Accepted work of a team with its "
+        "own worktree is merged into your checkout. A team whose work is "
+        "rejected a third time is stopped and left blocked."
+    )
+
+    @classmethod
+    def _action_type(cls):
+        return ReviewTeamAction
+
+    @classmethod
+    def _act(cls):
+        return lambda service, caller, action: pod_actions.review_team(
+            service,
+            caller,
+            action.node_id,
+            action.decision,
+            action.findings,
+            action.needed_above,
+        )
+
+
+class RecordRuleTool(_DirectorTool[RecordRuleAction]):
+    summary = (
+        "Add a rule to the permanent memory of your team's boundary. Every "
+        "agent that works there or below it later is told it. For what must "
+        "hold from now on, not for notes on the current task."
+    )
+
+    @classmethod
+    def _action_type(cls):
+        return RecordRuleAction
+
+    @classmethod
+    def _act(cls):
+        return lambda service, caller, action: pod_actions.record_rule(
+            service, caller, action.rule
         )
 
 
@@ -314,3 +385,5 @@ register_tool(RaiseEscalationTool.name, RaiseEscalationTool)
 register_tool(ResolveEscalationTool.name, ResolveEscalationTool)
 register_tool(SetStatusTool.name, SetStatusTool)
 register_tool(PruneTeamTool.name, PruneTeamTool)
+register_tool(ReviewTeamTool.name, ReviewTeamTool)
+register_tool(RecordRuleTool.name, RecordRuleTool)

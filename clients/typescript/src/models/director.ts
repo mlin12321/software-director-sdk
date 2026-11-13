@@ -93,6 +93,42 @@ export interface DirectorSplitProposal {
   proposed_at: string;
 }
 
+/**
+ * `pending`: the IC of the team above has the work to review. `unreviewed`:
+ * the root team's, which has nobody above.
+ */
+export type DirectorReviewState = 'pending' | 'changes_requested' | 'accepted' | 'unreviewed';
+
+/** One thing a review found wrong in a team's work. */
+export interface DirectorReviewFinding {
+  /** The file, relative to the repository; '' when it is about no one file. */
+  path: string;
+  line: number | null;
+  issue: string;
+  evidence: string;
+}
+
+/** The review of the work a team reported as done. */
+export interface DirectorReview {
+  state: DirectorReviewState;
+  /** 1 the first time; one more each time the work comes back after changes. */
+  round: number;
+  /** What the team said it delivered. */
+  summary: string;
+  /** The team's own account of what it changed, written as a pull request
+   * description; '' when it gave none. */
+  description: string;
+  /** Whether the team's IC, asked to review the changes by the code review
+   * instructions, gave an answer. */
+  automated_ran: boolean;
+  /** What it found, for the reviewing IC to verify. */
+  automated: DirectorReviewFinding[];
+  /** What the reviewing IC wants changed, when it asked. */
+  findings: DirectorReviewFinding[];
+  /** ISO 8601 timestamp of the last change. */
+  at: string;
+}
+
 export interface DirectorOrgNode {
   id: DirectorNodeId;
   parent_id: DirectorNodeId | null;
@@ -114,6 +150,10 @@ export interface DirectorOrgNode {
   escalations: DirectorEscalation[];
   /** A split of this node's boundary that is not carried out yet. */
   pending_split: DirectorSplitProposal | null;
+  /** The commit the team's work is compared with when it is reviewed. */
+  base_commit: string;
+  /** The review of what the team last reported as done. */
+  review: DirectorReview | null;
   /** Status of every node below this one. */
   descendant_counts: DirectorStatusCounts;
   /** Escalations from this node or below that wait on the human. */
@@ -280,3 +320,19 @@ export type DirectorOrgEvent =
   | { type: 'node_upsert'; node: DirectorOrgNode }
   | { type: 'node_removed'; id: DirectorNodeId }
   | { type: 'escalations'; escalations: DirectorOpenEscalation[] };
+
+/** What a pull or a push of the blackboard did. */
+export interface DirectorBlackboardSync {
+  remote: string;
+  /** The local blackboard's commit afterwards; `null` when it is empty. */
+  head: string | null;
+  /** The local blackboard took in remote changes. */
+  changed: boolean;
+  /**
+   * Specs and contracts both sides had changed. The local text was kept;
+   * the remote text is in the blackboard's history.
+   */
+  kept_local: string[];
+  /** The remote now has the local blackboard. */
+  pushed: boolean;
+}

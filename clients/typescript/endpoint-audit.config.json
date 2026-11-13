@@ -47,6 +47,8 @@
         "GET /api/director/org",
         "POST /api/director/org",
         "POST /api/director/org/messages",
+        "POST /api/director/org/blackboard/pull",
+        "POST /api/director/org/blackboard/push",
         "GET /api/director/org/tree-stream",
         "GET /api/director/org/nodes/{}",
         "GET /api/director/org/nodes/{}/blackboard",

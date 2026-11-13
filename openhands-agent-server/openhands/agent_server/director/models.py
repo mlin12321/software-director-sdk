@@ -20,6 +20,10 @@ EscalationKind = Literal["critical_issue", "design_decision"]
 
 SplitStatus = Literal["proposed", "refine_requested", "approved"]
 
+# 'pending': the IC of the team above has the team's work to review.
+# 'unreviewed': the root team's, which has nobody above.
+ReviewState = Literal["pending", "changes_requested", "accepted", "unreviewed"]
+
 # 'sandbox': an agent's shell can write only its team's directory, and its
 # file tools are checked. 'checks': only its file tools are checked.
 BoundaryEnforcement = Literal["sandbox", "checks"]
@@ -120,6 +124,52 @@ class SplitProposal(BaseModel):
     proposed_at: str = Field(description="ISO 8601 timestamp.")
 
 
+class ReviewFinding(BaseModel):
+    """One thing a review found wrong in a team's work."""
+
+    path: str = Field(default="", description="The file, relative to the repository.")
+    line: int | None = None
+    issue: str = Field(min_length=1, description="What is wrong.")
+    evidence: str = Field(
+        default="", description="What shows it: the code, a failing check's output."
+    )
+
+
+class Review(BaseModel):
+    """The review of the work a team reported as done.
+
+    The IC of the team above reviews it. Before that, the team's own IC is
+    asked to describe the changes and to review them, and both answers are
+    handed to that IC.
+    """
+
+    state: ReviewState
+    round: int = Field(
+        default=1,
+        description="1 for the first time this work is reviewed, one more "
+        "each time it comes back after changes were requested.",
+    )
+    summary: str = Field(default="", description="What the team said it delivered.")
+    description: str = Field(
+        default="",
+        description="The team's own account of what it changed, written as "
+        "a pull request description; '' when it gave none.",
+    )
+    automated_ran: bool = Field(
+        default=False,
+        description="Whether the team's IC, asked to review the changes by "
+        "the code review instructions, gave an answer.",
+    )
+    automated: list[ReviewFinding] = Field(
+        default_factory=list, description="What it found."
+    )
+    findings: list[ReviewFinding] = Field(
+        default_factory=list,
+        description="What the reviewing IC wants changed, when it asked.",
+    )
+    at: str = Field(description="ISO 8601 timestamp of the last change.")
+
+
 class StatusCounts(BaseModel):
     """Number of nodes in each status."""
 
@@ -164,6 +214,18 @@ class OrgNodeInput(BaseModel):
     pending_split: SplitProposal | None = Field(
         default=None,
         description="A split of this node's boundary that is not carried out yet.",
+    )
+    base_commit: str = Field(
+        default="",
+        description=(
+            "The commit the team's work is compared with when it is reviewed: "
+            "where its checkout was when the team started, or when its work "
+            "was last accepted."
+        ),
+    )
+    review: Review | None = Field(
+        default=None,
+        description="The review of what the team last reported as done.",
     )
 
 
@@ -311,6 +373,30 @@ class TeachRequest(BaseModel):
     """A rule to add to a boundary's permanent memory."""
 
     rule: str = Field(min_length=1, description="The rule, in plain English.")
+
+
+class BlackboardSyncRequest(BaseModel):
+    """Which remote to share the blackboard with."""
+
+    remote: str = Field(default="origin", min_length=1)
+
+
+class BlackboardSync(BaseModel):
+    """What a pull or a push of the blackboard did."""
+
+    remote: str
+    head: str | None = Field(
+        description="The local blackboard's commit afterwards; None when empty."
+    )
+    changed: bool = Field(description="The local blackboard took in remote changes.")
+    kept_local: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Specs and contracts both sides had changed. The local text was "
+            "kept; the remote text is in the blackboard's history."
+        ),
+    )
+    pushed: bool = Field(description="The remote now has the local blackboard.")
 
 
 class OrgSummary(BaseModel):

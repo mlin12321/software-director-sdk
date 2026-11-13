@@ -4,7 +4,13 @@ from functools import lru_cache
 from itertools import combinations
 from pathlib import Path
 
-from openhands.agent_server.director.git import GitError, git, git_version
+from openhands.agent_server.director.git import (
+    GitError,
+    git,
+    git_version,
+    head_of,
+    pathspec,
+)
 from openhands.agent_server.director.models import (
     BoundaryOwner,
     Collision,
@@ -59,7 +65,7 @@ def _owner(path: str, reports: list[OrgNode]) -> str | None:
 
 def _files(checkout: Path, directory: str) -> tuple[list[str], bool]:
     """The files under ``directory`` that git does not ignore."""
-    spec = f":(top,literal){directory}" if directory else ":(top)"
+    spec = pathspec(directory)
     try:
         listed = git(
             checkout,
@@ -72,21 +78,26 @@ def _files(checkout: Path, directory: str) -> tuple[list[str], bool]:
     return files[:MAX_FILES], len(files) > MAX_FILES
 
 
+def can_merge_in_memory(checkout: Path) -> bool:
+    """Whether the installed git can merge two commits without a checkout."""
+    try:
+        return git_version(checkout) >= _MERGE_TREE_MIN_GIT
+    except (GitError, OSError, RuntimeError):
+        return False
+
+
 def _collisions(node: OrgNode, reports: list[OrgNode]) -> tuple[list[Collision], bool]:
     checkout = Path(node.worktree_path)
-    try:
-        if git_version(checkout) < _MERGE_TREE_MIN_GIT:
-            return [], False
-    except (GitError, OSError, RuntimeError):
+    if not can_merge_in_memory(checkout):
         return [], False
     # Teams that share a checkout have one tip between them; the first stands
     # for it.
     tips: dict[str, str] = {}
     for team in (node, *reports):
-        tip = _tip(Path(team.worktree_path))
+        tip = head_of(Path(team.worktree_path))
         if tip is not None:
             tips.setdefault(tip, team.id)
-    own = _tip(checkout)
+    own = head_of(checkout)
     pairs = [
         (ours, theirs)
         for ours, theirs in combinations(tips, 2)
@@ -94,7 +105,7 @@ def _collisions(node: OrgNode, reports: list[OrgNode]) -> tuple[list[Collision],
     ]
     teams_by_path: dict[str, set[str]] = {}
     for ours, theirs in pairs:
-        for path in _conflicts(checkout, ours, theirs):
+        for path in conflicts(checkout, ours, theirs):
             teams_by_path.setdefault(path, set()).update((tips[ours], tips[theirs]))
     order = [node.id, *(report.id for report in reports)]
     return [
@@ -103,15 +114,8 @@ def _collisions(node: OrgNode, reports: list[OrgNode]) -> tuple[list[Collision],
     ], True
 
 
-def _tip(checkout: Path) -> str | None:
-    try:
-        return git(checkout, ["rev-parse", "--verify", "--quiet", "HEAD"]).strip()
-    except (GitError, OSError):
-        return None
-
-
 @lru_cache(maxsize=4096)
-def _conflicts(checkout: Path, ours: str, theirs: str) -> tuple[str, ...]:
+def conflicts(checkout: Path, ours: str, theirs: str) -> tuple[str, ...]:
     """The files that conflict when two commits are merged, without merging."""
     try:
         git(

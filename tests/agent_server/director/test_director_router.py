@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 from openhands.agent_server import director_router
 from openhands.agent_server.api import create_app
 from openhands.agent_server.config import Config
+from openhands.agent_server.director.git import git_version
 from openhands.agent_server.director.git_blackboard import GitBlackboard
 from openhands.agent_server.director.models import Autopsy
 from openhands.agent_server.director.org_persistence import (
@@ -29,6 +30,7 @@ from tests.agent_server.director.conftest import (
     make_escalation,
     make_node,
     root_conversation,
+    run_git,
     small_tree,
 )
 
@@ -562,3 +564,46 @@ async def test_a_message_that_cannot_be_routed_is_refused(running, repo):
     assert outside.status_code == 422
     blank = await client.post("/api/director/org/messages", json={"text": ""})
     assert blank.status_code == 422
+
+
+def test_the_blackboard_is_pushed_to_and_pulled_from_a_remote(
+    saved_tree: Path, tmp_path: Path
+):
+    if git_version(saved_tree) < (2, 38):
+        pytest.skip("needs git 2.38")
+    bare, clone = tmp_path / "remote.git", tmp_path / "clone"
+    run_git(tmp_path, "clone", "--quiet", "--bare", str(saved_tree), str(bare))
+    run_git(saved_tree, "remote", "add", "origin", str(bare))
+    run_git(tmp_path, "clone", "--quiet", str(bare), str(clone))
+    GitBlackboard(saved_tree).teach("svc/a", "Be kind.")
+    client = make_client(saved_tree)
+
+    pushed = client.post("/api/director/org/blackboard/push")
+    pulled = make_client(clone).post(
+        "/api/director/org/blackboard/pull", json={"remote": "origin"}
+    )
+
+    assert pushed.status_code == 200 and pushed.json()["pushed"] is True
+    assert pulled.status_code == 200
+    assert pulled.json() == {
+        "remote": "origin",
+        "head": GitBlackboard(saved_tree).head(),
+        "changed": True,
+        "kept_local": [],
+        "pushed": False,
+    }
+    assert GitBlackboard(clone).memory("svc/a").rules == ["Be kind."]
+
+
+def test_sharing_the_blackboard_reports_what_is_missing(saved_tree: Path):
+    client = make_client(saved_tree)
+
+    no_remote = client.post("/api/director/org/blackboard/pull")
+    run_git(saved_tree, "remote", "add", "origin", str(saved_tree / "nowhere.git"))
+    nothing_to_push = client.post("/api/director/org/blackboard/push")
+    GitBlackboard(saved_tree).teach("", "Rule.")
+    unreachable = client.post("/api/director/org/blackboard/push")
+
+    assert [
+        response.status_code for response in (no_remote, nothing_to_push, unreachable)
+    ] == [404, 409, 502]

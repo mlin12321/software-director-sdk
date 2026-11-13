@@ -298,6 +298,15 @@ class Config(BaseModel):
             "the one stored in the repository. For developing clients."
         ),
     )
+    director_consolidation_seconds: float = Field(
+        default=900.0,
+        ge=0,
+        description=(
+            "How often the director looks for boundaries whose rules have "
+            "grown enough to have a model rewrite them into fewer. 0 turns "
+            "this off."
+        ),
+    )
     conversation_worktree_root: Path = Field(
         default=Path("/tmp/conversation-worktrees"),
         description=(

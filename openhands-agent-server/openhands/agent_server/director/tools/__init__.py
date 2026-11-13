@@ -10,7 +10,9 @@ from openhands.agent_server.director.tools.definition import (
     PruneTeamTool,
     RaiseEscalationTool,
     ReadNodeContextTool,
+    RecordRuleTool,
     ResolveEscalationTool,
+    ReviewTeamTool,
     SetStatusTool,
     WriteSpecTool,
 )
@@ -22,7 +24,9 @@ __all__ = [
     "PruneTeamTool",
     "RaiseEscalationTool",
     "ReadNodeContextTool",
+    "RecordRuleTool",
     "ResolveEscalationTool",
+    "ReviewTeamTool",
     "SetStatusTool",
     "WriteSpecTool",
 ]
