@@ -25,6 +25,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import threading
 import time
 import uuid
@@ -1190,6 +1191,46 @@ class _ACPClientConnection(ClientSideConnection):  # pyright: ignore[reportGener
         )
 
 
+# How long what an ACP command started gets to end after the command itself
+# has, before it is killed.
+_ACP_GROUP_EXIT_GRACE_SECONDS = 2.0
+
+
+def _signal_process_group(group: int | None, sig: int) -> bool:
+    """Signal the process group an ACP command leads.
+
+    The command is started in a session of its own, so its process id names
+    a group holding everything it started (``npx`` starts ``node``, which
+    starts the agent). The group outlives the command while any of those is
+    left.
+
+    Args:
+        group: The id of the group; None when the command leads none.
+
+    Returns:
+        Whether there was a group to signal.
+    """
+    if group is None:
+        return False
+    try:
+        os.killpg(group, sig)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True
+    return True
+
+
+def _end_process_group(group: int | None) -> None:
+    """Kill what is left of an ACP command's group once it had time to end."""
+    deadline = time.monotonic() + _ACP_GROUP_EXIT_GRACE_SECONDS
+    while _signal_process_group(group, 0):
+        if time.monotonic() >= deadline:
+            _signal_process_group(group, signal.SIGKILL)
+            return
+        time.sleep(0.05)
+
+
 async def _filter_jsonrpc_lines(source: Any, dest: Any) -> None:
     """Read lines from *source* and forward only JSON-RPC lines to *dest*.
 
@@ -2121,6 +2162,8 @@ class ACPAgent(AgentBase):
     _conn: ClientSideConnection | None = PrivateAttr(default=None)
     _session_id: str | None = PrivateAttr(default=None)
     _process: Any = PrivateAttr(default=None)  # asyncio subprocess
+    # The process group the subprocess leads; None when it leads none.
+    _process_group: int | None = PrivateAttr(default=None)
     _client: Any = PrivateAttr(default=None)  # _OpenHandsACPBridge
     _filtered_reader: Any = PrivateAttr(default=None)  # StreamReader
     _stdout_filter_task: Any = PrivateAttr(default=None)  # asyncio.Task
@@ -3328,6 +3371,9 @@ class ACPAgent(AgentBase):
                 env=env,
                 cwd=working_dir if os.path.isdir(working_dir) else None,
                 limit=_STREAM_READER_LIMIT,
+                # A group of its own, so that closing can end everything the
+                # command started and not the command alone.
+                start_new_session=os.name != "nt",
             )
             assert process.stdin is not None
             assert process.stdout is not None
@@ -3357,6 +3403,7 @@ class ACPAgent(AgentBase):
             # last, on full success), so an early _conn here does not make the
             # agent look ready before _init completes.
             self._process = process
+            self._process_group = process.pid if os.name != "nt" else None
             self._conn = conn
             self._filtered_reader = filtered_reader
             self._stdout_filter_task = stdout_filter_task
@@ -5009,6 +5056,7 @@ class ACPAgent(AgentBase):
                 if process.returncode is None or not isinstance(
                     process.returncode, int
                 ):
+                    _signal_process_group(self._process_group, signal.SIGTERM)
                     process.terminate()
                 if self._executor is not None:
                     self._executor.run_async(
@@ -5028,7 +5076,9 @@ class ACPAgent(AgentBase):
                         )
                 except Exception as kill_error:
                     logger.debug("Error killing ACP process: %s", kill_error)
+            _end_process_group(self._process_group)
             self._process = None
+            self._process_group = None
 
         for task_name, task in (
             ("stdout filter task", self._stdout_filter_task),
