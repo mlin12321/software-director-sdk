@@ -1,7 +1,7 @@
 import asyncio
 import time
 import traceback
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext, suppress
 from dataclasses import dataclass, field
@@ -74,6 +74,7 @@ from openhands.sdk.credential import (
 )
 from openhands.sdk.errors import RateLimited
 from openhands.sdk.event import (
+    ActionEvent,
     AgentErrorEvent,
     ObservationBaseEvent,
     ReactionEvent,
@@ -221,6 +222,11 @@ def _without_agent_context_secret(
     )
 
 
+# Decides whether an agent's action may run: given the conversation and the
+# action, it returns why not, or None to let it run.
+type ActionGuard = Callable[[UUID, ActionEvent], str | None]
+
+
 @dataclass
 class EventService:
     """
@@ -245,6 +251,8 @@ class EventService:
     bash_event_service: BashEventService | None = field(default=None, init=False)
     owner_instance_id: str = field(default_factory=lambda: uuid4().hex)
     lease_ttl_seconds: float = DEFAULT_LEASE_TTL_SECONDS
+    # Asked about every action of the agent before it runs; see ``ActionGuard``.
+    action_guards: Sequence[ActionGuard] = ()
     _conversation: LocalConversation | None = field(default=None, init=False)
     _persisted_events: EventLog | None = field(default=None, init=False)
     _pub_sub: PubSub[Event] = field(
@@ -1389,7 +1397,7 @@ class EventService:
             plugins=self.stored.plugins,
             persistence_dir=str(self.conversations_dir),
             conversation_id=self.stored.id,
-            callbacks=[self._callback_wrapper],
+            callbacks=[self._guard_action, self._callback_wrapper],
             token_callbacks=([_token_streaming_callback] if streaming_enabled else []),
             stream_callbacks=[_publish_stream_progress],
             max_iteration_per_run=self.stored.max_iterations,
@@ -2374,6 +2382,25 @@ class EventService:
             self._lease.release(self._lease_generation)
         self._lease_generation = None
         self._lease = None
+
+    def _guard_action(self, event: Event) -> None:
+        """Block an action a guard refuses, before the agent executes it."""
+        conversation = self._conversation
+        if (
+            conversation is None
+            or not isinstance(event, ActionEvent)
+            or event.action is None
+        ):
+            return
+        for guard in list(self.action_guards):
+            try:
+                reason = guard(self.stored.id, event)
+            except Exception:
+                logger.exception("Action guard failed; the action is not blocked")
+                continue
+            if reason is not None:
+                conversation.state.block_action(event.id, reason)
+                return
 
     async def generate_title(
         self, llm: "LLM | None" = None, max_length: int = 50
