@@ -226,6 +226,47 @@ export interface DirectorOrgSummary {
   /** The tree is a fixed sample; its agents are not running. */
   fixture: boolean;
   boundary_enforcement: DirectorBoundaryEnforcement;
+  /**
+   * Why the org's agents are held and its steps and messages wait; `null`
+   * when the org runs. Absent from servers that cannot pause an org.
+   */
+  paused?: DirectorPauseReason | null;
+}
+
+/**
+ * Why an org is paused. `shutdown`: the server was stopped while the org
+ * worked. `crash`: the server ended without stopping the org first.
+ */
+export type DirectorPauseReason = 'human' | 'shutdown' | 'crash';
+
+/**
+ * `run_again`: an agent that was running runs again. `start`: a team that
+ * waited to start is started. `continue`: a step the director had begun is
+ * finished. `message`: messages are delivered. `dropped`: run state that no
+ * longer fits the org was put aside. `cannot_resume`: a team that cannot be
+ * taken up as it is.
+ */
+export type DirectorRecoveryKind =
+  'run_again' | 'start' | 'continue' | 'message' | 'dropped' | 'cannot_resume';
+
+/** One thing a paused org takes up again, or cannot. */
+export interface DirectorRecoveryItem {
+  /** The team it is about; `''` for the whole org. */
+  node_id: DirectorNodeId;
+  title: string;
+  kind: DirectorRecoveryKind;
+  /** What it is, in words for the human. */
+  detail: string;
+}
+
+/** What a paused org does when it is resumed. */
+export interface DirectorRecovery {
+  /** Why the org is paused; `null` when it is not. */
+  paused: DirectorPauseReason | null;
+  /** Empty when the org is not paused. */
+  items: DirectorRecoveryItem[];
+  /** How many messages to agents wait for the org to resume. */
+  messages_held: number;
 }
 
 /**
@@ -371,6 +412,12 @@ export interface DirectorSettings {
    * own agent. Empty: every team runs on the agent of the team above.
    */
   allowed_profiles: string[];
+  /**
+   * Whether an org that was stopped in the middle of its work takes it up
+   * again as soon as the server is back, without being asked. Absent from
+   * servers that cannot pause an org.
+   */
+  resume_on_start?: boolean;
 }
 
 /** The settings, beside what the org has now. */

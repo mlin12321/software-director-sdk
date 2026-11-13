@@ -11,6 +11,7 @@ import type {
   DirectorOrgNodeDetail,
   DirectorOrgSummary,
   DirectorRoutedMessage,
+  DirectorRecovery,
   DirectorSettings,
   DirectorSettingsState,
   DirectorTeamMatch,
@@ -268,6 +269,31 @@ export class DirectorClient {
       `${DIRECTOR_PATH}/settings`,
       settings
     );
+    return response.data;
+  }
+
+  /**
+   * Hold the org: its agents stop after the step they are in, and the
+   * director's steps and the messages to agents wait. Returns what
+   * `resumeOrg` would do.
+   */
+  async pauseOrg(): Promise<DirectorRecovery> {
+    const response = await this.client.post<DirectorRecovery>(`${DIRECTOR_PATH}/org/pause`);
+    return response.data;
+  }
+
+  /**
+   * Take a paused org up again. Returns only what was put aside because it
+   * no longer fits the org.
+   */
+  async resumeOrg(): Promise<DirectorRecovery> {
+    const response = await this.client.post<DirectorRecovery>(`${DIRECTOR_PATH}/org/resume`);
+    return response.data;
+  }
+
+  /** What resuming a paused org does, team by team. */
+  async getRecovery(): Promise<DirectorRecovery> {
+    const response = await this.client.get<DirectorRecovery>(`${DIRECTOR_PATH}/org/recovery`);
     return response.data;
   }
 

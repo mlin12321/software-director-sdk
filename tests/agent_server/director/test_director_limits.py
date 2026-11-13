@@ -181,6 +181,7 @@ async def test_settings_are_kept_for_the_next_start_beside_the_repository(
         "max_agents": 64,
         "max_depth": 3,
         "allowed_profiles": [],
+        "resume_on_start": False,
     }
     assert kept["repo_path"] == str(repo)
     assert again.settings.max_depth == 3 and again.store.root_id == "root"

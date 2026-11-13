@@ -315,6 +315,16 @@ _AUTH_METHOD_ENV_MAP: dict[str, str] = {
 # ``gemini --acp``. Its presence lets us select the server's ``oauth-personal``
 # auth method without an API key (mirrors the ChatGPT subscription path).
 _GEMINI_OAUTH_PATH = Path(".gemini") / "oauth_creds.json"
+# Cursor CLI login, cached by ``agent login``. Its presence lets us select the
+# server's ``cursor_login`` auth method, which ``agent acp`` requires before
+# it opens a session.
+_CURSOR_LOGIN_PATH = Path("cursor") / "auth.json"
+
+
+def _cursor_login_file(env: dict[str, str]) -> Path:
+    config_home = env.get("XDG_CONFIG_HOME")
+    base = Path(config_home) if config_home else Path.home() / ".config"
+    return base / _CURSOR_LOGIN_PATH
 
 
 def _preconfigured_credentials(
@@ -373,6 +383,8 @@ def _select_auth_method(
       ``GOOGLE_APPLICATION_CREDENTIALS`` (the deployable Gemini path; preferred
       over personal OAuth, which is host-bound and undeployable)
     - ``oauth-personal`` (gemini-cli) — ``~/.gemini/oauth_creds.json``
+    - ``cursor_login`` (Cursor CLI) — ``$XDG_CONFIG_HOME/cursor/auth.json`` or
+      ``~/.config/cursor/auth.json``
 
     In a server image the interactive-login files are absent, so the API-key
     fallback (e.g. ``GEMINI_API_KEY``) is used instead.
@@ -387,6 +399,8 @@ def _select_auth_method(
         return "vertex-ai"
     if "oauth-personal" in method_ids and (Path.home() / _GEMINI_OAUTH_PATH).is_file():
         return "oauth-personal"
+    if "cursor_login" in method_ids and _cursor_login_file(env).is_file():
+        return "cursor_login"
     # The maintained Codex ACP adapter exposes one API-key method and reads
     # CODEX_API_KEY first, then OPENAI_API_KEY, from its subprocess env.
     if "api-key" in method_ids and any(

@@ -5137,6 +5137,30 @@ class TestSelectAuthMethod:
         with patch("openhands.sdk.agent.acp_agent.Path.home", return_value=tmp_path):
             assert _select_auth_method(methods, {}) == "oauth-personal"
 
+    def test_cursor_login_when_login_file_present(self, tmp_path):
+        """The Cursor CLI's login is selected when `agent login` left its file,
+        under ~/.config or under XDG_CONFIG_HOME."""
+        methods = [self._make_auth_method("cursor_login")]
+        with patch("openhands.sdk.agent.acp_agent.Path.home", return_value=tmp_path):
+            assert _select_auth_method(methods, {}) is None
+
+            login = tmp_path / ".config" / "cursor"
+            login.mkdir(parents=True)
+            (login / "auth.json").write_text("{}", encoding="utf-8")
+            assert _select_auth_method(methods, {}) == "cursor_login"
+
+            elsewhere = tmp_path / "xdg"
+            assert (
+                _select_auth_method(methods, {"XDG_CONFIG_HOME": str(elsewhere)})
+                is None
+            )
+            (elsewhere / "cursor").mkdir(parents=True)
+            (elsewhere / "cursor" / "auth.json").write_text("{}", encoding="utf-8")
+            assert (
+                _select_auth_method(methods, {"XDG_CONFIG_HOME": str(elsewhere)})
+                == "cursor_login"
+            )
+
     def test_gemini_oauth_preferred_over_api_key(self, tmp_path):
         """OAuth login takes precedence over GEMINI_API_KEY (mirrors chatgpt)."""
         methods = [

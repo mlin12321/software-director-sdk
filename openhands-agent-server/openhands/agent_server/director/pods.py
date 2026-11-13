@@ -3,6 +3,7 @@
 import asyncio
 import logging
 from collections.abc import Callable, Collection, Sequence
+from contextlib import suppress
 from dataclasses import dataclass
 from typing import Any, Protocol
 from uuid import UUID
@@ -24,6 +25,7 @@ from openhands.agent_server.event_service import (
     ActionGuard,
     ConversationRunLimitExceeded,
 )
+from openhands.agent_server.local_storage import conversation_worktree_dir
 from openhands.agent_server.models import (
     StartChildConversationRequest,
     StartConversationRequest,
@@ -152,6 +154,27 @@ class PodLauncher(Protocol):
 
     async def send(self, conversation_id: UUID, text: str) -> None:
         """Deliver a message and make sure the agent runs to read it.
+
+        Raises:
+            NotFound: The conversation does not exist.
+        """
+        ...
+
+    async def started(self, conversation_id: UUID) -> StartedAgent | None:
+        """Where an agent that has a conversation works; None when it has
+        none."""
+        ...
+
+    async def pause(self, conversation_id: UUID) -> None:
+        """Have an agent stop after the step it is in. A conversation that
+        is gone is fine."""
+        ...
+
+    async def resume(self, conversation_id: UUID, note: str | None) -> None:
+        """Have an agent that was stopped carry on.
+
+        Args:
+            note: What to tell it first; None to tell it nothing.
 
         Raises:
             NotFound: The conversation does not exist.
@@ -382,6 +405,33 @@ class ConversationPodLauncher:
             except ValueError:
                 # Already running, so the agent reads the message anyway.
                 pass
+
+    async def started(self, conversation_id: UUID) -> StartedAgent | None:
+        event_service = await self._conversations.get_event_service(conversation_id)
+        if event_service is None:
+            return None
+        working_dir = event_service.stored.workspace.working_dir
+        own = conversation_worktree_dir(
+            self._conversations.conversation_worktree_root, working_dir
+        )
+        return StartedAgent(
+            workspace=str(working_dir),
+            isolation="worktree" if own is not None else "shared",
+            **_kind_of(event_service.get_conversation().agent),
+        )
+
+    async def pause(self, conversation_id: UUID) -> None:
+        await self._conversations.pause_conversation(conversation_id)
+
+    async def resume(self, conversation_id: UUID, note: str | None) -> None:
+        if note is not None:
+            await self.send(conversation_id, note)
+            return
+        event_service = await self._conversations.get_event_service(conversation_id)
+        if event_service is None:
+            raise NotFound(f"Conversation {conversation_id} does not exist")
+        with suppress(ValueError):  # it runs already
+            await event_service.run(wait_for_capacity=True)
 
     async def stop(self, conversation_id: UUID) -> None:
         await self._conversations.interrupt_conversation(conversation_id)

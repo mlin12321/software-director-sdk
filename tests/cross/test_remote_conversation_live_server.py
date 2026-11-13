@@ -3675,6 +3675,73 @@ def test_director_runs_an_org_whose_root_splits_into_sub_teams(
         assert run_git_command(["git", "status", "--porcelain"], repo) == ""
 
 
+def test_director_holds_a_paused_org_and_takes_it_up_again(
+    server_env, monkeypatch: pytest.MonkeyPatch
+):
+    _scripted_org_llm(monkeypatch)
+    repo = server_env["workspace_path"]
+    run_git_command(["git", "init", "-b", "main"], repo)
+    run_git_command(
+        ["git", "-c", "user.name=T", "-c", "user.email=t@example.com", "commit"]
+        + ["--allow-empty", "-m", "init"],
+        repo,
+    )
+
+    with httpx.Client(base_url=server_env["host"], timeout=30) as client:
+        refused = client.post("/api/director/org/pause")
+        created = client.post(
+            "/api/director/org",
+            json={
+                "title": "Checkout",
+                "task": "Build the checkout flow",
+                "conversation": {
+                    "agent": {
+                        "llm": {"model": "gpt-4o-mini", "api_key": "test"},
+                        "tools": [],
+                    },
+                    "workspace": {"working_dir": str(repo)},
+                    "autotitle": False,
+                },
+            },
+        )
+        assert created.status_code == 201, created.text
+        root_ic = created.json()["agents"][0]["conversation_id"]
+
+        def said_to_the_ic() -> list[str]:
+            events = client.get(
+                f"/api/conversations/{root_ic}/events/search", params={"limit": 100}
+            ).json()["items"]
+            return [
+                content["text"]
+                for event in events
+                if event["kind"] == "MessageEvent" and event["source"] == "user"
+                for content in event["llm_message"]["content"]
+            ]
+
+        paused = client.post("/api/director/org/pause")
+        sent = client.post("/api/director/org/messages", json={"text": "Add a cart"})
+        held = client.get("/api/director/org/recovery").json()
+        time.sleep(1)
+        before = said_to_the_ic()
+        resumed = client.post("/api/director/org/resume")
+        deadline = time.time() + 30
+        while time.time() < deadline and "Add a cart" not in said_to_the_ic():
+            time.sleep(0.2)
+
+        assert refused.status_code == 409, refused.text
+        assert paused.status_code == 200 and paused.json()["paused"] == "human"
+        assert sent.status_code == 200, sent.text
+        assert held["messages_held"] >= 1
+        assert "Add a cart" not in before
+        assert resumed.status_code == 200 and resumed.json()["paused"] is None
+        assert "Add a cart" in said_to_the_ic()
+        assert client.get("/api/director/org").json()["paused"] is None
+    # What the director was in the middle of is beside the repository, never
+    # in it.
+    assert (repo / ".git" / "director" / "state.db").is_file()
+    assert run_git_command(["git", "status", "--porcelain"], repo) == ""
+
+
 def test_director_has_done_work_reviewed_by_the_ic_above(
     server_env, monkeypatch: pytest.MonkeyPatch
 ):

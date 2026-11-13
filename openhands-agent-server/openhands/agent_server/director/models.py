@@ -34,6 +34,17 @@ TeamEnforcement = Literal["sandbox", "checks", "merge"]
 # 'acp': an external agent, such as Claude Code or Codex, that runs its own
 # tools and reaches the director's through an MCP server.
 AgentKind = Literal["openhands", "acp"]
+# Why an org's agents are held. 'shutdown': the server was stopped while the
+# org worked. 'crash': the server ended without stopping the org first.
+PauseReason = Literal["human", "shutdown", "crash"]
+# 'run_again': an agent that was running runs again. 'start': a team that
+# waited to start is started. 'continue': a step the director had begun is
+# finished. 'message': messages are delivered. 'dropped': run state that no
+# longer fits the org was put aside. 'cannot_resume': a team that cannot be
+# taken up as it is.
+RecoveryKind = Literal[
+    "run_again", "start", "continue", "message", "dropped", "cannot_resume"
+]
 
 
 class Boundary(BaseModel):
@@ -442,10 +453,10 @@ class BlackboardSync(BaseModel):
 
 
 class DirectorSettings(BaseModel):
-    """Limits on the teams an org may still add.
+    """Limits on the teams an org may still add, and how it starts again.
 
-    They are checked when a team splits. Teams that exist are never removed
-    for exceeding a limit that was lowered.
+    The limits are checked when a team splits. Teams that exist are never
+    removed for exceeding a limit that was lowered.
     """
 
     max_agents: int = Field(
@@ -469,6 +480,13 @@ class DirectorSettings(BaseModel):
             "team above."
         ),
     )
+    resume_on_start: bool = Field(
+        default=False,
+        description=(
+            "Whether an org that was stopped in the middle of its work takes "
+            "it up again as soon as the server is back, without being asked."
+        ),
+    )
 
 
 class DirectorSettingsUpdate(BaseModel):
@@ -477,6 +495,7 @@ class DirectorSettingsUpdate(BaseModel):
     max_agents: int | None = Field(default=None, ge=2)
     max_depth: int | None = Field(default=None, ge=1)
     allowed_profiles: list[str] | None = None
+    resume_on_start: bool | None = None
 
 
 class DirectorSettingsState(DirectorSettings):
@@ -499,6 +518,32 @@ class TeamMatch(BaseModel):
     id: str
     title: str
     path: str = Field(description="The directory the team owns; '' at the root.")
+
+
+class RecoveryItem(BaseModel):
+    """One thing a paused org takes up again, or cannot."""
+
+    node_id: str = Field(description="The team it is about; '' for the whole org.")
+    title: str
+    kind: RecoveryKind
+    detail: str = Field(description="What it is, in words for the human.")
+
+
+class Recovery(BaseModel):
+    """What a paused org does when it is resumed."""
+
+    paused: PauseReason | None = Field(
+        description="Why the org is paused; None when it is not."
+    )
+    items: list[RecoveryItem] = Field(
+        description=(
+            "What resuming does, team by team, and what it cannot do. Empty "
+            "when the org is not paused."
+        )
+    )
+    messages_held: int = Field(
+        description="How many messages to agents wait for the org to resume."
+    )
 
 
 class OrgSummary(BaseModel):
@@ -537,6 +582,14 @@ class OrgSummary(BaseModel):
             "file tools are refused anything else. 'checks': only the file "
             "tools are refused; the server cannot confine a shell."
         )
+    )
+    paused: PauseReason | None = Field(
+        default=None,
+        description=(
+            "Why the org's agents are held and its steps and messages wait; "
+            "None when the org runs. `GET /org/recovery` says what resuming "
+            "does."
+        ),
     )
 
 
