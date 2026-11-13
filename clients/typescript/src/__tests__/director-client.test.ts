@@ -127,6 +127,25 @@ describe('DirectorClient', () => {
     expect(memory).toEqual({ rules: ['Never mock the clock'] });
   });
 
+  it("lists a team's changes, shows a file and writes one by hand", async () => {
+    const fetchMock = mockFetch(() => jsonResponse({ path: 'api/a.py', commit: 'abc' }));
+    const client = new DirectorClient({ host: 'http://example.com' });
+
+    await client.getNodeChanges('services.api');
+    await client.getNodeChangedFile('services.api', 'api/a b.py');
+    const edit = await client.editNodeFile('services.api', 'api/a.py', 'x\n');
+
+    const calls = fetchMock.mock.calls.map(
+      ([url, init]) => `${init.method} ${url} ${init.body ?? ''}`
+    );
+    expect(calls).toEqual([
+      'GET http://example.com/api/director/org/nodes/services.api/changes ',
+      'GET http://example.com/api/director/org/nodes/services.api/changes/file?path=api%2Fa+b.py ',
+      'PUT http://example.com/api/director/org/nodes/services.api/files?path=api%2Fa.py {"content":"x\\n"}',
+    ]);
+    expect(edit).toEqual({ path: 'api/a.py', commit: 'abc' });
+  });
+
   it('pulls and pushes the blackboard, from origin unless told otherwise', async () => {
     const sync = { remote: 'origin', head: 'abc', changed: true, kept_local: [], pushed: false };
     const fetchMock = mockFetch(() => jsonResponse(sync));

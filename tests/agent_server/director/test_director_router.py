@@ -24,6 +24,7 @@ from openhands.agent_server.director.service import (
     DirectorService,
     agent_conversation,
 )
+from openhands.sdk.conversation.state import ConversationExecutionStatus
 from openhands.sdk.errors import NotFound
 from tests.agent_server.director.conftest import (
     FakeLauncher,
@@ -726,3 +727,45 @@ def test_teams_are_searched_by_title_and_directory(client: TestClient):
     assert [team["id"] for team in found.json()] == ["a", "a1"]
     assert found.json()[0] == {"id": "a", "title": "a", "path": "svc/a"}
     assert client.get("/api/director/org/search").status_code == 422
+
+
+async def test_a_teams_changes_are_listed_shown_and_edited_by_hand(running, repo):
+    client, launcher, service = running
+    root = (await client.post("/api/director/org", json=org_body(repo))).json()
+    await service.settled()
+    ic = root["agents"][0]["conversation_id"]
+    (repo / "README.md").write_text("hello\nfrom the agent\n")
+    url = "/api/director/org/nodes/root"
+
+    listed = await client.get(f"{url}/changes")
+    sides = await client.get(f"{url}/changes/file", params={"path": "README.md"})
+    launcher.report(ic, ConversationExecutionStatus.RUNNING)
+    busy = await client.put(
+        f"{url}/files", params={"path": "README.md"}, json={"content": "mine\n"}
+    )
+    outside_while_busy = await client.put(
+        f"{url}/files", params={"path": ".git/config"}, json={"content": "no\n"}
+    )
+    launcher.report(ic, ConversationExecutionStatus.FINISHED)
+    saved = await client.put(
+        f"{url}/files", params={"path": "README.md"}, json={"content": "mine\n"}
+    )
+    await service.settled()
+    outside = await client.put(
+        f"{url}/files", params={"path": "../x"}, json={"content": "no\n"}
+    )
+    unknown = await client.get("/api/director/org/nodes/nobody/changes")
+
+    assert [(f["path"], f["committed"]) for f in listed.json()["files"]] == [
+        ("README.md", False)
+    ]
+    assert sides.json()["before"] == "hello\n"
+    assert sides.json()["after"] == "hello\nfrom the agent\n"
+    assert busy.status_code == 409 and "working" in busy.json()["detail"]
+    assert saved.status_code == 200
+    assert saved.json()["commit"] == run_git(repo, "rev-parse", "HEAD").strip()
+    assert (repo / "README.md").read_text() == "mine\n"
+    told = launcher.messages_to(ic)[-1]
+    assert "README.md" in told and saved.json()["commit"][:12] in told
+    assert (outside.status_code, unknown.status_code) == (400, 404)
+    assert outside_while_busy.status_code == 403

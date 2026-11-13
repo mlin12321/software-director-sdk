@@ -3,6 +3,8 @@ import type { CreateConversationPayload } from './conversation-client';
 import type {
   DirectorBlackboardSync,
   DirectorBoundaryMemory,
+  DirectorFileEdit,
+  DirectorFileSides,
   DirectorNodeBlackboard,
   DirectorNodeOwnership,
   DirectorNodeId,
@@ -17,6 +19,7 @@ import type {
   DirectorResolveMerge,
   DirectorSettings,
   DirectorSettingsState,
+  DirectorTeamChanges,
   DirectorTeamMatch,
 } from '../models/director';
 
@@ -211,6 +214,49 @@ export class DirectorClient {
    */
   async getNodeOwnership(nodeId: DirectorNodeId): Promise<DirectorNodeOwnership> {
     const response = await this.client.get<DirectorNodeOwnership>(nodePath(nodeId, 'ownership'));
+    return response.data;
+  }
+
+  /**
+   * The files a team changed in its directory since its work started or
+   * was last accepted, uncommitted and new files included.
+   *
+   * @throws HttpError 404 when the team or its checkout is not on the server.
+   */
+  async getNodeChanges(nodeId: DirectorNodeId): Promise<DirectorTeamChanges> {
+    const response = await this.client.get<DirectorTeamChanges>(nodePath(nodeId, 'changes'));
+    return response.data;
+  }
+
+  /**
+   * One file as it was at the team's base commit and as it is now.
+   *
+   * @param path Relative to the top of the repository.
+   */
+  async getNodeChangedFile(nodeId: DirectorNodeId, path: string): Promise<DirectorFileSides> {
+    const response = await this.client.get<DirectorFileSides>(nodePath(nodeId, 'changes/file'), {
+      params: { path },
+    });
+    return response.data;
+  }
+
+  /**
+   * Write one file of a team by hand. It is committed alone and the team's
+   * IC is told.
+   *
+   * @throws HttpError 409 while an agent of the team is in the middle of a
+   *   turn, 403 for a file the team's agents may not write either.
+   */
+  async editNodeFile(
+    nodeId: DirectorNodeId,
+    path: string,
+    content: string
+  ): Promise<DirectorFileEdit> {
+    const response = await this.client.put<DirectorFileEdit>(
+      nodePath(nodeId, 'files'),
+      { content },
+      { params: { path } }
+    );
     return response.data;
   }
 

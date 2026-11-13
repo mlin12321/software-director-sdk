@@ -31,6 +31,7 @@ from openhands.agent_server.director.boundary import (
     write_refusal,
     written_paths,
 )
+from openhands.agent_server.director.changes import require_editable, write_by_hand
 from openhands.agent_server.director.fixture import build_fixture_nodes
 from openhands.agent_server.director.git import (
     GitError,
@@ -62,6 +63,7 @@ from openhands.agent_server.director.models import (
     DirectorSettings,
     DirectorSettingsState,
     DirectorSettingsUpdate,
+    FileEdit,
     OrgConflict,
     OrgMerge,
     OrgNode,
@@ -1268,6 +1270,45 @@ class DirectorService:
                 result="up_to_date",
                 head=await asyncio.to_thread(create_org_board(self._repo_dir).head),
             )
+
+    async def edit_file(self, node_id: str, path: str, content: str) -> FileEdit:
+        """Write one file of a team by hand, commit it and tell its IC.
+
+        Raises:
+            NotFound: There is no such team, or its checkout is not here.
+            Conflict: An agent of the team is in the middle of a turn.
+            Forbidden: The team's agents may not write the file either.
+            Invalid: The path does not name a file that can be committed.
+        """
+        store = await asyncio.to_thread(lambda: self.store)
+        node = store.get(node_id)
+        if node is None:
+            raise NotFound(f"Unknown node: {node_id}")
+        sub_teams = store.children(node_id)
+        require_editable(node, sub_teams, path)
+        agents = [
+            UUID(agent.conversation_id)
+            for agent in node.agents
+            if agent.conversation_id is not None
+        ]
+        if agents and self._launcher is not None:
+            statuses = await self._launcher.statuses(agents)
+            if ConversationExecutionStatus.RUNNING in statuses.values():
+                raise Conflict(
+                    f"An agent of team {node.title!r} is working. Pause the "
+                    "org or wait for it to finish, then save again."
+                )
+        edit = await asyncio.to_thread(write_by_hand, node, sub_teams, path, content)
+        ic = agent_conversation(node, "ic")
+        if edit.commit is not None and ic is not None and self._loop is not None:
+            self.notify(
+                ic,
+                f"The human changed {edit.path} in your team's checkout by hand "
+                f"and committed it as {edit.commit[:12]}. Read the file again "
+                "before you change it, and keep what they wrote unless they "
+                "tell you otherwise.",
+            )
+        return edit
 
     async def start_again(self, node_id: str, request: StartAgainRequest) -> OrgNode:
         """Start afresh a team whose agents have no conversation on this

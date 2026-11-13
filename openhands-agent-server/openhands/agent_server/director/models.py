@@ -404,6 +404,58 @@ class Collision(BaseModel):
     )
 
 
+ChangeKind = Literal["added", "modified", "deleted"]
+
+
+class ChangedFile(BaseModel):
+    """One file a team changed."""
+
+    path: str = Field(description="Relative to the top of the repository.")
+    kind: ChangeKind
+    added: int | None = Field(description="Lines added; None when not text.")
+    removed: int | None = Field(description="Lines removed; None when not text.")
+    committed: bool = Field(
+        description="False when the file has changes that are not committed."
+    )
+
+
+class TeamChanges(BaseModel):
+    """What a team changed in its directory since its base commit."""
+
+    node_id: str
+    base: str = Field(
+        description="The commit compared with; '' when the team has none yet."
+    )
+    files: list[ChangedFile] = Field(description="Sorted by path.")
+    truncated: bool = Field(description="There were more files than are listed.")
+
+
+class FileSides(BaseModel):
+    """A file at a team's base commit and in its checkout now."""
+
+    path: str
+    before: str | None = Field(description="None when the file was not there.")
+    after: str | None = Field(description="None when the file is not there.")
+    unreadable: bool = Field(
+        description="A side is not text or is too large, and is left out."
+    )
+
+
+class EditFileRequest(BaseModel):
+    """The whole new content of one file."""
+
+    content: str
+
+
+class FileEdit(BaseModel):
+    """What came of a change made by hand."""
+
+    path: str
+    commit: str | None = Field(
+        description="The commit that holds it; None when nothing changed."
+    )
+
+
 class NodeOwnership(BaseModel):
     """How a node's boundary is divided among its direct reports."""
 
