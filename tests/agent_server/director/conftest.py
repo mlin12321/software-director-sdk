@@ -172,6 +172,9 @@ class FakeLauncher:
     titles: dict[UUID, str] = field(default_factory=dict)
     stopped: list[UUID] = field(default_factory=list)
     deleted: list[UUID] = field(default_factory=list)
+    # What the model answers to a question of the director, by usage id.
+    answers: dict[str, str | None] = field(default_factory=dict)
+    asked: list[tuple[UUID, str, str, str]] = field(default_factory=list)
 
     async def start_root(
         self,
@@ -264,6 +267,14 @@ class FakeLauncher:
         self.summarized.append((conversation_id, task))
         await asyncio.sleep(self.summary_delay)
         return self.summary
+
+    async def ask(
+        self, conversation_id: UUID, system: str, user: str, *, usage_id: str
+    ) -> str | None:
+        if conversation_id not in self.known:
+            raise NotFound(f"Conversation {conversation_id} does not exist")
+        self.asked.append((conversation_id, usage_id, system, user))
+        return self.answers.get(usage_id)
 
     async def rename(self, conversation_id: UUID, title: str) -> None:
         if conversation_id not in self.known:

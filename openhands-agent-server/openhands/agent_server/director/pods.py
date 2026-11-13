@@ -1,6 +1,7 @@
 """Starts and reaches the conversations of an org's agents."""
 
 import asyncio
+import logging
 from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass
 from typing import Protocol
@@ -26,9 +27,13 @@ from openhands.sdk import Message, TextContent
 from openhands.sdk.agent import ACPAgent
 from openhands.sdk.conversation.request import ConversationWorktreeOptions
 from openhands.sdk.conversation.state import ConversationExecutionStatus
+from openhands.sdk.conversation.title_utils import strip_reasoning_blocks
 from openhands.sdk.errors import Conflict, NotFound, Unprocessable
+from openhands.sdk.llm import LLM
 from openhands.sdk.tool.spec import Tool
 
+
+logger = logging.getLogger(__name__)
 
 # On every conversation the director starts itself, so that a client can tell
 # them from the ones a human started. The root IC is the human's own.
@@ -127,6 +132,22 @@ class PodLauncher(Protocol):
 
         Returns:
             None when the model gave nothing usable.
+
+        Raises:
+            NotFound: The conversation does not exist.
+        """
+        ...
+
+    async def ask(
+        self, conversation_id: UUID, system: str, user: str, *, usage_id: str
+    ) -> str | None:
+        """Ask the model of an agent one question, apart from its work.
+
+        Args:
+            usage_id: What the call's cost is counted under.
+
+        Returns:
+            The answer; None when the model gave none.
 
         Raises:
             NotFound: The conversation does not exist.
@@ -242,9 +263,37 @@ class ConversationPodLauncher:
             return None
         return await asyncio.to_thread(summarize_team, agent.llm, task)
 
+    async def ask(
+        self, conversation_id: UUID, system: str, user: str, *, usage_id: str
+    ) -> str | None:
+        event_service = await self._conversations.get_event_service(conversation_id)
+        if event_service is None:
+            raise NotFound(f"Conversation {conversation_id} does not exist")
+        agent = event_service.get_conversation().agent
+        if isinstance(agent, ACPAgent):
+            return None
+        llm = agent.llm.model_copy(update={"usage_id": usage_id})
+        return await asyncio.to_thread(_ask, llm, system, user)
+
     async def rename(self, conversation_id: UUID, title: str) -> None:
         updated = await self._conversations.update_conversation(
             conversation_id, UpdateConversationRequest(title=title)
         )
         if not updated:
             raise NotFound(f"Conversation {conversation_id} does not exist")
+
+
+def _ask(llm: LLM, system: str, user: str) -> str | None:
+    messages = [
+        Message(role="system", content=[TextContent(text=system)]),
+        Message(role="user", content=[TextContent(text=user)]),
+    ]
+    try:
+        response = llm.generate(messages, store=False)
+    except Exception:
+        logger.warning("A model call of the director failed", exc_info=True)
+        return None
+    text = "".join(
+        part.text for part in response.message.content if isinstance(part, TextContent)
+    )
+    return strip_reasoning_blocks(text).strip() or None
