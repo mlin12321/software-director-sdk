@@ -128,16 +128,97 @@ async def test_a_director_has_one_org(service: DirectorService, repo: Path):
         await service.create_org(org_request(repo))
 
 
-async def test_an_org_must_work_inside_the_directors_repository(
-    service: DirectorService, tmp_path: Path
+def other_repository(tmp_path: Path) -> Path:
+    """A git repository that is not the one the server was started for."""
+    other = tmp_path / "other"
+    (other / "src").mkdir(parents=True)
+    run_git(other, "init", "--quiet", "--initial-branch=main")
+    run_git(other, "config", "user.name", "Test")
+    run_git(other, "config", "user.email", "test@example.invalid")
+    run_git(other, "commit", "--quiet", "--allow-empty", "-m", "init")
+    return other
+
+
+async def test_an_org_lives_in_the_repository_its_first_conversation_is_opened_in(
+    repo: Path, tmp_path: Path, launcher: FakeLauncher
+):
+    other = other_repository(tmp_path)
+    remembered = tmp_path / "state" / "director.json"
+    first = DirectorService(repo, save_delay=0, remembered=remembered)
+    await first.start(launcher)
+    before = first.summary().repo_path
+    routed = await first.route_message(
+        RouteMessageRequest(
+            text="Build it", conversation=root_conversation(other / "src")
+        )
+    )
+    await first.settled()
+    await first.aclose()
+
+    assert (before, first.summary().repo_path) == (str(repo), str(other))
+    assert routed.started_org
+    assert run_git(other, "rev-parse", ORG_REF).strip()
+    with pytest.raises(subprocess.CalledProcessError):
+        run_git(repo, "rev-parse", "--verify", "--quiet", ORG_REF)
+
+    # The server starts again where it was started before.
+    second = DirectorService(repo, save_delay=0, remembered=remembered)
+    await second.start(launcher)
+    try:
+        again = await second.route_message(
+            RouteMessageRequest(text="And tests", path=str(other / "src"))
+        )
+        await second.settled()
+    finally:
+        await second.aclose()
+
+    assert second.summary().repo_path == str(other)
+    assert again.conversation_id == routed.conversation_id
+    assert launcher.messages_to(again.conversation_id)[-1] == (
+        "And tests\n\n(The human sent this from src.)"
+    )
+
+
+async def test_a_first_message_takes_up_the_org_saved_where_it_is_sent_from(
+    repo: Path, tmp_path: Path, launcher: FakeLauncher
+):
+    other = other_repository(tmp_path)
+    there = DirectorService(other, save_delay=0)
+    await there.start(launcher)
+    root = await there.create_org(org_request(other))
+    await there.settled()
+    await there.aclose()
+
+    service = DirectorService(repo, save_delay=0)
+    await service.start(launcher)
+    try:
+        routed = await service.route_message(
+            RouteMessageRequest(
+                text="Add refunds", conversation=root_conversation(other)
+            )
+        )
+        await service.settled()
+    finally:
+        await service.aclose()
+
+    assert not routed.started_org
+    assert routed.conversation_id == agent_conversation(root, "ic")
+    assert launcher.messages_to(routed.conversation_id)[-1] == "Add refunds"
+    assert launcher.root is not None
+    assert launcher.root.conversation_id == UUID(routed.conversation_id)
+
+
+async def test_an_org_is_not_started_outside_a_git_repository(
+    service: DirectorService, repo: Path, tmp_path: Path
 ):
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
 
-    with pytest.raises(Unprocessable):
+    with pytest.raises(Unavailable, match="elsewhere"):
         await service.create_org(org_request(elsewhere))
 
     assert service.store.root_id is None
+    assert service.summary().repo_path == str(repo)
 
 
 async def test_an_org_cannot_run_in_docker(service: DirectorService, repo: Path):

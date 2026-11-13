@@ -243,9 +243,10 @@ class OrgSummary(BaseModel):
     node_count: int
     repo_path: str = Field(
         description=(
-            "The directory the org works in. When the server was started in a "
-            "git submodule that has no org, this is the nearest repository "
-            "above it that has one."
+            "The repository the org works in: the one its first conversation "
+            "was opened in, or the nearest repository above that one which "
+            "has it as a submodule and already had an org. Without an org, "
+            "the directory the server was started for."
         )
     )
     directory: str = Field(
@@ -256,7 +257,10 @@ class OrgSummary(BaseModel):
         )
     )
     is_git_repository: bool = Field(
-        description="An org can only be started in a git repository."
+        description=(
+            "Whether `repo_path` is in a git repository. An org can only be "
+            "started in one."
+        )
     )
     fixture: bool = Field(
         description="The tree is a fixed sample; its agents are not running."
@@ -286,8 +290,9 @@ class CreateOrgRequest(BaseModel):
     conversation: StartConversationRequest = Field(
         description=(
             "How to start the root team's IC. Every other agent of the org is "
-            "derived from it. Its workspace must be the director's directory, "
-            "and its initial message is ignored: the IC is briefed with `task`."
+            "derived from it. The org lives in the git repository of its "
+            "workspace. Its initial message is ignored: the IC is briefed "
+            "with `task`."
         )
     )
 
@@ -308,9 +313,11 @@ class RouteMessageRequest(BaseModel):
     conversation: StartConversationRequest | None = Field(
         default=None,
         description=(
-            "How to start the root team's IC when there is no org yet; the "
-            "message then becomes the org's task. See `CreateOrgRequest`. "
-            "Ignored when an org exists."
+            "How to start the root team's IC when there is no org yet. If "
+            "the git repository of its workspace already has a saved org, "
+            "that org is taken up and the message routed in it; otherwise "
+            "the message starts an org there and becomes its task. See "
+            "`CreateOrgRequest`. Ignored when an org exists."
         ),
     )
 

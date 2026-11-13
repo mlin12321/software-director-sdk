@@ -30,6 +30,11 @@ from openhands.sdk.errors import Conflict, NotFound, Unprocessable
 from openhands.sdk.tool.spec import Tool
 
 
+# On every conversation the director starts itself, so that a client can tell
+# them from the ones a human started. The root IC is the human's own.
+STARTED_BY_DIRECTOR = {"startedby": "director"}
+
+
 @dataclass(frozen=True)
 class StartedAgent:
     workspace: str
@@ -179,6 +184,7 @@ class ConversationPodLauncher:
             # repository's default branch.
             worktree_options=ConversationWorktreeOptions(base="head"),
             tool_params=tool_params,
+            extra_tags=STARTED_BY_DIRECTOR,
         )
         if started is None or started.workspace is None:
             raise NotFound(f"Conversation {parent_id} does not exist")
