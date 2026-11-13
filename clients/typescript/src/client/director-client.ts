@@ -1,10 +1,13 @@
 import { HttpClient, HttpError } from './http-client';
+import type { CreateConversationPayload } from './conversation-client';
 import type {
   DirectorBoundaryMemory,
   DirectorNodeBlackboard,
   DirectorNodeId,
   DirectorOrgEvent,
+  DirectorOrgNode,
   DirectorOrgNodeDetail,
+  DirectorOrgSummary,
 } from '../models/director';
 
 export interface DirectorClientOptions {
@@ -22,6 +25,19 @@ export interface StreamOrgTreeOptions {
   full?: boolean;
   /** Abort to stop following. */
   signal?: AbortSignal;
+}
+
+/** Start an org: a root team that works on `task`. */
+export interface CreateOrgRequest {
+  title: string;
+  task: string;
+  /**
+   * How to start the root team's IC, as for a normal conversation. Every
+   * other agent of the org is derived from it. Its workspace must be the
+   * director's `repo_path`, and its initial message is ignored: the IC is
+   * briefed with `task`.
+   */
+  conversation: CreateConversationPayload;
 }
 
 const DIRECTOR_PATH = '/api/director';
@@ -81,6 +97,49 @@ export class DirectorClient {
       apiKey: this.apiKey,
       timeout: options.timeout || 60000,
     });
+  }
+
+  /**
+   * Whether the director has an org. Without one `root_id` is null and
+   * `streamOrgTree` is refused with 404 until `createOrg` starts one.
+   */
+  async getOrg(): Promise<DirectorOrgSummary> {
+    const response = await this.client.get<DirectorOrgSummary>(`${DIRECTOR_PATH}/org`);
+    return response.data;
+  }
+
+  /**
+   * Start an org and brief the IC of its root team with the task.
+   *
+   * @returns The root node. Follow the org with `streamOrgTree`.
+   * @throws HttpError 409 when the director already has an org; 422 when the
+   *   conversation cannot lead one (workspace outside the director's
+   *   directory, Docker runtime, ACP agent); 503 when the directory is not a
+   *   git repository.
+   */
+  async createOrg(request: CreateOrgRequest): Promise<DirectorOrgNode> {
+    const response = await this.client.post<DirectorOrgNode>(`${DIRECTOR_PATH}/org`, request);
+    return response.data;
+  }
+
+  /**
+   * Answer an escalation that waits on the human, which settles it. The
+   * answer is sent to the IC of the team that raised it.
+   *
+   * @param nodeId The node that raised the escalation.
+   * @returns That node after the change.
+   * @throws HttpError 409 when the escalation is still held by a team.
+   */
+  async answerEscalation(
+    nodeId: DirectorNodeId,
+    escalationId: string,
+    answer: string
+  ): Promise<DirectorOrgNode> {
+    const response = await this.client.post<DirectorOrgNode>(
+      nodePath(nodeId, `escalations/${encodeURIComponent(escalationId)}/answer`),
+      { answer }
+    );
+    return response.data;
   }
 
   /** A node with its ancestors and its direct reports. */

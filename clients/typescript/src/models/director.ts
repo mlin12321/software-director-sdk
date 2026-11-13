@@ -67,6 +67,32 @@ export interface DirectorEscalation {
 
 export type DirectorStatusCounts = Record<DirectorNodeStatus, number>;
 
+export type DirectorSplitStatus = 'proposed' | 'refine_requested' | 'approved';
+
+/** A sub-team an IC proposes to hand part of its boundary to. */
+export interface DirectorSplitChild {
+  title: string;
+  /** Directory the sub-team owns, strictly inside the proposing node's boundary. */
+  path: string;
+  writable: string[];
+  readonly: string[];
+  isolation: DirectorIsolationMode;
+  /** What the sub-team is to deliver. */
+  task: string;
+}
+
+/** An IC's proposal to split its boundary, for its Manager to decide. */
+export interface DirectorSplitProposal {
+  children: DirectorSplitChild[];
+  /** The interfaces the sub-teams must keep between them. */
+  contracts: string;
+  status: DirectorSplitStatus;
+  /** What the Manager wants changed, when it asked. */
+  feedback: string;
+  /** ISO 8601 timestamp. */
+  proposed_at: string;
+}
+
 export interface DirectorOrgNode {
   id: DirectorNodeId;
   parent_id: DirectorNodeId | null;
@@ -81,6 +107,8 @@ export interface DirectorOrgNode {
   spec_summary: string;
   /** Open escalations this node raised, wherever above they are held. */
   escalations: DirectorEscalation[];
+  /** A split of this node's boundary that is not carried out yet. */
+  pending_split: DirectorSplitProposal | null;
   /** Status of every node below this one. */
   descendant_counts: DirectorStatusCounts;
   /** Escalations from this node or below that wait on the human. */
@@ -92,6 +120,19 @@ export interface DirectorOrgNodeDetail {
   /** Root first, excluding the node. */
   ancestors: DirectorOrgNode[];
   children: DirectorOrgNode[];
+}
+
+/** Whether the director has an org, and where it would keep one. */
+export interface DirectorOrgSummary {
+  /** `null` when no org has been started. */
+  root_id: DirectorNodeId | null;
+  node_count: number;
+  /** The directory the org works in. */
+  repo_path: string;
+  /** An org can only be started in a git repository. */
+  is_git_repository: boolean;
+  /** The tree is a fixed sample; its agents are not running. */
+  fixture: boolean;
 }
 
 export interface DirectorEscalationPathStep {
