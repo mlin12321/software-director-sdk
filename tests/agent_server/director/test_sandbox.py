@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from openhands.agent_server.director.sandbox import (
+    command_script,
     find_bwrap,
     shell_script,
     write_shell,
@@ -127,3 +128,17 @@ def test_an_unchanged_script_is_not_rewritten(repo: Path):
 
     assert script.stat().st_mtime_ns == written
     assert script.stat().st_mode & 0o777 == 0o700
+
+
+def test_an_agents_whole_process_ends_with_the_server_and_a_shell_does_not(
+    repo: Path,
+):
+    given = {"checkouts": [repo], "private": repo / ".git" / "director-shells"}
+
+    command = command_script("/usr/bin/bwrap", directory="api", **given)
+    shell = shell_script("/usr/bin/bwrap", "/bin/bash", directory="api", **given)
+    unconfined = command_script(None, directory="api", **given)
+
+    assert "--die-with-parent" in command
+    assert "--die-with-parent" not in shell
+    assert "--die-with-parent" not in unconfined

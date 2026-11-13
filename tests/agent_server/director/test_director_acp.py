@@ -25,6 +25,7 @@ from openhands.agent_server.director.acp import (
 from openhands.agent_server.director.models import (
     CreateOrgRequest,
     DirectorSettingsUpdate,
+    RouteMessageRequest,
     SplitChild,
 )
 from openhands.agent_server.director.prompts import POD_PROTOCOL
@@ -43,6 +44,7 @@ from openhands.agent_server.director.tools.definition import (
     ProposeBoundarySplitAction,
 )
 from openhands.sdk.agent import ACPAgent
+from openhands.sdk.conversation.state import ConversationExecutionStatus
 from tests.agent_server.director.conftest import FakeLauncher, root_conversation
 from tests.agent_server.director.test_director_router import server_config
 from tests.agent_server.director.test_director_tools import ic, manager, node, use
@@ -486,4 +488,73 @@ async def test_the_profiles_a_sub_team_may_run_on_are_kept_and_told_to_the_ic(
     assert service.update_settings(DirectorSettingsUpdate(max_depth=3)).model_dump(
         include={"allowed_profiles", "max_depth", "max_agents"}
     ) == {"allowed_profiles": ["codex"], "max_depth": 3, "max_agents": 64}
+    await service.aclose()
+
+
+def said_to(launcher: FakeLauncher, conversation_id: str | None) -> list[str]:
+    """The director's notices and the human's words that reached an agent."""
+    return [
+        text
+        for text in launcher.messages_to(conversation_id)
+        if "merged" in text or "human" in text.lower()
+    ]
+
+
+async def test_a_notice_waits_for_the_turn_of_an_agent_that_runs_its_own_tools(
+    repo: Path,
+):
+    launcher = FakeLauncher(root_kind="acp")
+    service = await started(repo, launcher)
+    agent = ic(service)
+    assert agent is not None
+    launcher.report(agent, ConversationExecutionStatus.RUNNING)
+
+    service.notify(agent, "The work of 'API' is merged into your checkout.")
+    service.notify(agent, "The work of 'Web' is merged into your checkout.")
+    await service.settled()
+    waiting = said_to(launcher, agent)
+
+    launcher.report(agent, ConversationExecutionStatus.FINISHED)
+    await service.settled()
+
+    assert waiting == []
+    assert [text.split("'")[1] for text in said_to(launcher, agent)] == ["API", "Web"]
+    await service.aclose()
+
+
+async def test_what_the_human_says_reaches_such_an_agent_in_the_middle_of_a_turn(
+    repo: Path,
+):
+    launcher = FakeLauncher(root_kind="acp")
+    service = await started(repo, launcher)
+    agent = ic(service)
+    assert agent is not None
+    service.store.raise_escalation(
+        "root", "jwt", kind="design_decision", title="JWT or opaque tokens?"
+    )
+    launcher.report(agent, ConversationExecutionStatus.RUNNING)
+
+    await service.route_message(RouteMessageRequest(text="The human: stop, use Go."))
+    service.answer_escalation("root", "jwt", "Opaque.")
+    await service.settled()
+
+    said = said_to(launcher, agent)
+    assert len(said) == 2
+    assert "stop, use Go" in said[0] and "Opaque." in said[1]
+    await service.aclose()
+
+
+async def test_a_notice_does_not_wait_for_an_agent_whose_tools_the_server_runs(
+    repo: Path,
+):
+    launcher = FakeLauncher()
+    service = await started(repo, launcher)
+    agent = ic(service)
+    assert agent is not None
+    launcher.report(agent, ConversationExecutionStatus.RUNNING)
+
+    service.notify(agent, "The work of 'API' is merged into your checkout.")
+    await service.settled()
+
+    assert len(said_to(launcher, agent)) == 1
     await service.aclose()

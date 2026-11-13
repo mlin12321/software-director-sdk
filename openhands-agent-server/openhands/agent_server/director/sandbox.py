@@ -103,6 +103,7 @@ def command_script(
         directory=directory,
         sub_team_directories=sub_team_directories,
         stay=True,
+        die_with_parent=True,
     )
 
 
@@ -115,12 +116,17 @@ def _confined(
     directory: str | None,
     sub_team_directories: Sequence[str],
     stay: bool = False,
+    die_with_parent: bool = False,
 ) -> str:
     """``start`` followed by the script's own arguments, under ``bwrap``.
 
     Args:
         stay: Keep the directory the script was started in, instead of
             moving to the team's.
+        die_with_parent: End the command when the process that started the
+            script ends, however that happens. Not for a shell: the kernel
+            counts the thread that started it as the parent, and a
+            terminal's may end while its shell is still wanted.
     """
     quote = shlex.quote
     run = f'{start} "$@"'.strip()
@@ -154,6 +160,7 @@ def _confined(
             mounts.append('--chdir "$own"')
     command = [
         f"exec {quote(bwrap)} --dev-bind / /",
+        *(["--die-with-parent"] if die_with_parent else []),
         *mounts,
         f"-- {run}",
     ]

@@ -347,6 +347,9 @@ class DirectorService:
         # resuming does not carry one out a second time.
         self._in_flight: set[int] = set()
         self._delivering: set[int] = set()
+        # Messages that do not wait for their agent's turn to end: what the
+        # human said, and what waited for a turn that has now ended.
+        self._at_once: set[int] = set()
         # The conversations last recorded as running.
         self._running: set[str] = set()
         # The conversations a resume is about to run again.
@@ -849,7 +852,7 @@ class DirectorService:
         text = request.text
         if path != node.boundary.path:
             text = f"{text}\n\n(The human sent this from {path}.)"
-        self._post(conversation_id, text)
+        self._post(conversation_id, text, at_once=True)
         return RoutedMessage(
             node_id=node.id, conversation_id=conversation_id, started_org=False
         )
@@ -927,13 +930,21 @@ class DirectorService:
         self.notify(
             agent_conversation(node, "ic"),
             f"The human answered your escalation {escalation.title!r}:\n{answer}",
+            at_once=True,
         )
         return store.get(node_id) or node
 
-    def notify(self, conversation_id: str | None, text: str) -> None:
-        """Send an agent a message from the director. Safe from any thread."""
+    def notify(
+        self, conversation_id: str | None, text: str, *, at_once: bool = False
+    ) -> None:
+        """Send an agent a message from the director. Safe from any thread.
+
+        Args:
+            at_once: Do not wait for the end of the turn of an agent that
+                runs its own tools; for what the human said.
+        """
         if conversation_id is not None:
-            self._post(conversation_id, from_director(text))
+            self._post(conversation_id, from_director(text), at_once=at_once)
 
     def carry_out_split(self, node_id: str) -> None:
         """Start the sub-teams of a node's approved split. Safe from any thread."""
@@ -2005,14 +2016,23 @@ class DirectorService:
             if not others:
                 self._begin("finish_split", above)
 
-    def _post(self, conversation_id: str, text: str) -> None:
+    def _post(self, conversation_id: str, text: str, *, at_once: bool = False) -> None:
         """Record a message to an agent, then deliver it. Safe from any
-        thread. While the org is paused the message waits."""
+        thread. While the org is paused the message waits.
+
+        Args:
+            at_once: Deliver it even in the middle of the agent's turn. A
+                message to an agent that runs its own tools ends the turn
+                it is in, so the director's own notices wait for that turn
+                to end and only the human's words interrupt.
+        """
         if self._loop is None:
             raise Unavailable("The director is not running agents on this server")
         found = self.store.find_by_conversation(conversation_id)
         node_id = found[0].id if found else ""
         seq = self._runs().hold(conversation_id, node_id, text)
+        if at_once:
+            self._at_once.add(seq)
         self._save_soon()
         self._enqueue(
             lambda: self._deliver(seq, conversation_id, text), node_id or ORG_LANE
@@ -2024,7 +2044,10 @@ class DirectorService:
             return
         if not run.is_held(seq):
             return
+        if seq not in self._at_once and self._in_a_turn_of_its_own(conversation_id):
+            return
         self._delivering.add(seq)
+        self._at_once.discard(seq)
         try:
             await self._require_launcher().send(UUID(conversation_id), text)
         except NotFound:
@@ -2036,6 +2059,30 @@ class DirectorService:
         finally:
             self._delivering.discard(seq)
         run.delivered(seq)
+
+    def _in_a_turn_of_its_own(self, conversation_id: str) -> bool:
+        """Whether a message now would cut short the turn of an agent that
+        runs its own tools."""
+        if conversation_id not in self._running:
+            return False
+        found = self.store.find_by_conversation(conversation_id)
+        if found is None:
+            return False
+        node, role = found
+        return any(agent.role == role and agent.kind == "acp" for agent in node.agents)
+
+    def _deliver_what_waited(self, conversation_id: str) -> None:
+        """Deliver the messages that waited for an agent's turn to end."""
+        for held in self._runs().held():
+            if held.conversation_id != conversation_id:
+                continue
+            self._at_once.add(held.seq)
+            self._enqueue(
+                lambda held=held: self._deliver(
+                    held.seq, held.conversation_id, held.text
+                ),
+                held.node_id or ORG_LANE,
+            )
 
     async def _when_there_is_room[T](
         self, node_id: str, start: Callable[[], Awaitable[T]]
@@ -2162,6 +2209,8 @@ class DirectorService:
         else:
             self._running.discard(conversation_id)
             run.unmark(RUNNING, conversation_id)
+            if self._loop is not None:
+                self._deliver_what_waited(conversation_id)
 
     def _shown(self, conversation_id: str, status: ConversationExecutionStatus) -> str:
         """An agent's status as the org shows it. One that was running when
@@ -2974,7 +3023,9 @@ def _shared_root(nodes: list[dict[str, Any]]) -> str | None:
 # Steps whose outcome is in the tree alone. The steps that start agents are
 # not among them: their outcome is the conversation, and nothing may come
 # between an IC's start and its Manager's.
-_SAVED_BEFORE_FORGOTTEN = frozenset({"accept", "request_review", "halt"})
+_SAVED_BEFORE_FORGOTTEN = frozenset(
+    {"accept", "finish_split", "request_review", "halt"}
+)
 
 
 def _lane_for(intent: Intent) -> str:
