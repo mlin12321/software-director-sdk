@@ -189,6 +189,8 @@ export interface DirectorAutopsy {
   at: string;
   approach: string;
   why_failed: string;
+  /** The git ref that holds the uncommitted changes the prune discarded. */
+  saved_ref?: string | null;
 }
 
 export interface DirectorBoundaryMemory {
@@ -206,6 +208,43 @@ export interface DirectorNodeBlackboard {
   specs: DirectorInheritedSpec[];
   memory: DirectorBoundaryMemory;
   autopsies: DirectorAutopsy[];
+}
+
+/** A direct report, as the owner of a directory. */
+export interface DirectorBoundaryOwner {
+  node_id: DirectorNodeId;
+  title: string;
+  /** The directory it owns, relative to the repository. */
+  path: string;
+  isolation: DirectorIsolationMode;
+  branch: string;
+}
+
+export interface DirectorOwnedFile {
+  /** Relative to the repository. */
+  path: string;
+  /** The direct report that owns the file; null when the node kept it. */
+  owner: DirectorNodeId | null;
+}
+
+/** A file the committed work of two teams changed in ways that do not merge. */
+export interface DirectorCollision {
+  path: string;
+  /** The teams whose checkouts collide, the node itself included. */
+  node_ids: DirectorNodeId[];
+}
+
+/** How a node's boundary is divided among its direct reports. */
+export interface DirectorNodeOwnership {
+  node_id: DirectorNodeId;
+  owners: DirectorBoundaryOwner[];
+  /** The unignored files of the node's boundary in its own checkout, by path. */
+  files: DirectorOwnedFile[];
+  truncated: boolean;
+  /** From the tips of the checkouts; uncommitted changes are not compared. */
+  collisions: DirectorCollision[];
+  /** False when the server's git is too old to look for collisions. */
+  collisions_checked: boolean;
 }
 
 /**

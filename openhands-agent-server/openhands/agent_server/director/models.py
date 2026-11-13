@@ -237,6 +237,59 @@ class NodeBlackboard(BaseModel):
     autopsies: list[Autopsy]
 
 
+class BoundaryOwner(BaseModel):
+    """A direct report, as the owner of a directory."""
+
+    node_id: str
+    title: str
+    path: str = Field(description="The directory it owns, relative to the repository.")
+    isolation: IsolationMode
+    branch: str
+
+
+class OwnedFile(BaseModel):
+    path: str = Field(description="Relative to the repository.")
+    owner: str | None = Field(
+        description=(
+            "The direct report whose boundary the file is in; None for a "
+            "file the node kept for itself."
+        )
+    )
+
+
+class Collision(BaseModel):
+    """A file that the committed work of two teams changed in ways that do
+    not merge."""
+
+    path: str
+    node_ids: list[str] = Field(
+        description="The teams whose checkouts collide, the node itself included."
+    )
+
+
+class NodeOwnership(BaseModel):
+    """How a node's boundary is divided among its direct reports."""
+
+    node_id: str
+    owners: list[BoundaryOwner]
+    files: list[OwnedFile] = Field(
+        description=(
+            "The files of the node's boundary in its own checkout that git "
+            "does not ignore, sorted by path."
+        )
+    )
+    truncated: bool = Field(description="There were more files than are listed.")
+    collisions: list[Collision] = Field(
+        description=(
+            "Found by merging the tips of the checkouts of the node and its "
+            "direct reports in memory. Uncommitted changes are not compared."
+        )
+    )
+    collisions_checked: bool = Field(
+        description="False when the installed git is too old to look for them."
+    )
+
+
 class TeachRequest(BaseModel):
     """A rule to add to a boundary's permanent memory."""
 

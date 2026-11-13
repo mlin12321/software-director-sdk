@@ -80,11 +80,12 @@ def test_an_unknown_node_is_not_found_on_every_node_route(client: TestClient):
     responses = [
         client.get("/api/director/org/nodes/missing"),
         client.get("/api/director/org/nodes/missing/blackboard"),
+        client.get("/api/director/org/nodes/missing/ownership"),
         client.post("/api/director/org/nodes/missing/teach", json={"rule": "x"}),
         client.get("/api/director/org/tree-stream", params={"node": "missing"}),
     ]
 
-    assert [response.status_code for response in responses] == [404] * 4
+    assert [response.status_code for response in responses] == [404] * 5
 
 
 def test_routes_require_the_session_key_when_one_is_configured(saved_tree: Path):
@@ -120,6 +121,45 @@ def test_the_tree_is_empty_without_a_saved_tree_or_a_repository(
 
         assert client.get("/api/director/org/nodes/root").status_code == 404
         assert client.get("/api/director/org/tree-stream").status_code == 404
+
+
+def test_ownership_lists_a_nodes_files_by_the_report_that_owns_them(repo: Path):
+    (repo / "svc" / "a").mkdir(parents=True)
+    (repo / "svc" / "a" / "app.py").write_text("a\n")
+    store = OrgStore()
+    store.replace_all(
+        [
+            node.model_copy(update={"worktree_path": str(repo)})
+            for node in (
+                make_node("root", None, path=""),
+                make_node("a", "root", path="svc/a"),
+            )
+        ]
+    )
+    save_org(create_org_board(repo), store)
+
+    response = make_client(repo).get("/api/director/org/nodes/root/ownership")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "node_id": "root",
+        "owners": [
+            {
+                "node_id": "a",
+                "title": "a",
+                "path": "svc/a",
+                "isolation": "worktree",
+                "branch": "main",
+            }
+        ],
+        "files": [
+            {"path": "README.md", "owner": None},
+            {"path": "svc/a/app.py", "owner": "a"},
+        ],
+        "truncated": False,
+        "collisions": [],
+        "collisions_checked": True,
+    }
 
 
 class TestBlackboard:

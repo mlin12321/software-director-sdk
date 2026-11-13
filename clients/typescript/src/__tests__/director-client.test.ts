@@ -112,15 +112,17 @@ describe('DirectorClient', () => {
 
     await client.getNode('payments/api');
     await client.getNodeBlackboard('payments.api');
+    await client.getNodeOwnership('payments.api');
     const memory = await client.teach('payments.api', 'Never mock the clock');
 
     const calls = fetchMock.mock.calls;
     expect(calls.map(([url, init]) => `${init.method} ${url}`)).toEqual([
       'GET http://example.com/api/director/org/nodes/payments%2Fapi',
       'GET http://example.com/api/director/org/nodes/payments.api/blackboard',
+      'GET http://example.com/api/director/org/nodes/payments.api/ownership',
       'POST http://example.com/api/director/org/nodes/payments.api/teach',
     ]);
-    expect(JSON.parse(calls[2][1].body)).toEqual({ rule: 'Never mock the clock' });
+    expect(JSON.parse(calls[3][1].body)).toEqual({ rule: 'Never mock the clock' });
     expect(calls[0][1].headers['X-Session-API-Key']).toBe('secret');
     expect(memory).toEqual({ rules: ['Never mock the clock'] });
   });
