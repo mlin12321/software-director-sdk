@@ -11,7 +11,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import NamedTuple
 
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 
 from openhands.agent_server.director.git import (
     DIRECTOR_IDENTITY,
@@ -25,7 +25,7 @@ from openhands.agent_server.director.models import (
     BoundaryMemory,
     InheritedSpec,
 )
-from openhands.sdk.errors import Conflict, Invalid, NotSupported, OperationFailed
+from openhands.sdk.errors import Invalid, NotSupported, OperationFailed
 
 
 BLACKBOARD_REF = "refs/agents/blackboard"
@@ -33,6 +33,8 @@ SPEC_FILE = "spec.md"
 CONTRACTS_FILE = "contracts.md"
 MEMORY_FILE = "memory.json"
 AUTOPSIES_FILE = "autopsies.json"
+# What the rules of a boundary looked like when they were last consolidated.
+CONSOLIDATED_FILE = "consolidated.json"
 
 _ZERO_OID = "0" * 40
 _MAX_COMMIT_ATTEMPTS = 8
@@ -44,15 +46,19 @@ class BlackboardScopeError(Invalid):
     """A path escapes the blackboard or the scope it must stay inside."""
 
 
-class BlackboardMergeConflictError(Conflict):
-    """Two blackboards changed the same file in incompatible ways."""
-
-
 class BoardChange(NamedTuple):
     """One file to write. ``content=None`` deletes the file."""
 
     path: str
     content: str | None
+
+
+class Merged(NamedTuple):
+    """The outcome of merging another blackboard into this one."""
+
+    head: str
+    kept_local: list[str]
+    """Files both sides changed where this side's text was kept."""
 
 
 type BoardReader = Callable[[str], str | None]
@@ -95,6 +101,31 @@ def _parse_autopsies(raw: str | None) -> list[Autopsy]:
 
 def _serialize(value: object) -> str:
     return json.dumps(value, indent=2) + "\n"
+
+
+def _union[T](ours: list[T], theirs: list[T]) -> list[T]:
+    return [*ours, *(item for item in theirs if item not in ours)]
+
+
+def _settle(path: str, ours: str | None, theirs: str | None) -> tuple[str | None, bool]:
+    """What a file both blackboards changed becomes.
+
+    Returns:
+        The content, and whether the other side's text was left out of it.
+    """
+    if ours is None or theirs is None:
+        return (theirs if ours is None else ours), False
+    name = path.rsplit("/", 1)[-1]
+    try:
+        if name == MEMORY_FILE:
+            rules = _union(_parse_memory(ours).rules, _parse_memory(theirs).rules)
+            return _serialize(BoundaryMemory(rules=rules).model_dump()), False
+        if name == AUTOPSIES_FILE:
+            autopsies = _union(_parse_autopsies(ours), _parse_autopsies(theirs))
+            return _serialize(_AUTOPSIES.dump_python(autopsies)), False
+    except ValidationError:
+        return ours, True
+    return ours, name != CONSOLIDATED_FILE
 
 
 class GitBlackboard:
@@ -229,18 +260,28 @@ class GitBlackboard:
             "contended attempts"
         )
 
-    def merge(self, theirs_ref: str) -> str:
+    def directories_with(self, file: str) -> list[str]:
+        """The directories of the blackboard that hold a file named ``file``."""
+        commit = self.head()
+        if commit is None:
+            return []
+        listed = git(self.repo_dir, ["ls-tree", "-r", "-z", "--name-only", commit])
+        return sorted(
+            path[: -len(file)].rstrip("/")
+            for path in listed.split("\0")
+            if path == file or path.endswith(f"/{file}")
+        )
+
+    def merge(self, theirs_ref: str) -> Merged:
         """Three-way merge another blackboard ref into this one.
 
         The merge happens entirely in the object store and needs git 2.38 or
-        newer (``git merge-tree --write-tree``).
-
-        Returns:
-            The resulting head commit.
+        newer (``git merge-tree --write-tree``). Where both sides changed a
+        file, rules and autopsies become those of both; of anything else
+        this side's text is kept and the other's stays in its history.
 
         Raises:
             NotSupported: The installed git is too old.
-            BlackboardMergeConflictError: Both sides changed the same content.
         """
         version = git_version(self.repo_dir)
         if version < _MERGE_MIN_GIT:
@@ -256,38 +297,54 @@ class GitBlackboard:
             ours = self.head()
             if ours is None:
                 if self._swap(theirs, None):
-                    return theirs
+                    return Merged(theirs, [])
                 continue
-            if ours == theirs:
-                return ours
-            try:
-                tree = git(
-                    self.repo_dir,
-                    [
-                        "merge-tree",
-                        "--write-tree",
-                        # Two blackboards that each started empty share no
-                        # ancestor; merge them against an empty base.
-                        "--allow-unrelated-histories",
-                        ours,
-                        theirs,
-                    ],
-                ).strip()
-            except GitError as error:
-                if error.code == 1:
-                    raise BlackboardMergeConflictError(
-                        f"Blackboard merge has conflicts:\n{error.stdout}"
-                    ) from error
-                raise
+            if ours == theirs or self._contains(ours, theirs):
+                return Merged(ours, [])
+            if self._contains(theirs, ours):
+                if self._swap(theirs, ours):
+                    return Merged(theirs, [])
+                continue
+            tree, kept = self._merged_tree(ours, theirs)
             commit = self._commit_tree(
                 tree, [ours, theirs], f"blackboard: merge {theirs_ref}"
             )
             if self._swap(commit, ours):
-                return commit
+                return Merged(commit, kept)
         raise OperationFailed(
             f"Gave up merging into {self.ref} after {_MAX_COMMIT_ATTEMPTS} "
             "contended attempts"
         )
+
+    def _contains(self, commit: str, other: str) -> bool:
+        try:
+            git(self.repo_dir, ["merge-base", "--is-ancestor", other, commit])
+        except GitError:
+            return False
+        return True
+
+    def _merged_tree(self, ours: str, theirs: str) -> tuple[str, list[str]]:
+        command = ["merge-tree", "--write-tree", "--name-only", "-z", "--no-messages"]
+        # Two blackboards that each started empty share no ancestor; merge
+        # them against an empty base.
+        command += ["--allow-unrelated-histories", ours, theirs]
+        try:
+            return git(self.repo_dir, command).split("\0")[0].strip(), []
+        except GitError as error:
+            if error.code != 1:
+                raise
+            # The tree git wrote comes first, then the files it could not merge.
+            tree, *conflicted = error.stdout.split("\0")
+        changes: list[BoardChange] = []
+        kept: list[str] = []
+        for path in filter(None, conflicted):
+            content, ours_kept = _settle(
+                path, self._read_at(ours, path), self._read_at(theirs, path)
+            )
+            changes.append(BoardChange(path, content))
+            if ours_kept:
+                kept.append(path)
+        return self._build_tree(tree.strip(), changes), kept
 
     def _read_at(self, commit: str | None, path: str) -> str | None:
         if commit is None:

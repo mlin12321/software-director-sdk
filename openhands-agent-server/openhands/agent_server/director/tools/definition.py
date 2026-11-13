@@ -119,6 +119,12 @@ class ReviewTeamAction(Action):
     )
 
 
+class RecordRuleAction(Action):
+    """Record a rule for everyone who works in your boundary later."""
+
+    rule: str = Field(description="The rule, in plain English.")
+
+
 class PruneTeamAction(Action):
     """Remove a team below yours that is stuck."""
 
@@ -328,6 +334,24 @@ class ReviewTeamTool(_DirectorTool[ReviewTeamAction]):
         )
 
 
+class RecordRuleTool(_DirectorTool[RecordRuleAction]):
+    summary = (
+        "Add a rule to the permanent memory of your team's boundary. Every "
+        "agent that works there or below it later is told it. For what must "
+        "hold from now on, not for notes on the current task."
+    )
+
+    @classmethod
+    def _action_type(cls):
+        return RecordRuleAction
+
+    @classmethod
+    def _act(cls):
+        return lambda service, caller, action: pod_actions.record_rule(
+            service, caller, action.rule
+        )
+
+
 class PruneTeamTool(_DirectorTool[PruneTeamAction]):
     summary = (
         "Manager only. Remove a team directly below yours that is stuck or "
@@ -362,3 +386,4 @@ register_tool(ResolveEscalationTool.name, ResolveEscalationTool)
 register_tool(SetStatusTool.name, SetStatusTool)
 register_tool(PruneTeamTool.name, PruneTeamTool)
 register_tool(ReviewTeamTool.name, ReviewTeamTool)
+register_tool(RecordRuleTool.name, RecordRuleTool)

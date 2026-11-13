@@ -397,6 +397,13 @@ def review_team(
     )
 
 
+def record_rule(service: DirectorService, caller: Caller, rule: str) -> str:
+    """Add a rule to the permanent memory of the caller's boundary."""
+    path = caller.node.boundary.path
+    service.blackboard.teach(path, rule)
+    return f"Recorded for everyone who works in {path or 'the repository'}."
+
+
 def prune_team(
     service: DirectorService,
     caller: Caller,

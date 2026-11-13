@@ -17,12 +17,14 @@ from openhands.agent_server.director.service import DirectorService
 from openhands.agent_server.director.tools import (
     DecideSplitTool,
     ProposeBoundarySplitTool,
+    RecordRuleTool,
     ReviewTeamTool,
     SetStatusTool,
 )
 from openhands.agent_server.director.tools.definition import (
     DecideSplitAction,
     ProposeBoundarySplitAction,
+    RecordRuleAction,
     ReviewTeamAction,
     SetStatusAction,
 )
@@ -408,3 +410,23 @@ async def test_a_team_that_works_on_takes_its_work_back_from_review(
 
     assert node(service, "services.api").review is None
     assert refused.is_error
+
+
+async def test_an_agent_records_a_rule_for_its_own_boundary(service: DirectorService):
+    await split_root(service)
+
+    await use(
+        service,
+        ic(service, "services.api"),
+        RecordRuleTool,
+        RecordRuleAction(rule="Amounts are integer cents."),
+    )
+    blank = await use(
+        service, manager(service), RecordRuleTool, RecordRuleAction(rule="  ")
+    )
+
+    assert service.blackboard.memory("services/api").rules == [
+        "Amounts are integer cents."
+    ]
+    assert service.blackboard.memory("").rules == []
+    assert blank.is_error

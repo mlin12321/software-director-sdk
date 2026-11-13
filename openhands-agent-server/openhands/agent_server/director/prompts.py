@@ -39,6 +39,8 @@ The IC owns the technical work of the team's boundary:
   runtime. The IC tells the team above only when a team there waits on that
   work, through `needed_above`; otherwise the work is simply part of its own
   team's, which it reports when all of it is done.
+- It records what whoever works in the boundary later must know with
+  `record_rule`.
 
 The Manager owns the team's make-up and unblocks it. It does not edit files;
 the runtime refuses it every write in the repository.

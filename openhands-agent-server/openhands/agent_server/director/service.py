@@ -106,6 +106,7 @@ DIRECTOR_TOOL_NAMES = (
     "resolve_escalation",
     "set_status",
     "review_team",
+    "record_rule",
     "prune_team",
 )
 # How long tree changes are gathered before they are saved as one commit.

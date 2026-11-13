@@ -13,8 +13,11 @@ from fastapi.responses import StreamingResponse
 
 # The org's agents get their tools from this server, so it registers them.
 import openhands.agent_server.director.tools  # noqa: F401
+from openhands.agent_server.director import blackboard_sync
 from openhands.agent_server.director.models import (
     AnswerEscalationRequest,
+    BlackboardSync,
+    BlackboardSyncRequest,
     BoundaryMemory,
     CreateOrgRequest,
     NodeBlackboard,
@@ -36,8 +39,10 @@ from openhands.sdk.errors import (
     DomainError,
     Invalid,
     NotFound,
+    NotSupported,
     RateLimited,
     Unavailable,
+    UpstreamFailed,
 )
 
 
@@ -51,6 +56,14 @@ _NODE_NOT_FOUND: dict[type[DomainError], str] = {
 }
 _NO_BLACKBOARD: dict[type[DomainError], str] = {
     Unavailable: "The director's directory is not a git repository",
+}
+
+
+_NO_REMOTE: dict[type[DomainError], str] = {
+    **_NO_BLACKBOARD,
+    NotFound: "The repository has no remote of that name",
+    UpstreamFailed: "The remote could not be reached, or refused",
+    NotSupported: "The installed git is too old to merge blackboards",
 }
 
 
@@ -360,3 +373,42 @@ def teach_node(
     blackboard = service.blackboard
     blackboard.teach(path, request.rule)
     return blackboard.memory(path)
+
+
+@director_router.post(
+    "/org/blackboard/pull",
+    response_model=BlackboardSync,
+    responses=error_responses(_NO_REMOTE),
+)
+def pull_blackboard(
+    request: BlackboardSyncRequest | None = None,
+    service: DirectorService = Depends(get_director_service),
+) -> BlackboardSync:
+    """Take in the blackboard a remote of the repository has.
+
+    Rules and autopsies both sides added are kept from both. Where both
+    changed a spec or contracts, the local text is kept and the file is
+    named in `kept_local`.
+    """
+    remote = (request or BlackboardSyncRequest()).remote
+    return blackboard_sync.pull(service.blackboard, remote)
+
+
+@director_router.post(
+    "/org/blackboard/push",
+    response_model=BlackboardSync,
+    responses=error_responses(
+        {**_NO_REMOTE, Conflict: "There is no blackboard to push yet"}
+    ),
+)
+def push_blackboard(
+    request: BlackboardSyncRequest | None = None,
+    service: DirectorService = Depends(get_director_service),
+) -> BlackboardSync:
+    """Give a remote of the repository the local blackboard.
+
+    If the remote has changes the local blackboard lacks, they are pulled
+    in first, as `pull` does, and the push is made once more.
+    """
+    remote = (request or BlackboardSyncRequest()).remote
+    return blackboard_sync.push(service.blackboard, remote)

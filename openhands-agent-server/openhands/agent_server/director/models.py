@@ -368,6 +368,30 @@ class TeachRequest(BaseModel):
     rule: str = Field(min_length=1, description="The rule, in plain English.")
 
 
+class BlackboardSyncRequest(BaseModel):
+    """Which remote to share the blackboard with."""
+
+    remote: str = Field(default="origin", min_length=1)
+
+
+class BlackboardSync(BaseModel):
+    """What a pull or a push of the blackboard did."""
+
+    remote: str
+    head: str | None = Field(
+        description="The local blackboard's commit afterwards; None when empty."
+    )
+    changed: bool = Field(description="The local blackboard took in remote changes.")
+    kept_local: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Specs and contracts both sides had changed. The local text was "
+            "kept; the remote text is in the blackboard's history."
+        ),
+    )
+    pushed: bool = Field(description="The remote now has the local blackboard.")
+
+
 class OrgSummary(BaseModel):
     """Whether the director has an org, and where it would keep one."""
 
