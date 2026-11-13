@@ -99,6 +99,7 @@ class PodLauncher(Protocol):
         suffixes: Sequence[str] = (),
         tool_params: ToolParams | None = None,
         adapt_agent: AgentAdapter | None = None,
+        checkout: str | None = None,
     ) -> StartedAgent:
         """Start an agent with the configuration of ``parent_id``.
 
@@ -106,6 +107,8 @@ class PodLauncher(Protocol):
             tool_params: Parameters to set on the agent's tools, by tool
                 name, over the ones it inherits.
             adapt_agent: Applied last to the agent it inherits.
+            checkout: A checkout that exists already, for the agent to work
+                in; ``isolation`` then only says what kind it is.
 
         Raises:
             NotFound: The parent conversation does not exist.
@@ -127,6 +130,7 @@ class PodLauncher(Protocol):
         suffixes: Sequence[str] = (),
         tool_params: ToolParams | None = None,
         adapt_agent: AgentAdapter | None = None,
+        checkout: str | None = None,
     ) -> StartedAgent:
         """Start an agent from a stored agent profile, in the workspace of
         ``parent_id`` and as its child.
@@ -298,6 +302,7 @@ class ConversationPodLauncher:
         suffixes: Sequence[str] = (),
         tool_params: ToolParams | None = None,
         adapt_agent: AgentAdapter | None = None,
+        checkout: str | None = None,
     ) -> StartedAgent:
         started = await self._conversations.start_child_conversation(
             parent_id,
@@ -310,12 +315,13 @@ class ConversationPodLauncher:
             tool_params=tool_params,
             extra_tags=STARTED_BY_DIRECTOR,
             adapt_agent=adapt_agent,
+            workspace_dir=checkout,
         )
         if started is None or started.workspace is None:
             raise NotFound(f"Conversation {parent_id} does not exist")
         return StartedAgent(
             workspace=started.workspace,
-            isolation=started.isolation or "shared",
+            isolation=isolation if checkout else started.isolation or "shared",
             **_kind_of(await self._agent(conversation_id)),
         )
 
@@ -332,6 +338,7 @@ class ConversationPodLauncher:
         suffixes: Sequence[str] = (),
         tool_params: ToolParams | None = None,
         adapt_agent: AgentAdapter | None = None,
+        checkout: str | None = None,
     ) -> StartedAgent:
         parent = await self._conversations.get_event_service(parent_id)
         if parent is None:
@@ -340,15 +347,18 @@ class ConversationPodLauncher:
             stored = await asyncio.to_thread(get_agent_profile_store().load, profile)
         except (FileNotFoundError, Invalid) as error:
             raise NotFound(f"There is no agent profile named {profile!r}") from error
+        workspace = parent.stored.workspace
+        if checkout:
+            workspace = workspace.model_copy(update={"working_dir": checkout})
         request = StartConversationRequest(
             agent_profile_id=stored.id,
-            workspace=parent.stored.workspace,
+            workspace=workspace,
             conversation_id=conversation_id,
             parent_conversation_id=parent_id,
             initial_message=SendMessageRequest(
                 role="user", content=[TextContent(text=task)], run=True
             ),
-            worktree=isolation == "worktree",
+            worktree=isolation == "worktree" and not checkout,
             worktree_options=ConversationWorktreeOptions(base="head"),
             tags=STARTED_BY_DIRECTOR,
             autotitle=False,

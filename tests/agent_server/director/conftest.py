@@ -150,6 +150,8 @@ class DerivedStart:
     adapt_agent: AgentAdapter | None = None
     # The agent profile it was started from, when it was not derived.
     profile: str | None = None
+    # The checkout it was told to work on in, when it got no new one.
+    checkout: str | None = None
 
 
 @dataclass
@@ -164,6 +166,8 @@ class FakeLauncher:
     sent: list[tuple[UUID, str]] = field(default_factory=list)
     known: dict[UUID, ConversationExecutionStatus] = field(default_factory=dict)
     listeners: list[ExecutionStatusListener] = field(default_factory=list)
+    # The message a ``send`` is about to deliver, for ``before`` to look at.
+    sending: str = ""
     # How many of the next derived starts the server is too full for.
     full_for: int = 0
     root_error: Exception | None = None
@@ -237,6 +241,7 @@ class FakeLauncher:
         tool_params: ToolParams | None = None,
         adapt_agent: AgentAdapter | None = None,
         profile: str | None = None,
+        checkout: str | None = None,
     ) -> StartedAgent:
         if self.full_for > 0:
             self.full_for -= 1
@@ -254,6 +259,7 @@ class FakeLauncher:
                 tool_params,
                 adapt_agent,
                 profile,
+                checkout,
             )
         )
         kind = self.profiles[profile] if profile else self.kinds[parent_id]
@@ -263,7 +269,7 @@ class FakeLauncher:
         self.on_derived(conversation_id)
         assert self.root is not None
         return StartedAgent(
-            workspace=str(self.root.workspace.working_dir),
+            workspace=checkout or str(self.root.workspace.working_dir),
             isolation=isolation,
             kind=kind,
             acp_server="claude-code" if kind == "acp" else None,
@@ -282,6 +288,7 @@ class FakeLauncher:
         suffixes: Sequence[str] = (),
         tool_params: ToolParams | None = None,
         adapt_agent: AgentAdapter | None = None,
+        checkout: str | None = None,
     ) -> StartedAgent:
         if profile not in self.profiles:
             raise NotFound(f"There is no agent profile named {profile!r}")
@@ -295,6 +302,7 @@ class FakeLauncher:
             tool_params=tool_params,
             adapt_agent=adapt_agent,
             profile=profile,
+            checkout=checkout,
         )
 
     async def agent_kind(self, conversation_id: UUID) -> AgentKind | None:
@@ -306,6 +314,8 @@ class FakeLauncher:
     async def send(self, conversation_id: UUID, text: str) -> None:
         if conversation_id not in self.known:
             raise NotFound(f"Conversation {conversation_id} does not exist")
+        self.sending = text
+        self.before("send")
         self.sent.append((conversation_id, text))
 
     async def started(self, conversation_id: UUID) -> StartedAgent | None:
@@ -373,6 +383,7 @@ class FakeLauncher:
     async def ask_agent(self, conversation_id: UUID, question: str) -> str | None:
         if conversation_id not in self.known:
             raise NotFound(f"Conversation {conversation_id} does not exist")
+        self.before("ask_agent")
         self.agents_asked.append((conversation_id, question))
         if self.agents_silent is not None:
             await self.agents_silent.wait()

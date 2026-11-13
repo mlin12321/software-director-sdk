@@ -28,6 +28,8 @@ from openhands.agent_server.director.tools import (
     DecideSplitTool,
     ProposeBoundarySplitTool,
     PruneTeamTool,
+    ReviewTeamTool,
+    SetStatusTool,
 )
 from openhands.sdk.conversation.state import ConversationExecutionStatus
 from tests.agent_server.director.conftest import FakeLauncher, make_node, run_git
@@ -36,6 +38,13 @@ from tests.agent_server.director.test_director_limits import (
     eventually,
     split,
     started,
+)
+from tests.agent_server.director.test_director_review import (
+    DONE,
+    accept,
+    api_reports_done,
+    commit,
+    reject,
 )
 from tests.agent_server.director.test_director_tools import (
     PRUNE_API,
@@ -268,6 +277,140 @@ async def test_a_prune_cut_off_by_a_crash_is_finished_and_recorded_once(
     assert kept.split() == [autopsy.saved_ref]
     told = [text for text in launcher.messages_to(ic(second)) if "pruned" in text]
     assert len(told) == 1
+    await second.aclose()
+
+
+async def cut_off(launcher: FakeLauncher, ended: asyncio.Event, doing) -> None:
+    """Let the server end in the middle of ``doing``."""
+    task = asyncio.create_task(doing)
+    await ended.wait()
+    task.cancel()
+    await asyncio.gather(task, return_exceptions=True)
+
+
+def end_server_at_message(launcher: FakeLauncher, part: str) -> asyncio.Event:
+    """Have the server end as it is about to send a message with ``part``."""
+    ended = asyncio.Event()
+
+    def before(name: str) -> None:
+        if ended.is_set() or (name == "send" and part in launcher.sending):
+            ended.set()
+            raise ServerEnded
+
+    launcher.before = before
+    return ended
+
+
+async def test_the_end_of_a_split_cut_off_by_a_crash_is_told_once(
+    repo: Path, launcher: FakeLauncher
+):
+    first = await started(repo, launcher)
+    await use(first, ic(first), ProposeBoundarySplitTool, SPLIT)
+    ended = end_server_at_message(launcher, "Your split was approved")
+    await cut_off(launcher, ended, use(first, manager(first), DecideSplitTool, APPROVE))
+
+    second = await again(repo, launcher)
+    assert ("root", "message") in kinds(await second.recovery())
+    await second.resume()
+    await second.settled()
+
+    assert node(second, "root").pending_split is None
+    assert len(launcher.derived) == 5
+    told = [text for text in launcher.messages_to(ic(second)) if "approved" in text]
+    assert len(told) == 1
+    await second.aclose()
+
+
+async def test_a_review_request_cut_off_by_a_crash_reaches_the_reviewer_once(
+    repo: Path, launcher: FakeLauncher
+):
+    first = await started(repo, launcher)
+    await split_root(first)
+    commit(repo, "services/api/app.py", "order_id = '1'\n")
+    # The server ends as the team is asked for its account of the work.
+    ended = end_server_at(launcher, "ask_agent")
+    await cut_off(
+        launcher, ended, use(first, ic(first, "services.api"), SetStatusTool, DONE)
+    )
+
+    second = await again(repo, launcher)
+    assert ("services.api", "continue") in kinds(await second.recovery())
+    await second.resume()
+    await second.settled()
+
+    review = node(second, "services.api").review
+    assert review is not None and review.state == "pending"
+    asked = [text for text in launcher.messages_to(ic(second)) if "Review mode" in text]
+    assert len(asked) == 1
+    await second.aclose()
+
+
+async def test_an_acceptance_the_server_ended_before_saving_is_not_lost(
+    repo: Path, launcher: FakeLauncher, monkeypatch: pytest.MonkeyPatch
+):
+    first = await started(repo, launcher)
+    await split_root(first)
+    await api_reports_done(first, repo)
+    ended = asyncio.Event()
+
+    def nothing_more(_: str) -> None:
+        if ended.is_set():
+            raise ServerEnded
+
+    async def end_instead_of_saving() -> None:
+        ended.set()
+        raise ServerEnded
+
+    # The server ends with the acceptance made and the tree not yet saved.
+    launcher.before = nothing_more
+    monkeypatch.setattr(first, "_save", end_instead_of_saving)
+    await cut_off(launcher, ended, use(first, ic(first), ReviewTeamTool, accept()))
+
+    second = await again(repo, launcher)
+    saved = node(second, "services.api").review
+    assert saved is not None and saved.state == "pending"
+    assert ("services.api", "continue") in kinds(await second.recovery())
+    await second.resume()
+    await second.settled()
+
+    review = node(second, "services.api").review
+    assert review is not None and review.state == "accepted"
+    told = [
+        text
+        for text in launcher.messages_to(ic(second, "services.api"))
+        if "accepted" in text
+    ]
+    # Told at least once; a message recorded before the end is sent as well.
+    assert 1 <= len(told) <= 2
+    await second.aclose()
+
+
+async def test_stopping_a_team_cut_off_by_a_crash_stops_all_its_agents(
+    repo: Path, launcher: FakeLauncher
+):
+    first = await started(repo, launcher)
+    await split_root(first)
+    for attempt in range(3):
+        commit(repo, "services/api/app.py", f"order_id = {attempt}\n")
+        await use(first, ic(first, "services.api"), SetStatusTool, DONE)
+        if attempt < 2:
+            await use(first, ic(first), ReviewTeamTool, reject())
+    # The third rejection stops the team; the server ends at the first stop.
+    ended = end_server_at(launcher, "stop")
+    await cut_off(launcher, ended, use(first, ic(first), ReviewTeamTool, reject()))
+    assert launcher.stopped == []
+    await first._save()
+
+    second = await again(repo, launcher)
+    assert ("services.api", "continue") in kinds(await second.recovery())
+    await second.resume()
+    await second.settled()
+
+    api = node(second, "services.api")
+    assert api.status == "blocked"
+    assert {UUID(str(agent.conversation_id)) for agent in api.agents} <= set(
+        launcher.stopped
+    )
     await second.aclose()
 
 

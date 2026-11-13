@@ -380,6 +380,22 @@ class TestTreeStream:
         ]
         assert events[-1][1] == {"type": "escalations", "escalations": []}
 
+    async def test_says_when_the_org_is_paused_and_when_it_runs_again(
+        self, service: DirectorService
+    ):
+        service._hold("human")
+        body = await self.open_stream(service)
+
+        _, snapshot = await self.next_event(body)
+        await asyncio.to_thread(service._release)
+        name, running = await self.next_event(body)
+        await body.aclose()  # type: ignore[attr-defined]
+
+        assert (snapshot["paused"], snapshot["merging"]) == ("human", False)
+        assert name == "org_state"
+        assert running == {"type": "org_state", "paused": None, "merging": False}
+        assert service._state_listeners == []
+
     async def test_an_idle_stream_sends_heartbeats(
         self, service: DirectorService, monkeypatch: pytest.MonkeyPatch
     ):
@@ -565,6 +581,8 @@ async def test_an_org_is_pushed_pulled_and_its_merge_asked_for(running, repo, tm
     assert merge.status_code == 200 and merge.json() is None
     assert resolve.status_code == 409 and abort.status_code == 409
     assert again.status_code == 409
+    unasked = await client.post("/api/director/org/nodes/root/start_again", json={})
+    assert unasked.status_code == 409
     assert (await client.get("/api/director/org")).json()["merging"] is False
 
 

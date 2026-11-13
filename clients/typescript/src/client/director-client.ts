@@ -287,6 +287,22 @@ export class DirectorClient {
     return response.data;
   }
 
+  /**
+   * Start afresh a team whose agents have no conversation on this server, on
+   * the work its branch has. Its IC starts like the IC of the team above, or
+   * from the team's own agent profile.
+   *
+   * @throws HttpError 404 when there is no such team, 409 when it is done,
+   *   its IC has a conversation here, or the team above has no IC here.
+   */
+  async startAgain(nodeId: DirectorNodeId): Promise<DirectorOrgNode> {
+    const response = await this.client.post<DirectorOrgNode>(
+      `${DIRECTOR_PATH}/org/nodes/${encodeURIComponent(nodeId)}/start_again`,
+      {}
+    );
+    return response.data;
+  }
+
   /** The merge that waits for choices; `null` when none does. */
   async getMerge(): Promise<DirectorOrgMerge | null> {
     const response = await this.client.get<DirectorOrgMerge | null>(`${DIRECTOR_PATH}/org/merge`);

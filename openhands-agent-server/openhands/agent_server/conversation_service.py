@@ -2322,6 +2322,7 @@ class ConversationService:
         tool_params: ToolParams | None = None,
         extra_tags: Mapping[str, str] | None = None,
         adapt_agent: AgentAdapter | None = None,
+        workspace_dir: str | None = None,
     ) -> StartChildConversationResponse | None:
         """Start a child conversation on this server, derived from *parent_id*.
 
@@ -2345,6 +2346,8 @@ class ConversationService:
                 tool name, over the ones it inherits.
             extra_tags: Tags the child gets on top of its parent's.
             adapt_agent: Applied last to the agent the child inherits.
+            workspace_dir: An existing directory the child works in, instead
+                of the parent's directory or a new worktree.
 
         Returns ``None`` when *parent_id* does not exist.
 
@@ -2382,7 +2385,7 @@ class ConversationService:
                     self.conversation_worktree_root,
                     worktree_options,
                 )
-                if request.isolation == "worktree"
+                if request.isolation == "worktree" and workspace_dir is None
                 else None
             )
             launched = await asyncio.to_thread(
@@ -2398,17 +2401,20 @@ class ConversationService:
                 )
             )
             launched = _adapted(_with_tool_params(launched, tool_params), adapt_agent)
-            workspace = (
-                _create_conversation_worktree(worktree)
-                if worktree is not None
-                else parent_stored.workspace
-            )
+            if worktree is not None:
+                workspace = _create_conversation_worktree(worktree)
+            elif workspace_dir is not None:
+                workspace = parent_stored.workspace.model_copy(
+                    update={"working_dir": workspace_dir}
+                )
+            else:
+                workspace = parent_stored.workspace
             now = utc_now()
             child_stored = parent_stored.model_copy(
                 update={
                     "id": child_id,
                     "workspace": workspace,
-                    "worktree": request.isolation == "worktree",
+                    "worktree": worktree is not None,
                     "title": request.title,
                     "metrics": None,
                     "created_at": now,
