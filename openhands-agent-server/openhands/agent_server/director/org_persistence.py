@@ -6,6 +6,7 @@ on start.
 
 import json
 from pathlib import Path
+from typing import Any
 
 from pydantic import BaseModel
 
@@ -14,7 +15,7 @@ from openhands.agent_server.director.git_blackboard import (
     BoardReader,
     GitBlackboard,
 )
-from openhands.agent_server.director.models import OrgNode, OrgNodeInput
+from openhands.agent_server.director.models import OrgNodeInput
 from openhands.agent_server.director.org_store import OrgStore
 
 
@@ -33,7 +34,7 @@ def create_org_board(repo_dir: Path) -> GitBlackboard:
     return GitBlackboard(repo_dir, ref=ORG_REF)
 
 
-def _persisted(node: OrgNode) -> dict[str, object]:
+def _persisted(node: OrgNodeInput) -> dict[str, Any]:
     """A node without what its agents' conversations determine.
 
     Whether an agent is running changes many times a minute and is read back
@@ -50,10 +51,37 @@ def _persisted(node: OrgNode) -> dict[str, object]:
     return data
 
 
+def org_file(nodes: list[dict[str, Any]]) -> BoardChange:
+    """The file that holds a tree of saved nodes."""
+    content = json.dumps({"version": _VERSION, "nodes": nodes}, indent=2) + "\n"
+    return BoardChange(_ORG_FILE, content)
+
+
+def saved_nodes(board: GitBlackboard, commit: str | None) -> list[dict[str, Any]]:
+    """The nodes of the tree saved at ``commit``, as they are stored.
+
+    Raises:
+        ValueError: The saved tree has a format this version does not read.
+    """
+    raw = board.read_at(commit, _ORG_FILE)
+    if raw is None:
+        return []
+    persisted = _PersistedOrg.model_validate_json(raw)
+    if persisted.version != _VERSION:
+        raise ValueError(
+            f"Unrecognized org tree version {persisted.version} in {board.ref}"
+        )
+    return [_persisted(node) for node in persisted.nodes]
+
+
+def stored_nodes(store: OrgStore) -> list[dict[str, Any]]:
+    """The nodes of ``store`` as they are saved."""
+    return [_persisted(node) for node in store.all()]
+
+
 def save_org(board: GitBlackboard, store: OrgStore) -> None:
     """Write the tree to ``board`` unless it is already stored unchanged."""
-    nodes = [_persisted(node) for node in store.all()]
-    content = json.dumps({"version": _VERSION, "nodes": nodes}, indent=2) + "\n"
+    content = org_file(stored_nodes(store)).content
 
     def mutate(read: BoardReader) -> list[BoardChange]:
         return [] if read(_ORG_FILE) == content else [BoardChange(_ORG_FILE, content)]

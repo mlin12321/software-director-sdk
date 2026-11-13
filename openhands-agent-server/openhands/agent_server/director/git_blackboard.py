@@ -7,7 +7,7 @@ builds a tree in a throwaway index file and lands with a compare-and-swap
 
 import json
 import tempfile
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from pathlib import Path
 from typing import NamedTuple
 
@@ -59,6 +59,14 @@ class Merged(NamedTuple):
     head: str
     kept_local: list[str]
     """Files both sides changed where this side's text was kept."""
+
+
+class Clash(NamedTuple):
+    """A file both blackboards changed the same lines of."""
+
+    path: str
+    ours: str | None
+    theirs: str | None
 
 
 type BoardReader = Callable[[str], str | None]
@@ -272,26 +280,39 @@ class GitBlackboard:
             if path == file or path.endswith(f"/{file}")
         )
 
-    def merge(self, theirs_ref: str) -> Merged:
-        """Three-way merge another blackboard ref into this one.
-
-        The merge happens entirely in the object store and needs git 2.38 or
-        newer (``git merge-tree --write-tree``). Where both sides changed a
-        file, rules and autopsies become those of both; of anything else
-        this side's text is kept and the other's stays in its history.
+    def clashes(self, theirs_ref: str) -> list[Clash]:
+        """The files a merge of ``theirs_ref`` would keep this side's text of,
+        because both sides changed the same lines.
 
         Raises:
             NotSupported: The installed git is too old.
         """
-        version = git_version(self.repo_dir)
-        if version < _MERGE_MIN_GIT:
-            raise NotSupported(
-                "Blackboard merge needs git 2.38 or newer "
-                f"(found {version[0]}.{version[1]})"
-            )
-        theirs = git(
-            self.repo_dir, ["rev-parse", "--verify", f"{theirs_ref}^{{commit}}"]
-        ).strip()
+        theirs = self._other(theirs_ref)
+        ours = self.head()
+        if ours is None or self._contains(ours, theirs) or self._contains(theirs, ours):
+            return []
+        _, kept = self._merged_tree(ours, theirs, ())
+        return [
+            Clash(path, self._read_at(ours, path), self._read_at(theirs, path))
+            for path in kept
+        ]
+
+    def merge(self, theirs_ref: str, take_theirs: Collection[str] = ()) -> Merged:
+        """Three-way merge another blackboard ref into this one.
+
+        The merge happens entirely in the object store and needs git 2.38 or
+        newer (``git merge-tree --write-tree``). Where both sides changed the
+        same lines of a file, rules and autopsies become those of both; of
+        anything else this side's text is kept and the other's stays in its
+        history.
+
+        Args:
+            take_theirs: The files to take the other side's text of instead.
+
+        Raises:
+            NotSupported: The installed git is too old.
+        """
+        theirs = self._other(theirs_ref)
 
         for _ in range(_MAX_COMMIT_ATTEMPTS):
             ours = self.head()
@@ -305,7 +326,7 @@ class GitBlackboard:
                 if self._swap(theirs, ours):
                     return Merged(theirs, [])
                 continue
-            tree, kept = self._merged_tree(ours, theirs)
+            tree, kept = self._merged_tree(ours, theirs, take_theirs)
             commit = self._commit_tree(
                 tree, [ours, theirs], f"blackboard: merge {theirs_ref}"
             )
@@ -316,6 +337,63 @@ class GitBlackboard:
             "contended attempts"
         )
 
+    def land(
+        self, changes: list[BoardChange], message: str, *, merging: str | None = None
+    ) -> bool:
+        """Commit ``changes`` on the head, once.
+
+        Args:
+            merging: A commit to record as the second parent.
+
+        Returns:
+            False when another writer moved the ref first; nothing was written.
+        """
+        parent = self.head()
+        tree = self._build_tree(parent, changes)
+        parents = [commit for commit in (parent, merging) if commit]
+        return self._swap(self._commit_tree(tree, parents, message), parent)
+
+    def move_to(self, commit: str) -> bool:
+        """Point the ref at ``commit``, which has its head in its history.
+
+        Returns:
+            False when it has not, or another writer moved the ref first.
+        """
+        parent = self.head()
+        if parent is not None and not self._contains(commit, parent):
+            return False
+        return self._swap(commit, parent)
+
+    def contains(self, other: str) -> bool:
+        """Whether the head has ``other`` in its history."""
+        head = self.head()
+        return head is not None and (head == other or self._contains(head, other))
+
+    def base_with(self, other: str) -> str | None:
+        """The commit this ref and ``other`` both come from, if any."""
+        head = self.head()
+        if head is None:
+            return None
+        try:
+            return git(self.repo_dir, ["merge-base", head, other]).strip() or None
+        except GitError:
+            return None
+
+    def read_at(self, commit: str | None, path: str) -> str | None:
+        """The content of ``path`` at ``commit``, or None if it is absent."""
+        return self._read_at(commit, path)
+
+    def _other(self, theirs_ref: str) -> str:
+        version = git_version(self.repo_dir)
+        if version < _MERGE_MIN_GIT:
+            raise NotSupported(
+                "Blackboard merge needs git 2.38 or newer "
+                f"(found {version[0]}.{version[1]})"
+            )
+        return git(
+            self.repo_dir, ["rev-parse", "--verify", f"{theirs_ref}^{{commit}}"]
+        ).strip()
+
     def _contains(self, commit: str, other: str) -> bool:
         try:
             git(self.repo_dir, ["merge-base", "--is-ancestor", other, commit])
@@ -323,7 +401,9 @@ class GitBlackboard:
             return False
         return True
 
-    def _merged_tree(self, ours: str, theirs: str) -> tuple[str, list[str]]:
+    def _merged_tree(
+        self, ours: str, theirs: str, take_theirs: Collection[str]
+    ) -> tuple[str, list[str]]:
         command = ["merge-tree", "--write-tree", "--name-only", "-z", "--no-messages"]
         # Two blackboards that each started empty share no ancestor; merge
         # them against an empty base.
@@ -341,6 +421,8 @@ class GitBlackboard:
             content, ours_kept = _settle(
                 path, self._read_at(ours, path), self._read_at(theirs, path)
             )
+            if ours_kept and path in take_theirs:
+                content, ours_kept = self._read_at(theirs, path), False
             changes.append(BoardChange(path, content))
             if ours_kept:
                 kept.append(path)

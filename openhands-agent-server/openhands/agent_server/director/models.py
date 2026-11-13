@@ -42,6 +42,11 @@ PauseReason = Literal["human", "shutdown", "crash"]
 # finished. 'message': messages are delivered. 'dropped': run state that no
 # longer fits the org was put aside. 'cannot_resume': a team that cannot be
 # taken up as it is.
+Side = Literal["mine", "theirs"]
+ConflictKind = Literal["field", "team", "file"]
+SyncResult = Literal["up_to_date", "fast_forward", "merged", "conflicts", "pushed"]
+BranchResult = Literal["created", "fast_forwarded", "diverged", "pushed"]
+
 RecoveryKind = Literal[
     "run_again", "start", "continue", "message", "dropped", "cannot_resume"
 ]
@@ -546,6 +551,117 @@ class Recovery(BaseModel):
     )
 
 
+class OrgConflict(BaseModel):
+    """Something both sides of a pull changed, for the human to decide."""
+
+    id: str = Field(description="Names the conflict in a resolve request.")
+    kind: ConflictKind = Field(
+        description=(
+            "`field`: one field of a team was changed on both sides. `team`: "
+            "one side removed a team the other changed. `file`: both sides "
+            "changed the same lines of a spec or of contracts."
+        )
+    )
+    node_id: str = Field(description="The team; '' for a file of the blackboard.")
+    title: str
+    field: str = Field(description="The field, or the file's path.")
+    mine: str | None = Field(description="What is here; None when removed here.")
+    theirs: str | None = Field(
+        description="What the remote has; None when removed there."
+    )
+    choice: Side | None = Field(
+        default=None, description="What was chosen; None while it is open."
+    )
+
+
+class OrgMerge(BaseModel):
+    """A pull that stopped because both sides changed the same thing.
+
+    Nothing of it has been written to the org. The org stays paused until
+    every conflict has a choice, or the merge is abandoned.
+    """
+
+    remote: str
+    theirs: str = Field(description="The remote's org commit being merged.")
+    conflicts: list[OrgConflict]
+
+
+class BranchSync(BaseModel):
+    """What a pull or a push did with the branch of one team's work."""
+
+    node_id: str
+    title: str
+    branch: str
+    result: BranchResult = Field(
+        description=(
+            "`created`: the branch was not here and now is. `fast_forwarded`: "
+            "it took in the other side's commits. `diverged`: both sides have "
+            "commits the other lacks; on a pull the remote's are kept at "
+            "`ref` and the team's IC is told to merge them, on a push the "
+            "branch was not pushed. `pushed`: the remote now has it."
+        )
+    )
+    ref: str | None = Field(
+        default=None, description="Where the remote's commits are kept, if diverged."
+    )
+
+
+class OrgSyncRequest(BaseModel):
+    """Which remote to exchange the org with."""
+
+    remote: str = Field(default="origin", min_length=1)
+
+
+class OrgSync(BaseModel):
+    """What a pull or a push of the org did."""
+
+    remote: str
+    result: SyncResult = Field(
+        description=(
+            "`up_to_date`: nothing to take in. `fast_forward`: only the "
+            "remote had changed. `merged`: both had, and nothing clashed. "
+            "`conflicts`: both changed the same thing; see `merge`. "
+            "`pushed`: the remote now has what is here."
+        )
+    )
+    head: str | None = Field(description="The local org's commit afterwards.")
+    merge: OrgMerge | None = Field(
+        default=None, description="The merge waiting for choices, if any."
+    )
+    blackboard: BlackboardSync | None = Field(
+        default=None, description="What happened to specs, contracts and rules."
+    )
+    branches: list[BranchSync] = Field(
+        default_factory=list, description="The teams' branches that changed."
+    )
+    put_aside: list[RecoveryItem] = Field(
+        default_factory=list,
+        description="Unfinished work dropped because its team was changed.",
+    )
+
+
+class ResolveMergeRequest(BaseModel):
+    """Choices for the conflicts of a merge."""
+
+    choices: dict[str, Side] = Field(
+        default_factory=dict, description="A side per conflict id."
+    )
+    rest: Side | None = Field(
+        default=None, description="The side for every conflict not named."
+    )
+
+
+class StartAgainRequest(BaseModel):
+    """How to start a team whose agents have no conversation here."""
+
+    conversation: StartConversationRequest = Field(
+        description=(
+            "How to start the team's IC. Its workspace is replaced by the "
+            "team's own checkout; the team's Manager is derived from it."
+        ),
+    )
+
+
 class OrgSummary(BaseModel):
     """Whether the director has an org, and where it would keep one."""
 
@@ -590,6 +706,10 @@ class OrgSummary(BaseModel):
             "None when the org runs. `GET /org/recovery` says what resuming "
             "does."
         ),
+    )
+    merging: bool = Field(
+        default=False,
+        description="A pull stopped on conflicts and waits for choices.",
     )
 
 
