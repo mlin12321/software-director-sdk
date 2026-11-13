@@ -62,6 +62,7 @@ async def test_starting_an_org_runs_a_root_team_briefed_with_the_task(
     assert launcher.root is not None
     assert str(launcher.root.conversation_id) == ic
     assert launcher.root_tools == list(DIRECTOR_TOOL_NAMES)
+    assert (launcher.root_title, launcher.root.autotitle) == ("Checkout (IC)", False)
     [briefing] = launcher.messages_to(ic)
     assert "IC" in briefing and "Build the checkout flow\nwith tests" in briefing
 

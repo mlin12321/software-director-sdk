@@ -3618,6 +3618,10 @@ def test_director_runs_an_org_whose_root_splits_into_sub_teams(
         root_ic, root_manager = (agent["conversation_id"] for agent in root["agents"])
         manager = client.get(f"/api/conversations/{root_manager}").json()
         assert manager["parent_conversation_id"] == root_ic
+        assert [
+            client.get(f"/api/conversations/{root_ic}").json()["title"],
+            manager["title"],
+        ] == ["Checkout (IC)", "Checkout (Manager)"]
         for child in detail["children"]:
             child_ic, child_manager = (
                 agent["conversation_id"] for agent in child["agents"]

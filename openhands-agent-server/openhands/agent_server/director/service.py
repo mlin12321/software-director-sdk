@@ -82,6 +82,10 @@ def agent_conversation(node: OrgNode, role: AgentRole) -> str | None:
     return None
 
 
+def _agent_title(team: str, role: AgentRole) -> str:
+    return f"{team} ({'IC' if role == 'ic' else 'Manager'})"
+
+
 def _summary_of(text: str) -> str:
     first_line = text.strip().splitlines()[0] if text.strip() else ""
     return first_line[:200]
@@ -254,12 +258,15 @@ class DirectorService:
                         update={
                             "conversation_id": ic_id,
                             "initial_message": None,
+                            # Named like every other agent of the org.
+                            "autotitle": False,
                             "agent_launch_additions": additions.model_copy(
                                 update={"system_message_suffix_append": suffix}
                             ),
                         }
                     ),
                     [Tool(name=name) for name in DIRECTOR_TOOL_NAMES],
+                    title=_agent_title(request.title, "ic"),
                 )
             except BaseException:
                 store.remove(ROOT_ID)
@@ -483,7 +490,7 @@ class DirectorService:
                 lambda: launcher.start_derived(
                     parent_id,
                     UUID(conversation_id),
-                    title=f"{node.title} ({'IC' if role == 'ic' else 'Manager'})",
+                    title=_agent_title(node.title, role),
                     task=text,
                     isolation=node.isolation if role == "ic" else "shared",
                     suffixes=[] if role == "ic" else [MANAGER_ROLE],

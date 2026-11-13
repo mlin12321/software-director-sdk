@@ -124,6 +124,7 @@ class FakeLauncher:
 
     root: StartConversationRequest | None = None
     root_tools: list[str] = field(default_factory=list)
+    root_title: str | None = None
     derived: list[DerivedStart] = field(default_factory=list)
     sent: list[tuple[UUID, str]] = field(default_factory=list)
     known: dict[UUID, ConversationExecutionStatus] = field(default_factory=dict)
@@ -133,13 +134,14 @@ class FakeLauncher:
     root_error: Exception | None = None
 
     async def start_root(
-        self, request: StartConversationRequest, tools: Sequence[Tool]
+        self, request: StartConversationRequest, tools: Sequence[Tool], *, title: str
     ) -> StartedAgent:
         if self.root_error is not None:
             raise self.root_error
         assert request.conversation_id is not None
         self.root = request
         self.root_tools = [tool.name for tool in tools]
+        self.root_title = title
         self.known[request.conversation_id] = ConversationExecutionStatus.IDLE
         return StartedAgent(
             workspace=str(request.workspace.working_dir), isolation="shared"

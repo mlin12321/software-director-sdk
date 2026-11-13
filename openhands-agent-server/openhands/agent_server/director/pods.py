@@ -14,6 +14,7 @@ from openhands.agent_server.event_service import ConversationRunLimitExceeded
 from openhands.agent_server.models import (
     StartChildConversationRequest,
     StartConversationRequest,
+    UpdateConversationRequest,
 )
 from openhands.sdk import Message, TextContent
 from openhands.sdk.agent import ACPAgent
@@ -33,7 +34,7 @@ class PodLauncher(Protocol):
     """What the director needs from the conversations of its agents."""
 
     async def start_root(
-        self, request: StartConversationRequest, tools: Sequence[Tool]
+        self, request: StartConversationRequest, tools: Sequence[Tool], *, title: str
     ) -> StartedAgent:
         """Start the conversation every other agent of the org derives from.
 
@@ -89,7 +90,7 @@ class ConversationPodLauncher:
         self._conversations = conversations
 
     async def start_root(
-        self, request: StartConversationRequest, tools: Sequence[Tool]
+        self, request: StartConversationRequest, tools: Sequence[Tool], *, title: str
     ) -> StartedAgent:
         info, is_new = await self._conversations.start_conversation(
             request, server_tools=tools
@@ -102,6 +103,9 @@ class ConversationPodLauncher:
                 "An org cannot be led by an ACP agent: it runs its own tools "
                 "and cannot be given the director's"
             )
+        await self._conversations.update_conversation(
+            info.id, UpdateConversationRequest(title=title)
+        )
         return StartedAgent(
             workspace=str(info.workspace.working_dir),
             isolation="worktree" if request.worktree else "shared",
