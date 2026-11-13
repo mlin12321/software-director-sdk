@@ -2284,6 +2284,7 @@ class ConversationService:
         extra_suffixes: Sequence[str] = (),
         worktree_options: ConversationWorktreeOptions | None = None,
         tool_params: ToolParams | None = None,
+        extra_tags: Mapping[str, str] | None = None,
     ) -> StartChildConversationResponse | None:
         """Start a child conversation on this server, derived from *parent_id*.
 
@@ -2305,6 +2306,7 @@ class ConversationService:
                 repository's default branch when not given.
             tool_params: Parameters this server sets on the child's tools, by
                 tool name, over the ones it inherits.
+            extra_tags: Tags the child gets on top of its parent's.
 
         Returns ``None`` when *parent_id* does not exist.
 
@@ -2374,6 +2376,7 @@ class ConversationService:
                     "parent_conversation_id": parent_id,
                     "forked_from_conversation_id": None,
                     "forked_from_event_id": None,
+                    "tags": {**parent_stored.tags, **(extra_tags or {})},
                 }
             )
             info, _ = await self._launch_prepared_conversation(

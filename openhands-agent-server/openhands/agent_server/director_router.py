@@ -181,12 +181,14 @@ def get_org(service: DirectorService = Depends(get_director_service)) -> OrgSumm
         {
             Conflict: "The director already has an org, or serves the fixture",
             Invalid: (
-                "The conversation cannot lead an org: its workspace is outside "
-                "the director's directory, it runs in Docker, or its agent is "
-                "an ACP agent"
+                "The conversation cannot lead an org: it runs in Docker, or "
+                "its agent is an ACP agent"
             ),
             RateLimited: "The server cannot run another conversation now",
-            Unavailable: "The director's directory is not a git repository",
+            Unavailable: (
+                "The director is not running agents, or the conversation's "
+                "workspace is not in a git repository"
+            ),
         }
     ),
 )
@@ -197,8 +199,9 @@ async def create_org(
     """Start an org: a root team whose IC is briefed with the task.
 
     The IC runs as the given conversation and its Manager, like every agent of
-    the teams it later splits into, is derived from it. Follow the org on the
-    tree stream.
+    the teams it later splits into, is derived from it. The org lives in the
+    git repository of that conversation's workspace, which the server keeps
+    for its next start. Follow the org on the tree stream.
     """
     return await service.create_org(request)
 
@@ -210,14 +213,14 @@ async def create_org(
         {
             Conflict: "No team of the org can take the message",
             Invalid: (
-                "The path is outside the repository; or there is no org and "
+                "The path is outside the org's repository; or there is no org and "
                 "the request has no `conversation` to start one with, or one "
                 "that cannot lead an org"
             ),
             RateLimited: "The server cannot run another conversation now",
             Unavailable: (
                 "The director is not running agents, or there is no org and "
-                "its directory is not a git repository"
+                "the conversation's workspace is not in a git repository"
             ),
         }
     ),
@@ -236,8 +239,12 @@ async def route_message(
     submodule that has no org of its own searches on through the repository
     that has the submodule.
 
-    When there is no org yet, the message starts one: the root team is
-    briefed with it as its task and named by a model that summarizes it.
+    When there is no org yet, the message needs a `conversation`. If the
+    repository of that conversation's workspace (or one above that has it as
+    a submodule) has a saved org, the director takes that org up and routes
+    the message in it. Otherwise the message starts an org there: the root
+    team is briefed with it as its task and named by a model that summarizes
+    it.
     """
     return await service.route_message(request)
 

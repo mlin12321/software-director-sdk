@@ -1,6 +1,7 @@
 """The director's state for one server: an org tree and its blackboard."""
 
 import asyncio
+import json
 import logging
 import os
 import re
@@ -72,6 +73,7 @@ from openhands.sdk.errors import (
 )
 from openhands.sdk.event import ActionEvent
 from openhands.sdk.tool.spec import Tool
+from openhands.sdk.utils.files import atomic_write_text
 
 
 logger = logging.getLogger(__name__)
@@ -99,6 +101,7 @@ AGENT_LOST = "lost"
 # Where, in the repository's git directory, the director keeps the shells
 # it confines its agents' terminals with.
 _SHELLS_DIR = "director-shells"
+_REMEMBERED_FILE = "director.json"
 
 _AGENT_STATUS: dict[ConversationExecutionStatus, str] = {
     ConversationExecutionStatus.RUNNING: "working",
@@ -143,9 +146,12 @@ def _is_in(path: Path, directory: Path) -> bool:
 class DirectorService:
     """Owns the org tree and the blackboard of one repository.
 
-    That is the repository of the directory the server was started for,
-    unless that one has no org and is a submodule of a repository that has:
-    the director then joins the org of the nearest such repository above.
+    An org lives in the repository its first conversation was opened in,
+    which need not be the directory the server was started for; the director
+    remembers it across restarts. Until there is an org, the director looks
+    for a saved one in the server's directory. A repository that has no org
+    and is a submodule of one that has stands for the nearest such
+    repository above it, in both cases.
 
     Nothing is read from disk until the tree or the blackboard is first used,
     so creating the service is free for servers that never use the director.
@@ -167,9 +173,13 @@ class DirectorService:
         worktree_root: Path | None = None,
         find_sandbox: Callable[[], str | None] = lambda: None,
         summary_timeout: float = SUMMARY_TIMEOUT_SECONDS,
+        remembered: Path | None = None,
     ) -> None:
         """
         Args:
+            remembered: A file to keep the org's repository in, so that an
+                org started outside ``repo_dir`` is found again after a
+                restart.
             worktree_root: Where the server makes the git worktrees of
                 conversations, so that no team writes into another's.
             find_sandbox: Returns the bubblewrap binary to confine the
@@ -182,6 +192,7 @@ class DirectorService:
         self._worktree_root = worktree_root
         self._find_sandbox = find_sandbox
         self._summary_timeout = summary_timeout
+        self._remembered = remembered
         self._bwrap: str | None = None
         self._stop_guard: Callable[[], None] | None = None
         self._save_delay = save_delay
@@ -195,6 +206,7 @@ class DirectorService:
         self._save_timer: asyncio.TimerHandle | None = None
         self._stop_status: Callable[[], None] | None = None
         self._create_lock = asyncio.Lock()
+        self._first_message_lock = asyncio.Lock()
 
     @classmethod
     def from_config(cls, config: Config) -> "DirectorService":
@@ -203,6 +215,7 @@ class DirectorService:
             fixture=config.director_fixture,
             worktree_root=config.conversation_worktree_root,
             find_sandbox=find_bwrap,
+            remembered=config.conversations_path.parent / _REMEMBERED_FILE,
         )
 
     @property
@@ -286,25 +299,19 @@ class DirectorService:
 
         Raises:
             Conflict: The director already has an org, or serves the fixture.
-            Unavailable: The director is not running, or its directory is not
-                a git repository.
-            Unprocessable: The conversation cannot lead an org here.
+            Unavailable: The director is not running, or the conversation's
+                workspace is not in a git repository.
+            Unprocessable: The conversation cannot lead an org.
         """
         launcher = self._require_launcher()
         if self._fixture:
             raise Conflict("The director serves a fixture tree; it cannot run an org")
         store = await asyncio.to_thread(lambda: self.store)
-        if not await asyncio.to_thread(is_git_repository, self._repo_dir):
-            raise Unavailable(
-                f"An org needs a git repository; {self._repo_dir} is not one"
-            )
         conversation = request.conversation
         workspace = Path(conversation.workspace.working_dir).resolve()
-        if not workspace.is_relative_to(self._repo_dir.resolve()):
-            raise Unprocessable(
-                f"The org works in {self._repo_dir}; the conversation's "
-                f"workspace {workspace} is outside it"
-            )
+        if not await asyncio.to_thread(is_git_repository, workspace):
+            raise Unavailable(f"An org needs a git repository; {workspace} is not one")
+        repository = await asyncio.to_thread(_checkout_root, str(workspace))
         if conversation.conversation_runtime == "docker":
             raise Unprocessable(
                 "An org's agents run in the server's own process, not in Docker"
@@ -322,6 +329,7 @@ class DirectorService:
         async with self._create_lock:
             if store.root_id is not None:
                 raise Conflict("The director already has an org")
+            configured, self._repo_dir = self._repo_dir, repository
             store.upsert(
                 OrgNodeInput(
                     id=ROOT_ID,
@@ -357,7 +365,9 @@ class DirectorService:
                 )
             except BaseException:
                 store.remove(ROOT_ID)
+                self._repo_dir = configured
                 raise
+            await asyncio.to_thread(self._remember)
             root = store.update_node(
                 ROOT_ID,
                 worktree_path=started.workspace,
@@ -377,7 +387,9 @@ class DirectorService:
     async def route_message(self, request: RouteMessageRequest) -> RoutedMessage:
         """Hand what the human says to the team nearest to where they say it.
 
-        Without an org the message starts one and becomes its task.
+        Without an org, the message joins the one saved in the repository of
+        the conversation it comes with (or above it), and failing that
+        starts one there and becomes its task.
 
         Raises:
             Unprocessable: The path is outside the org's repository, or there
@@ -387,20 +399,27 @@ class DirectorService:
         """
         self._require_launcher()
         store = await asyncio.to_thread(lambda: self.store)
-        if store.root_id is None:
-            if request.conversation is None:
+        async with self._first_message_lock:
+            conversation = request.conversation
+            if store.root_id is None and conversation is None:
                 raise Unprocessable(
                     "There is no org yet. Send `conversation` with the message "
                     "so that it can start one."
                 )
-            root = await self.create_org(
-                CreateOrgRequest(task=request.text, conversation=request.conversation)
-            )
-            return RoutedMessage(
-                node_id=root.id,
-                conversation_id=agent_conversation(root, "ic") or "",
-                started_org=True,
-            )
+            if store.root_id is None and conversation is not None:
+                joined = not self._fixture and await asyncio.to_thread(
+                    self._join, Path(conversation.workspace.working_dir)
+                )
+                if not joined:
+                    root = await self.create_org(
+                        CreateOrgRequest(task=request.text, conversation=conversation)
+                    )
+                    return RoutedMessage(
+                        node_id=root.id,
+                        conversation_id=agent_conversation(root, "ic") or "",
+                        started_org=True,
+                    )
+                await self._resync()
         path = await asyncio.to_thread(
             lambda: (
                 self._home()
@@ -593,17 +612,56 @@ class DirectorService:
             store.replace_all(build_fixture_nodes())
             logger.info("Director serving the fixture tree (%d nodes)", len(store))
             return store
-        repository: Path | None = self._directory
-        while repository is not None and is_git_repository(repository):
-            if load_org(create_org_board(repository), store):
-                self._repo_dir = repository
-                logger.info("Director loaded %d nodes from %s", len(store), repository)
-                break
-            repository = enclosing_repository(repository)
+        remembered = self._read_remembered()
+        if remembered is None or not self._load_from(remembered, store):
+            self._load_from(self._directory, store)
         store.on_change(self._schedule_save)
         if self._loop is not None:
             self._enqueue(self._resync)
         return store
+
+    def _load_from(self, directory: Path, store: OrgStore) -> bool:
+        """Load the org saved in the repository of ``directory``, or failing
+        that in the nearest repository above that has it as a submodule.
+
+        Returns:
+            Whether one was found. The director then works in its repository.
+        """
+        repository: Path | None = directory
+        while repository is not None and is_git_repository(repository):
+            if load_org(create_org_board(repository), store):
+                self._repo_dir = _checkout_root(str(repository))
+                logger.info("Director loaded %d nodes from %s", len(store), repository)
+                return True
+            repository = enclosing_repository(repository)
+        return False
+
+    def _join(self, workspace: Path) -> bool:
+        """Take up the org saved at or above ``workspace``, if there is one."""
+        if not self._load_from(workspace, self.store):
+            return False
+        self._remember()
+        return True
+
+    def _read_remembered(self) -> Path | None:
+        if self._remembered is None:
+            return None
+        try:
+            return Path(json.loads(self._remembered.read_text())["repo_path"])
+        except (OSError, ValueError, KeyError, TypeError):
+            return None
+
+    def _remember(self) -> None:
+        """Keep the org's repository for the next start of the server."""
+        if self._remembered is None:
+            return
+        try:
+            self._remembered.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_text(
+                self._remembered, json.dumps({"repo_path": str(self._repo_dir)}) + "\n"
+            )
+        except OSError:
+            logger.exception("Could not remember the org's repository")
 
     def _enqueue(self, effect: Effect) -> None:
         loop = self._loop

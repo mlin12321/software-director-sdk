@@ -428,6 +428,23 @@ async def test_start_child_conversation_takes_a_chosen_id_and_prompt_suffix(
 
 
 @pytest.mark.asyncio
+async def test_start_child_conversation_adds_tags_to_the_ones_it_inherits(
+    tmp_path, workspace_dir
+):
+    launch = await _launch_child(
+        tmp_path,
+        workspace_dir,
+        StartChildConversationRequest(task="Review the plan"),
+        extra_tags={"startedby": "director"},
+    )
+
+    assert launch.result is not None
+    child_stored = launch.services[launch.result.conversation_id].stored
+    assert child_stored.tags == {"source": "test", "startedby": "director"}
+    assert launch.services[launch.parent_id].stored.tags == {"source": "test"}
+
+
+@pytest.mark.asyncio
 async def test_start_child_conversation_refuses_an_id_that_is_taken(
     tmp_path, workspace_dir
 ):

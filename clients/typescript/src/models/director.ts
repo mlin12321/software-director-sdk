@@ -133,9 +133,10 @@ export interface DirectorOrgSummary {
   root_id: DirectorNodeId | null;
   node_count: number;
   /**
-   * The directory the org works in. When the server was started in a git
-   * submodule that has no org, this is the nearest repository above it that
-   * has one.
+   * The repository the org works in: the one its first conversation was
+   * opened in, or the nearest repository above that one which has it as a
+   * submodule and already had an org. Without an org, the directory the
+   * server was started for.
    */
   repo_path: string;
   /**
@@ -144,7 +145,7 @@ export interface DirectorOrgSummary {
    * to come from here.
    */
   directory: string;
-  /** An org can only be started in a git repository. */
+  /** Whether `repo_path` is in a git repository. An org needs one. */
   is_git_repository: boolean;
   /** The tree is a fixed sample; its agents are not running. */
   fixture: boolean;

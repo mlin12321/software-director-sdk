@@ -38,8 +38,8 @@ export interface CreateOrgRequest {
   task: string;
   /**
    * How to start the root team's IC, as for a normal conversation. Every
-   * other agent of the org is derived from it. Its workspace must be the
-   * director's `repo_path`, and its initial message is ignored: the IC is
+   * other agent of the org is derived from it. The org lives in the git
+   * repository of its workspace. Its initial message is ignored: the IC is
    * briefed with `task`.
    */
   conversation: CreateConversationPayload;
@@ -54,9 +54,10 @@ export interface RouteMessageRequest {
    */
   path?: string;
   /**
-   * How to start the root team's IC when there is no org yet; the message
-   * then becomes the org's task. See `CreateOrgRequest.conversation`.
-   * Ignored when an org exists.
+   * How to start the root team's IC when there is no org yet. If the git
+   * repository of its workspace already has a saved org, that org is taken
+   * up and the message routed in it; otherwise the message starts an org
+   * there and becomes its task. Ignored when an org exists.
    */
   conversation?: CreateConversationPayload;
 }
