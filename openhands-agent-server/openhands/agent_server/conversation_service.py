@@ -1607,7 +1607,7 @@ class ConversationService:
 
         with await RunSlot.acquire(self._run_semaphore) as run_slot:
             return await self._create_conversation(
-                request, conversation_id, run_slot, server_tools=server_tools
+                request, conversation_id, run_slot, server_tools
             )
 
     async def _create_conversation(
@@ -1615,7 +1615,6 @@ class ConversationService:
         request: StartConversationRequest,
         conversation_id: UUID,
         run_slot: RunSlot,
-        *,
         server_tools: Sequence[Tool] = (),
     ) -> tuple[ConversationInfo, bool]:
         # The link is immutable after creation, so cycles beyond self-parent are

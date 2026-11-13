@@ -42,6 +42,8 @@ from openhands.agent_server.conversation_registry import (
     create_conversation_registry,
 )
 from openhands.agent_server.conversation_service import ConversationService
+from openhands.agent_server.director import DirectorService
+from openhands.agent_server.director.pods import ConversationPodLauncher
 from openhands.agent_server.persistence import reencrypt_stale_stores, reset_stores
 from openhands.agent_server.server_details_router import mark_initialization_complete
 from openhands.agent_server.telemetry import (
@@ -242,6 +244,7 @@ class InitService:
         self._entered_service: ConversationService | None = None
         self._entered_conversation_registry: ConversationRegistry | None = None
         self._entered_bash_service: BashEventService | None = None
+        self._entered_director: DirectorService | None = None
         # ``initialize`` exports the delivered session key to the environment;
         # ``(None, None)`` means nothing to put back.
         self._session_api_key_env_before_init: tuple[bool, str | None] = (
@@ -320,6 +323,10 @@ class InitService:
             self._app.state.conversation_service = service
             self._app.state.conversation_registry = conversation_registry
             self._app.state.bash_event_service = bash_svc
+            director = DirectorService.from_config(new_config)
+            await director.start(ConversationPodLauncher(service))
+            self._app.state.director_service = director
+            self._entered_director = director
 
             # Re-derive root_path from the merged config so Doc URLS are valid
             from openhands.agent_server.api import _get_root_path
@@ -356,6 +363,9 @@ class InitService:
         Called from the FastAPI lifespan's finally clause so dormant pods
         that were never initialized don't need any cleanup.
         """
+        if self._entered_director is not None:
+            await self._entered_director.aclose()
+            self._entered_director = None
         if self._entered_service is not None:
             if self._entered_conversation_registry is not None:
                 await self._entered_conversation_registry.shutdown()

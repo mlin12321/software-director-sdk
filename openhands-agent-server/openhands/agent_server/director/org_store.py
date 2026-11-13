@@ -158,6 +158,11 @@ class OrgStore:
     ) -> OrgNode:
         """Change the conversation or the status of one agent of a node.
 
+        The node's own status follows its agents: it works while one of them
+        does and idles when none does, and an agent that is ``blocked`` blocks
+        it. Done is only ever declared for the node, so an agent of a finished
+        node waking up does not reopen it.
+
         Raises:
             NotFound: The node does not exist or has no agent in that role.
         """
@@ -175,9 +180,17 @@ class OrgStore:
                 )
                 for agent in node.agents
             ]
-            if agents == node.agents:
+            working = any(agent.status == "working" for agent in agents)
+            node_status = node.status
+            if status == "blocked":
+                node_status = "blocked"
+            elif working and node.status in ("idle", "blocked"):
+                node_status = "working"
+            elif not working and node.status == "working":
+                node_status = "idle"
+            if agents == node.agents and node_status == node.status:
                 return node
-            return self.update_node(node_id, agents=agents)
+            return self.update_node(node_id, agents=agents, status=node_status)
 
     def upsert(self, node_input: OrgNodeInput) -> OrgNode:
         """Insert a node or update an existing one.

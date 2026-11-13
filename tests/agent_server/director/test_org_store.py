@@ -674,14 +674,33 @@ def test_a_loaded_tree_knows_its_agents_conversations():
 
 
 def test_setting_an_agent_status_announces_the_node_once(store: OrgStore):
-    events = record(store, "a")
+    events = record(store, "a2")
 
-    store.set_agent("a", "ic", status="working")
-    store.set_agent("a", "ic", status="working")
+    store.set_agent("a2", "ic", status="working")
+    store.set_agent("a2", "ic", status="working")
 
-    assert describe(events) == [("node_upsert", "a")]
-    node = store.get("a")
+    assert describe(events).count(("node_upsert", "a2")) == 1
+    node = store.get("a2")
     assert node is not None and node.agents[0].status == "working"
+
+
+@pytest.mark.parametrize(
+    ("node_id", "agent_status", "expected"),
+    [
+        pytest.param("a2", "working", "working", id="an idle node starts working"),
+        pytest.param("a", "working", "working", id="a blocked node resumes"),
+        pytest.param("root", "idle", "idle", id="a working node goes idle"),
+        pytest.param("a2", "blocked", "blocked", id="a failed agent blocks its node"),
+        pytest.param("b", "working", "done", id="a done node stays done"),
+        pytest.param("a", "idle", "blocked", id="a blocked node stays blocked"),
+    ],
+)
+def test_a_nodes_status_follows_its_agents(
+    store: OrgStore, node_id: str, agent_status: str, expected: str
+):
+    node = store.set_agent(node_id, "ic", status=agent_status)
+
+    assert node.status == expected
 
 
 def test_setting_an_agent_a_node_does_not_have_is_refused(store: OrgStore):

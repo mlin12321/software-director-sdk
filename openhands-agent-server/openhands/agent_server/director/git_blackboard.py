@@ -154,6 +154,19 @@ class GitBlackboard:
         """The permanent memory of the boundary at ``scope_path``."""
         return _parse_memory(self.read(_scoped(scope_path, MEMORY_FILE)))
 
+    def inherited_rules(self, boundary_path: str) -> list[str]:
+        """The rules of every boundary from the repository root down to
+        ``boundary_path``, outermost first, each once."""
+        target = normalize_board_path(boundary_path)
+        segments = target.split("/") if target else []
+        commit = self.head()
+        rules: list[str] = []
+        for depth in range(len(segments) + 1):
+            directory = "/".join(segments[:depth])
+            memory = _parse_memory(self._read_at(commit, _join(directory, MEMORY_FILE)))
+            rules.extend(rule for rule in memory.rules if rule not in rules)
+        return rules
+
     def autopsies(self, scope_path: str) -> list[Autopsy]:
         """The autopsies recorded for the boundary at ``scope_path``."""
         return _parse_autopsies(self.read(_scoped(scope_path, AUTOPSIES_FILE)))

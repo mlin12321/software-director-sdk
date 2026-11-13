@@ -5,6 +5,7 @@ import json
 from collections.abc import AsyncIterator
 from pathlib import Path
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -21,8 +22,10 @@ from openhands.agent_server.director.org_store import OrgStore
 from openhands.agent_server.director.service import DirectorService
 from openhands.sdk.errors import NotFound
 from tests.agent_server.director.conftest import (
+    FakeLauncher,
     make_escalation,
     make_node,
+    root_conversation,
     small_tree,
 )
 
@@ -357,3 +360,99 @@ class TestTreeStream:
             await self.open_stream(service, "missing")
 
         assert service.store._listeners == {}
+
+
+def org_body(workspace: Path) -> dict:
+    return {
+        "title": "Checkout",
+        "task": "Build the checkout flow",
+        "conversation": root_conversation(workspace).model_dump(mode="json"),
+    }
+
+
+@pytest.fixture
+async def running(
+    repo: Path,
+) -> AsyncIterator[tuple[httpx.AsyncClient, FakeLauncher, DirectorService]]:
+    """The app with its director running agents through a fake launcher."""
+    app = create_app(Config(session_api_keys=[], director_repo_path=repo))
+    launcher = FakeLauncher()
+    service: DirectorService = app.state.director_service
+    await service.start(launcher)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        yield client, launcher, service
+    await service.aclose()
+
+
+def test_the_summary_says_there_is_no_org_yet_and_where_one_would_work(repo: Path):
+    response = make_client(repo).get("/api/director/org")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "root_id": None,
+        "node_count": 0,
+        "repo_path": str(repo),
+        "is_git_repository": True,
+        "fixture": False,
+    }
+
+
+def test_the_summary_reports_an_existing_org(client: TestClient):
+    body = client.get("/api/director/org").json()
+
+    assert (body["root_id"], body["node_count"]) == ("root", 5)
+
+
+def test_an_org_cannot_be_started_while_the_director_runs_no_agents(repo: Path):
+    response = make_client(repo).post("/api/director/org", json=org_body(repo))
+
+    assert response.status_code == 503
+
+
+async def test_starting_an_org_returns_its_root_and_only_works_once(running, repo):
+    client, launcher, _ = running
+
+    created = await client.post("/api/director/org", json=org_body(repo))
+    again = await client.post("/api/director/org", json=org_body(repo))
+
+    assert created.status_code == 201
+    root = created.json()
+    assert (root["id"], root["title"]) == ("root", "Checkout")
+    assert [agent["role"] for agent in root["agents"]] == ["ic", "manager"]
+    assert launcher.root is not None
+    assert again.status_code == 409
+    summary = (await client.get("/api/director/org")).json()
+    assert summary["root_id"] == "root"
+
+
+async def test_an_org_request_outside_the_repository_is_unprocessable(
+    running, tmp_path: Path
+):
+    client, _, _ = running
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+
+    response = await client.post("/api/director/org", json=org_body(elsewhere))
+
+    assert response.status_code == 422
+    assert (await client.get("/api/director/org")).json()["root_id"] is None
+
+
+async def test_answering_an_escalation_settles_it_and_tells_the_team(running, repo):
+    client, launcher, service = running
+    root = (await client.post("/api/director/org", json=org_body(repo))).json()
+    service.store.raise_escalation(
+        "root", "jwt", kind="design_decision", title="JWT or opaque tokens?"
+    )
+    url = "/api/director/org/nodes/root/escalations/{}/answer"
+
+    blank = await client.post(url.format("jwt"), json={"answer": ""})
+    unknown = await client.post(url.format("nothing"), json={"answer": "Opaque."})
+    answered = await client.post(url.format("jwt"), json={"answer": "Opaque."})
+    await service.settled()
+
+    assert (blank.status_code, unknown.status_code) == (422, 404)
+    assert answered.status_code == 200
+    assert answered.json()["escalations"] == []
+    assert "Opaque." in launcher.messages_to(root["agents"][0]["conversation_id"])[-1]
