@@ -36,13 +36,14 @@ def find_bwrap() -> str | None:
 
 
 def shell_script(
-    bwrap: str,
+    bwrap: str | None,
     shell: str,
     *,
     checkouts: Sequence[Path],
     private: Path,
     directory: str | None,
     sub_team_directories: Sequence[str] = (),
+    rcfile: Path | None = None,
 ) -> str:
     """A script that runs ``shell`` confined to one team's directory.
 
@@ -51,6 +52,8 @@ def shell_script(
     was written.
 
     Args:
+        bwrap: The bubblewrap binary; None for a shell that is not confined.
+        rcfile: What bash reads at its start in place of ``~/.bashrc``.
         checkouts: Where the org's checkouts are; nothing in them is writable
             but the team's directory.
         private: A directory of the director inside the git directory, kept
@@ -62,6 +65,9 @@ def shell_script(
             that sub-teams own and this shell may not write.
     """
     quote = shlex.quote
+    start = f"{quote(shell)} --rcfile {quote(str(rcfile))}" if rcfile else quote(shell)
+    if bwrap is None:
+        return f'#!/bin/sh\nexec {start} "$@"\n'
 
     def read_only(path: Path) -> str:
         return f"--ro-bind-try {quote(str(path))} {quote(str(path))}"
@@ -90,7 +96,7 @@ def shell_script(
     command = [
         f"exec {quote(bwrap)} --dev-bind / /",
         *mounts,
-        f'-- {quote(shell)} "$@"',
+        f'-- {start} "$@"',
     ]
     lines.append(" \\\n  ".join(command))
     return "\n".join(lines) + "\n"

@@ -96,6 +96,15 @@ class PodLauncher(Protocol):
         """
         ...
 
+    async def stop(self, conversation_id: UUID) -> None:
+        """Stop an agent where it is. A conversation that is gone is fine."""
+        ...
+
+    async def delete(self, conversation_id: UUID) -> None:
+        """Delete an agent's conversation, and its worktree when no other
+        conversation works in it. A conversation that is gone is fine."""
+        ...
+
     async def statuses(
         self, conversation_ids: Collection[UUID]
     ) -> dict[UUID, ConversationExecutionStatus]:
@@ -206,6 +215,12 @@ class ConversationPodLauncher:
             except ValueError:
                 # Already running, so the agent reads the message anyway.
                 pass
+
+    async def stop(self, conversation_id: UUID) -> None:
+        await self._conversations.interrupt_conversation(conversation_id)
+
+    async def delete(self, conversation_id: UUID) -> None:
+        await self._conversations.delete_conversation(conversation_id)
 
     async def statuses(
         self, conversation_ids: Collection[UUID]

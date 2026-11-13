@@ -9,6 +9,7 @@ import shutil
 import threading
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
+from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path
 from uuid import UUID, uuid4
@@ -26,12 +27,22 @@ from openhands.agent_server.director.git import (
     enclosing_repository,
     git,
     is_git_repository,
+    save_and_discard,
 )
-from openhands.agent_server.director.git_blackboard import SPEC_FILE, GitBlackboard
+from openhands.agent_server.director.git_blackboard import (
+    CONTRACTS_FILE,
+    GitBlackboard,
+)
+from openhands.agent_server.director.git_index import (
+    excludes_file,
+    git_script,
+    rcfile,
+)
 from openhands.agent_server.director.headline import provisional_summary
 from openhands.agent_server.director.models import (
     AgentRef,
     AgentRole,
+    Autopsy,
     Boundary,
     CreateOrgRequest,
     OrgNode,
@@ -88,6 +99,7 @@ DIRECTOR_TOOL_NAMES = (
     "raise_escalation",
     "resolve_escalation",
     "set_status",
+    "prune_team",
 )
 # How long tree changes are gathered before they are saved as one commit.
 SAVE_DELAY_SECONDS = 2.0
@@ -96,10 +108,13 @@ RUN_LIMIT_RETRY_SECONDS = 5.0
 # How long a model may take to name a team before the team keeps the name
 # it has; the root's agents are not briefed until then.
 SUMMARY_TIMEOUT_SECONDS = 20.0
+# Where, in the org's repository, the uncommitted work a prune discarded is
+# kept.
+PRUNED_REFS = "refs/agents/pruned"
 # An agent whose conversation is gone, or could not be started.
 AGENT_LOST = "lost"
 # Where, in the repository's git directory, the director keeps the shells
-# it confines its agents' terminals with.
+# its agents' terminals start, and what those shells need.
 _SHELLS_DIR = "director-shells"
 _REMEMBERED_FILE = "director.json"
 
@@ -528,6 +543,25 @@ class DirectorService:
         """Start the sub-teams of a node's approved split. Safe from any thread."""
         self._enqueue(lambda: self._carry_out_split(node_id))
 
+    def prune(
+        self,
+        node_id: str,
+        *,
+        approach: str,
+        why_failed: str,
+        replacement_task: str | None,
+    ) -> None:
+        """Remove a team and what is below it. Safe from any thread.
+
+        Args:
+            replacement_task: What a fresh team does in the same boundary;
+                None to leave the boundary to the team above.
+        """
+        self.store.update_node(node_id, status="blocked")
+        self._enqueue(
+            lambda: self._prune(node_id, approach, why_failed, replacement_task)
+        )
+
     def _checkouts(self) -> list[Path]:
         """Where the org's checkouts are: the repository and the worktrees."""
         roots = [
@@ -562,32 +596,62 @@ class DirectorService:
         return "" if relative == "." else relative
 
     def _confine(self, node_id: str, role: AgentRole) -> ToolParams | None:
-        """Write the shell that holds an agent's terminal to its boundary.
+        """Write the shell an agent's terminal starts.
+
+        Where the server can, the shell holds the agent to its team's
+        boundary. An IC's shell also finds a ``git`` that keeps the agent's
+        index apart from those of the agents it shares a checkout with.
 
         Returns:
-            What to start the agent's terminal with, or None when shells are
-            not confined on this server.
+            What to start the agent's terminal with, or None when it needs
+            no shell of its own.
         """
         node = self.store.get(node_id)
         conversation_id = agent_conversation(node, role) if node else None
-        if self._bwrap is None or node is None or conversation_id is None:
+        if node is None or conversation_id is None:
+            return None
+        bash, real_git = shutil.which("bash"), shutil.which("git")
+        own_git = role == "ic" and os.name != "nt" and bash and real_git
+        if self._bwrap is None and not own_git:
             return None
         git_dir = git(
             self._repo_dir, ["rev-parse", "--path-format=absolute", "--git-common-dir"]
         ).strip()
         shells = Path(git_dir) / _SHELLS_DIR
+        sub_teams = [child.boundary.path for child in self.store.children(node_id)]
+        rc: Path | None = None
+        if own_git and real_git:
+            directory = node.boundary.path
+            rc = shells / f"{conversation_id}.rc"
+            bin_dir = shells / f"{conversation_id}.bin"
+            excludes = shells / f"{conversation_id}.exclude"
+            write_shell(
+                bin_dir / "git",
+                git_script(
+                    real_git,
+                    common_dir=git_dir,
+                    conversation_id=conversation_id,
+                    directory=directory,
+                    sub_team_directories=sub_teams,
+                    excludes=excludes,
+                    flock=shutil.which("flock"),
+                ),
+            )
+            atomic_write_text(
+                excludes, excludes_file(self._repo_dir, directory, sub_teams)
+            )
+            atomic_write_text(rc, rcfile(bin_dir))
         script = shells / f"{conversation_id}.sh"
         write_shell(
             script,
             shell_script(
                 self._bwrap,
-                shutil.which("bash") or "/bin/sh",
+                bash or "/bin/sh",
                 checkouts=self._checkouts(),
                 private=shells,
                 directory=node.boundary.path if role == "ic" else None,
-                sub_team_directories=[
-                    child.boundary.path for child in self.store.children(node_id)
-                ],
+                sub_team_directories=sub_teams,
+                rcfile=rc,
             ),
         )
         # Only the subprocess terminal starts the shell it is given.
@@ -766,12 +830,18 @@ class DirectorService:
     def _briefing(self, node: OrgNode, role: AgentRole, task: str) -> str:
         blackboard = GitBlackboard(self._repo_dir)
         path = node.boundary.path
+        above = self.store.get(node.parent_id) if node.parent_id else None
+        specs, contracts = blackboard.applies_to(
+            path, above.boundary.path if above else None
+        )
         return brief(
             node,
             role,
             task,
-            blackboard.inherited(path),
+            specs,
+            contracts,
             blackboard.inherited_rules(path),
+            blackboard.autopsies(path),
         )
 
     async def _brief(self, node_id: str, role: AgentRole, task: str) -> None:
@@ -874,6 +944,144 @@ class DirectorService:
             "there; carry on with what remains in your boundary.",
         )
 
+    async def _prune(
+        self,
+        node_id: str,
+        approach: str,
+        why_failed: str,
+        replacement_task: str | None,
+    ) -> None:
+        store = self.store
+        node = store.get(node_id)
+        parent = store.get(node.parent_id) if node and node.parent_id else None
+        if node is None or parent is None:
+            return
+        launcher = self._require_launcher()
+        # The team first, then everything below it.
+        teams = [node]
+        for team in teams:
+            teams.extend(store.children(team.id))
+        conversations = [
+            UUID(agent.conversation_id)
+            for team in teams
+            for agent in team.agents
+            if agent.conversation_id is not None
+        ]
+        for conversation_id in conversations:
+            await launcher.stop(conversation_id)
+        now = datetime.now(UTC)
+        saved = await asyncio.to_thread(
+            self._discard_work, teams, now.strftime("%Y%m%dT%H%M%SZ")
+        )
+        for conversation_id in conversations:
+            await launcher.delete(conversation_id)
+        autopsy = Autopsy(
+            node_id=node_id,
+            at=now.isoformat(timespec="seconds"),
+            approach=approach,
+            why_failed=why_failed,
+            saved_ref=saved,
+        )
+        try:
+            await asyncio.to_thread(
+                GitBlackboard(self._repo_dir).append_autopsy,
+                node.boundary.path,
+                autopsy,
+            )
+        except (GitError, DomainError):
+            logger.exception("Could not record the autopsy of node %s", node_id)
+
+        parent_ic = agent_conversation(parent, "ic")
+        where = node.boundary.path
+        if replacement_task is None:
+            store.remove(node_id)
+            # The shell the IC above starts next can write there again.
+            with suppress(GitError, OSError):
+                await asyncio.to_thread(self._confine, parent.id, "ic")
+            outcome = f"{where} is yours again"
+        else:
+            for child in store.children(node_id):
+                store.remove(child.id)
+            store.update_node(
+                node_id,
+                agents=_new_pod(uuid4()),
+                status="idle",
+                worktree_path=parent.worktree_path,
+                branch=parent.branch,
+                escalations=[],
+                pending_split=None,
+                headline=provisional_summary(replacement_task).headline,
+                spec_summary=_summary_of(replacement_task),
+            )
+            if await self._start_agent(node_id, "ic", parent_ic, replacement_task):
+                await self._launch_manager(node_id, replacement_task)
+            self._enqueue(
+                lambda: self._summarize(node_id, replacement_task, first=True)
+            )
+            outcome = f"a fresh team now works in {where}"
+        self.notify(
+            parent_ic,
+            f"Your Manager pruned the team {node.title!r} ({where}): "
+            f"{why_failed} Its uncommitted changes were discarded"
+            + (f" (kept in git as {saved})" if saved else "")
+            + f"; {outcome}.",
+        )
+
+    def _discard_work(self, teams: list[OrgNode], stamp: str) -> str | None:
+        """Discard the uncommitted work of ``teams``, the pruned team first.
+
+        Returns:
+            The ref that keeps what the pruned team itself had uncommitted.
+        """
+        store = self.store
+        kept: str | None = None
+        for index, team in enumerate(teams):
+            self._forget_shells(team)
+            above = store.get(team.parent_id) if team.parent_id else None
+            # A team in the checkout of the one above is covered by it.
+            if index and above and above.worktree_path == team.worktree_path:
+                continue
+            ref = f"{PRUNED_REFS}/{team.id}/{stamp}"
+            try:
+                saved = save_and_discard(
+                    Path(team.worktree_path), team.boundary.path, ref
+                )
+            except (GitError, OSError):
+                logger.exception("Could not discard the work of node %s", team.id)
+                continue
+            if index == 0 and saved is not None:
+                kept = ref
+        return kept
+
+    def _forget_shells(self, team: OrgNode) -> None:
+        """Remove what the shells of a team's agents were made of."""
+        try:
+            common, own = (
+                Path(
+                    git(
+                        directory, ["rev-parse", "--path-format=absolute", kind]
+                    ).strip()
+                )
+                for directory, kind in (
+                    (self._repo_dir, "--git-common-dir"),
+                    (Path(team.worktree_path), "--git-dir"),
+                )
+            )
+        except (GitError, OSError):
+            return
+        for agent in team.agents:
+            name = agent.conversation_id
+            if name is None:
+                continue
+            for left in (
+                *(common / _SHELLS_DIR).glob(f"{name}.*"),
+                *own.glob(f"agent-index-{name}*"),
+            ):
+                if left.is_dir():
+                    shutil.rmtree(left, ignore_errors=True)
+                else:
+                    left.unlink(missing_ok=True)
+
     async def _summarize(
         self, node_id: str, task: str, *, rename: bool = False, first: bool = False
     ) -> None:
@@ -926,14 +1134,17 @@ class DirectorService:
                     )
 
     def _record_contracts(self, node: OrgNode, contracts: str) -> None:
+        """Add the contracts of a split to those of the node's boundary."""
         blackboard = GitBlackboard(self._repo_dir)
         path = node.boundary.path
-        own = next(
-            (spec.spec for spec in blackboard.inherited(path) if not spec.readonly), ""
+        earlier = blackboard.read(
+            f"{path}/{CONTRACTS_FILE}" if path else CONTRACTS_FILE
         )
-        section = f"## Contracts between sub-teams\n\n{contracts.strip()}\n"
+        text = f"{contracts.strip()}\n"
         blackboard.write(
-            path, SPEC_FILE, f"{own.rstrip()}\n\n{section}" if own.strip() else section
+            path,
+            CONTRACTS_FILE,
+            f"{earlier.rstrip()}\n\n{text}" if earlier and earlier.strip() else text,
         )
 
     @staticmethod

@@ -3562,6 +3562,15 @@ def _scripted_org_llm(
             )
         if last.role == "user" and "Your IC proposes to split" in text:
             return tool_call("decide_split", {"decision": "approve"})
+        if last.role == "user" and "Team 'API'" in text and "it is blocked" in text:
+            return tool_call(
+                "prune_team",
+                {
+                    "node_id": "services.api",
+                    "approach": "Serving it from one file",
+                    "why_failed": "The file grew past what one agent can hold.",
+                },
+            )
         return {"role": "assistant", "content": "Understood."}
 
     def fake_completion(self, messages, tools=None, **kwargs):  # type: ignore[no-untyped-def]
@@ -3656,9 +3665,88 @@ def test_director_runs_an_org_whose_root_splits_into_sub_teams(
                 == child_ic
             )
         specs = client.get("/api/director/org/nodes/services.api/blackboard").json()
-        assert "POST /checkout" in specs["specs"][0]["spec"]
+        assert specs["specs"] == []
+        assert "POST /checkout" in specs["contracts"][0]["contracts"]
         # Everything the org keeps is in hidden refs, not in the working tree.
         assert run_git_command(["git", "status", "--porcelain"], repo) == ""
+
+
+def test_director_prunes_a_blocked_team_and_maps_who_owns_what(
+    server_env, monkeypatch: pytest.MonkeyPatch
+):
+    repo = server_env["workspace_path"]
+    _scripted_org_llm(
+        monkeypatch,
+        api_ic=[("set_status", {"status": "blocked", "summary": "Too much."})],
+    )
+    run_git_command(["git", "init", "-b", "main"], repo)
+    for path in ("services/api/app.py", "apps/web/index.html"):
+        (repo / path).parent.mkdir(parents=True)
+        (repo / path).write_text("x\n")
+    run_git_command(["git", "add", "."], repo)
+    run_git_command(
+        ["git", "-c", "user.name=T", "-c", "user.email=t@example.com", "commit"]
+        + ["-m", "init"],
+        repo,
+    )
+
+    with httpx.Client(base_url=server_env["host"], timeout=30) as client:
+        created = client.post(
+            "/api/director/org",
+            json={
+                "title": "Checkout",
+                "task": "Build the checkout flow",
+                "conversation": {
+                    "agent": {
+                        "llm": {"model": "gpt-4o-mini", "api_key": "test"},
+                        "tools": [],
+                    },
+                    "workspace": {"working_dir": str(repo)},
+                    "autotitle": False,
+                },
+            },
+        )
+        assert created.status_code == 201, created.text
+
+        def teams() -> list[str]:
+            detail = client.get("/api/director/org/nodes/root").json()
+            return [child["id"] for child in detail["children"]]
+
+        seen: set[str] = set()
+        deadline = time.time() + 30
+        while time.time() < deadline and (
+            "services.api" not in seen or "services.api" in teams()
+        ):
+            seen.update(teams())
+            time.sleep(0.1)
+
+        assert teams() == ["apps.web"]
+        ownership = client.get("/api/director/org/nodes/root/ownership")
+        assert ownership.status_code == 200, ownership.text
+        body = ownership.json()
+        assert [owner["node_id"] for owner in body["owners"]] == ["apps.web"]
+        assert body["files"] == [
+            {"path": "apps/web/index.html", "owner": "apps.web"},
+            {"path": "services/api/app.py", "owner": None},
+        ]
+        assert (body["collisions"], body["collisions_checked"]) == ([], True)
+        titles = [
+            item["title"]
+            for item in client.get("/api/conversations/search").json()["items"]
+        ]
+        assert "Web (IC)" in titles and "API (IC)" not in titles
+    autopsies = json.loads(
+        run_git_command(
+            ["git", "show", "refs/agents/blackboard:services/api/autopsies.json"],
+            repo,
+        )
+    )
+    assert [(entry["approach"], entry["why_failed"]) for entry in autopsies] == [
+        (
+            "Serving it from one file",
+            "The file grew past what one agent can hold.",
+        )
+    ]
 
 
 def test_director_starts_an_org_from_a_message_and_holds_teams_to_their_directories(

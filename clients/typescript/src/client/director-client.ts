@@ -3,6 +3,7 @@ import type { CreateConversationPayload } from './conversation-client';
 import type {
   DirectorBoundaryMemory,
   DirectorNodeBlackboard,
+  DirectorNodeOwnership,
   DirectorNodeId,
   DirectorOrgEvent,
   DirectorOrgNode,
@@ -190,9 +191,18 @@ export class DirectorClient {
     return response.data;
   }
 
-  /** The specs, memory and autopsies that apply to a node's boundary. */
+  /** The spec, contracts, memory and autopsies a node works to. */
   async getNodeBlackboard(nodeId: DirectorNodeId): Promise<DirectorNodeBlackboard> {
     const response = await this.client.get<DirectorNodeBlackboard>(nodePath(nodeId, 'blackboard'));
+    return response.data;
+  }
+
+  /**
+   * Which direct report owns each file of a node's boundary, and the files
+   * where the committed work of two of these teams does not merge.
+   */
+  async getNodeOwnership(nodeId: DirectorNodeId): Promise<DirectorNodeOwnership> {
+    const response = await this.client.get<DirectorNodeOwnership>(nodePath(nodeId, 'ownership'));
     return response.data;
   }
 

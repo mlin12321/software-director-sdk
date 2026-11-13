@@ -170,6 +170,8 @@ class FakeLauncher:
     summary_delay: float = 0
     summarized: list[tuple[UUID, str]] = field(default_factory=list)
     titles: dict[UUID, str] = field(default_factory=dict)
+    stopped: list[UUID] = field(default_factory=list)
+    deleted: list[UUID] = field(default_factory=list)
 
     async def start_root(
         self,
@@ -231,6 +233,13 @@ class FakeLauncher:
         if conversation_id not in self.known:
             raise NotFound(f"Conversation {conversation_id} does not exist")
         self.sent.append((conversation_id, text))
+
+    async def stop(self, conversation_id: UUID) -> None:
+        self.stopped.append(conversation_id)
+
+    async def delete(self, conversation_id: UUID) -> None:
+        self.deleted.append(conversation_id)
+        self.known.pop(conversation_id, None)
 
     async def statuses(
         self, conversation_ids: Collection[UUID]

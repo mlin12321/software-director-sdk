@@ -46,7 +46,7 @@ def test_a_plain_or_missing_directory_is_not_a_repository(tmp_path: Path, repo: 
 def test_reads_nothing_before_the_first_write(board: GitBlackboard):
     assert board.head() is None
     assert board.read("spec.md") is None
-    assert board.inherited("svc/a") == []
+    assert board.applies_to("svc/a", "svc") == ([], [])
     assert board.memory("svc/a").rules == []
     assert board.autopsies("svc/a") == []
 
@@ -82,18 +82,36 @@ def test_content_round_trips_byte_for_byte(board: GitBlackboard):
     assert board.read("notes.txt") == content
 
 
-def test_inherited_specs_run_root_to_boundary_and_skip_gaps(board: GitBlackboard):
-    board.write("", "spec.md", "root")
-    board.write("svc/a", "spec.md", "leaf")
-    board.write("svc/b", "spec.md", "sibling")
+def test_a_team_works_to_its_own_spec_and_the_contracts_around_it(
+    board: GitBlackboard,
+):
+    board.write("", "spec.md", "root spec")
+    board.write("", "contracts.md", "set at the root")
+    board.write("svc", "spec.md", "spec of the team above")
+    board.write("svc", "contracts.md", "between a and b")
+    board.write("svc/a", "spec.md", "own spec")
+    board.write("svc/a", "contracts.md", "between the teams below a")
+    board.write("svc/b", "spec.md", "spec of the team beside")
+    board.write("svc/a/one", "spec.md", "spec of a team below")
 
-    specs = board.inherited("svc/a")
+    specs, contracts = board.applies_to("svc/a", "svc")
 
-    # ``svc`` has no spec, and the sibling's spec does not apply.
-    assert [(s.path, s.spec, s.readonly) for s in specs] == [
-        ("", "root", True),
-        ("svc/a", "leaf", False),
+    assert [(spec.path, spec.spec, spec.readonly) for spec in specs] == [
+        ("svc/a", "own spec", False)
     ]
+    assert [(agreed.path, agreed.contracts, agreed.own) for agreed in contracts] == [
+        ("svc", "between a and b", False),
+        ("svc/a", "between the teams below a", True),
+    ]
+
+
+def test_the_root_team_has_nothing_from_above(board: GitBlackboard):
+    board.write("", "contracts.md", "between the first teams")
+
+    specs, contracts = board.applies_to("", None)
+
+    assert specs == []
+    assert [(agreed.path, agreed.own) for agreed in contracts] == [("", True)]
 
 
 @pytest.mark.parametrize(

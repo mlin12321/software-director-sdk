@@ -18,6 +18,7 @@ from openhands.agent_server.director.models import (
     BoundaryMemory,
     CreateOrgRequest,
     NodeBlackboard,
+    NodeOwnership,
     OrgNode,
     OrgNodeDetail,
     OrgSummary,
@@ -27,6 +28,7 @@ from openhands.agent_server.director.models import (
     TeachRequest,
 )
 from openhands.agent_server.director.org_store import OrgChange
+from openhands.agent_server.director.ownership import node_ownership
 from openhands.agent_server.director.service import DirectorService
 from openhands.agent_server.errors import error_responses
 from openhands.sdk.errors import (
@@ -298,14 +300,40 @@ def get_org_node(
 def get_node_blackboard(
     node_id: str, service: DirectorService = Depends(get_director_service)
 ) -> NodeBlackboard:
-    """Get the specs, memory and autopsies that apply to a node's boundary."""
-    path = _require_node(service, node_id).boundary.path
+    """Get what a node works to: the spec of its boundary, the contracts
+    between its sub-teams and the ones the team above set for it, its
+    memory and its autopsies."""
+    node = _require_node(service, node_id)
+    path = node.boundary.path
+    above = service.store.get(node.parent_id) if node.parent_id else None
     blackboard = service.blackboard
+    specs, contracts = blackboard.applies_to(
+        path, above.boundary.path if above else None
+    )
     return NodeBlackboard(
-        specs=blackboard.inherited(path),
+        specs=specs,
+        contracts=contracts,
         memory=blackboard.memory(path),
         autopsies=blackboard.autopsies(path),
     )
+
+
+@director_router.get(
+    "/org/nodes/{node_id}/ownership",
+    response_model=NodeOwnership,
+    responses=error_responses(_NODE_NOT_FOUND),
+)
+def get_node_ownership(
+    node_id: str, service: DirectorService = Depends(get_director_service)
+) -> NodeOwnership:
+    """Get which direct report owns each file of a node's boundary, and the
+    files where the committed work of two of these teams does not merge.
+
+    The files are those of the node's own checkout. A team that works in a
+    git worktree of its own is compared by the tip of that worktree.
+    """
+    node = _require_node(service, node_id)
+    return node_ownership(node, service.store.children(node_id))
 
 
 @director_router.post(

@@ -23,6 +23,7 @@ from openhands.agent_server.director.service import (
 from openhands.agent_server.director.tools import (
     DecideSplitTool,
     ProposeBoundarySplitTool,
+    PruneTeamTool,
     RaiseEscalationTool,
     ReadNodeContextTool,
     ResolveEscalationTool,
@@ -32,6 +33,7 @@ from openhands.agent_server.director.tools import (
 from openhands.agent_server.director.tools.definition import (
     DecideSplitAction,
     ProposeBoundarySplitAction,
+    PruneTeamAction,
     RaiseEscalationAction,
     ReadNodeContextAction,
     ResolveEscalationAction,
@@ -39,9 +41,16 @@ from openhands.agent_server.director.tools.definition import (
     WriteSpecAction,
 )
 from openhands.agent_server.director.tools.impl import DirectorObservation
-from openhands.sdk.conversation.state import ConversationState
+from openhands.sdk.conversation.state import (
+    ConversationExecutionStatus,
+    ConversationState,
+)
 from openhands.sdk.tool.tool import Action, ToolDefinition
-from tests.agent_server.director.conftest import FakeLauncher, root_conversation
+from tests.agent_server.director.conftest import (
+    FakeLauncher,
+    root_conversation,
+    run_git,
+)
 
 
 @pytest.fixture
@@ -154,8 +163,8 @@ async def test_the_ic_writes_the_spec_its_sub_teams_inherit(service: DirectorSer
 
     assert not written.is_error and refused.is_error
     assert node(service, "root").spec_summary == "Checkout"
-    [spec] = service.blackboard.inherited("services/api")
-    assert spec.readonly and "integer cents" in spec.spec
+    [spec], _ = service.blackboard.applies_to("", None)
+    assert not spec.readonly and "integer cents" in spec.spec
 
 
 async def test_a_proposed_split_waits_for_the_manager(
@@ -253,8 +262,9 @@ async def test_an_approved_split_starts_a_pod_for_each_sub_team(
 
     assert node(service, "root").pending_split is None
     assert "API (services/api)" in launcher.messages_to(ic(service))[-1]
-    [contracts] = service.blackboard.inherited("services/api")
-    assert contracts.readonly and "POST /checkout" in contracts.spec
+    specs, [contracts] = service.blackboard.applies_to("services/api", "")
+    assert specs == []
+    assert not contracts.own and "POST /checkout" in contracts.contracts
 
 
 async def test_a_sub_team_that_cannot_start_is_shown_as_blocked(
@@ -365,3 +375,200 @@ async def test_a_team_declares_itself_done_and_the_manager_above_hears(
     assert node(service, "root").descendant_counts.done == 1
     told = launcher.messages_to(manager(service))[-1]
     assert "done" in told and "Pages shipped." in told
+
+
+async def test_a_team_that_says_it_is_blocked_stays_blocked_while_its_agents_run(
+    service: DirectorService, launcher: FakeLauncher
+):
+    await split_root(service)
+    api_ic = ic(service, "services.api")
+    assert api_ic is not None
+    launcher.report(api_ic, ConversationExecutionStatus.RUNNING)
+
+    await use(
+        service,
+        api_ic,
+        SetStatusTool,
+        SetStatusAction(status="blocked", summary="No schema to build against."),
+    )
+    launcher.report(api_ic, ConversationExecutionStatus.RUNNING)
+
+    assert node(service, "services.api").status == "blocked"
+
+
+PRUNE_API = PruneTeamAction(
+    node_id="services.api",
+    approach="Hand-written SQL per endpoint",
+    why_failed="Every schema change broke all of them.",
+)
+
+
+async def test_a_pruned_team_is_gone_with_its_agents_and_leaves_an_autopsy(
+    service: DirectorService, launcher: FakeLauncher, repo: Path
+):
+    await split_root(service)
+    agents = {ic(service, "services.api"), manager(service, "services.api")}
+    (repo / "services" / "api").mkdir(parents=True)
+    (repo / "services" / "api" / "half.py").write_text("broken\n")
+    (repo / "README.md").write_text("the root team's own edit\n")
+
+    answer = await use(service, manager(service), PruneTeamTool, PRUNE_API)
+
+    assert not answer.is_error
+    assert service.store.get("services.api") is None
+    assert {str(gone) for gone in launcher.deleted} == agents
+    assert launcher.stopped == launcher.deleted
+    [autopsy] = service.blackboard.autopsies("services/api")
+    assert (autopsy.approach, autopsy.why_failed) == (
+        "Hand-written SQL per endpoint",
+        "Every schema change broke all of them.",
+    )
+    # Only the team's own uncommitted work went, and git still has it.
+    assert not (repo / "services" / "api" / "half.py").exists()
+    assert (repo / "README.md").read_text() == "the root team's own edit\n"
+    assert autopsy.saved_ref is not None
+    kept = run_git(repo, "show", f"{autopsy.saved_ref}:services/api/half.py")
+    assert kept == "broken\n"
+    told = launcher.messages_to(ic(service))[-1]
+    assert "Every schema change broke all of them." in told
+    assert "services/api is yours again" in told
+
+
+async def test_a_pruned_team_takes_the_teams_below_it_along(
+    service: DirectorService, launcher: FakeLauncher
+):
+    await split_root(service)
+    api = "services.api"
+    await use(
+        service,
+        ic(service, api),
+        ProposeBoundarySplitTool,
+        ProposeBoundarySplitAction(
+            children=[
+                SplitChild(title="DB", path="services/api/db", task="Own the schema")
+            ],
+            contracts="",
+        ),
+    )
+    await use(
+        service,
+        manager(service, api),
+        DecideSplitTool,
+        DecideSplitAction(decision="approve"),
+    )
+    below = ic(service, "services.api.db")
+
+    await use(service, manager(service), PruneTeamTool, PRUNE_API)
+
+    assert service.store.get("services.api.db") is None
+    assert below in {str(gone) for gone in launcher.deleted}
+    assert [team.id for team in service.store.children("root")] == ["apps.web"]
+
+
+async def test_a_replacement_starts_clean_and_is_told_what_failed_before(
+    service: DirectorService, launcher: FakeLauncher
+):
+    await split_root(service)
+    first_ic = ic(service, "services.api")
+
+    await use(
+        service,
+        manager(service),
+        PruneTeamTool,
+        PRUNE_API.model_copy(update={"replacement_task": "Serve it through an ORM"}),
+    )
+
+    team = node(service, "services.api")
+    assert team.status == "idle" and team.boundary.path == "services/api"
+    new_ic = ic(service, "services.api")
+    assert new_ic != first_ic
+    starts = {str(start.conversation_id): start for start in launcher.derived}
+    briefing = starts[str(new_ic)].task
+    assert str(starts[str(new_ic)].parent_id) == ic(service)
+    assert "Serve it through an ORM" in briefing
+    assert "Hand-written SQL per endpoint: Every schema change broke" in briefing
+    assert str(manager(service, "services.api")) in starts
+    context = await use(service, new_ic, ReadNodeContextTool, ReadNodeContextAction())
+    assert json.loads(context.text)["failed_here_before"] == [
+        {
+            "approach": "Hand-written SQL per endpoint",
+            "why_failed": "Every schema change broke all of them.",
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    ("as_role", "action", "refusal"),
+    [
+        pytest.param("ic", PRUNE_API, "Only the Manager", id="an IC"),
+        pytest.param(
+            "manager",
+            PRUNE_API.model_copy(update={"node_id": "root"}),
+            "not a team directly below yours",
+            id="its own team",
+        ),
+        pytest.param(
+            "manager",
+            PRUNE_API.model_copy(update={"why_failed": " "}),
+            "Say why the team failed",
+            id="no reason",
+        ),
+    ],
+)
+async def test_a_prune_is_refused_and_the_team_stays(
+    service: DirectorService,
+    launcher: FakeLauncher,
+    as_role: str,
+    action: PruneTeamAction,
+    refusal: str,
+):
+    await split_root(service)
+    caller = ic(service) if as_role == "ic" else manager(service)
+
+    answer = await use(service, caller, PruneTeamTool, action)
+
+    assert answer.is_error and refusal in answer.text
+    assert service.store.get("services.api") is not None
+    assert launcher.deleted == []
+
+
+async def test_a_sub_team_is_told_the_contracts_and_not_the_spec_of_the_team_above(
+    service: DirectorService, launcher: FakeLauncher
+):
+    await use(
+        service,
+        ic(service),
+        WriteSpecTool,
+        WriteSpecAction(content="# Checkout\n\nInternal notes of the root team."),
+    )
+    await split_root(service)
+    api_ic = ic(service, "services.api")
+    await use(
+        service, api_ic, WriteSpecTool, WriteSpecAction(content="# API\n\nUses Flask.")
+    )
+
+    starts = {str(start.conversation_id): start for start in launcher.derived}
+    briefing = starts[str(api_ic)].task
+    context = json.loads(
+        (await use(service, api_ic, ReadNodeContextTool, ReadNodeContextAction())).text
+    )
+    root_context = json.loads(
+        (
+            await use(
+                service, ic(service), ReadNodeContextTool, ReadNodeContextAction()
+            )
+        ).text
+    )
+
+    assert "POST /checkout returns {order_id}" in briefing
+    assert "Internal notes of the root team." not in briefing
+    assert context["spec"] == "# API\n\nUses Flask."
+    assert context["contracts_with_the_teams_beside_you"] == [
+        "POST /checkout returns {order_id}\n"
+    ]
+    assert context["contracts_between_your_sub_teams"] == []
+    assert "Internal notes of the root team." not in json.dumps(context)
+    assert root_context["contracts_between_your_sub_teams"] == [
+        "POST /checkout returns {order_id}\n"
+    ]
+    assert root_context["contracts_with_the_teams_beside_you"] == []

@@ -1,5 +1,6 @@
 """DirectorService running an org through a launcher."""
 
+import os
 import subprocess
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -871,13 +872,79 @@ async def test_every_agent_starts_its_terminal_in_a_shell_held_to_its_boundary(
     assert script.name == f"{api_ic.conversation_id}.sh"
 
 
-async def test_shells_are_left_alone_where_the_server_cannot_confine_them(
-    service: DirectorService, launcher: FakeLauncher, repo: Path
+def run_in_shell(params: object, command: str, home: Path) -> str:
+    """Run ``command`` in the shell a started agent's terminal runs."""
+    assert isinstance(params, dict)
+    home.mkdir(exist_ok=True)
+    env = {
+        **os.environ,
+        "HOME": str(home),
+        "GIT_AUTHOR_NAME": "Agent",
+        "GIT_AUTHOR_EMAIL": "agent@example.invalid",
+        "GIT_COMMITTER_NAME": "Agent",
+        "GIT_COMMITTER_EMAIL": "agent@example.invalid",
+    }
+    done = subprocess.run(
+        [params["terminal"]["shell_path"], "-ic", command],
+        env=env,
+        capture_output=True,
+        text=True,
+        stdin=subprocess.DEVNULL,
+    )
+    assert done.returncode == 0, done.stderr
+    return done.stdout
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the agents' git is a sh script")
+async def test_an_ic_commits_from_its_own_index_where_shells_are_not_confined(
+    service: DirectorService, launcher: FakeLauncher, repo: Path, tmp_path: Path
 ):
     assert service.summary().boundary_enforcement == "checks"
     await service.create_org(org_request(repo))
     await service.settled()
+    await split_root(service, API)
+    manager, api_ic, _ = launcher.derived
+    (repo / "README.md").write_text("root v2\n")
+    (repo / "services" / "api").mkdir(parents=True)
+    (repo / "services" / "api" / "app.py").write_text("api\n")
 
-    assert launcher.root_tool_params is None
-    assert launcher.derived[0].tool_params is None
-    assert not (repo / ".git" / "director-shells").exists()
+    run_in_shell(
+        launcher.root_tool_params,
+        f"cd {repo} && git add -A && git commit -qm root",
+        tmp_path / "home",
+    )
+    run_in_shell(
+        api_ic.tool_params,
+        f"cd {repo} && git add -A && git commit -qm api",
+        tmp_path / "home",
+    )
+
+    def files(commit: str) -> list[str]:
+        return run_git(repo, "show", "--name-only", "--format=", commit).split()
+
+    assert files("HEAD~1") == ["README.md"]
+    assert files("HEAD") == ["services/api/app.py"]
+    assert run_git(repo, "status", "--porcelain") == ""
+    # A Manager changes nothing, so it has no shell of its own here.
+    assert manager.tool_params is None
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the agents' git is a sh script")
+async def test_a_pruned_agents_shell_and_index_are_removed(
+    service: DirectorService, launcher: FakeLauncher, repo: Path, tmp_path: Path
+):
+    await service.create_org(org_request(repo))
+    await service.settled()
+    await split_root(service, API)
+    api_ic = launcher.derived[1]
+    run_in_shell(api_ic.tool_params, f"cd {repo} && git status", tmp_path / "home")
+    left = [
+        *(repo / ".git" / "director-shells").glob(f"{api_ic.conversation_id}.*"),
+        *(repo / ".git").glob(f"agent-index-{api_ic.conversation_id}*"),
+    ]
+    assert len(left) == 6
+
+    service.prune("services.api", approach="", why_failed="x", replacement_task=None)
+    await service.settled()
+
+    assert not [path for path in left if path.exists()]

@@ -202,6 +202,13 @@ class Autopsy(BaseModel):
     at: str = Field(description="ISO 8601 timestamp of the prune.")
     approach: str
     why_failed: str
+    saved_ref: str | None = Field(
+        default=None,
+        description=(
+            "The git ref that holds the uncommitted changes the prune "
+            "discarded, when there were any."
+        ),
+    )
 
 
 class BoundaryMemory(BaseModel):
@@ -211,13 +218,27 @@ class BoundaryMemory(BaseModel):
 
 
 class InheritedSpec(BaseModel):
-    """A spec that applies to a boundary."""
+    """The spec of a boundary."""
 
     path: str
     spec: str
     readonly: bool = Field(
         description=(
-            "Ancestor specs are invariants; only the boundary's own spec is writable."
+            "False for the spec of the node's own boundary, which its IC writes."
+        )
+    )
+
+
+class BoundaryContracts(BaseModel):
+    """What the sub-teams of one boundary must keep between them."""
+
+    path: str = Field(description="The boundary that was split.")
+    contracts: str
+    own: bool = Field(
+        description=(
+            "True for the contracts between the node's own sub-teams. False "
+            "for the ones the team above set, which the node must keep with "
+            "the teams beside it."
         )
     )
 
@@ -225,9 +246,65 @@ class InheritedSpec(BaseModel):
 class NodeBlackboard(BaseModel):
     """Everything on the blackboard that applies to one node."""
 
-    specs: list[InheritedSpec]
+    specs: list[InheritedSpec] = Field(
+        description="The spec of the node's own boundary, when it has one."
+    )
+    contracts: list[BoundaryContracts] = Field(default_factory=list)
     memory: BoundaryMemory
     autopsies: list[Autopsy]
+
+
+class BoundaryOwner(BaseModel):
+    """A direct report, as the owner of a directory."""
+
+    node_id: str
+    title: str
+    path: str = Field(description="The directory it owns, relative to the repository.")
+    isolation: IsolationMode
+    branch: str
+
+
+class OwnedFile(BaseModel):
+    path: str = Field(description="Relative to the repository.")
+    owner: str | None = Field(
+        description=(
+            "The direct report whose boundary the file is in; None for a "
+            "file the node kept for itself."
+        )
+    )
+
+
+class Collision(BaseModel):
+    """A file that the committed work of two teams changed in ways that do
+    not merge."""
+
+    path: str
+    node_ids: list[str] = Field(
+        description="The teams whose checkouts collide, the node itself included."
+    )
+
+
+class NodeOwnership(BaseModel):
+    """How a node's boundary is divided among its direct reports."""
+
+    node_id: str
+    owners: list[BoundaryOwner]
+    files: list[OwnedFile] = Field(
+        description=(
+            "The files of the node's boundary in its own checkout that git "
+            "does not ignore, sorted by path."
+        )
+    )
+    truncated: bool = Field(description="There were more files than are listed.")
+    collisions: list[Collision] = Field(
+        description=(
+            "Found by merging the tips of the checkouts of the node and its "
+            "direct reports in memory. Uncommitted changes are not compared."
+        )
+    )
+    collisions_checked: bool = Field(
+        description="False when the installed git is too old to look for them."
+    )
 
 
 class TeachRequest(BaseModel):
