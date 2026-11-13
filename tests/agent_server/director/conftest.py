@@ -8,11 +8,13 @@ from uuid import UUID
 import pytest
 
 from openhands.agent_server.conversation_service import (
+    AgentAdapter,
     ExecutionStatusListener,
     ToolParams,
 )
 from openhands.agent_server.director.headline import TeamSummary
 from openhands.agent_server.director.models import (
+    AgentKind,
     AgentRef,
     Boundary,
     Escalation,
@@ -145,6 +147,9 @@ class DerivedStart:
     isolation: IsolationMode
     suffixes: list[str]
     tool_params: ToolParams | None = None
+    adapt_agent: AgentAdapter | None = None
+    # The agent profile it was started from, when it was not derived.
+    profile: str | None = None
 
 
 @dataclass
@@ -181,6 +186,12 @@ class FakeLauncher:
     agents_asked: list[tuple[UUID, str]] = field(default_factory=list)
     # While set, an agent that is asked does not answer.
     agents_silent: asyncio.Event | None = None
+    # What the root's request resolves to.
+    root_kind: AgentKind = "openhands"
+    root_adapt: AgentAdapter | None = None
+    kinds: dict[UUID, AgentKind] = field(default_factory=dict)
+    # The stored agent profiles, by name.
+    profiles: dict[str, AgentKind] = field(default_factory=dict)
 
     async def start_root(
         self,
@@ -189,18 +200,24 @@ class FakeLauncher:
         *,
         title: str,
         tool_params: ToolParams | None = None,
+        adapt_agent: AgentAdapter | None = None,
     ) -> StartedAgent:
         if self.root_error is not None:
             raise self.root_error
         assert request.conversation_id is not None
         self.root = request
+        self.root_adapt = adapt_agent
+        self.kinds[request.conversation_id] = self.root_kind
         self.root_tools = [tool.name for tool in tools]
         self.root_title = title
         self.root_tool_params = tool_params
         self.titles[request.conversation_id] = title
         self.known[request.conversation_id] = ConversationExecutionStatus.IDLE
         return StartedAgent(
-            workspace=str(request.workspace.working_dir), isolation="shared"
+            workspace=str(request.workspace.working_dir),
+            isolation="shared",
+            kind=self.root_kind,
+            acp_server="claude-code" if self.root_kind == "acp" else None,
         )
 
     async def start_derived(
@@ -213,6 +230,8 @@ class FakeLauncher:
         isolation: IsolationMode,
         suffixes: Sequence[str] = (),
         tool_params: ToolParams | None = None,
+        adapt_agent: AgentAdapter | None = None,
+        profile: str | None = None,
     ) -> StartedAgent:
         if self.full_for > 0:
             self.full_for -= 1
@@ -228,15 +247,56 @@ class FakeLauncher:
                 isolation,
                 list(suffixes),
                 tool_params,
+                adapt_agent,
+                profile,
             )
         )
+        kind = self.profiles[profile] if profile else self.kinds[parent_id]
+        self.kinds[conversation_id] = kind
         self.titles[conversation_id] = title
         self.known[conversation_id] = ConversationExecutionStatus.IDLE
         self.on_derived(conversation_id)
         assert self.root is not None
         return StartedAgent(
-            workspace=str(self.root.workspace.working_dir), isolation=isolation
+            workspace=str(self.root.workspace.working_dir),
+            isolation=isolation,
+            kind=kind,
+            acp_server="claude-code" if kind == "acp" else None,
         )
+
+    async def start_from_profile(
+        self,
+        profile: str,
+        parent_id: UUID,
+        conversation_id: UUID,
+        tools: Sequence[Tool],
+        *,
+        title: str,
+        task: str,
+        isolation: IsolationMode,
+        suffixes: Sequence[str] = (),
+        tool_params: ToolParams | None = None,
+        adapt_agent: AgentAdapter | None = None,
+    ) -> StartedAgent:
+        if profile not in self.profiles:
+            raise NotFound(f"There is no agent profile named {profile!r}")
+        return await self.start_derived(
+            parent_id,
+            conversation_id,
+            title=title,
+            task=task,
+            isolation=isolation,
+            suffixes=suffixes,
+            tool_params=tool_params,
+            adapt_agent=adapt_agent,
+            profile=profile,
+        )
+
+    async def agent_kind(self, conversation_id: UUID) -> AgentKind | None:
+        return self.kinds.get(conversation_id)
+
+    async def profile_kind(self, profile: str) -> AgentKind | None:
+        return self.profiles.get(profile)
 
     async def send(self, conversation_id: UUID, text: str) -> None:
         if conversation_id not in self.known:

@@ -298,6 +298,15 @@ class Config(BaseModel):
             "the one stored in the repository. For developing clients."
         ),
     )
+    director_server_url: str | None = Field(
+        default=None,
+        description=(
+            "Where this server answers, such as `http://127.0.0.1:8000`, for "
+            "agents of an org that run their own tools and call the "
+            "director's from their own process. By default the director "
+            "uses the address its own requests arrive at."
+        ),
+    )
     director_consolidation_seconds: float = Field(
         default=900.0,
         ge=0,

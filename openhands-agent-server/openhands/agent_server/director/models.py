@@ -27,6 +27,13 @@ ReviewState = Literal["pending", "changes_requested", "accepted", "unreviewed"]
 # 'sandbox': an agent's shell can write only its team's directory, and its
 # file tools are checked. 'checks': only its file tools are checked.
 BoundaryEnforcement = Literal["sandbox", "checks"]
+# How one team is held to its boundary. 'merge': its agent runs its own tools
+# and no sandbox holds it, so what it commits outside its directory is
+# refused only when its work is merged into the team above.
+TeamEnforcement = Literal["sandbox", "checks", "merge"]
+# 'acp': an external agent, such as Claude Code or Codex, that runs its own
+# tools and reaches the director's through an MCP server.
+AgentKind = Literal["openhands", "acp"]
 
 
 class Boundary(BaseModel):
@@ -52,6 +59,14 @@ class AgentRef(BaseModel):
         description="None until a conversation has been started for this agent.",
     )
     status: str
+    kind: AgentKind = "openhands"
+    acp_server: str | None = Field(
+        default=None,
+        description=(
+            "Which external agent an `acp` agent is, such as `claude-code` or "
+            "`codex`; None when the server could not tell."
+        ),
+    )
 
 
 class EscalationHandoff(BaseModel):
@@ -107,6 +122,14 @@ class SplitChild(BaseModel):
     readonly: list[str] = Field(default_factory=list)
     isolation: IsolationMode = "shared"
     task: str = Field(min_length=1, description="What the sub-team is to deliver.")
+    agent_profile: str | None = Field(
+        default=None,
+        description=(
+            "Name of the agent profile the sub-team's agents run on, from the "
+            "ones `read_node_context` lists. Leave it out for the same agent "
+            "as your own."
+        ),
+    )
 
 
 class SplitProposal(BaseModel):
@@ -226,6 +249,17 @@ class OrgNodeInput(BaseModel):
     review: Review | None = Field(
         default=None,
         description="The review of what the team last reported as done.",
+    )
+    agent_profile: str | None = Field(
+        default=None,
+        description=(
+            "The agent profile the team's agents were started from; None "
+            "when they were derived from the team above."
+        ),
+    )
+    boundary_enforcement: TeamEnforcement | None = Field(
+        default=None,
+        description="How this team is held to its boundary; None until its IC ran.",
     )
     waiting_to_start: bool = Field(
         default=False,
@@ -427,6 +461,14 @@ class DirectorSettings(BaseModel):
         ge=1,
         description="The most levels of teams; the root team is level 1.",
     )
+    allowed_profiles: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Names of the agent profiles a team may give a sub-team in place "
+            "of its own agent. Empty: every team runs on the agent of the "
+            "team above."
+        ),
+    )
 
 
 class DirectorSettingsUpdate(BaseModel):
@@ -434,6 +476,7 @@ class DirectorSettingsUpdate(BaseModel):
 
     max_agents: int | None = Field(default=None, ge=2)
     max_depth: int | None = Field(default=None, ge=1)
+    allowed_profiles: list[str] | None = None
 
 
 class DirectorSettingsState(DirectorSettings):

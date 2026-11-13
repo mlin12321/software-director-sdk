@@ -564,6 +564,8 @@ type ExecutionStatusListener = Callable[[UUID, ConversationExecutionStatus], Non
 
 # Parameters for the tools of an agent, by tool name.
 type ToolParams = Mapping[str, Mapping[str, Any]]
+# Changes this server makes to an agent just before its conversation starts.
+type AgentAdapter = Callable[[AgentBase], AgentBase]
 
 
 def _with_tool_params(
@@ -579,6 +581,14 @@ def _with_tool_params(
         for tool in launched.agent.tools
     ]
     return replace(launched, agent=launched.agent.model_copy(update={"tools": tools}))
+
+
+def _adapted(
+    launched: LaunchedAgent, adapt_agent: AgentAdapter | None
+) -> LaunchedAgent:
+    if adapt_agent is None:
+        return launched
+    return replace(launched, agent=adapt_agent(launched.agent))
 
 
 @dataclass
@@ -1615,6 +1625,7 @@ class ConversationService:
         *,
         server_tools: Sequence[Tool] = (),
         tool_params: ToolParams | None = None,
+        adapt_agent: AgentAdapter | None = None,
     ) -> tuple[ConversationInfo, bool]:
         """Start a conversation, or return the one that has the requested id.
 
@@ -1624,9 +1635,13 @@ class ConversationService:
                 does not get them.
             tool_params: Parameters this server sets on the agent's tools, by
                 tool name, over the ones the request resolves to.
+            adapt_agent: Applied last to the agent the request resolves to.
         """
         return await self._start_conversation(
-            request, server_tools=server_tools, tool_params=tool_params
+            request,
+            server_tools=server_tools,
+            tool_params=tool_params,
+            adapt_agent=adapt_agent,
         )
 
     async def start_acp_conversation(
@@ -1640,6 +1655,7 @@ class ConversationService:
         *,
         server_tools: Sequence[Tool] = (),
         tool_params: ToolParams | None = None,
+        adapt_agent: AgentAdapter | None = None,
     ) -> tuple[ConversationInfo, bool]:
         """Start a local event_service and return its id."""
         if self._event_services is None:
@@ -1653,7 +1669,12 @@ class ConversationService:
 
         with await RunSlot.acquire(self._run_semaphore) as run_slot:
             return await self._create_conversation(
-                request, conversation_id, run_slot, server_tools, tool_params
+                request,
+                conversation_id,
+                run_slot,
+                server_tools,
+                tool_params,
+                adapt_agent,
             )
 
     async def _create_conversation(
@@ -1663,6 +1684,7 @@ class ConversationService:
         run_slot: RunSlot,
         server_tools: Sequence[Tool] = (),
         tool_params: ToolParams | None = None,
+        adapt_agent: AgentAdapter | None = None,
     ) -> tuple[ConversationInfo, bool]:
         # The link is immutable after creation, so cycles beyond self-parent are
         # impossible; allowing reparenting would require a real ancestor walk.
@@ -1796,7 +1818,7 @@ class ConversationService:
                 ),
             )
         )
-        launched = _with_tool_params(launched, tool_params)
+        launched = _adapted(_with_tool_params(launched, tool_params), adapt_agent)
         # Building the agent would raise KeyError on the first message, so
         # reject the create while the caller can still act on it.
         missing_tools = [
@@ -2285,6 +2307,7 @@ class ConversationService:
         worktree_options: ConversationWorktreeOptions | None = None,
         tool_params: ToolParams | None = None,
         extra_tags: Mapping[str, str] | None = None,
+        adapt_agent: AgentAdapter | None = None,
     ) -> StartChildConversationResponse | None:
         """Start a child conversation on this server, derived from *parent_id*.
 
@@ -2307,6 +2330,7 @@ class ConversationService:
             tool_params: Parameters this server sets on the child's tools, by
                 tool name, over the ones it inherits.
             extra_tags: Tags the child gets on top of its parent's.
+            adapt_agent: Applied last to the agent the child inherits.
 
         Returns ``None`` when *parent_id* does not exist.
 
@@ -2357,7 +2381,7 @@ class ConversationService:
                     ],
                 )
             )
-            launched = _with_tool_params(launched, tool_params)
+            launched = _adapted(_with_tool_params(launched, tool_params), adapt_agent)
             workspace = (
                 _create_conversation_worktree(worktree)
                 if worktree is not None

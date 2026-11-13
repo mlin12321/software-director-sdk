@@ -120,6 +120,7 @@ def node_context(service: DirectorService, caller: Caller) -> str:
             for child in store.children(node.id)
         ],
         "review_of_your_work": node.review.model_dump() if node.review else None,
+        "agent_profiles_a_sub_team_may_run_on": service.settings.allowed_profiles,
         "pending_split": (
             node.pending_split.model_dump() if node.pending_split else None
         ),
@@ -164,6 +165,18 @@ def propose_split(
         )
     store = service.store
     check_limits(store, node, len(children), service.settings)
+    allowed = service.settings.allowed_profiles
+    for child in children:
+        if child.agent_profile and child.agent_profile not in allowed:
+            raise Invalid(
+                f"Sub-team {child.title!r} cannot run on the agent profile "
+                f"{child.agent_profile!r}. "
+                + (
+                    f"The org allows: {', '.join(allowed)}."
+                    if allowed
+                    else "The org allows none; leave `agent_profile` out."
+                )
+            )
     proposal = SplitProposal(
         children=normalize_split(node, store.children(node.id), children),
         contracts=contracts,
@@ -171,7 +184,9 @@ def propose_split(
     )
     store.update_node(node.id, pending_split=proposal)
     listing = "\n".join(
-        f"- {child.title}: {child.path} ({child.isolation}). Task: {child.task}"
+        f"- {child.title}: {child.path} ({child.isolation}"
+        f"{f', agent profile {child.agent_profile}' if child.agent_profile else ''}"
+        f"). Task: {child.task}"
         for child in proposal.children
     )
     service.notify(

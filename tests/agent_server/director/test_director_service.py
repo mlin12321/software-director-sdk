@@ -942,7 +942,9 @@ async def test_a_pruned_agents_shell_and_index_are_removed(
         *(repo / ".git" / "director-shells").glob(f"{api_ic.conversation_id}.*"),
         *(repo / ".git").glob(f"agent-index-{api_ic.conversation_id}*"),
     ]
-    assert len(left) == 6
+    # The shell, its rc file, its git, its excludes, the launcher an ACP
+    # agent would be started by, and the index with its marker.
+    assert len(left) == 7
 
     service.prune("services.api", approach="", why_failed="x", replacement_task=None)
     await service.settled()
