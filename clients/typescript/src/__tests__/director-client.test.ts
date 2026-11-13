@@ -47,6 +47,7 @@ describe('DirectorClient', () => {
       repo_path: '/repo',
       is_git_repository: true,
       fixture: false,
+      boundary_enforcement: 'sandbox',
     };
     const fetchMock = mockFetch(() => jsonResponse(summary));
     const client = new DirectorClient({ host: 'http://example.com' });
@@ -66,6 +67,19 @@ describe('DirectorClient', () => {
       task: 'Build the checkout flow',
       conversation,
     });
+  });
+
+  it('sends a message to the org from a directory', async () => {
+    const routed = { node_id: 'payments.api', conversation_id: 'c-1', started_org: false };
+    const fetchMock = mockFetch(() => jsonResponse(routed));
+    const client = new DirectorClient({ host: 'http://example.com' });
+
+    const result = await client.routeMessage({ text: 'Add refunds', path: 'services/api' });
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(`${init.method} ${url}`).toBe('POST http://example.com/api/director/org/messages');
+    expect(JSON.parse(init.body)).toEqual({ text: 'Add refunds', path: 'services/api' });
+    expect(result).toEqual(routed);
   });
 
   it('answers an escalation of the node that raised it', async () => {

@@ -104,6 +104,11 @@ export interface DirectorOrgNode {
   branch: string;
   agents: DirectorAgentRef[];
   status: DirectorNodeStatus;
+  /**
+   * One line on what the team is delivering, written by a model from the
+   * team's task and its latest report.
+   */
+  headline: string;
   spec_summary: string;
   /** Open escalations this node raised, wherever above they are held. */
   escalations: DirectorEscalation[];
@@ -133,6 +138,25 @@ export interface DirectorOrgSummary {
   is_git_repository: boolean;
   /** The tree is a fixed sample; its agents are not running. */
   fixture: boolean;
+  boundary_enforcement: DirectorBoundaryEnforcement;
+}
+
+/**
+ * How far a team is held to its boundary. `sandbox`: the shell of an agent
+ * can write only the directory its team owns, and its file tools are refused
+ * anything else. `checks`: only the file tools are refused; the server
+ * cannot confine a shell.
+ */
+export type DirectorBoundaryEnforcement = 'sandbox' | 'checks';
+
+/** Where a message to the org went. */
+export interface DirectorRoutedMessage {
+  /** The team that received it. */
+  node_id: DirectorNodeId;
+  /** The conversation of that team's IC. */
+  conversation_id: string;
+  /** There was no org, and the message started one. */
+  started_org: boolean;
 }
 
 export interface DirectorEscalationPathStep {

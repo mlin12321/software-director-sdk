@@ -8,6 +8,7 @@ import type {
   DirectorOrgNode,
   DirectorOrgNodeDetail,
   DirectorOrgSummary,
+  DirectorRoutedMessage,
 } from '../models/director';
 
 export interface DirectorClientOptions {
@@ -29,7 +30,11 @@ export interface StreamOrgTreeOptions {
 
 /** Start an org: a root team that works on `task`. */
 export interface CreateOrgRequest {
-  title: string;
+  /**
+   * The root team's name. Left out, the team is first named after the
+   * task's first line and then by a model that summarizes it.
+   */
+  title?: string;
   task: string;
   /**
    * How to start the root team's IC, as for a normal conversation. Every
@@ -38,6 +43,22 @@ export interface CreateOrgRequest {
    * briefed with `task`.
    */
   conversation: CreateConversationPayload;
+}
+
+/** Something the human says to the org, from somewhere in the repository. */
+export interface RouteMessageRequest {
+  text: string;
+  /**
+   * The directory the message is about: repo-relative, or absolute inside
+   * the director's `repo_path`. Defaults to the repository root.
+   */
+  path?: string;
+  /**
+   * How to start the root team's IC when there is no org yet; the message
+   * then becomes the org's task. See `CreateOrgRequest.conversation`.
+   * Ignored when an org exists.
+   */
+  conversation?: CreateConversationPayload;
 }
 
 const DIRECTOR_PATH = '/api/director';
@@ -119,6 +140,26 @@ export class DirectorClient {
    */
   async createOrg(request: CreateOrgRequest): Promise<DirectorOrgNode> {
     const response = await this.client.post<DirectorOrgNode>(`${DIRECTOR_PATH}/org`, request);
+    return response.data;
+  }
+
+  /**
+   * Say something to the org from a directory of the repository.
+   *
+   * The message goes to the IC of the nearest team: the search starts at
+   * `path` and moves up one directory at a time until it reaches a directory
+   * a team owns, skipping a team whose IC is gone or that may only read
+   * `path`. Without an org the message starts one and becomes its task.
+   *
+   * @throws HttpError 409 when no team can take the message; 422 when the
+   *   path is outside the repository, or there is no org and `conversation`
+   *   is missing or cannot lead one.
+   */
+  async routeMessage(request: RouteMessageRequest): Promise<DirectorRoutedMessage> {
+    const response = await this.client.post<DirectorRoutedMessage>(
+      `${DIRECTOR_PATH}/org/messages`,
+      request
+    );
     return response.data;
   }
 
