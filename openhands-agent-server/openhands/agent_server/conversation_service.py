@@ -3,10 +3,10 @@ import importlib
 import json
 import logging
 import os
-from collections.abc import Awaitable, Callable, Collection, Sequence
+from collections.abc import Awaitable, Callable, Collection, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager, suppress
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
@@ -23,6 +23,7 @@ from openhands.agent_server.conversation_lease import (
 )
 from openhands.agent_server.event_service import (
     LEASE_RENEW_INTERVAL_SECONDS,
+    ActionGuard,
     EventService,
     RunSlot,
 )
@@ -561,6 +562,24 @@ def _read_execution_status_sync(
 
 type ExecutionStatusListener = Callable[[UUID, ConversationExecutionStatus], None]
 
+# Parameters for the tools of an agent, by tool name.
+type ToolParams = Mapping[str, Mapping[str, Any]]
+
+
+def _with_tool_params(
+    launched: LaunchedAgent, tool_params: ToolParams | None
+) -> LaunchedAgent:
+    """The launched agent with ``tool_params`` set on the tools it names."""
+    if not tool_params:
+        return launched
+    tools = [
+        tool.model_copy(update={"params": {**tool.params, **tool_params[tool.name]}})
+        if tool.name in tool_params
+        else tool
+        for tool in launched.agent.tools
+    ]
+    return replace(launched, agent=launched.agent.model_copy(update={"tools": tools}))
+
 
 @dataclass
 class _ConversationRecord:
@@ -632,6 +651,7 @@ class ConversationService:
     _execution_status_listeners: list[ExecutionStatusListener] = field(
         default_factory=list, init=False
     )
+    _action_guards: list[ActionGuard] = field(default_factory=list, init=False)
 
     def add_execution_status_listener(
         self, listener: ExecutionStatusListener
@@ -650,6 +670,23 @@ class ConversationService:
         def stop() -> None:
             if listener in self._execution_status_listeners:
                 self._execution_status_listeners.remove(listener)
+
+        return stop
+
+    def add_action_guard(self, guard: ActionGuard) -> Callable[[], None]:
+        """Ask ``guard`` about every action of every agent before it runs.
+
+        It is called on the thread that runs the conversation, so it must be
+        safe to call from any thread and return quickly.
+
+        Returns:
+            A function that stops the calls.
+        """
+        self._action_guards.append(guard)
+
+        def stop() -> None:
+            if guard in self._action_guards:
+                self._action_guards.remove(guard)
 
         return stop
 
@@ -1573,7 +1610,11 @@ class ConversationService:
         return conversation_info, False
 
     async def start_conversation(
-        self, request: StartConversationRequest, *, server_tools: Sequence[Tool] = ()
+        self,
+        request: StartConversationRequest,
+        *,
+        server_tools: Sequence[Tool] = (),
+        tool_params: ToolParams | None = None,
     ) -> tuple[ConversationInfo, bool]:
         """Start a conversation, or return the one that has the requested id.
 
@@ -1581,8 +1622,12 @@ class ConversationService:
             server_tools: Tools this server gives the agent on top of the ones
                 the request resolves to. An ACP agent runs its own tools and
                 does not get them.
+            tool_params: Parameters this server sets on the agent's tools, by
+                tool name, over the ones the request resolves to.
         """
-        return await self._start_conversation(request, server_tools=server_tools)
+        return await self._start_conversation(
+            request, server_tools=server_tools, tool_params=tool_params
+        )
 
     async def start_acp_conversation(
         self, request: StartConversationRequest
@@ -1594,6 +1639,7 @@ class ConversationService:
         request: StartConversationRequest,
         *,
         server_tools: Sequence[Tool] = (),
+        tool_params: ToolParams | None = None,
     ) -> tuple[ConversationInfo, bool]:
         """Start a local event_service and return its id."""
         if self._event_services is None:
@@ -1607,7 +1653,7 @@ class ConversationService:
 
         with await RunSlot.acquire(self._run_semaphore) as run_slot:
             return await self._create_conversation(
-                request, conversation_id, run_slot, server_tools
+                request, conversation_id, run_slot, server_tools, tool_params
             )
 
     async def _create_conversation(
@@ -1616,6 +1662,7 @@ class ConversationService:
         conversation_id: UUID,
         run_slot: RunSlot,
         server_tools: Sequence[Tool] = (),
+        tool_params: ToolParams | None = None,
     ) -> tuple[ConversationInfo, bool]:
         # The link is immutable after creation, so cycles beyond self-parent are
         # impossible; allowing reparenting would require a real ancestor walk.
@@ -1749,6 +1796,7 @@ class ConversationService:
                 ),
             )
         )
+        launched = _with_tool_params(launched, tool_params)
         # Building the agent would raise KeyError on the first message, so
         # reject the create while the caller can still act on it.
         missing_tools = [
@@ -2235,6 +2283,7 @@ class ConversationService:
         child_id: UUID | None = None,
         extra_suffixes: Sequence[str] = (),
         worktree_options: ConversationWorktreeOptions | None = None,
+        tool_params: ToolParams | None = None,
     ) -> StartChildConversationResponse | None:
         """Start a child conversation on this server, derived from *parent_id*.
 
@@ -2254,6 +2303,8 @@ class ConversationService:
                 inherits from the parent's agent.
             worktree_options: Where a worktree child starts from; the
                 repository's default branch when not given.
+            tool_params: Parameters this server sets on the child's tools, by
+                tool name, over the ones it inherits.
 
         Returns ``None`` when *parent_id* does not exist.
 
@@ -2304,6 +2355,7 @@ class ConversationService:
                     ],
                 )
             )
+            launched = _with_tool_params(launched, tool_params)
             workspace = (
                 _create_conversation_worktree(worktree)
                 if worktree is not None
@@ -2640,6 +2692,7 @@ class ConversationService:
             credential_bindings=credential_bindings,
             owner_instance_id=self.owner_instance_id,
             lease_ttl_seconds=self.lease_ttl_seconds,
+            action_guards=self._action_guards,
         )
         # Lease renewal is handled by the centralized
         # _renew_all_leases_loop task on ConversationService.

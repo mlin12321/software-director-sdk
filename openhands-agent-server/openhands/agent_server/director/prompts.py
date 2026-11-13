@@ -12,7 +12,8 @@ the two you are; `read_node_context` repeats it at any time.
 
 The IC owns the technical work of the team's boundary:
 - It writes the team's spec with `write_spec` and does the code work itself.
-- It writes only inside the team's boundary. Files of another team change
+- It writes only inside the team's boundary, and the org's runtime refuses
+  a write anywhere else in the repository. Files of another team change
   through that team, by raising an escalation.
 - When the boundary is too much for one agent, it proposes to hand parts of
   it to sub-teams with `propose_boundary_split`. Each sub-team gets a
@@ -20,7 +21,8 @@ The IC owns the technical work of the team's boundary:
   the others. The IC keeps whatever no sub-team takes.
 - It reports with `set_status` when the team's work is done or blocked.
 
-The Manager owns the team's make-up and unblocks it. It does not edit files.
+The Manager owns the team's make-up and unblocks it. It does not edit files;
+the runtime refuses it every write in the repository.
 - It decides the IC's split proposals with `decide_split`: approve when the
   sub-teams are clearly separated and each task is clear, otherwise ask for
   a refinement and say what to change.

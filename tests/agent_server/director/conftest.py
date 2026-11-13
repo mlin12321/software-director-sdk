@@ -1,3 +1,4 @@
+import asyncio
 import subprocess
 from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass, field
@@ -6,7 +7,11 @@ from uuid import UUID
 
 import pytest
 
-from openhands.agent_server.conversation_service import ExecutionStatusListener
+from openhands.agent_server.conversation_service import (
+    ExecutionStatusListener,
+    ToolParams,
+)
+from openhands.agent_server.director.headline import TeamSummary
 from openhands.agent_server.director.models import (
     AgentRef,
     Boundary,
@@ -18,7 +23,10 @@ from openhands.agent_server.director.models import (
     OrgNodeInput,
 )
 from openhands.agent_server.director.pods import StartedAgent
-from openhands.agent_server.event_service import ConversationRunLimitExceeded
+from openhands.agent_server.event_service import (
+    ActionGuard,
+    ConversationRunLimitExceeded,
+)
 from openhands.agent_server.models import StartConversationRequest
 from openhands.sdk import LLM, Agent
 from openhands.sdk.conversation.state import ConversationExecutionStatus
@@ -45,6 +53,26 @@ def repo(tmp_path: Path) -> Path:
     run_git(path, "add", "README.md")
     run_git(path, "commit", "--quiet", "-m", "init")
     return path
+
+
+@pytest.fixture
+def submodule(repo: Path, tmp_path: Path) -> Path:
+    """A repository checked out as the submodule ``libs/payments`` of ``repo``."""
+    source = tmp_path / "payments"
+    source.mkdir()
+    run_git(source, "init", "--quiet", "--initial-branch=main")
+    run_git(source, "config", "user.name", "Test")
+    run_git(source, "config", "user.email", "test@example.invalid")
+    (source / "charge.py").write_text("amount = 1\n")
+    run_git(source, "add", "charge.py")
+    run_git(source, "commit", "--quiet", "-m", "init")
+    run_git(
+        repo,
+        *("-c", "protocol.file.allow=always"),
+        *("submodule", "--quiet", "add", str(source), "libs/payments"),
+    )
+    run_git(repo, "commit", "--quiet", "-m", "add payments")
+    return repo / "libs" / "payments"
 
 
 def make_node(
@@ -116,6 +144,7 @@ class DerivedStart:
     task: str
     isolation: IsolationMode
     suffixes: list[str]
+    tool_params: ToolParams | None = None
 
 
 @dataclass
@@ -125,6 +154,7 @@ class FakeLauncher:
     root: StartConversationRequest | None = None
     root_tools: list[str] = field(default_factory=list)
     root_title: str | None = None
+    root_tool_params: ToolParams | None = None
     derived: list[DerivedStart] = field(default_factory=list)
     sent: list[tuple[UUID, str]] = field(default_factory=list)
     known: dict[UUID, ConversationExecutionStatus] = field(default_factory=dict)
@@ -132,9 +162,22 @@ class FakeLauncher:
     # How many of the next derived starts the server is too full for.
     full_for: int = 0
     root_error: Exception | None = None
+    guards: list[ActionGuard] = field(default_factory=list)
+    # What the model answers when asked to summarize a task; None: nothing.
+    summary: TeamSummary | None = None
+    # Called with the id of each conversation derived, once it runs.
+    on_derived: Callable[[UUID], None] = lambda _: None
+    summary_delay: float = 0
+    summarized: list[tuple[UUID, str]] = field(default_factory=list)
+    titles: dict[UUID, str] = field(default_factory=dict)
 
     async def start_root(
-        self, request: StartConversationRequest, tools: Sequence[Tool], *, title: str
+        self,
+        request: StartConversationRequest,
+        tools: Sequence[Tool],
+        *,
+        title: str,
+        tool_params: ToolParams | None = None,
     ) -> StartedAgent:
         if self.root_error is not None:
             raise self.root_error
@@ -142,6 +185,8 @@ class FakeLauncher:
         self.root = request
         self.root_tools = [tool.name for tool in tools]
         self.root_title = title
+        self.root_tool_params = tool_params
+        self.titles[request.conversation_id] = title
         self.known[request.conversation_id] = ConversationExecutionStatus.IDLE
         return StartedAgent(
             workspace=str(request.workspace.working_dir), isolation="shared"
@@ -156,6 +201,7 @@ class FakeLauncher:
         task: str,
         isolation: IsolationMode,
         suffixes: Sequence[str] = (),
+        tool_params: ToolParams | None = None,
     ) -> StartedAgent:
         if self.full_for > 0:
             self.full_for -= 1
@@ -164,10 +210,18 @@ class FakeLauncher:
             raise NotFound(f"Conversation {parent_id} does not exist")
         self.derived.append(
             DerivedStart(
-                parent_id, conversation_id, title, task, isolation, list(suffixes)
+                parent_id,
+                conversation_id,
+                title,
+                task,
+                isolation,
+                list(suffixes),
+                tool_params,
             )
         )
+        self.titles[conversation_id] = title
         self.known[conversation_id] = ConversationExecutionStatus.IDLE
+        self.on_derived(conversation_id)
         assert self.root is not None
         return StartedAgent(
             workspace=str(self.root.workspace.working_dir), isolation=isolation
@@ -190,6 +244,22 @@ class FakeLauncher:
     def on_status(self, listener: ExecutionStatusListener) -> Callable[[], None]:
         self.listeners.append(listener)
         return lambda: self.listeners.remove(listener)
+
+    def on_action(self, guard: ActionGuard) -> Callable[[], None]:
+        self.guards.append(guard)
+        return lambda: self.guards.remove(guard)
+
+    async def summarize(self, conversation_id: UUID, task: str) -> TeamSummary | None:
+        if conversation_id not in self.known:
+            raise NotFound(f"Conversation {conversation_id} does not exist")
+        self.summarized.append((conversation_id, task))
+        await asyncio.sleep(self.summary_delay)
+        return self.summary
+
+    async def rename(self, conversation_id: UUID, title: str) -> None:
+        if conversation_id not in self.known:
+            raise NotFound(f"Conversation {conversation_id} does not exist")
+        self.titles[conversation_id] = title
 
     def report(self, conversation_id: str, status: ConversationExecutionStatus) -> None:
         """A conversation changed status."""

@@ -97,6 +97,7 @@ def node_context(service: DirectorService, caller: Caller) -> str:
                 "team": child.title,
                 "path": child.boundary.path,
                 "status": child.status,
+                "headline": child.headline,
                 "summary": child.spec_summary,
             }
             for child in store.children(node.id)
@@ -310,4 +311,6 @@ def set_status(
             f"Team {node.title!r} (node {node.id}) reports it is {status}."
             + (f"\n{summary.strip()}" if summary.strip() else ""),
         )
+    if summary.strip():
+        service.refresh_headline(node.id, f"it is {status}. {summary.strip()}")
     return f"Your team is now {status}."

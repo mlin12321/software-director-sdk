@@ -59,6 +59,7 @@ export type {
 export type {
   CreateOrgRequest,
   DirectorClientOptions,
+  RouteMessageRequest,
   StreamOrgTreeOptions,
 } from './client/director-client';
 export type {
@@ -66,6 +67,7 @@ export type {
   DirectorAgentRole,
   DirectorAutopsy,
   DirectorBoundary,
+  DirectorBoundaryEnforcement,
   DirectorBoundaryMemory,
   DirectorEscalation,
   DirectorEscalationHandoff,
@@ -82,6 +84,7 @@ export type {
   DirectorOrgNode,
   DirectorOrgNodeDetail,
   DirectorOrgSummary,
+  DirectorRoutedMessage,
   DirectorSplitChild,
   DirectorSplitProposal,
   DirectorSplitStatus,

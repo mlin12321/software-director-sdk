@@ -21,6 +21,8 @@ from openhands.agent_server.director.models import (
     OrgNode,
     OrgNodeDetail,
     OrgSummary,
+    RoutedMessage,
+    RouteMessageRequest,
     SnapshotEvent,
     TeachRequest,
 )
@@ -199,6 +201,45 @@ async def create_org(
     tree stream.
     """
     return await service.create_org(request)
+
+
+@director_router.post(
+    "/org/messages",
+    response_model=RoutedMessage,
+    responses=error_responses(
+        {
+            Conflict: "No team of the org can take the message",
+            Invalid: (
+                "The path is outside the repository; or there is no org and "
+                "the request has no `conversation` to start one with, or one "
+                "that cannot lead an org"
+            ),
+            RateLimited: "The server cannot run another conversation now",
+            Unavailable: (
+                "The director is not running agents, or there is no org and "
+                "its directory is not a git repository"
+            ),
+        }
+    ),
+)
+async def route_message(
+    request: RouteMessageRequest,
+    service: DirectorService = Depends(get_director_service),
+) -> RoutedMessage:
+    """Say something to the org from a directory of the repository.
+
+    The message goes to the IC of the nearest team: the search starts at
+    `path` (by default the directory the server was started for) and moves
+    up one directory at a time until it reaches a directory a team owns,
+    skipping a team whose IC is gone or that may only read `path`. The root
+    team takes what no team below it does. A server started in a git
+    submodule that has no org of its own searches on through the repository
+    that has the submodule.
+
+    When there is no org yet, the message starts one: the root team is
+    briefed with it as its task and named by a model that summarizes it.
+    """
+    return await service.route_message(request)
 
 
 @director_router.post(

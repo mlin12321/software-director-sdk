@@ -19,7 +19,10 @@ from openhands.agent_server.director.org_persistence import (
     save_org,
 )
 from openhands.agent_server.director.org_store import OrgStore
-from openhands.agent_server.director.service import DirectorService
+from openhands.agent_server.director.service import (
+    DirectorService,
+    agent_conversation,
+)
 from openhands.sdk.errors import NotFound
 from tests.agent_server.director.conftest import (
     FakeLauncher,
@@ -393,8 +396,10 @@ def test_the_summary_says_there_is_no_org_yet_and_where_one_would_work(repo: Pat
         "root_id": None,
         "node_count": 0,
         "repo_path": str(repo),
+        "directory": "",
         "is_git_repository": True,
         "fixture": False,
+        "boundary_enforcement": "checks",
     }
 
 
@@ -456,3 +461,52 @@ async def test_answering_an_escalation_settles_it_and_tells_the_team(running, re
     assert answered.status_code == 200
     assert answered.json()["escalations"] == []
     assert "Opaque." in launcher.messages_to(root["agents"][0]["conversation_id"])[-1]
+
+
+async def test_the_first_message_starts_an_org_and_later_ones_find_its_teams(
+    running, repo
+):
+    client, launcher, service = running
+    conversation = root_conversation(repo).model_dump(mode="json")
+
+    first = await client.post(
+        "/api/director/org/messages",
+        json={"text": "Build the checkout flow", "conversation": conversation},
+    )
+    await service.settled()
+
+    assert first.status_code == 200
+    root = service.store.get("root")
+    assert root is not None and root.title == "Build the checkout flow"
+    assert first.json() == {
+        "node_id": "root",
+        "conversation_id": agent_conversation(root, "ic"),
+        "started_org": True,
+    }
+
+    later = await client.post(
+        "/api/director/org/messages",
+        json={"text": "Add refunds", "path": "services/api"},
+    )
+    await service.settled()
+
+    assert later.json() == {**first.json(), "started_org": False}
+    assert launcher.messages_to(later.json()["conversation_id"])[-1] == (
+        "Add refunds\n\n(The human sent this from services/api.)"
+    )
+
+
+async def test_a_message_that_cannot_be_routed_is_refused(running, repo):
+    client, _, service = running
+
+    no_org = await client.post("/api/director/org/messages", json={"text": "Hi"})
+    assert no_org.status_code == 422
+
+    await client.post("/api/director/org", json=org_body(repo))
+    await service.settled()
+    outside = await client.post(
+        "/api/director/org/messages", json={"text": "Hi", "path": "/etc"}
+    )
+    assert outside.status_code == 422
+    blank = await client.post("/api/director/org/messages", json={"text": ""})
+    assert blank.status_code == 422

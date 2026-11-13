@@ -42,8 +42,8 @@ def normalize_split(
     titles = {sibling.title for sibling in siblings}
     normalized: list[SplitChild] = []
     for child in children:
-        path = _clean(child.path)
-        if not _inside(path, parent.boundary.path):
+        path = clean_path(child.path)
+        if not is_inside(path, parent.boundary.path):
             raise OrgStoreError(
                 f"Sub-team {child.title!r} must own a directory inside "
                 f"{parent.boundary.path or 'the repository'!r}, not {child.path!r}"
@@ -51,8 +51,8 @@ def normalize_split(
         for other_path, other_title in taken.items():
             if (
                 path == other_path
-                or _inside(path, other_path)
-                or _inside(other_path, path)
+                or is_inside(path, other_path)
+                or is_inside(other_path, path)
             ):
                 raise OrgStoreError(
                     f"Sub-teams {child.title!r} ({path}) and {other_title!r} "
@@ -60,7 +60,7 @@ def normalize_split(
                 )
         if child.title in titles:
             raise OrgStoreError(f"More than one sub-team is titled {child.title!r}")
-        writable = [_clean(glob) for glob in child.writable] or [f"{path}/**"]
+        writable = [clean_path(glob) for glob in child.writable] or [f"{path}/**"]
         for glob in writable:
             if not glob.startswith(f"{path}/"):
                 raise OrgStoreError(
@@ -77,7 +77,7 @@ def child_boundary(child: SplitChild) -> Boundary:
     return Boundary(path=child.path, writable=child.writable, readonly=child.readonly)
 
 
-def _clean(path: str) -> str:
+def clean_path(path: str) -> str:
     """A repo-relative POSIX path without empty, ``.`` or ``..`` segments.
 
     Raises:
@@ -89,7 +89,7 @@ def _clean(path: str) -> str:
     return "/".join(part for part in parts if part != ".")
 
 
-def _inside(path: str, ancestor: str) -> bool:
+def is_inside(path: str, ancestor: str) -> bool:
     """Whether ``path`` is strictly below ``ancestor`` ('' is the repository)."""
     if not path:
         return False

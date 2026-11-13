@@ -3507,9 +3507,15 @@ def test_max_budget_per_run_set_updated_and_cleared_over_live_server(
         conv.close()
 
 
-def _scripted_org_llm(monkeypatch: pytest.MonkeyPatch) -> None:
+def _scripted_org_llm(
+    monkeypatch: pytest.MonkeyPatch, api_ic: list[tuple[str, dict]] | None = None
+) -> None:
     """Agents of an org that split the root once: the IC proposes when it is
-    briefed, its Manager approves when it is told, everyone else just replies."""
+    briefed, its Manager approves when it is told, everyone else just replies.
+
+    Args:
+        api_ic: Tool calls the IC of the API sub-team makes, one per turn.
+    """
 
     def tool_call(name: str, arguments: dict) -> dict:
         return {
@@ -3524,11 +3530,25 @@ def _scripted_org_llm(monkeypatch: pytest.MonkeyPatch) -> None:
             ],
         }
 
+    def text_of(message: Message) -> str:
+        return "".join(
+            content.text
+            for content in message.content
+            if isinstance(content, TextContent)
+        )
+
     def reply_to(messages: list[Message]) -> dict:
         last = messages[-1]
-        text = "".join(
-            content.text for content in last.content if isinstance(content, TextContent)
-        )
+        text = text_of(last)
+        if "You label the work of software teams" in text_of(messages[0]):
+            return {
+                "role": "assistant",
+                "content": "Title: Checkout\nHeadline: Builds the checkout flow.",
+            }
+        if any("the IC of the team 'API'" in text_of(m) for m in messages):
+            done = sum(message.role == "tool" for message in messages)
+            if done < len(api_ic or []):
+                return tool_call(*(api_ic or [])[done])
         if last.role == "user" and "You are the IC of the team 'Checkout'" in text:
             return tool_call(
                 "propose_boundary_split",
@@ -3639,3 +3659,123 @@ def test_director_runs_an_org_whose_root_splits_into_sub_teams(
         assert "POST /checkout" in specs["specs"][0]["spec"]
         # Everything the org keeps is in hidden refs, not in the working tree.
         assert run_git_command(["git", "status", "--porcelain"], repo) == ""
+
+
+def test_director_starts_an_org_from_a_message_and_holds_teams_to_their_directories(
+    server_env, monkeypatch: pytest.MonkeyPatch
+):
+    repo = server_env["workspace_path"]
+    _scripted_org_llm(
+        monkeypatch,
+        api_ic=[
+            (
+                "file_editor",
+                {
+                    "command": "create",
+                    "path": str(repo / "by-editor.txt"),
+                    "file_text": "x",
+                },
+            ),
+            (
+                "file_editor",
+                {
+                    "command": "create",
+                    "path": str(repo / "services" / "api" / "by-editor.txt"),
+                    "file_text": "x",
+                },
+            ),
+            (
+                "terminal",
+                {
+                    "command": (
+                        "echo x > by-shell.txt; echo x > ../../by-shell.txt; "
+                        "echo x > ../../apps/by-shell.txt; pwd"
+                    )
+                },
+            ),
+        ],
+    )
+    run_git_command(["git", "init", "-b", "main"], repo)
+    run_git_command(
+        ["git", "-c", "user.name=T", "-c", "user.email=t@example.com", "commit"]
+        + ["--allow-empty", "-m", "init"],
+        repo,
+    )
+
+    with httpx.Client(base_url=server_env["host"], timeout=30) as client:
+        started = client.post(
+            "/api/director/org/messages",
+            json={
+                "text": "Build the checkout flow",
+                "conversation": {
+                    "agent": {
+                        "llm": {"model": "gpt-4o-mini", "api_key": "test"},
+                        "tools": [{"name": "terminal"}, {"name": "file_editor"}],
+                    },
+                    "workspace": {"working_dir": str(repo)},
+                },
+            },
+        )
+        assert started.status_code == 200, started.text
+        assert (started.json()["node_id"], started.json()["started_org"]) == (
+            "root",
+            True,
+        )
+        confined = client.get("/api/director/org").json()["boundary_enforcement"]
+
+        def api_ic_events() -> list[dict]:
+            api = client.get("/api/director/org/nodes/services.api")
+            if api.status_code != 200:
+                return []
+            api_ic = api.json()["node"]["agents"][0]["conversation_id"]
+            page = client.get(
+                f"/api/conversations/{api_ic}/events/search", params={"limit": 100}
+            )
+            return page.json()["items"] if page.status_code == 200 else []
+
+        def finished(events: list[dict]) -> bool:
+            return any(
+                event.get("source") == "agent" and event.get("kind") == "MessageEvent"
+                for event in events
+            )
+
+        deadline = time.time() + 60
+        events = api_ic_events()
+        while time.time() < deadline and not finished(events):
+            time.sleep(0.3)
+            events = api_ic_events()
+        assert finished(events), [event.get("kind") for event in events]
+
+        root = client.get("/api/director/org/nodes/root").json()["node"]
+        assert (root["title"], root["headline"]) == (
+            "Checkout",
+            "Builds the checkout flow.",
+        )
+        root_ic = root["agents"][0]["conversation_id"]
+        assert client.get(f"/api/conversations/{root_ic}").json()["title"] == (
+            "Checkout (IC)"
+        )
+
+        # The file editor is refused outside the team's directory and works in it.
+        rejections = [
+            event["rejection_reason"]
+            for event in events
+            if event.get("kind") == "UserRejectObservation"
+        ]
+        assert len(rejections) == 1
+        assert "outside your team's boundary (services/api)" in rejections[0]
+        assert not (repo / "by-editor.txt").exists()
+        assert (repo / "services" / "api" / "by-editor.txt").read_text() == "x"
+
+        routed = client.post(
+            "/api/director/org/messages",
+            json={"text": "Add refunds", "path": "services/api/handlers"},
+        ).json()
+        assert (routed["node_id"], routed["started_org"]) == ("services.api", False)
+
+    if confined != "sandbox":
+        pytest.skip("this machine cannot confine a shell; only file tools are checked")
+    # The shell starts in the team's directory and can write nowhere else.
+    assert (repo / "services" / "api" / "by-shell.txt").exists()
+    assert not (repo / "by-shell.txt").exists()
+    assert not (repo / "apps" / "by-shell.txt").exists()
