@@ -454,6 +454,7 @@ def test_the_summary_says_there_is_no_org_yet_and_where_one_would_work(repo: Pat
         "is_git_repository": True,
         "fixture": False,
         "boundary_enforcement": "checks",
+        "paused": None,
     }
 
 
@@ -496,6 +497,45 @@ async def test_an_org_cannot_be_started_outside_a_git_repository(
 
     assert response.status_code == 503
     assert (await client.get("/api/director/org")).json()["root_id"] is None
+
+
+async def test_an_org_is_paused_asked_what_it_holds_and_resumed(running, repo):
+    client, launcher, service = running
+    no_org = await client.post("/api/director/org/pause")
+    created = await client.post("/api/director/org", json=org_body(repo))
+    await service.settled()
+    root_ic = created.json()["agents"][0]["conversation_id"]
+    delivered = len(launcher.messages_to(root_ic))
+
+    paused = await client.post("/api/director/org/pause")
+    await client.post("/api/director/org/messages", json={"text": "Add a cart"})
+    await service.settled()
+    summary = await client.get("/api/director/org")
+    recovery = await client.get("/api/director/org/recovery")
+
+    assert no_org.status_code == 409
+    assert paused.status_code == 200 and paused.json()["paused"] == "human"
+    assert summary.json()["paused"] == "human"
+    assert recovery.json() == {
+        "paused": "human",
+        "items": [
+            {
+                "node_id": "root",
+                "title": created.json()["title"],
+                "kind": "message",
+                "detail": "1 message is delivered.",
+            }
+        ],
+        "messages_held": 1,
+    }
+    assert len(launcher.messages_to(root_ic)) == delivered
+
+    resumed = await client.post("/api/director/org/resume")
+    await service.settled()
+
+    assert resumed.json() == {"paused": None, "items": [], "messages_held": 0}
+    assert launcher.messages_to(root_ic)[-1] == "Add a cart"
+    assert (await client.get("/api/director/org/recovery")).json()["items"] == []
 
 
 async def test_answering_an_escalation_settles_it_and_tells_the_team(running, repo):
@@ -621,6 +661,7 @@ def test_the_limits_on_new_teams_are_read_changed_and_kept(saved_tree: Path):
         "max_agents": 64,
         "max_depth": 8,
         "allowed_profiles": [],
+        "resume_on_start": False,
         "agents": 10,
         "depth": 3,
         "max_concurrent_runs": 7,

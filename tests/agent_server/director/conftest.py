@@ -176,6 +176,11 @@ class FakeLauncher:
     summarized: list[tuple[UUID, str]] = field(default_factory=list)
     titles: dict[UUID, str] = field(default_factory=dict)
     stopped: list[UUID] = field(default_factory=list)
+    paused: list[UUID] = field(default_factory=list)
+    resumed: list[tuple[UUID, str | None]] = field(default_factory=list)
+    # Called with the name of a call before it is carried out; a test ends
+    # the server in the middle of a step by raising from it.
+    before: Callable[[str], None] = lambda _: None
     deleted: list[UUID] = field(default_factory=list)
     # What the model answers to a question of the director, by usage id.
     answers: dict[str, str | None] = field(default_factory=dict)
@@ -303,10 +308,33 @@ class FakeLauncher:
             raise NotFound(f"Conversation {conversation_id} does not exist")
         self.sent.append((conversation_id, text))
 
+    async def started(self, conversation_id: UUID) -> StartedAgent | None:
+        if conversation_id not in self.known:
+            return None
+        assert self.root is not None
+        return StartedAgent(
+            workspace=str(self.root.workspace.working_dir),
+            isolation="shared",
+            kind=self.kinds.get(conversation_id, "openhands"),
+        )
+
+    async def pause(self, conversation_id: UUID) -> None:
+        self.paused.append(conversation_id)
+        if conversation_id in self.known:
+            self.report(str(conversation_id), ConversationExecutionStatus.PAUSED)
+
+    async def resume(self, conversation_id: UUID, note: str | None) -> None:
+        if conversation_id not in self.known:
+            raise NotFound(f"Conversation {conversation_id} does not exist")
+        self.resumed.append((conversation_id, note))
+        self.report(str(conversation_id), ConversationExecutionStatus.RUNNING)
+
     async def stop(self, conversation_id: UUID) -> None:
+        self.before("stop")
         self.stopped.append(conversation_id)
 
     async def delete(self, conversation_id: UUID) -> None:
+        self.before("delete")
         self.deleted.append(conversation_id)
         self.known.pop(conversation_id, None)
 

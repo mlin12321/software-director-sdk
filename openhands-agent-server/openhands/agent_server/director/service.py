@@ -63,6 +63,9 @@ from openhands.agent_server.director.models import (
     OrgNode,
     OrgNodeInput,
     OrgSummary,
+    PauseReason,
+    Recovery,
+    RecoveryItem,
     ReviewFinding,
     RoutedMessage,
     RouteMessageRequest,
@@ -84,6 +87,23 @@ from openhands.agent_server.director.prompts import (
     changes_requested,
     from_director,
     review_request,
+)
+from openhands.agent_server.director.recovery import (
+    STARTING,
+    describe,
+    fingerprint,
+    has_work,
+    put_aside_stale,
+    restore_worktrees,
+)
+from openhands.agent_server.director.run_state import (
+    REVIEWING,
+    RUNNING,
+    TEAM,
+    WAITING,
+    Intent,
+    RunState,
+    RunStateError,
 )
 from openhands.agent_server.director.runtime import bind_director
 from openhands.agent_server.director.sandbox import (
@@ -149,6 +169,18 @@ CONSOLIDATION_SECONDS = 900.0
 PRUNED_REFS = "refs/agents/pruned"
 # An agent whose conversation is gone, or could not be started.
 AGENT_LOST = "lost"
+# An agent that was running when its org was paused, and runs again when it
+# is resumed.
+AGENT_PAUSED = "paused"
+# What an agent is told when the server ended in the middle of its step.
+RESTART_NOTE = (
+    "The server was restarted while you were working. The command or edit "
+    "you were in the middle of may not have finished: check what is there "
+    "before you carry on with your task."
+)
+# Where, in the repository's git directory, the director keeps what it is in
+# the middle of.
+_RUN_STATE = "director/state.db"
 # Where, in the repository's git directory, the director keeps the shells
 # its agents' terminals start, and what those shells need.
 _SHELLS_DIR = "director-shells"
@@ -159,6 +191,10 @@ _REMEMBERED_FILE = "director.json"
 ORG_LANE = "org"
 # The lane of the rules' consolidation.
 MODELS_LANE = "models"
+# The lane agents are paused in, so that nothing waits for their last step.
+PAUSE_LANE = "pause"
+# The steps the director takes for a team's review, in its own lane.
+_REVIEW_STEPS = ("request_review", "accept")
 # How many of the director's own model calls run at once.
 MODEL_CALLS_AT_ONCE = 2
 
@@ -169,6 +205,10 @@ _AGENT_STATUS: dict[ConversationExecutionStatus, str] = {
 }
 
 type Effect = Callable[[], Awaitable[None]]
+
+
+class _Held(Exception):
+    """The org was paused before a step could be finished."""
 
 
 def agent_conversation(node: OrgNode, role: AgentRole) -> str | None:
@@ -270,8 +310,33 @@ class DirectorService:
         self._remembered = remembered
         self._find_review_instructions = find_review_instructions
         self._model_call_timeout = model_call_timeout
-        # Teams that had reported done and are working again only to review.
-        self._done_reviewers: set[str] = set()
+        self._run: RunState | None = None
+        self._run_of: Path | None = None
+        self._paused: PauseReason | None = None
+        # The intents and messages being carried out right now, so that
+        # resuming does not carry one out a second time.
+        self._in_flight: set[int] = set()
+        self._delivering: set[int] = set()
+        # The conversations last recorded as running.
+        self._running: set[str] = set()
+        # The conversations a resume is about to run again.
+        self._resuming: set[str] = set()
+        self._save_asked = False
+        # Teams that waited for a run when the org was paused, in the order
+        # they waited: each tries to start only when it is the first.
+        self._line: deque[str] = deque()
+        self._line_moved = asyncio.Event()
+        self._steps: dict[str, Callable[[Intent], Awaitable[None]]] = {
+            "brief": self._do_brief,
+            "launch_manager": self._do_launch_manager,
+            "split": self._carry_out_split,
+            "start_team": self._do_start_team,
+            "finish_split": self._do_finish_split,
+            "request_review": self._do_request_review,
+            "accept": self._do_accept,
+            "prune": self._prune,
+            "halt": self._do_halt,
+        }
         self._consolidate_every = consolidate_every
         self._consolidator: asyncio.Task[None] | None = None
         self._bwrap: str | None = None
@@ -279,6 +344,7 @@ class DirectorService:
         self._save_delay = save_delay
         self._run_limit_retry = run_limit_retry
         self._lock = threading.Lock()
+        self._remember_lock = threading.Lock()
         self._store: OrgStore | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._launcher: PodLauncher | None = None
@@ -352,6 +418,7 @@ class DirectorService:
             is_git_repository=is_git_repository(self._repo_dir),
             fixture=self._fixture,
             boundary_enforcement="sandbox" if self._bwrap else "checks",
+            paused=self._paused if self._runs() else None,
         )
 
     @property
@@ -500,11 +567,25 @@ class DirectorService:
                 self._consolidate_regularly(), name="director-consolidation"
             )
         if self._store is not None:
-            self._enqueue(self._resync)
+            self._enqueue(self._came_back)
+        elif await asyncio.to_thread(self._remembered_repo) is not None:
+            # An org that was left in the middle of its work is looked at
+            # now, not when somebody first asks for it.
+            await asyncio.to_thread(lambda: self.store)
 
     async def aclose(self) -> None:
-        """Stop running agents and save the tree if a save was pending."""
+        """Stop running agents and save the tree if a save was pending.
+
+        An org that is in the middle of its work is left paused, so that the
+        next start finds what to take up again.
+        """
         bind_director(None)
+        store = self._store
+        if store is not None and store.root_id is not None and not self._fixture:
+            run = self._runs()
+            if self._paused is None and has_work(run):
+                self._hold("shutdown")
+            run.put("clean", "1")
         if self._stop_status is not None:
             self._stop_status()
             self._stop_status = None
@@ -525,6 +606,10 @@ class DirectorService:
             await self._save()
         self._launcher = None
         self._loop = None
+        with self._lock:
+            if self._run is not None:
+                self._run.close()
+                self._run = None
 
     async def settled(self) -> None:
         """Wait until everything asked for so far has been carried out."""
@@ -610,6 +695,7 @@ class DirectorService:
                 self._repo_dir = configured
                 raise
             await asyncio.to_thread(self._remember, repo_path=str(self._repo_dir))
+            await asyncio.to_thread(self._working)
             store.set_agent(
                 ROOT_ID, "ic", kind=started.kind, acp_server=started.acp_server
             )
@@ -628,8 +714,8 @@ class DirectorService:
             ),
             ROOT_ID,
         )
-        self._enqueue(lambda: self._brief(ROOT_ID, "ic", request.task), ROOT_ID)
-        self._enqueue(lambda: self._launch_manager(ROOT_ID, request.task), ROOT_ID)
+        self._begin("brief", ROOT_ID, role="ic", task=request.task)
+        self._begin("launch_manager", ROOT_ID, task=request.task)
         return root
 
     async def route_message(self, request: RouteMessageRequest) -> RoutedMessage:
@@ -667,7 +753,7 @@ class DirectorService:
                         conversation_id=agent_conversation(root, "ic") or "",
                         started_org=True,
                     )
-                await self._resync()
+                await self._came_back()
         path = await asyncio.to_thread(
             lambda: (
                 self._home()
@@ -685,7 +771,7 @@ class DirectorService:
         text = request.text
         if path != node.boundary.path:
             text = f"{text}\n\n(The human sent this from {path}.)"
-        self._enqueue(lambda: self._send(conversation_id, text), node.id)
+        self._post(conversation_id, text)
         return RoutedMessage(
             node_id=node.id, conversation_id=conversation_id, started_org=False
         )
@@ -768,16 +854,12 @@ class DirectorService:
 
     def notify(self, conversation_id: str | None, text: str) -> None:
         """Send an agent a message from the director. Safe from any thread."""
-        if conversation_id is None:
-            return
-        self._enqueue(
-            lambda: self._send(conversation_id, from_director(text)),
-            self._lane_of(conversation_id),
-        )
+        if conversation_id is not None:
+            self._post(conversation_id, from_director(text))
 
     def carry_out_split(self, node_id: str) -> None:
         """Start the sub-teams of a node's approved split. Safe from any thread."""
-        self._enqueue(lambda: self._carry_out_split(node_id), node_id)
+        self._begin("split", node_id)
 
     def prune(
         self,
@@ -794,14 +876,17 @@ class DirectorService:
                 None to leave the boundary to the team above.
         """
         self.store.update_node(node_id, status="blocked")
-        self._enqueue(
-            lambda: self._prune(node_id, approach, why_failed, replacement_task),
+        self._begin(
+            "prune",
             node_id,
+            approach=approach,
+            why_failed=why_failed,
+            replacement_task=replacement_task,
         )
 
     def request_review(self, node_id: str) -> None:
         """Have the work a team reported done reviewed. Safe from any thread."""
-        self._enqueue(lambda: self._request_review(node_id), f"review:{node_id}")
+        self._begin("request_review", node_id)
 
     def request_changes(self, node_id: str, findings: list[ReviewFinding]) -> bool:
         """Send a team's work back to it with what must change.
@@ -828,7 +913,7 @@ class DirectorService:
         above = store.get(node.parent_id) if node.parent_id else None
         if review.round >= MAX_REVIEW_ROUNDS:
             store.update_node(node_id, status="blocked", review=review)
-            self._enqueue(lambda: self._halt(node_id), node_id)
+            self._begin("halt", node_id)
             self._reviewed(above)
             return True
         store.update_node(node_id, status="working", review=review)
@@ -840,12 +925,13 @@ class DirectorService:
 
     def declared_status(self, node_id: str) -> None:
         """A team declared its own status, which now stands."""
-        self._done_reviewers.discard(node_id)
+        self._runs().unmark(REVIEWING, node_id)
 
     def _reviewed(self, reviewer: OrgNode | None) -> None:
         """Put a team that was done before it reviewed back to done, once
         none of its teams waits for it."""
-        if reviewer is None or reviewer.id not in self._done_reviewers:
+        run = self._runs()
+        if reviewer is None or reviewer.id not in run.marked(REVIEWING):
             return
         store = self.store
         waiting = any(
@@ -856,7 +942,7 @@ class DirectorService:
         )
         if waiting:
             return
-        self._done_reviewers.discard(reviewer.id)
+        run.unmark(REVIEWING, reviewer.id)
         now = store.get(reviewer.id)
         if now is not None and now.status in ("working", "idle"):
             store.update_node(reviewer.id, status="done")
@@ -869,7 +955,234 @@ class DirectorService:
             needed_above: Why a team further up waits on the work; '' when
                 none does.
         """
-        self._enqueue(lambda: self._accept(node_id, needed_above), f"review:{node_id}")
+        self._begin("accept", node_id, needed_above=needed_above)
+
+    async def pause(self) -> Recovery:
+        """Hold the org: its agents stop after the step they are in, and
+        the director's own steps and messages wait.
+
+        What agents still report is recorded and acted on after
+        :meth:`resume`.
+
+        Raises:
+            Conflict: There is no org, or it is the fixture.
+            Unavailable: The director is not running.
+        """
+        self._require_launcher()
+        store = await asyncio.to_thread(lambda: self.store)
+        if store.root_id is None or self._fixture:
+            raise Conflict("There is no org to pause")
+        if self._paused is None:
+            self._hold("human")
+            self._enqueue(self._pause_agents, PAUSE_LANE)
+        return await self.recovery()
+
+    async def resume(self) -> Recovery:
+        """Take a paused org up again.
+
+        Run state that no longer fits the org is put aside first. Then the
+        teams that waited to start are started in the order they waited,
+        the steps the director had begun are finished, held messages are
+        delivered and the agents that were running run again.
+
+        Returns:
+            What was put aside, and nothing else.
+
+        Raises:
+            Unavailable: The director is not running.
+        """
+        launcher = self._require_launcher()
+        store = await asyncio.to_thread(lambda: self.store)
+        if self._paused is None:
+            return await self.recovery()
+        run = self._runs()
+        await asyncio.to_thread(self._put_aside_stale)
+        await asyncio.to_thread(
+            restore_worktrees, self._repo_dir, store.all(), self._home()
+        )
+        dropped = self._dropped()
+        was_running = run.marked(RUNNING)
+        waited = list(run.marked(WAITING))
+        statuses = await launcher.statuses([UUID(agent) for agent in was_running])
+        again: dict[str, str | None] = {}
+        for conversation_id in was_running:
+            status = statuses.get(UUID(conversation_id))
+            if status == ConversationExecutionStatus.ERROR:
+                again[conversation_id] = RESTART_NOTE
+            elif status == ConversationExecutionStatus.PAUSED:
+                again[conversation_id] = None
+        self._resuming = set(again)
+        self._release()
+        await self._resync()
+        for node_id in waited:
+            run.unmark(WAITING, node_id)
+        intents = run.open_intents()
+        starting = {intent.node_id for intent in intents}
+        self._line = deque(node_id for node_id in waited if node_id in starting)
+        for intent in intents:
+            self._enqueue(
+                lambda intent=intent: self._carry_out(intent.id), _lane_for(intent)
+            )
+        for held in run.held():
+            self._enqueue(
+                lambda held=held: self._deliver(
+                    held.seq, held.conversation_id, held.text
+                ),
+                held.node_id or ORG_LANE,
+            )
+        for conversation_id, note in again.items():
+            self._enqueue(
+                lambda conversation_id=conversation_id, note=note: self._run_again(
+                    conversation_id, note
+                ),
+                was_running[conversation_id],
+            )
+        return Recovery(paused=None, items=dropped, messages_held=0)
+
+    async def recovery(self) -> Recovery:
+        """What resuming the org does, and what was put aside as stale."""
+        store = await asyncio.to_thread(lambda: self.store)
+        run = self._runs()
+        if self._paused is None:
+            return Recovery(paused=None, items=[], messages_held=0)
+        launcher = self._launcher
+        statuses = (
+            await launcher.statuses(
+                [
+                    UUID(agent.conversation_id)
+                    for node in store.all()
+                    for agent in node.agents
+                    if agent.conversation_id is not None
+                ]
+            )
+            if launcher is not None
+            else {}
+        )
+        items = await asyncio.to_thread(describe, run, store, statuses, self._repo_dir)
+        return Recovery(
+            paused=self._paused,
+            items=[*items, *self._dropped()],
+            messages_held=len(run.held()),
+        )
+
+    def _runs(self) -> RunState:
+        """What the director is in the middle of, in the org's repository."""
+        _ = self.store  # settles which repository the org is in
+        with self._lock:
+            if self._run is None or self._run_of != self._repo_dir:
+                if self._run is not None:
+                    self._run.close()
+                self._run = self._open_run_state()
+                self._run_of = self._repo_dir
+                kept = self._run.get("paused")
+                self._paused = kept if kept in ("human", "shutdown", "crash") else None
+                self._running = set(self._run.marked(RUNNING))
+            return self._run
+
+    def _open_run_state(self) -> RunState:
+        if self._fixture or not is_git_repository(self._repo_dir):
+            return RunState(None)
+        try:
+            return RunState(self._shells().parent / _RUN_STATE)
+        except (GitError, OSError, RunStateError):
+            logger.exception("Run state of %s is kept in memory only", self._repo_dir)
+            return RunState(None)
+
+    def _hold(self, reason: PauseReason) -> None:
+        self._runs().put("paused", reason)
+        self._paused = reason
+
+    def _release(self) -> None:
+        run = self._runs()
+        run.put("paused", None)
+        run.put("dropped", None)
+        self._paused = None
+
+    def _dropped(self) -> list[RecoveryItem]:
+        kept = self._runs().get("dropped")
+        return [RecoveryItem.model_validate(item) for item in json.loads(kept or "[]")]
+
+    def _instance(self) -> str:
+        """Names this server, to tell its run state from another's."""
+        if self._remembered is None:
+            return ""
+        kept = self._read_remembered().get("instance")
+        if not isinstance(kept, str):
+            kept = uuid4().hex
+            self._remember(instance=kept)
+        return kept
+
+    def _working(self) -> None:
+        """Record that the org is run by this server and has not been
+        stopped."""
+        run = self._runs()
+        run.put("instance", self._instance())
+        run.put("clean", "0")
+
+    def _put_aside_stale(self) -> None:
+        run = self._runs()
+        head = create_org_board(self._repo_dir).head()
+        dropped = put_aside_stale(
+            run, self.store, instance=self._instance(), org_commit=head
+        )
+        if run.get("paused") is None:
+            # Nothing that was left is this server's to take up.
+            self._paused = None
+        if dropped:
+            run.put(
+                "dropped",
+                json.dumps(
+                    [item.model_dump() for item in [*self._dropped(), *dropped]]
+                ),
+            )
+
+    async def _came_back(self) -> None:
+        """Look at what an org that was just loaded was left in the middle
+        of. A server that ended without stopping its org leaves it paused."""
+        await asyncio.to_thread(self._look_at_what_was_left)
+        await self._resync()
+        if self._paused in ("shutdown", "crash") and self.settings.resume_on_start:
+            await self.resume()
+
+    def _look_at_what_was_left(self) -> None:
+        if self._fixture or self.store.root_id is None:
+            return
+        run = self._runs()
+        self._put_aside_stale()
+        if self._paused is None and run.get("clean") == "0" and has_work(run):
+            self._hold("crash")
+        if self._paused is None:
+            for item in self._dropped():
+                logger.warning("Run state put aside: %s", item.detail)
+            run.put("dropped", None)
+        self._working()
+
+    async def _pause_agents(self) -> None:
+        store = self.store
+        run = self._runs()
+        launcher = self._require_launcher()
+        agents: list[tuple[str, AgentRole, UUID]] = [
+            (node.id, agent.role, UUID(agent.conversation_id))
+            for node in store.all()
+            for agent in node.agents
+            if agent.conversation_id is not None
+        ]
+        statuses = await launcher.statuses([agent for _, _, agent in agents])
+        stopping: list[UUID] = []
+        for node_id, role, conversation_id in agents:
+            if statuses.get(conversation_id) != ConversationExecutionStatus.RUNNING:
+                continue
+            run.mark(RUNNING, str(conversation_id), node_id)
+            self._running.add(str(conversation_id))
+            with suppress(NotFound):
+                store.set_agent(node_id, role, status=AGENT_PAUSED)
+            stopping.append(conversation_id)
+        await asyncio.gather(*(launcher.pause(agent) for agent in stopping))
+
+    async def _run_again(self, conversation_id: str, note: str | None) -> None:
+        self._resuming.discard(conversation_id)
+        with suppress(NotFound):
+            await self._require_launcher().resume(UUID(conversation_id), note)
 
     def _checkouts(self) -> list[Path]:
         """Where the org's checkouts are: the repository and the worktrees."""
@@ -1002,7 +1315,7 @@ class DirectorService:
             self._load_from(self._directory, store)
         store.on_change(self._schedule_save)
         if self._loop is not None:
-            self._enqueue(self._resync)
+            self._enqueue(self._came_back)
         return store
 
     def _load_from(self, directory: Path, store: OrgStore) -> bool:
@@ -1046,14 +1359,15 @@ class DirectorService:
         """Keep ``changes`` for the next start of the server."""
         if self._remembered is None:
             return
-        try:
-            self._remembered.parent.mkdir(parents=True, exist_ok=True)
-            atomic_write_text(
-                self._remembered,
-                json.dumps({**self._read_remembered(), **changes}) + "\n",
-            )
-        except OSError:
-            logger.exception("Could not write %s", self._remembered)
+        with self._remember_lock:
+            try:
+                self._remembered.parent.mkdir(parents=True, exist_ok=True)
+                atomic_write_text(
+                    self._remembered,
+                    json.dumps({**self._read_remembered(), **changes}) + "\n",
+                )
+            except OSError:
+                logger.exception("Could not write %s", self._remembered)
 
     def _enqueue(self, effect: Effect, lane: str = ORG_LANE) -> None:
         loop = self._loop
@@ -1089,26 +1403,114 @@ class DirectorService:
         finally:
             del self._lanes[lane]
 
-    def _lane_of(self, conversation_id: str) -> str:
-        """The lane of the team an agent's conversation belongs to."""
+    def _begin(self, kind: str, node_id: str, **payload: object) -> None:
+        """Record something of several steps the director does for a team,
+        then do it. Safe from any thread.
+
+        It is finished after a restart or a pause from the steps that were
+        done, so each step must be safe to take twice.
+        """
+        if self._loop is None:
+            raise Unavailable("The director is not running agents on this server")
+        intent = self._runs().begin(kind, node_id, payload)
+        self._save_soon()
+        self._enqueue(lambda: self._carry_out(intent.id), _lane_for(intent))
+
+    async def _carry_out(self, intent_id: int) -> None:
+        run = self._runs()
+        if self._paused is not None or intent_id in self._in_flight:
+            return
+        intent = next(
+            (open_ for open_ in run.open_intents() if open_.id == intent_id), None
+        )
+        if intent is None:
+            return
+        step = self._steps.get(intent.kind)
+        if step is None:
+            run.finish(intent.id)
+            self._leave_line(intent.node_id)
+            return
+        self._in_flight.add(intent.id)
+        try:
+            await step(intent)
+        except _Held:
+            return
+        except Exception:
+            logger.exception("A director action failed")
+            run.finish(intent.id)
+        else:
+            run.finish(intent.id)
+        finally:
+            self._in_flight.discard(intent.id)
+            self._leave_line(intent.node_id)
+        if intent.kind == "start_team":
+            above = intent.payload["parent"]
+            others = [
+                other
+                for other in run.open_intents()
+                if other.kind == "start_team" and other.payload["parent"] == above
+            ]
+            if not others:
+                self._begin("finish_split", above)
+
+    def _post(self, conversation_id: str, text: str) -> None:
+        """Record a message to an agent, then deliver it. Safe from any
+        thread. While the org is paused the message waits."""
+        if self._loop is None:
+            raise Unavailable("The director is not running agents on this server")
         found = self.store.find_by_conversation(conversation_id)
-        return found[0].id if found else ORG_LANE
+        node_id = found[0].id if found else ""
+        seq = self._runs().hold(conversation_id, node_id, text)
+        self._save_soon()
+        self._enqueue(
+            lambda: self._deliver(seq, conversation_id, text), node_id or ORG_LANE
+        )
+
+    async def _deliver(self, seq: int, conversation_id: str, text: str) -> None:
+        run = self._runs()
+        if self._paused is not None or seq in self._delivering:
+            return
+        if not run.is_held(seq):
+            return
+        self._delivering.add(seq)
+        try:
+            await self._require_launcher().send(UUID(conversation_id), text)
+        except NotFound:
+            store = self.store
+            found = store.find_by_conversation(conversation_id)
+            if found is not None:
+                store.set_agent(found[0].id, found[1], status=AGENT_LOST)
+            logger.warning("Agent conversation %s is gone", conversation_id)
+        finally:
+            self._delivering.discard(seq)
+        run.delivered(seq)
 
     async def _when_there_is_room[T](
         self, node_id: str, start: Callable[[], Awaitable[T]]
     ) -> T:
         """Run ``start`` for a team; while the server is full, wait in line
         for a conversation to stop running and try again."""
+        while node_id in self._line and self._line[0] != node_id:
+            await self._line_moved.wait()
         try:
             return await start()
         except ConversationRunLimitExceeded:
             logger.info("Server is at its run limit; node %s waits", node_id)
+        finally:
+            # Nothing is awaited from here to the gate, so the team is in
+            # line at the gate before the next one tries.
+            self._leave_line(node_id)
         store = self.store
+        run = self._runs()
+        run.mark(WAITING, node_id)
         with suppress(NotFound):
             store.update_node(node_id, waiting_to_start=True)
+        keeps_place = False
         try:
             async with self._start_gate:
                 while True:
+                    if self._paused is not None:
+                        raise _Held
                     self._room.clear()
                     try:
                         return await start()
@@ -1119,9 +1521,21 @@ class DirectorService:
                         await asyncio.wait_for(
                             self._room.wait(), timeout=self._run_limit_retry
                         )
+        except (_Held, asyncio.CancelledError):
+            # Stopped while it waited: it is still next when the org resumes.
+            keeps_place = True
+            raise
         finally:
+            if not keeps_place:
+                run.unmark(WAITING, node_id)
             with suppress(NotFound):
                 store.update_node(node_id, waiting_to_start=False)
+
+    def _leave_line(self, node_id: str) -> None:
+        if node_id in self._line:
+            self._line.remove(node_id)
+            moved, self._line_moved = self._line_moved, asyncio.Event()
+            moved.set()
 
     def _schedule_save(self) -> None:
         loop = self._loop
@@ -1140,14 +1554,32 @@ class DirectorService:
         self._save_timer = None
         await self._save()
 
+    def _save_soon(self) -> None:
+        """Save the tree without waiting to gather more changes: what was
+        just recorded as begun refers to it."""
+        if not self._save_asked:
+            self._save_asked = True
+            self._enqueue(self._save_asked_for)
+
+    async def _save_asked_for(self) -> None:
+        self._save_asked = False
+        await self._save()
+
     async def _save(self) -> None:
         store = self._store
         if store is None or self._fixture:
             return
         try:
-            await asyncio.to_thread(save_org, create_org_board(self._repo_dir), store)
+            await asyncio.to_thread(self._save_tree, store)
         except GitError:
             logger.exception("Could not save the org tree to %s", self._repo_dir)
+
+    def _save_tree(self, store: OrgStore) -> None:
+        board = create_org_board(self._repo_dir)
+        save_org(board, store)
+        run = self._runs()
+        run.replace_marks(TEAM, {node.id: fingerprint(node) for node in store.all()})
+        run.put("org_commit", board.head())
 
     def _on_status(
         self, conversation_id: UUID, status: ConversationExecutionStatus
@@ -1157,10 +1589,36 @@ class DirectorService:
         store = self._store
         if store is None:
             return
-        found = store.find_by_conversation(str(conversation_id))
-        if found is not None:
-            node, role = found
-            store.set_agent(node.id, role, status=_AGENT_STATUS.get(status, "idle"))
+        agent = str(conversation_id)
+        found = store.find_by_conversation(agent)
+        if found is None:
+            return
+        node, role = found
+        if self._paused is None:
+            self._note_running(
+                agent, node.id, status == ConversationExecutionStatus.RUNNING
+            )
+        store.set_agent(node.id, role, status=self._shown(agent, status))
+
+    def _note_running(self, conversation_id: str, node_id: str, running: bool) -> None:
+        if running == (conversation_id in self._running):
+            return
+        run = self._runs()
+        if running:
+            self._running.add(conversation_id)
+            run.mark(RUNNING, conversation_id, node_id)
+        else:
+            self._running.discard(conversation_id)
+            run.unmark(RUNNING, conversation_id)
+
+    def _shown(self, conversation_id: str, status: ConversationExecutionStatus) -> str:
+        """An agent's status as the org shows it. One that was running when
+        the org was paused is paused, whatever stopping did to it."""
+        held = self._paused is not None and conversation_id in self._running
+        if held or conversation_id in self._resuming:
+            if status != ConversationExecutionStatus.RUNNING:
+                return AGENT_PAUSED
+        return _AGENT_STATUS.get(status, "idle")
 
     async def _resync(self) -> None:
         """Read every agent's status back from its conversation."""
@@ -1179,26 +1637,30 @@ class DirectorService:
         statuses = await self._require_launcher().statuses(
             [conversation_id for _, _, conversation_id in agents]
         )
+        starting = {
+            intent.node_id
+            for intent in self._runs().open_intents()
+            if intent.kind in STARTING
+        }
         for node_id, role, conversation_id in agents:
             status = statuses.get(conversation_id)
-            with suppress(NotFound):
-                store.set_agent(
-                    node_id,
-                    role,
-                    status=AGENT_LOST
-                    if status is None
-                    else _AGENT_STATUS.get(status, "idle"),
+            agent = str(conversation_id)
+            if self._paused is None:
+                self._note_running(
+                    agent, node_id, status == ConversationExecutionStatus.RUNNING
                 )
+            if status is not None:
+                shown = self._shown(agent, status)
+            else:
+                shown = "idle" if node_id in starting else AGENT_LOST
+            with suppress(NotFound):
+                store.set_agent(node_id, role, status=shown)
 
     async def _send(self, conversation_id: str, text: str) -> None:
-        try:
-            await self._require_launcher().send(UUID(conversation_id), text)
-        except NotFound:
-            store = self.store
-            found = store.find_by_conversation(conversation_id)
-            if found is not None:
-                store.set_agent(found[0].id, found[1], status=AGENT_LOST)
-            logger.warning("Agent conversation %s is gone", conversation_id)
+        """Deliver a message as part of a step, in its place among them."""
+        found = self.store.find_by_conversation(conversation_id)
+        seq = self._runs().hold(conversation_id, found[0].id if found else "", text)
+        await self._deliver(seq, conversation_id, text)
 
     def _briefing(self, node: OrgNode, role: AgentRole, task: str) -> str:
         blackboard = GitBlackboard(self._repo_dir)
@@ -1244,54 +1706,17 @@ class DirectorService:
         if node is None or conversation_id is None:
             return False
         launcher = self._require_launcher()
-        text = await asyncio.to_thread(self._briefing, node, role, task)
         try:
-            tool_params = await asyncio.to_thread(self._confine, node_id, role)
-            if parent_conversation is None:
-                raise NotFound(f"Node {node_id} has nobody to derive its {role} from")
-            parent_id = UUID(parent_conversation)
-            # A team given a profile of its own starts its IC from it; its
-            # Manager, like every Manager, is derived from the IC.
-            profile = node.agent_profile if role == "ic" else None
-            kind = await (
-                launcher.profile_kind(profile)
-                if profile
-                else launcher.agent_kind(parent_id)
-            )
-            isolation = node.isolation if role == "ic" else "shared"
-            if kind == "acp" and role == "ic" and self._bwrap is None:
-                # Nothing holds its process to the team's directory, so its
-                # work is kept apart and checked when it is merged.
-                isolation = "worktree"
-            adapt = await asyncio.to_thread(self._adapter, conversation_id)
-            title = _agent_title(node.title, role)
-
-            async def start() -> StartedAgent:
-                if profile:
-                    return await launcher.start_from_profile(
-                        profile,
-                        parent_id,
-                        UUID(conversation_id),
-                        [Tool(name=name) for name in DIRECTOR_TOOL_NAMES],
-                        title=title,
-                        task=text,
-                        isolation=isolation,
-                        suffixes=[POD_PROTOCOL],
-                        tool_params=tool_params,
-                        adapt_agent=adapt,
-                    )
-                return await launcher.start_derived(
-                    parent_id,
-                    UUID(conversation_id),
-                    title=title,
-                    task=text,
-                    isolation=isolation,
-                    suffixes=[] if role == "ic" else [MANAGER_ROLE],
-                    tool_params=tool_params,
-                    adapt_agent=adapt,
+            started = await launcher.started(UUID(conversation_id))
+            if started is None:
+                started = await self._start_new(
+                    node, role, conversation_id, parent_conversation, task
                 )
-
-            started = await self._when_there_is_room(node_id, start)
+                if self._paused is not None:
+                    self._note_running(conversation_id, node_id, True)
+                    await launcher.pause(UUID(conversation_id))
+        except _Held:
+            raise
         except Exception:
             logger.exception("Could not start the %s of node %s", role, node_id)
             store.set_agent(node_id, role, status=AGENT_LOST)
@@ -1304,10 +1729,75 @@ class DirectorService:
                 worktree_path=started.workspace,
                 isolation=started.isolation,
                 branch=await asyncio.to_thread(_branch_of, started.workspace),
-                base_commit=await asyncio.to_thread(_base_of, started.workspace),
+                base_commit=node.base_commit
+                or await asyncio.to_thread(_base_of, started.workspace),
                 boundary_enforcement=self._enforcement(started.kind),
             )
         return True
+
+    async def _start_new(
+        self,
+        node: OrgNode,
+        role: AgentRole,
+        conversation_id: str,
+        parent_conversation: str | None,
+        task: str,
+    ) -> StartedAgent:
+        """Start the conversation of an agent that has none yet.
+
+        Raises:
+            NotFound: There is nobody to derive the agent from.
+            _Held: The org was paused while the team waited for a run.
+        """
+        node_id = node.id
+        launcher = self._require_launcher()
+        text = await asyncio.to_thread(self._briefing, node, role, task)
+        tool_params = await asyncio.to_thread(self._confine, node_id, role)
+        if parent_conversation is None:
+            raise NotFound(f"Node {node_id} has nobody to derive its {role} from")
+        parent_id = UUID(parent_conversation)
+        # A team given a profile of its own starts its IC from it; its
+        # Manager, like every Manager, is derived from the IC.
+        profile = node.agent_profile if role == "ic" else None
+        kind = await (
+            launcher.profile_kind(profile)
+            if profile
+            else launcher.agent_kind(parent_id)
+        )
+        isolation = node.isolation if role == "ic" else "shared"
+        if kind == "acp" and role == "ic" and self._bwrap is None:
+            # Nothing holds its process to the team's directory, so its
+            # work is kept apart and checked when it is merged.
+            isolation = "worktree"
+        adapt = await asyncio.to_thread(self._adapter, conversation_id)
+        title = _agent_title(node.title, role)
+
+        async def start() -> StartedAgent:
+            if profile:
+                return await launcher.start_from_profile(
+                    profile,
+                    parent_id,
+                    UUID(conversation_id),
+                    [Tool(name=name) for name in DIRECTOR_TOOL_NAMES],
+                    title=title,
+                    task=text,
+                    isolation=isolation,
+                    suffixes=[POD_PROTOCOL],
+                    tool_params=tool_params,
+                    adapt_agent=adapt,
+                )
+            return await launcher.start_derived(
+                parent_id,
+                UUID(conversation_id),
+                title=title,
+                task=text,
+                isolation=isolation,
+                suffixes=[] if role == "ic" else [MANAGER_ROLE],
+                tool_params=tool_params,
+                adapt_agent=adapt,
+            )
+
+        return await self._when_there_is_room(node_id, start)
 
     async def _launch_manager(self, node_id: str, task: str) -> None:
         node = self.store.get(node_id)
@@ -1316,67 +1806,99 @@ class DirectorService:
                 node_id, "manager", agent_conversation(node, "ic"), task
             )
 
-    async def _carry_out_split(self, node_id: str) -> None:
+    async def _do_brief(self, intent: Intent) -> None:
+        await self._brief(
+            intent.node_id, intent.payload["role"], intent.payload["task"]
+        )
+
+    async def _do_launch_manager(self, intent: Intent) -> None:
+        await self._launch_manager(intent.node_id, intent.payload["task"])
+
+    async def _do_start_team(self, intent: Intent) -> None:
+        node_id, task = intent.node_id, intent.payload["task"]
+        above = self.store.get(intent.payload["parent"])
+        parent_ic = agent_conversation(above, "ic") if above else None
+        if await self._start_agent(node_id, "ic", parent_ic, task):
+            await self._launch_manager(node_id, task)
+        self._enqueue(lambda: self._summarize(node_id, task, first=True), node_id)
+
+    async def _do_finish_split(self, intent: Intent) -> None:
+        await self._finish_split(intent.node_id)
+
+    async def _do_request_review(self, intent: Intent) -> None:
+        await self._request_review(intent.node_id)
+
+    async def _do_accept(self, intent: Intent) -> None:
+        await self._accept(intent.node_id, intent.payload["needed_above"])
+
+    async def _do_halt(self, intent: Intent) -> None:
+        await self._halt(intent.node_id)
+
+    async def _carry_out_split(self, intent: Intent) -> None:
+        store = self.store
+        run = self._runs()
+        node_id = intent.node_id
+        node = store.get(node_id)
+        proposal = node.pending_split if node else None
+        if node is None or proposal is None or proposal.status != "approved":
+            return
+        if "planned" not in intent.steps:
+            try:
+                # The org may have grown since the split was proposed.
+                check_limits(store, node, len(proposal.children), self.settings)
+            except OrgStoreError as error:
+                store.update_node(
+                    node_id,
+                    pending_split=proposal.model_copy(
+                        update={"status": "refine_requested", "feedback": str(error)}
+                    ),
+                )
+                for conversation_id in (
+                    agent_conversation(node, "ic"),
+                    agent_conversation(node, "manager"),
+                ):
+                    self.notify(
+                        conversation_id,
+                        f"The approved split cannot be carried out: {error}",
+                    )
+                return
+            taken = {team.id for team in store.all()}
+            # Fixed before any of them exists, so that carrying the split
+            # out again makes the same teams and no others.
+            intent = run.step_done(
+                intent,
+                "planned",
+                teams=[
+                    _child_node(taken, node, child).model_dump(mode="json")
+                    for child in proposal.children
+                ],
+            )
+        if proposal.contracts.strip():
+            await asyncio.to_thread(self._record_contracts, node, proposal.contracts)
+        teams = [OrgNodeInput.model_validate(team) for team in intent.payload["teams"]]
+        for team in teams:
+            if store.get(team.id) is None:
+                store.upsert(team)
+        await self._save()
+        # The sub-teams start side by side, each in its own lane; the split
+        # is over when the last of them has.
+        for team, child in zip(teams, proposal.children, strict=True):
+            step = f"start:{team.id}"
+            if step not in intent.steps:
+                self._begin("start_team", team.id, task=child.task, parent=node_id)
+                intent = run.step_done(intent, step)
+
+    async def _finish_split(self, node_id: str) -> None:
         store = self.store
         node = store.get(node_id)
         proposal = node.pending_split if node else None
         if node is None or proposal is None or proposal.status != "approved":
             return
-        parent_ic = agent_conversation(node, "ic")
-        try:
-            # The org may have grown since the split was proposed.
-            check_limits(store, node, len(proposal.children), self.settings)
-        except OrgStoreError as error:
-            store.update_node(
-                node_id,
-                pending_split=proposal.model_copy(
-                    update={"status": "refine_requested", "feedback": str(error)}
-                ),
-            )
-            for conversation_id in (parent_ic, agent_conversation(node, "manager")):
-                self.notify(
-                    conversation_id,
-                    f"The approved split cannot be carried out: {error}",
-                )
-            return
-        if proposal.contracts.strip():
-            await asyncio.to_thread(self._record_contracts, node, proposal.contracts)
-
-        started: list[str] = []
-        teams: list[tuple[str, str]] = []
-        for child in proposal.children:
-            child_node = store.upsert(self._child_node(store, node, child))
-            started.append(f"{child.title} ({child.path})")
-            teams.append((child_node.id, child.task))
-        # The sub-teams start side by side, each in its own lane; the split
-        # is over when the last of them has.
-        left = len(teams)
-
-        async def start(child_id: str, task: str) -> None:
-            nonlocal left
-            try:
-                if await self._start_agent(child_id, "ic", parent_ic, task):
-                    await self._launch_manager(child_id, task)
-            finally:
-                left -= 1
-                if not left:
-                    self._enqueue(lambda: self._finish_split(node_id, started), node_id)
-            await self._summarize(child_id, task, first=True)
-
-        for child_id, task in teams:
-            self._enqueue(
-                lambda child_id=child_id, task=task: start(child_id, task), child_id
-            )
-
-    async def _finish_split(self, node_id: str, started: list[str]) -> None:
-        store = self.store
-        node = store.get(node_id)
-        if node is None:
-            return
         store.update_node(node_id, pending_split=None)
         # The shell the IC starts next can no longer write what it gave away.
         with suppress(GitError, OSError):
             await asyncio.to_thread(self._confine, node_id, "ic")
+        started = [f"{child.title} ({child.path})" for child in proposal.children]
         self.notify(
             agent_conversation(node, "ic"),
             "Your split was approved and these sub-teams now own their "
@@ -1384,76 +1906,97 @@ class DirectorService:
             "there; carry on with what remains in your boundary.",
         )
 
-    async def _prune(
-        self,
-        node_id: str,
-        approach: str,
-        why_failed: str,
-        replacement_task: str | None,
-    ) -> None:
+    async def _prune(self, intent: Intent) -> None:
         store = self.store
-        node = store.get(node_id)
-        parent = store.get(node.parent_id) if node and node.parent_id else None
-        if node is None or parent is None:
-            return
+        run = self._runs()
+        node_id = intent.node_id
         launcher = self._require_launcher()
-        # The team first, then everything below it.
-        teams = [node]
-        for team in teams:
-            teams.extend(store.children(team.id))
-        conversations = [
-            UUID(agent.conversation_id)
-            for team in teams
-            for agent in team.agents
-            if agent.conversation_id is not None
-        ]
-        for conversation_id in conversations:
-            await launcher.stop(conversation_id)
-        now = datetime.now(UTC)
-        saved = await asyncio.to_thread(
-            self._discard_work, teams, now.strftime("%Y%m%dT%H%M%SZ")
-        )
-        for conversation_id in conversations:
-            await launcher.delete(conversation_id)
+        if "planned" not in intent.steps:
+            node = store.get(node_id)
+            above = store.get(node.parent_id) if node and node.parent_id else None
+            if node is None or above is None:
+                return
+            # The team first, then everything below it.
+            teams = [node]
+            for team in teams:
+                teams.extend(store.children(team.id))
+            now = datetime.now(UTC)
+            # Fixed before anything is removed, so that pruning again after
+            # a restart removes the same things and records them once.
+            intent = run.step_done(
+                intent,
+                "planned",
+                title=node.title,
+                path=node.boundary.path,
+                parent=above.id,
+                teams=[team.id for team in teams],
+                conversations=[
+                    agent.conversation_id
+                    for team in teams
+                    for agent in team.agents
+                    if agent.conversation_id is not None
+                ],
+                stamp=now.strftime("%Y%m%dT%H%M%SZ"),
+                at=now.isoformat(timespec="seconds"),
+                fresh=str(uuid4()),
+            )
+        plan = intent.payload
+        where, replacement_task = plan["path"], plan["replacement_task"]
+        conversations = [UUID(agent) for agent in plan["conversations"]]
+        if "stopped" not in intent.steps:
+            for conversation_id in conversations:
+                await launcher.stop(conversation_id)
+            intent = run.step_done(intent, "stopped")
+        if "discarded" not in intent.steps:
+            teams = [team for team in map(store.get, plan["teams"]) if team is not None]
+            saved = await asyncio.to_thread(self._discard_work, teams, plan["stamp"])
+            intent = run.step_done(intent, "discarded", saved=saved)
+        saved = intent.payload["saved"]
+        if "deleted" not in intent.steps:
+            for conversation_id in conversations:
+                await launcher.delete(conversation_id)
+            intent = run.step_done(intent, "deleted")
         autopsy = Autopsy(
             node_id=node_id,
-            at=now.isoformat(timespec="seconds"),
-            approach=approach,
-            why_failed=why_failed,
+            at=plan["at"],
+            approach=plan["approach"],
+            why_failed=plan["why_failed"],
             saved_ref=saved,
         )
         try:
-            await asyncio.to_thread(
-                GitBlackboard(self._repo_dir).append_autopsy,
-                node.boundary.path,
-                autopsy,
-            )
+            await asyncio.to_thread(self._record_autopsy, where, autopsy)
         except (GitError, DomainError):
             logger.exception("Could not record the autopsy of node %s", node_id)
 
-        parent_ic = agent_conversation(parent, "ic")
-        where = node.boundary.path
+        above = store.get(plan["parent"])
+        parent_ic = agent_conversation(above, "ic") if above else None
+        if "removed" not in intent.steps:
+            if replacement_task is None:
+                store.remove(node_id)
+                # The shell the IC above starts next can write there again.
+                with suppress(GitError, OSError):
+                    await asyncio.to_thread(self._confine, plan["parent"], "ic")
+            elif above is not None:
+                for child in store.children(node_id):
+                    store.remove(child.id)
+                store.update_node(
+                    node_id,
+                    agents=_new_pod(UUID(plan["fresh"])),
+                    status="idle",
+                    worktree_path=above.worktree_path,
+                    branch=above.branch,
+                    base_commit="",
+                    escalations=[],
+                    pending_split=None,
+                    review=None,
+                    headline=provisional_summary(replacement_task).headline,
+                    spec_summary=_summary_of(replacement_task),
+                )
+            await self._save()
+            intent = run.step_done(intent, "removed")
         if replacement_task is None:
-            store.remove(node_id)
-            # The shell the IC above starts next can write there again.
-            with suppress(GitError, OSError):
-                await asyncio.to_thread(self._confine, parent.id, "ic")
             outcome = f"{where} is yours again"
         else:
-            for child in store.children(node_id):
-                store.remove(child.id)
-            store.update_node(
-                node_id,
-                agents=_new_pod(uuid4()),
-                status="idle",
-                worktree_path=parent.worktree_path,
-                branch=parent.branch,
-                escalations=[],
-                pending_split=None,
-                review=None,
-                headline=provisional_summary(replacement_task).headline,
-                spec_summary=_summary_of(replacement_task),
-            )
             if await self._start_agent(node_id, "ic", parent_ic, replacement_task):
                 await self._launch_manager(node_id, replacement_task)
             self._enqueue(
@@ -1463,11 +2006,16 @@ class DirectorService:
             outcome = f"a fresh team now works in {where}"
         self.notify(
             parent_ic,
-            f"Your Manager pruned the team {node.title!r} ({where}): "
-            f"{why_failed} Its uncommitted changes were discarded"
+            f"Your Manager pruned the team {plan['title']!r} ({where}): "
+            f"{plan['why_failed']} Its uncommitted changes were discarded"
             + (f" (kept in git as {saved})" if saved else "")
             + f"; {outcome}.",
         )
+
+    def _record_autopsy(self, where: str, autopsy: Autopsy) -> None:
+        board = GitBlackboard(self._repo_dir)
+        if autopsy not in board.autopsies(where):
+            board.append_autopsy(where, autopsy)
 
     async def _own_account(
         self, node: OrgNode
@@ -1559,7 +2107,7 @@ class DirectorService:
         if above is not None:
             if above.status == "done":
                 # Reviewing is work; it is done again once it has decided.
-                self._done_reviewers.add(above.id)
+                self._runs().mark(REVIEWING, above.id)
                 store.update_node(above.id, status="working")
             self.notify(agent_conversation(above, "ic"), review_request(node, review))
         elif found:
@@ -1687,6 +2235,8 @@ class DirectorService:
         asker = agent_conversation(root, "ic") if root else None
         if asker is None or not is_git_repository(self._repo_dir):
             return
+        if self._paused is not None:
+            return
         board = GitBlackboard(self._repo_dir)
         for item in await asyncio.to_thread(memory.due, board):
             answer = await self._ask(asker, *memory.prompt(item), memory.USAGE_ID)
@@ -1777,6 +2327,8 @@ class DirectorService:
         conversation_id = agent_conversation(node, "ic") if node else None
         if node is None or conversation_id is None or reported():
             return
+        if self._paused is not None:
+            return
         launcher = self._require_launcher()
         try:
             async with self._model_calls:
@@ -1813,38 +2365,46 @@ class DirectorService:
             f"{path}/{CONTRACTS_FILE}" if path else CONTRACTS_FILE
         )
         text = f"{contracts.strip()}\n"
+        if earlier and text.strip() in earlier:
+            return
         blackboard.write(
             path,
             CONTRACTS_FILE,
             f"{earlier.rstrip()}\n\n{text}" if earlier and earlier.strip() else text,
         )
 
-    @staticmethod
-    def _child_node(
-        store: OrgStore, parent: OrgNode, child: SplitChild
-    ) -> OrgNodeInput:
-        base = ".".join(
-            re.sub(r"[^A-Za-z0-9_-]+", "-", segment)
-            for segment in child.path.split("/")
-        )
-        node_id, attempt = base, 1
-        while store.get(node_id) is not None:
-            attempt += 1
-            node_id = f"{base}-{attempt}"
-        return OrgNodeInput(
-            id=node_id,
-            parent_id=parent.id,
-            title=child.title,
-            boundary=child_boundary(child),
-            isolation=child.isolation,
-            agent_profile=child.agent_profile,
-            worktree_path=parent.worktree_path,
-            branch=parent.branch,
-            agents=_new_pod(uuid4()),
-            status="idle",
-            headline=provisional_summary(child.task).headline,
-            spec_summary=_summary_of(child.task),
-        )
+
+def _child_node(taken: set[str], parent: OrgNode, child: SplitChild) -> OrgNodeInput:
+    """The team a split makes of ``child``, under an id that is not in
+    ``taken`` and is added to it."""
+    base = ".".join(
+        re.sub(r"[^A-Za-z0-9_-]+", "-", segment) for segment in child.path.split("/")
+    )
+    node_id, attempt = base, 1
+    while node_id in taken:
+        attempt += 1
+        node_id = f"{base}-{attempt}"
+    taken.add(node_id)
+    return OrgNodeInput(
+        id=node_id,
+        parent_id=parent.id,
+        title=child.title,
+        boundary=child_boundary(child),
+        isolation=child.isolation,
+        agent_profile=child.agent_profile,
+        worktree_path=parent.worktree_path,
+        branch=parent.branch,
+        agents=_new_pod(uuid4()),
+        status="idle",
+        headline=provisional_summary(child.task).headline,
+        spec_summary=_summary_of(child.task),
+    )
+
+
+def _lane_for(intent: Intent) -> str:
+    if intent.kind in _REVIEW_STEPS:
+        return f"review:{intent.node_id}"
+    return intent.node_id
 
 
 def _new_pod(ic_id: UUID) -> list[AgentRef]:

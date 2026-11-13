@@ -30,6 +30,7 @@ from openhands.agent_server.director.models import (
     OrgNode,
     OrgNodeDetail,
     OrgSummary,
+    Recovery,
     RoutedMessage,
     RouteMessageRequest,
     SnapshotEvent,
@@ -289,6 +290,63 @@ async def create_org(
     for its next start. Follow the org on the tree stream.
     """
     return await service.create_org(request)
+
+
+@director_router.post(
+    "/org/pause",
+    response_model=Recovery,
+    responses=error_responses(
+        {
+            Conflict: "There is no org, or the director serves the fixture",
+            Unavailable: "The director is not running agents",
+        }
+    ),
+)
+async def pause_org(
+    service: DirectorService = Depends(get_director_service),
+) -> Recovery:
+    """Hold the org.
+
+    Its agents stop after the step they are in. The steps the director
+    takes for them and the messages to them, the human's included, wait and
+    are kept across restarts. What agents still report is recorded. Pausing
+    a paused org changes nothing. The answer says what `POST /org/resume`
+    would do.
+    """
+    return await service.pause()
+
+
+@director_router.post(
+    "/org/resume",
+    response_model=Recovery,
+    responses=error_responses({Unavailable: "The director is not running agents"}),
+)
+async def resume_org(
+    service: DirectorService = Depends(get_director_service),
+) -> Recovery:
+    """Take a paused org up again.
+
+    Teams that waited to start are started in the order they waited, steps
+    the director had begun are finished, held messages are delivered in
+    order and the agents that were running run again. An agent the server
+    ended in the middle of a step is told so first. The answer lists only
+    what was put aside because it no longer fits the org.
+    """
+    return await service.resume()
+
+
+@director_router.get("/org/recovery", response_model=Recovery)
+async def get_recovery(
+    service: DirectorService = Depends(get_director_service),
+) -> Recovery:
+    """Get what resuming a paused org does, team by team.
+
+    An org is paused by `POST /org/pause`, and comes back paused when the
+    server stopped or ended while it was in the middle of its work
+    (`OrgSummary.paused` says which). Without a paused org the list is
+    empty.
+    """
+    return await service.recovery()
 
 
 @director_router.post(

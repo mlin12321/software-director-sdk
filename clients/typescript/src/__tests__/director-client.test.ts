@@ -173,6 +173,27 @@ describe('DirectorClient', () => {
     expect(read).toEqual(state);
   });
 
+  it('pauses and resumes the org, and reads what resuming does', async () => {
+    const recovery = {
+      paused: 'crash',
+      items: [{ node_id: 'api', title: 'API', kind: 'run_again', detail: 'Its IC runs again.' }],
+      messages_held: 2,
+    };
+    const fetchMock = mockFetch(() => jsonResponse(recovery));
+    const client = new DirectorClient({ host: 'http://example.com' });
+
+    await client.pauseOrg();
+    const read = await client.getRecovery();
+    await client.resumeOrg();
+
+    expect(fetchMock.mock.calls.map(([url, init]) => `${init.method} ${url}`)).toEqual([
+      'POST http://example.com/api/director/org/pause',
+      'GET http://example.com/api/director/org/recovery',
+      'POST http://example.com/api/director/org/resume',
+    ]);
+    expect(read).toEqual(recovery);
+  });
+
   it('streams events, across chunk boundaries and past keep-alives', async () => {
     const snapshot = { type: 'snapshot', focus_id: 'root', nodes: [], escalations: [] };
     const removed = { type: 'node_removed', id: 'a' };
