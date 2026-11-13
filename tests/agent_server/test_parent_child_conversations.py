@@ -31,12 +31,14 @@ from openhands.agent_server.models import (
 )
 from openhands.sdk import LLM, Agent, Message, TextContent
 from openhands.sdk.agent.base import AgentBase
+from openhands.sdk.conversation.request import ConversationWorktreeOptions
 from openhands.sdk.conversation.state import (
     ConversationExecutionStatus,
     ConversationState,
 )
 from openhands.sdk.git.exceptions import GitCommandError
 from openhands.sdk.git.utils import run_git_command
+from openhands.sdk.tool.spec import Tool
 from openhands.sdk.workspace import LocalWorkspace
 
 
@@ -313,7 +315,10 @@ class _ChildLaunch:
 
 
 async def _launch_child(
-    tmp_path: Path, workspace_dir: Path, request: StartChildConversationRequest
+    tmp_path: Path,
+    workspace_dir: Path,
+    request: StartChildConversationRequest,
+    **launch_options: Any,
 ) -> _ChildLaunch:
     """Start a parent in *workspace_dir*, then launch a child from it."""
     services: dict[UUID, Any] = {}
@@ -330,7 +335,9 @@ async def _launch_child(
             conversation_worktree_root=worktree_root,
         ) as service:
             parent_info, _ = await service.start_conversation(parent_request)
-            result = await service.start_child_conversation(parent_info.id, request)
+            result = await service.start_child_conversation(
+                parent_info.id, request, **launch_options
+            )
             parent = await service.get_conversation(parent_info.id)
             child = (
                 await service.get_conversation(result.conversation_id)
@@ -393,6 +400,109 @@ async def test_start_child_conversation_inherits_parent_configuration(
     assert child_stored.tags == {"source": "test"}
     assert child_stored.title == "Docs"
     assert launch.result.title == "Docs"
+
+
+@pytest.mark.asyncio
+async def test_start_child_conversation_takes_a_chosen_id_and_prompt_suffix(
+    tmp_path, workspace_dir
+):
+    child_id = uuid4()
+    request = StartChildConversationRequest(task="Review the plan")
+
+    launch = await _launch_child(
+        tmp_path,
+        workspace_dir,
+        request,
+        child_id=child_id,
+        extra_suffixes=["You review; you do not edit."],
+    )
+
+    assert launch.result is not None
+    assert launch.result.conversation_id == child_id
+    child_agent = launch.services[child_id].get_conversation().agent
+    assert child_agent.agent_context.system_message_suffix.endswith(
+        "You review; you do not edit."
+    )
+    parent_agent = launch.services[launch.parent_id].get_conversation().agent
+    assert parent_agent.agent_context is None
+
+
+@pytest.mark.asyncio
+async def test_start_child_conversation_refuses_an_id_that_is_taken(
+    tmp_path, workspace_dir
+):
+    services: dict[UUID, Any] = {}
+    with patch(
+        "openhands.agent_server.conversation_service.EventService",
+        side_effect=_event_service_factory(services),
+    ):
+        async with ConversationService(
+            conversations_dir=tmp_path / "conversations"
+        ) as service:
+            parent_info, _ = await service.start_conversation(
+                _start_request(workspace_dir)
+            )
+
+            with pytest.raises(ValueError, match="already exists"):
+                await service.start_child_conversation(
+                    parent_info.id,
+                    StartChildConversationRequest(task="Again"),
+                    child_id=parent_info.id,
+                )
+
+
+@pytest.mark.asyncio
+async def test_start_child_conversation_worktree_can_start_from_the_parents_head(
+    tmp_path,
+):
+    repo_dir = tmp_path / "repo"
+    _init_git_repo(repo_dir)
+    run_git_command(["git", "checkout", "-b", "feature"], repo_dir)
+    (repo_dir / "feature.txt").write_text("in progress\n")
+    run_git_command(["git", "add", "feature.txt"], repo_dir)
+    run_git_command(
+        [
+            "git",
+            "-c",
+            "user.name=OpenHands Test",
+            "-c",
+            "user.email=openhands@example.com",
+            "commit",
+            "-m",
+            "feature",
+        ],
+        repo_dir,
+    )
+    request = StartChildConversationRequest(task="Continue", isolation="worktree")
+
+    launch = await _launch_child(
+        tmp_path,
+        repo_dir,
+        request,
+        worktree_options=ConversationWorktreeOptions(base="head"),
+    )
+
+    assert launch.result is not None and launch.result.workspace is not None
+    assert (Path(launch.result.workspace) / "feature.txt").exists()
+
+
+@pytest.mark.asyncio
+async def test_start_conversation_gives_the_agent_server_tools(tmp_path, workspace_dir):
+    services: dict[UUID, Any] = {}
+    with patch(
+        "openhands.agent_server.conversation_service.EventService",
+        side_effect=_event_service_factory(services),
+    ):
+        async with ConversationService(
+            conversations_dir=tmp_path / "conversations"
+        ) as service:
+            info, _ = await service.start_conversation(
+                _start_request(workspace_dir),
+                server_tools=[Tool(name="start_child_conversation")],
+            )
+
+    agent = services[info.id].get_conversation().agent
+    assert [tool.name for tool in agent.tools] == ["start_child_conversation"]
 
 
 @pytest.mark.asyncio

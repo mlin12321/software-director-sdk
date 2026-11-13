@@ -3,10 +3,11 @@ import importlib
 import json
 import logging
 import os
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Collection, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 from uuid import UUID, uuid4
@@ -85,7 +86,10 @@ from openhands.sdk.credential import (
 )
 from openhands.sdk.errors import Conflict
 from openhands.sdk.event import MessageEvent
-from openhands.sdk.event.conversation_state import ConversationStateUpdateEvent
+from openhands.sdk.event.conversation_state import (
+    FULL_STATE_KEY,
+    ConversationStateUpdateEvent,
+)
 from openhands.sdk.git.exceptions import GitCommandError, GitRepositoryError
 from openhands.sdk.git.utils import run_git_command, validate_git_repository
 from openhands.sdk.launch import LaunchedAgent, finalize
@@ -94,6 +98,7 @@ from openhands.sdk.mcp.utils import MCPToolProvider
 from openhands.sdk.observability import OPERATION_METADATA_KEY, observe
 from openhands.sdk.tool.client_tool import register_client_tools
 from openhands.sdk.tool.registry import get_tool_module_qualnames, is_tool_available
+from openhands.sdk.tool.spec import Tool
 from openhands.sdk.utils.cipher import Cipher
 from openhands.sdk.workspace import LocalWorkspace
 
@@ -554,6 +559,9 @@ def _read_execution_status_sync(
     return None
 
 
+type ExecutionStatusListener = Callable[[UUID, ConversationExecutionStatus], None]
+
+
 @dataclass
 class _ConversationRecord:
     stored: StoredConversation
@@ -621,6 +629,53 @@ class ConversationService:
     _credential_bindings: dict[UUID, dict[str, VersionedCredentialBinding]] = field(
         default_factory=dict, init=False
     )
+    _execution_status_listeners: list[ExecutionStatusListener] = field(
+        default_factory=list, init=False
+    )
+
+    def add_execution_status_listener(
+        self, listener: ExecutionStatusListener
+    ) -> Callable[[], None]:
+        """Call ``listener`` whenever a live conversation changes status.
+
+        It is called on the event loop for every conversation of this service,
+        however many there are and whether or not a client follows them, so
+        it must return quickly.
+
+        Returns:
+            A function that stops the calls.
+        """
+        self._execution_status_listeners.append(listener)
+
+        def stop() -> None:
+            if listener in self._execution_status_listeners:
+                self._execution_status_listeners.remove(listener)
+
+        return stop
+
+    def _publish_execution_status(
+        self, conversation_id: UUID, status: ConversationExecutionStatus
+    ) -> None:
+        for listener in list(self._execution_status_listeners):
+            try:
+                listener(conversation_id, status)
+            except Exception:
+                logger.exception("Execution status listener failed")
+
+    async def get_execution_statuses(
+        self, conversation_ids: Collection[UUID]
+    ) -> dict[UUID, ConversationExecutionStatus]:
+        """The status of each known conversation in ``conversation_ids``.
+
+        Conversations that are not loaded are read from disk without being
+        loaded. Unknown ids are left out.
+        """
+        await self._refresh_execution_statuses()
+        return {
+            conversation_id: record.execution_status
+            for conversation_id in conversation_ids
+            if (record := self._conversation_records.get(conversation_id)) is not None
+        }
 
     def _load_catalog_sync(
         self, conversation_id: UUID | None = None
@@ -1518,9 +1573,16 @@ class ConversationService:
         return conversation_info, False
 
     async def start_conversation(
-        self, request: StartConversationRequest
+        self, request: StartConversationRequest, *, server_tools: Sequence[Tool] = ()
     ) -> tuple[ConversationInfo, bool]:
-        return await self._start_conversation(request)
+        """Start a conversation, or return the one that has the requested id.
+
+        Args:
+            server_tools: Tools this server gives the agent on top of the ones
+                the request resolves to. An ACP agent runs its own tools and
+                does not get them.
+        """
+        return await self._start_conversation(request, server_tools=server_tools)
 
     async def start_acp_conversation(
         self, request: StartConversationRequest
@@ -1530,6 +1592,8 @@ class ConversationService:
     async def _start_conversation(
         self,
         request: StartConversationRequest,
+        *,
+        server_tools: Sequence[Tool] = (),
     ) -> tuple[ConversationInfo, bool]:
         """Start a local event_service and return its id."""
         if self._event_services is None:
@@ -1542,13 +1606,17 @@ class ConversationService:
                 )
 
         with await RunSlot.acquire(self._run_semaphore) as run_slot:
-            return await self._create_conversation(request, conversation_id, run_slot)
+            return await self._create_conversation(
+                request, conversation_id, run_slot, server_tools=server_tools
+            )
 
     async def _create_conversation(
         self,
         request: StartConversationRequest,
         conversation_id: UUID,
         run_slot: RunSlot,
+        *,
+        server_tools: Sequence[Tool] = (),
     ) -> tuple[ConversationInfo, bool]:
         # The link is immutable after creation, so cycles beyond self-parent are
         # impossible; allowing reparenting would require a real ancestor walk.
@@ -1672,9 +1740,10 @@ class ConversationService:
                 additions=request.agent_launch_additions,
                 extra_suffixes=[worktree.guidance] if worktree else (),
                 client_tools=client_tools,
-                experimental_feature_tools=experimental_feature_tools(
-                    experimental_features
-                ),
+                experimental_feature_tools=[
+                    *experimental_feature_tools(experimental_features),
+                    *server_tools,
+                ],
                 load_memory=load_memory,
                 managed_secrets=(
                     [CODEX_AUTH_SECRET_NAME] if managed_codex_credential else ()
@@ -2163,6 +2232,10 @@ class ConversationService:
         self,
         parent_id: UUID,
         request: StartChildConversationRequest,
+        *,
+        child_id: UUID | None = None,
+        extra_suffixes: Sequence[str] = (),
+        worktree_options: ConversationWorktreeOptions | None = None,
     ) -> StartChildConversationResponse | None:
         """Start a child conversation on this server, derived from *parent_id*.
 
@@ -2176,11 +2249,19 @@ class ConversationService:
         shares the parent's directory. The link is recorded via
         ``parent_conversation_id``.
 
+        Args:
+            child_id: The id the child gets; a new one by default.
+            extra_suffixes: Text appended to the system prompt the child
+                inherits from the parent's agent.
+            worktree_options: Where a worktree child starts from; the
+                repository's default branch when not given.
+
         Returns ``None`` when *parent_id* does not exist.
 
         Raises:
             ConversationRunLimitExceeded: If all server run slots are occupied.
                 Nothing is persisted in that case.
+            ValueError: A conversation with ``child_id`` already exists.
         """
         if self._event_services is None:
             raise ValueError("inactive_service")
@@ -2196,7 +2277,7 @@ class ConversationService:
             parent_agent = cast(AgentBase, parent_service.get_conversation().agent)
             # A child spends under the same cap as its parent.
             max_budget_per_run = parent_service.get_conversation().max_budget_per_run
-            child_id = uuid4()
+            child_id = child_id or uuid4()
 
             # Reuse the worktree machinery of a regular start: a worktree is
             # planned (and its guidance appended to the child's agent) only when
@@ -2207,7 +2288,7 @@ class ConversationService:
                     parent_stored.workspace,
                     child_id,
                     self.conversation_worktree_root,
-                    None,
+                    worktree_options,
                 )
                 if request.isolation == "worktree"
                 else None
@@ -2218,7 +2299,10 @@ class ConversationService:
                     live_launch_runtime(
                         self.acp_skill_sourcing, enable_browser=self.enable_browser
                     ),
-                    extra_suffixes=[worktree.guidance] if worktree else (),
+                    extra_suffixes=[
+                        *([worktree.guidance] if worktree else ()),
+                        *extra_suffixes,
+                    ],
                 )
             )
             workspace = (
@@ -2570,7 +2654,12 @@ class ConversationService:
             # its initial-state push synchronously and any failure surfaces to
             # the caller instead of being silently logged on a later publish.
             await event_service.subscribe_to_events(
-                _EventSubscriber(service=event_service)
+                _EventSubscriber(
+                    service=event_service,
+                    on_execution_status=partial(
+                        self._publish_execution_status, stored.id
+                    ),
+                )
             )
             if stored.autotitle and stored.title is None:
                 await event_service.subscribe_to_events(
@@ -2721,9 +2810,26 @@ def _build_telemetry_context(
     )
 
 
+def _execution_status_in(
+    event: ConversationStateUpdateEvent,
+) -> ConversationExecutionStatus | None:
+    """The status a state update carries, if it carries one."""
+    if event.key == "execution_status":
+        value = event.value
+    elif event.key == FULL_STATE_KEY and isinstance(event.value, dict):
+        value = event.value.get("execution_status")
+    else:
+        return None
+    try:
+        return ConversationExecutionStatus(value)
+    except ValueError:
+        return None
+
+
 @dataclass
 class _EventSubscriber(Subscriber):
     service: EventService
+    on_execution_status: Callable[[ConversationExecutionStatus], None]
 
     async def __call__(self, _event: Event):
         # Any event is activity; refresh the idle-eviction clock.
@@ -2733,6 +2839,9 @@ class _EventSubscriber(Subscriber):
         # conversation activity. This prevents updated_at from being reset
         # on every server restart.
         if isinstance(_event, ConversationStateUpdateEvent):
+            status = _execution_status_in(_event)
+            if status is not None:
+                self.on_execution_status(status)
             return
         self.service.stored.updated_at = utc_now()
         update_last_execution_time()
