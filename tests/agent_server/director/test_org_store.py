@@ -688,7 +688,7 @@ def test_setting_an_agent_status_announces_the_node_once(store: OrgStore):
     ("node_id", "agent_status", "expected"),
     [
         pytest.param("a2", "working", "working", id="an idle node starts working"),
-        pytest.param("a", "working", "working", id="a blocked node resumes"),
+        pytest.param("a", "working", "blocked", id="a declared block stays"),
         pytest.param("root", "idle", "idle", id="a working node goes idle"),
         pytest.param("a2", "blocked", "blocked", id="a failed agent blocks its node"),
         pytest.param("b", "working", "done", id="a done node stays done"),
@@ -701,6 +701,14 @@ def test_a_nodes_status_follows_its_agents(
     node = store.set_agent(node_id, "ic", status=agent_status)
 
     assert node.status == expected
+
+
+def test_a_node_blocked_by_a_failed_agent_resumes_when_that_agent_does(
+    store: OrgStore,
+):
+    store.set_agent("a2", "ic", status="blocked")
+
+    assert store.set_agent("a2", "ic", status="working").status == "working"
 
 
 def test_setting_an_agent_a_node_does_not_have_is_refused(store: OrgStore):

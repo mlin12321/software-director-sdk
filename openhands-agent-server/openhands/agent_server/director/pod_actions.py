@@ -91,6 +91,10 @@ def node_context(service: DirectorService, caller: Caller) -> str:
             spec.model_dump() for spec in blackboard.inherited(node.boundary.path)
         ],
         "rules": blackboard.inherited_rules(node.boundary.path),
+        "failed_here_before": [
+            {"approach": autopsy.approach, "why_failed": autopsy.why_failed}
+            for autopsy in blackboard.autopsies(node.boundary.path)
+        ],
         "sub_teams": [
             {
                 "node_id": child.id,
@@ -314,3 +318,32 @@ def set_status(
     if summary.strip():
         service.refresh_headline(node.id, f"it is {status}. {summary.strip()}")
     return f"Your team is now {status}."
+
+
+def prune_team(
+    service: DirectorService,
+    caller: Caller,
+    node_id: str,
+    approach: str,
+    why_failed: str,
+    replacement_task: str,
+) -> str:
+    """Remove a team directly below the caller's, keeping why it failed."""
+    _only(caller, "manager", "prune a team")
+    if not why_failed.strip():
+        raise Invalid("Say why the team failed; whoever works there next reads it")
+    team = service.store.get(node_id)
+    if team is None or team.parent_id != caller.node.id:
+        raise Invalid(f"{node_id} is not a team directly below yours")
+    service.prune(
+        node_id,
+        approach=approach.strip(),
+        why_failed=why_failed.strip(),
+        replacement_task=replacement_task.strip() or None,
+    )
+    if replacement_task.strip():
+        return f"Pruning {team.title!r}; a fresh team takes over its directory."
+    return (
+        f"Pruning {team.title!r}. Its directory goes back to your team's IC "
+        "when it is gone."
+    )

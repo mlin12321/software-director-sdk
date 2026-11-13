@@ -13,7 +13,12 @@ from typing import NamedTuple
 
 from pydantic import TypeAdapter
 
-from openhands.agent_server.director.git import GitError, git, git_version
+from openhands.agent_server.director.git import (
+    DIRECTOR_IDENTITY,
+    GitError,
+    git,
+    git_version,
+)
 from openhands.agent_server.director.models import (
     Autopsy,
     BoundaryMemory,
@@ -30,12 +35,6 @@ AUTOPSIES_FILE = "autopsies.json"
 _ZERO_OID = "0" * 40
 _MAX_COMMIT_ATTEMPTS = 8
 _MERGE_MIN_GIT = (2, 38)
-_IDENTITY = {
-    "GIT_AUTHOR_NAME": "Agency Director",
-    "GIT_AUTHOR_EMAIL": "director@agency.invalid",
-    "GIT_COMMITTER_NAME": "Agency Director",
-    "GIT_COMMITTER_EMAIL": "director@agency.invalid",
-}
 _AUTOPSIES = TypeAdapter(list[Autopsy])
 
 
@@ -325,7 +324,7 @@ class GitBlackboard:
         return git(
             self.repo_dir,
             ["commit-tree", tree, *parent_args, "-m", message],
-            env=_IDENTITY,
+            env=DIRECTOR_IDENTITY,
         ).strip()
 
     def _swap(self, commit: str, expected: str | None) -> bool:

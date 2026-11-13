@@ -202,6 +202,13 @@ class Autopsy(BaseModel):
     at: str = Field(description="ISO 8601 timestamp of the prune.")
     approach: str
     why_failed: str
+    saved_ref: str | None = Field(
+        default=None,
+        description=(
+            "The git ref that holds the uncommitted changes the prune "
+            "discarded, when there were any."
+        ),
+    )
 
 
 class BoundaryMemory(BaseModel):

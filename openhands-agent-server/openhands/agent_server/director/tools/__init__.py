@@ -7,6 +7,7 @@ against its director, so they exist only in the agent server.
 from openhands.agent_server.director.tools.definition import (
     DecideSplitTool,
     ProposeBoundarySplitTool,
+    PruneTeamTool,
     RaiseEscalationTool,
     ReadNodeContextTool,
     ResolveEscalationTool,
@@ -18,6 +19,7 @@ from openhands.agent_server.director.tools.definition import (
 __all__ = [
     "DecideSplitTool",
     "ProposeBoundarySplitTool",
+    "PruneTeamTool",
     "RaiseEscalationTool",
     "ReadNodeContextTool",
     "ResolveEscalationTool",

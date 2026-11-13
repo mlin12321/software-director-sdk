@@ -3,11 +3,19 @@
 import os
 import re
 import subprocess
+import tempfile
 from collections.abc import Mapping
 from pathlib import Path
 
 
 _TIMEOUT_SECONDS = 30
+# Who the commits the director makes itself are by.
+DIRECTOR_IDENTITY = {
+    "GIT_AUTHOR_NAME": "Agency Director",
+    "GIT_AUTHOR_EMAIL": "director@agency.invalid",
+    "GIT_COMMITTER_NAME": "Agency Director",
+    "GIT_COMMITTER_EMAIL": "director@agency.invalid",
+}
 
 
 class GitError(Exception):
@@ -81,3 +89,39 @@ def enclosing_repository(repo_dir: Path) -> Path | None:
     except (GitError, OSError):
         return None
     return Path(top) if top else None
+
+
+def save_and_discard(checkout: Path, path: str, ref: str) -> str | None:
+    """Discard what is uncommitted under ``path`` of a checkout, keeping it
+    as a commit at ``ref``.
+
+    Ignored files are left alone. The checkout's own index is reset for
+    ``path``; nothing else of it changes.
+
+    Args:
+        path: Relative to the top of the checkout; '' for all of it.
+
+    Returns:
+        The commit that holds what was discarded, or None when everything
+        under ``path`` was committed already.
+    """
+    spec = [f":(top,literal){path}" if path else ":(top)"]
+    if not git(checkout, ["status", "--porcelain", "-uall", "--", *spec]):
+        return None
+    with tempfile.TemporaryDirectory(prefix="director-discard-") as scratch:
+        env = {"GIT_INDEX_FILE": str(Path(scratch) / "index")}
+        git(checkout, ["read-tree", "HEAD"], env=env)
+        git(checkout, ["add", "--all", "--", *spec], env=env)
+        tree = git(checkout, ["write-tree"], env=env).strip()
+    commit = git(
+        checkout,
+        ["commit-tree", tree, "-p", "HEAD", "-m", f"Discarded from {path or '/'}"],
+        env=DIRECTOR_IDENTITY,
+    ).strip()
+    git(checkout, ["update-ref", ref, commit])
+    git(checkout, ["reset", "--quiet", "--", *spec])
+    # `git restore` refuses a path that has no tracked file.
+    if git(checkout, ["ls-files", "--", *spec]):
+        git(checkout, ["restore", "--worktree", "--", *spec])
+    git(checkout, ["clean", "--force", "-d", "--quiet", "--", *spec])
+    return commit

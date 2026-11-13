@@ -1,6 +1,11 @@
 """What the director tells the agents of an org."""
 
-from openhands.agent_server.director.models import AgentRole, InheritedSpec, OrgNode
+from openhands.agent_server.director.models import (
+    AgentRole,
+    Autopsy,
+    InheritedSpec,
+    OrgNode,
+)
 
 
 POD_PROTOCOL = """\
@@ -28,6 +33,10 @@ the runtime refuses it every write in the repository.
   a refinement and say what to change.
 - It settles what the teams below escalate with `resolve_escalation`, or
   passes it up with the reason it could not.
+- It watches the teams directly below. A team that is blocked with no way
+  forward, or keeps trying what does not work, it removes with `prune_team`,
+  saying what the team tried and why it failed. With a new task, a fresh
+  team takes over the same directory.
 
 Anything a team cannot settle itself is raised with `raise_escalation`. It
 goes to the Manager of the team above, never straight to the human. Settle
@@ -52,6 +61,7 @@ def brief(
     task: str,
     specs: list[InheritedSpec],
     rules: list[str],
+    autopsies: list[Autopsy],
 ) -> str:
     """The first message of an agent: who it is and what it inherits."""
     boundary = node.boundary.path or "the whole repository"
@@ -70,6 +80,12 @@ def brief(
     if rules:
         lines += ["", "Rules that apply in this boundary:"]
         lines += [f"- {rule}" for rule in rules]
+    if autopsies:
+        lines += ["", "Approaches that already failed in this boundary:"]
+        lines += [
+            f"- {autopsy.approach or 'An earlier attempt'}: {autopsy.why_failed}"
+            for autopsy in autopsies
+        ]
     lines.append("")
     lines.append(
         "Start on the task now."

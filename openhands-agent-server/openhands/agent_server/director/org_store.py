@@ -159,9 +159,9 @@ class OrgStore:
         """Change the conversation or the status of one agent of a node.
 
         The node's own status follows its agents: it works while one of them
-        does and idles when none does, and an agent that is ``blocked`` blocks
-        it. Done is only ever declared for the node, so an agent of a finished
-        node waking up does not reopen it.
+        does and idles when none does. An agent that is ``blocked`` blocks it
+        until no agent of the node is. Done and blocked that the team declared
+        for the node stay, so an agent waking up does not reopen it.
 
         Raises:
             NotFound: The node does not exist or has no agent in that role.
@@ -181,10 +181,18 @@ class OrgStore:
                 for agent in node.agents
             ]
             working = any(agent.status == "working" for agent in agents)
+            was_blocked = any(
+                agent.role == role and agent.status == "blocked"
+                for agent in node.agents
+            )
             node_status = node.status
-            if status == "blocked":
-                node_status = "blocked"
-            elif working and node.status in ("idle", "blocked"):
+            if any(agent.status == "blocked" for agent in agents):
+                if status == "blocked":
+                    node_status = "blocked"
+            elif node.status == "blocked":
+                if was_blocked:
+                    node_status = "working" if working else "idle"
+            elif working and node.status == "idle":
                 node_status = "working"
             elif not working and node.status == "working":
                 node_status = "idle"

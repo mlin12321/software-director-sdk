@@ -96,6 +96,23 @@ class SetStatusAction(Action):
     )
 
 
+class PruneTeamAction(Action):
+    """Remove a team below yours that is stuck."""
+
+    node_id: str = Field(description="A team directly below yours.")
+    approach: str = Field(description="What the team tried.")
+    why_failed: str = Field(
+        description="Why it did not work, for whoever works there next."
+    )
+    replacement_task: str = Field(
+        default="",
+        description=(
+            "The task of a fresh team that takes over the directory. Leave "
+            "empty to give the directory back to your own team."
+        ),
+    )
+
+
 class _DirectorTool[ActionT: Action](ToolDefinition[ActionT, DirectorObservation]):
     """A tool bound to the conversation of the agent that owns it."""
 
@@ -262,6 +279,31 @@ class SetStatusTool(_DirectorTool[SetStatusAction]):
         )
 
 
+class PruneTeamTool(_DirectorTool[PruneTeamAction]):
+    summary = (
+        "Manager only. Remove a team directly below yours that is stuck or "
+        "keeps failing, with every team below it. Its agents are deleted and "
+        "the uncommitted changes in its directory are discarded (git keeps a "
+        "copy). What you say it tried and why it failed is kept for whoever "
+        "works there next."
+    )
+
+    @classmethod
+    def _action_type(cls):
+        return PruneTeamAction
+
+    @classmethod
+    def _act(cls):
+        return lambda service, caller, action: pod_actions.prune_team(
+            service,
+            caller,
+            action.node_id,
+            action.approach,
+            action.why_failed,
+            action.replacement_task,
+        )
+
+
 register_tool(ReadNodeContextTool.name, ReadNodeContextTool)
 register_tool(WriteSpecTool.name, WriteSpecTool)
 register_tool(ProposeBoundarySplitTool.name, ProposeBoundarySplitTool)
@@ -269,3 +311,4 @@ register_tool(DecideSplitTool.name, DecideSplitTool)
 register_tool(RaiseEscalationTool.name, RaiseEscalationTool)
 register_tool(ResolveEscalationTool.name, ResolveEscalationTool)
 register_tool(SetStatusTool.name, SetStatusTool)
+register_tool(PruneTeamTool.name, PruneTeamTool)
