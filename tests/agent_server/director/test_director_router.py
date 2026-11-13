@@ -33,8 +33,21 @@ from tests.agent_server.director.conftest import (
 )
 
 
+def server_config(repo_dir: Path, **config) -> Config:
+    """A server whose director is started for ``repo_dir`` and keeps what it
+    remembers beside it."""
+    return Config(
+        **{
+            "session_api_keys": [],
+            "director_repo_path": repo_dir,
+            "conversations_path": repo_dir.parent / "state" / "conversations",
+            **config,
+        }
+    )
+
+
 def make_client(repo_dir: Path, **config) -> TestClient:
-    app = create_app(Config(session_api_keys=[], director_repo_path=repo_dir, **config))
+    app = create_app(server_config(repo_dir, **config))
     return TestClient(app, raise_server_exceptions=False)
 
 
@@ -75,7 +88,7 @@ def test_an_unknown_node_is_not_found_on_every_node_route(client: TestClient):
 
 
 def test_routes_require_the_session_key_when_one_is_configured(saved_tree: Path):
-    app = create_app(Config(session_api_keys=["secret"], director_repo_path=saved_tree))
+    app = create_app(server_config(saved_tree, session_api_keys=["secret"]))
     client = TestClient(app, raise_server_exceptions=False)
 
     denied = client.get("/api/director/org/nodes/root")
@@ -378,7 +391,7 @@ async def running(
     repo: Path,
 ) -> AsyncIterator[tuple[httpx.AsyncClient, FakeLauncher, DirectorService]]:
     """The app with its director running agents through a fake launcher."""
-    app = create_app(Config(session_api_keys=[], director_repo_path=repo))
+    app = create_app(server_config(repo))
     launcher = FakeLauncher()
     service: DirectorService = app.state.director_service
     await service.start(launcher)
@@ -431,7 +444,7 @@ async def test_starting_an_org_returns_its_root_and_only_works_once(running, rep
     assert summary["root_id"] == "root"
 
 
-async def test_an_org_request_outside_the_repository_is_unprocessable(
+async def test_an_org_cannot_be_started_outside_a_git_repository(
     running, tmp_path: Path
 ):
     client, _, _ = running
@@ -440,7 +453,7 @@ async def test_an_org_request_outside_the_repository_is_unprocessable(
 
     response = await client.post("/api/director/org", json=org_body(elsewhere))
 
-    assert response.status_code == 422
+    assert response.status_code == 503
     assert (await client.get("/api/director/org")).json()["root_id"] is None
 
 
