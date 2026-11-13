@@ -30,6 +30,11 @@ from openhands.agent_server.director.git import (
     save_and_discard,
 )
 from openhands.agent_server.director.git_blackboard import SPEC_FILE, GitBlackboard
+from openhands.agent_server.director.git_index import (
+    excludes_file,
+    git_script,
+    rcfile,
+)
 from openhands.agent_server.director.headline import provisional_summary
 from openhands.agent_server.director.models import (
     AgentRef,
@@ -106,7 +111,7 @@ PRUNED_REFS = "refs/agents/pruned"
 # An agent whose conversation is gone, or could not be started.
 AGENT_LOST = "lost"
 # Where, in the repository's git directory, the director keeps the shells
-# it confines its agents' terminals with.
+# its agents' terminals start, and what those shells need.
 _SHELLS_DIR = "director-shells"
 _REMEMBERED_FILE = "director.json"
 
@@ -588,32 +593,62 @@ class DirectorService:
         return "" if relative == "." else relative
 
     def _confine(self, node_id: str, role: AgentRole) -> ToolParams | None:
-        """Write the shell that holds an agent's terminal to its boundary.
+        """Write the shell an agent's terminal starts.
+
+        Where the server can, the shell holds the agent to its team's
+        boundary. An IC's shell also finds a ``git`` that keeps the agent's
+        index apart from those of the agents it shares a checkout with.
 
         Returns:
-            What to start the agent's terminal with, or None when shells are
-            not confined on this server.
+            What to start the agent's terminal with, or None when it needs
+            no shell of its own.
         """
         node = self.store.get(node_id)
         conversation_id = agent_conversation(node, role) if node else None
-        if self._bwrap is None or node is None or conversation_id is None:
+        if node is None or conversation_id is None:
+            return None
+        bash, real_git = shutil.which("bash"), shutil.which("git")
+        own_git = role == "ic" and os.name != "nt" and bash and real_git
+        if self._bwrap is None and not own_git:
             return None
         git_dir = git(
             self._repo_dir, ["rev-parse", "--path-format=absolute", "--git-common-dir"]
         ).strip()
         shells = Path(git_dir) / _SHELLS_DIR
+        sub_teams = [child.boundary.path for child in self.store.children(node_id)]
+        rc: Path | None = None
+        if own_git and real_git:
+            directory = node.boundary.path
+            rc = shells / f"{conversation_id}.rc"
+            bin_dir = shells / f"{conversation_id}.bin"
+            excludes = shells / f"{conversation_id}.exclude"
+            write_shell(
+                bin_dir / "git",
+                git_script(
+                    real_git,
+                    common_dir=git_dir,
+                    conversation_id=conversation_id,
+                    directory=directory,
+                    sub_team_directories=sub_teams,
+                    excludes=excludes,
+                    flock=shutil.which("flock"),
+                ),
+            )
+            atomic_write_text(
+                excludes, excludes_file(self._repo_dir, directory, sub_teams)
+            )
+            atomic_write_text(rc, rcfile(bin_dir))
         script = shells / f"{conversation_id}.sh"
         write_shell(
             script,
             shell_script(
                 self._bwrap,
-                shutil.which("bash") or "/bin/sh",
+                bash or "/bin/sh",
                 checkouts=self._checkouts(),
                 private=shells,
                 directory=node.boundary.path if role == "ic" else None,
-                sub_team_directories=[
-                    child.boundary.path for child in self.store.children(node_id)
-                ],
+                sub_team_directories=sub_teams,
+                rcfile=rc,
             ),
         )
         # Only the subprocess terminal starts the shell it is given.
@@ -993,6 +1028,7 @@ class DirectorService:
         store = self.store
         kept: str | None = None
         for index, team in enumerate(teams):
+            self._forget_shells(team)
             above = store.get(team.parent_id) if team.parent_id else None
             # A team in the checkout of the one above is covered by it.
             if index and above and above.worktree_path == team.worktree_path:
@@ -1008,6 +1044,35 @@ class DirectorService:
             if index == 0 and saved is not None:
                 kept = ref
         return kept
+
+    def _forget_shells(self, team: OrgNode) -> None:
+        """Remove what the shells of a team's agents were made of."""
+        try:
+            common, own = (
+                Path(
+                    git(
+                        directory, ["rev-parse", "--path-format=absolute", kind]
+                    ).strip()
+                )
+                for directory, kind in (
+                    (self._repo_dir, "--git-common-dir"),
+                    (Path(team.worktree_path), "--git-dir"),
+                )
+            )
+        except (GitError, OSError):
+            return
+        for agent in team.agents:
+            name = agent.conversation_id
+            if name is None:
+                continue
+            for left in (
+                *(common / _SHELLS_DIR).glob(f"{name}.*"),
+                *own.glob(f"agent-index-{name}*"),
+            ):
+                if left.is_dir():
+                    shutil.rmtree(left, ignore_errors=True)
+                else:
+                    left.unlink(missing_ok=True)
 
     async def _summarize(
         self, node_id: str, task: str, *, rename: bool = False, first: bool = False
