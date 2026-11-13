@@ -359,24 +359,6 @@ async def test_a_manager_settles_what_it_can_and_the_team_below_is_told(
     assert "Cents." in launcher.messages_to(ic(service, api))[-1]
 
 
-async def test_a_team_declares_itself_done_and_the_manager_above_hears(
-    service: DirectorService, launcher: FakeLauncher
-):
-    await split_root(service)
-
-    await use(
-        service,
-        ic(service, "apps.web"),
-        SetStatusTool,
-        SetStatusAction(status="done", summary="Pages shipped."),
-    )
-
-    assert node(service, "apps.web").status == "done"
-    assert node(service, "root").descendant_counts.done == 1
-    told = launcher.messages_to(manager(service))[-1]
-    assert "done" in told and "Pages shipped." in told
-
-
 async def test_a_team_that_says_it_is_blocked_stays_blocked_while_its_agents_run(
     service: DirectorService, launcher: FakeLauncher
 ):

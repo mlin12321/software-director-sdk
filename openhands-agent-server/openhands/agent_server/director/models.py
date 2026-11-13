@@ -208,6 +208,18 @@ class OrgNodeInput(BaseModel):
         default=None,
         description="A split of this node's boundary that is not carried out yet.",
     )
+    base_commit: str = Field(
+        default="",
+        description=(
+            "The commit the team's work is compared with when it is reviewed: "
+            "where its checkout was when the team started, or when its work "
+            "was last accepted."
+        ),
+    )
+    review: Review | None = Field(
+        default=None,
+        description="The review of what the team last reported as done.",
+    )
 
 
 class OrgNode(OrgNodeInput):

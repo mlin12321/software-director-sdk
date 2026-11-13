@@ -6,6 +6,8 @@ from openhands.agent_server.director.models import (
     BoundaryContracts,
     InheritedSpec,
     OrgNode,
+    Review,
+    ReviewFinding,
 )
 
 
@@ -28,7 +30,15 @@ The IC owns the technical work of the team's boundary:
   the others. The contracts are all a sub-team is told of the team above, so
   they must say everything it has to respect. The IC keeps whatever no
   sub-team takes.
-- It reports with `set_status` when the team's work is done or blocked.
+- It commits the team's work and reports with `set_status` when it is done
+  or blocked. Done work is reviewed by the IC of the team above.
+- It reviews what the teams directly below report as done, when the runtime
+  asks it to: it reads the diff, runs the repository's checks, compares the
+  work with the contracts and decides with `review_team`. Accepted work of a
+  team with its own worktree is merged into the IC's checkout by the
+  runtime. The IC tells the team above only when a team there waits on that
+  work, through `needed_above`; otherwise the work is simply part of its own
+  team's, which it reports when all of it is done.
 
 The Manager owns the team's make-up and unblocks it. It does not edit files;
 the runtime refuses it every write in the repository.
@@ -105,6 +115,62 @@ def brief(
         else "Wait for your IC's proposals and for escalations from below."
     )
     return "\n".join(lines)
+
+
+def _finding_lines(findings: list[ReviewFinding]) -> list[str]:
+    lines = []
+    for finding in findings:
+        where = finding.path + (f":{finding.line}" if finding.line else "")
+        lines.append(f"- {where + ': ' if where else ''}{finding.issue}")
+        if finding.evidence:
+            lines.append(f"  Evidence: {finding.evidence}")
+    return lines
+
+
+def review_request(team: OrgNode, review: Review) -> str:
+    """What the IC above is told when a team below reports its work done."""
+    directory = team.boundary.path or "."
+    lines = [
+        f"Review mode. Team {team.title!r} (node {team.id}) reports its work in "
+        f"{directory} done"
+        + (f" (review round {review.round})." if review.round > 1 else "."),
+    ]
+    if review.summary:
+        lines += ["", "What it says it delivered:", review.summary]
+    lines += [
+        "",
+        "Its changes: run this in " + team.worktree_path,
+        f"  git diff {team.base_commit} HEAD -- {directory}",
+        "",
+    ]
+    if not review.automated_ran:
+        lines.append("The automated review of the diff did not run.")
+    elif review.automated:
+        lines.append("An automated review of the diff found, for you to verify:")
+        lines += _finding_lines(review.automated)
+    else:
+        lines.append("An automated review of the diff found nothing.")
+    lines += [
+        "",
+        "Read the diff, run the repository's checks on it, and compare it with "
+        "the contracts you set and with the team's task. Then call "
+        f"`review_team` for node {team.id}: `accept`, or `reject` with what "
+        "must change. Set `needed_above` only if a team above yours waits on "
+        "this work.",
+    ]
+    return "\n".join(lines)
+
+
+def changes_requested(reviewer: OrgNode, findings: list[ReviewFinding]) -> str:
+    """What a team is told when its work was not accepted."""
+    return "\n".join(
+        [
+            f"The IC of {reviewer.title!r} reviewed your work and asks for "
+            "changes before it is accepted:",
+            *_finding_lines(findings),
+            "Make them, commit, and report done again with `set_status`.",
+        ]
+    )
 
 
 def from_director(text: str) -> str:
