@@ -147,6 +147,25 @@ describe('DirectorClient', () => {
     expect(pulled).toEqual(sync);
   });
 
+  it('reads and changes the limits on new teams, and searches teams', async () => {
+    const state = { max_agents: 64, max_depth: 8, agents: 6, depth: 2, max_concurrent_runs: 10 };
+    const fetchMock = mockFetch(() => jsonResponse(state));
+    const client = new DirectorClient({ host: 'http://example.com' });
+
+    const read = await client.getSettings();
+    await client.updateSettings({ max_depth: 4 });
+    await client.searchTeams('api web', 5);
+
+    const calls = fetchMock.mock.calls;
+    expect(calls.map(([url, init]) => `${init.method} ${url}`)).toEqual([
+      'GET http://example.com/api/director/settings',
+      'PATCH http://example.com/api/director/settings',
+      'GET http://example.com/api/director/org/search?q=api+web&limit=5',
+    ]);
+    expect(JSON.parse(calls[1][1].body)).toEqual({ max_depth: 4 });
+    expect(read).toEqual(state);
+  });
+
   it('streams events, across chunk boundaries and past keep-alives', async () => {
     const snapshot = { type: 'snapshot', focus_id: 'root', nodes: [], escalations: [] };
     const removed = { type: 'node_removed', id: 'a' };

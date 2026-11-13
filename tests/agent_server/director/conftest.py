@@ -179,6 +179,8 @@ class FakeLauncher:
     # text the question contains.
     agent_answers: dict[str, str | None] = field(default_factory=dict)
     agents_asked: list[tuple[UUID, str]] = field(default_factory=list)
+    # While set, an agent that is asked does not answer.
+    agents_silent: asyncio.Event | None = None
 
     async def start_root(
         self,
@@ -284,6 +286,8 @@ class FakeLauncher:
         if conversation_id not in self.known:
             raise NotFound(f"Conversation {conversation_id} does not exist")
         self.agents_asked.append((conversation_id, question))
+        if self.agents_silent is not None:
+            await self.agents_silent.wait()
         for part, answer in self.agent_answers.items():
             if part in question:
                 return answer

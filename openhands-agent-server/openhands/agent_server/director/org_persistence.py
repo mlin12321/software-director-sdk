@@ -46,6 +46,7 @@ def _persisted(node: OrgNode) -> dict[str, object]:
         agent["status"] = "idle"
     if data["status"] == "working":
         data["status"] = "idle"
+    data["waiting_to_start"] = False
     return data
 
 

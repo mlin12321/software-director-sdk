@@ -26,7 +26,7 @@ from openhands.agent_server.director.service import (
     DirectorService,
     agent_conversation,
 )
-from openhands.agent_server.director.split import normalize_split
+from openhands.agent_server.director.split import check_limits, normalize_split
 from openhands.sdk.errors import Conflict, Invalid, NotFound
 
 
@@ -163,6 +163,7 @@ def propose_split(
             "carried out first"
         )
     store = service.store
+    check_limits(store, node, len(children), service.settings)
     proposal = SplitProposal(
         children=normalize_split(node, store.children(node.id), children),
         contracts=contracts,

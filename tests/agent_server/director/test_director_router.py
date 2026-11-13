@@ -607,3 +607,32 @@ def test_sharing_the_blackboard_reports_what_is_missing(saved_tree: Path):
     assert [
         response.status_code for response in (no_remote, nothing_to_push, unreachable)
     ] == [404, 409, 502]
+
+
+def test_the_limits_on_new_teams_are_read_changed_and_kept(saved_tree: Path):
+    with make_client(saved_tree, max_concurrent_runs=7) as client:
+        before = client.get("/api/director/settings").json()
+        changed = client.patch("/api/director/settings", json={"max_agents": 200})
+        refused = client.patch("/api/director/settings", json={"max_depth": 0})
+    with make_client(saved_tree) as client:
+        after = client.get("/api/director/settings").json()
+
+    assert before == {
+        "max_agents": 64,
+        "max_depth": 8,
+        "agents": 10,
+        "depth": 3,
+        "max_concurrent_runs": 7,
+    }
+    assert changed.status_code == 200 and changed.json()["max_agents"] == 200
+    assert refused.status_code == 422
+    assert (after["max_agents"], after["max_depth"]) == (200, 8)
+
+
+def test_teams_are_searched_by_title_and_directory(client: TestClient):
+    found = client.get("/api/director/org/search", params={"q": "svc/a", "limit": 2})
+
+    assert found.status_code == 200
+    assert [team["id"] for team in found.json()] == ["a", "a1"]
+    assert found.json()[0] == {"id": "a", "title": "a", "path": "svc/a"}
+    assert client.get("/api/director/org/search").status_code == 422
