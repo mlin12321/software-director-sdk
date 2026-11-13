@@ -127,6 +127,26 @@ describe('DirectorClient', () => {
     expect(memory).toEqual({ rules: ['Never mock the clock'] });
   });
 
+  it('pulls and pushes the blackboard, from origin unless told otherwise', async () => {
+    const sync = { remote: 'origin', head: 'abc', changed: true, kept_local: [], pushed: false };
+    const fetchMock = mockFetch(() => jsonResponse(sync));
+    const client = new DirectorClient({ host: 'http://example.com' });
+
+    const pulled = await client.pullBlackboard();
+    await client.pushBlackboard('upstream');
+
+    const calls = fetchMock.mock.calls;
+    expect(calls.map(([url, init]) => `${init.method} ${url}`)).toEqual([
+      'POST http://example.com/api/director/org/blackboard/pull',
+      'POST http://example.com/api/director/org/blackboard/push',
+    ]);
+    expect(calls.map(([, init]) => JSON.parse(init.body))).toEqual([
+      { remote: 'origin' },
+      { remote: 'upstream' },
+    ]);
+    expect(pulled).toEqual(sync);
+  });
+
   it('streams events, across chunk boundaries and past keep-alives', async () => {
     const snapshot = { type: 'snapshot', focus_id: 'root', nodes: [], escalations: [] };
     const removed = { type: 'node_removed', id: 'a' };
