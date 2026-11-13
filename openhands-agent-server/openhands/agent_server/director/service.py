@@ -2,17 +2,27 @@
 
 import asyncio
 import logging
+import os
 import re
+import shutil
 import threading
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
+from functools import lru_cache
 from pathlib import Path
 from uuid import UUID, uuid4
 
 from openhands.agent_server.config import Config
+from openhands.agent_server.conversation_service import ToolParams
+from openhands.agent_server.director.boundary import (
+    nearest_team,
+    write_refusal,
+    written_paths,
+)
 from openhands.agent_server.director.fixture import build_fixture_nodes
 from openhands.agent_server.director.git import GitError, git, is_git_repository
 from openhands.agent_server.director.git_blackboard import SPEC_FILE, GitBlackboard
+from openhands.agent_server.director.headline import provisional_summary
 from openhands.agent_server.director.models import (
     AgentRef,
     AgentRole,
@@ -21,6 +31,8 @@ from openhands.agent_server.director.models import (
     OrgNode,
     OrgNodeInput,
     OrgSummary,
+    RoutedMessage,
+    RouteMessageRequest,
     SplitChild,
 )
 from openhands.agent_server.director.org_persistence import (
@@ -37,11 +49,23 @@ from openhands.agent_server.director.prompts import (
     from_director,
 )
 from openhands.agent_server.director.runtime import bind_director
-from openhands.agent_server.director.split import child_boundary
+from openhands.agent_server.director.sandbox import (
+    find_bwrap,
+    shell_script,
+    write_shell,
+)
+from openhands.agent_server.director.split import child_boundary, clean_path
 from openhands.agent_server.event_service import ConversationRunLimitExceeded
 from openhands.sdk.conversation.request import AgentLaunchAdditions
 from openhands.sdk.conversation.state import ConversationExecutionStatus
-from openhands.sdk.errors import Conflict, NotFound, Unavailable, Unprocessable
+from openhands.sdk.errors import (
+    Conflict,
+    DomainError,
+    NotFound,
+    Unavailable,
+    Unprocessable,
+)
+from openhands.sdk.event import ActionEvent
 from openhands.sdk.tool.spec import Tool
 
 
@@ -62,8 +86,14 @@ DIRECTOR_TOOL_NAMES = (
 SAVE_DELAY_SECONDS = 2.0
 # How long to wait before starting an agent again when the server is full.
 RUN_LIMIT_RETRY_SECONDS = 5.0
+# How long a model may take to name a team before the team keeps the name
+# it has; the root's agents are not briefed until then.
+SUMMARY_TIMEOUT_SECONDS = 20.0
 # An agent whose conversation is gone, or could not be started.
 AGENT_LOST = "lost"
+# Where, in the repository's git directory, the director keeps the shells
+# it confines its agents' terminals with.
+_SHELLS_DIR = "director-shells"
 
 _AGENT_STATUS: dict[ConversationExecutionStatus, str] = {
     ConversationExecutionStatus.RUNNING: "working",
@@ -91,6 +121,20 @@ def _summary_of(text: str) -> str:
     return first_line[:200]
 
 
+@lru_cache(maxsize=4096)
+def _checkout_root(workspace: str) -> Path:
+    """The top of the git checkout ``workspace`` is in, symlinks resolved."""
+    try:
+        top = git(Path(workspace), ["rev-parse", "--show-toplevel"]).strip()
+    except (GitError, OSError):
+        top = workspace
+    return Path(os.path.realpath(top))
+
+
+def _is_in(path: Path, directory: Path) -> bool:
+    return path == directory or directory in path.parents
+
+
 class DirectorService:
     """Owns the org tree and the blackboard of one repository.
 
@@ -111,9 +155,24 @@ class DirectorService:
         fixture: bool = False,
         save_delay: float = SAVE_DELAY_SECONDS,
         run_limit_retry: float = RUN_LIMIT_RETRY_SECONDS,
+        worktree_root: Path | None = None,
+        find_sandbox: Callable[[], str | None] = lambda: None,
+        summary_timeout: float = SUMMARY_TIMEOUT_SECONDS,
     ) -> None:
+        """
+        Args:
+            worktree_root: Where the server makes the git worktrees of
+                conversations, so that no team writes into another's.
+            find_sandbox: Returns the bubblewrap binary to confine the
+                agents' shells with, or None to leave them unconfined.
+        """
         self._repo_dir = repo_dir
         self._fixture = fixture
+        self._worktree_root = worktree_root
+        self._find_sandbox = find_sandbox
+        self._summary_timeout = summary_timeout
+        self._bwrap: str | None = None
+        self._stop_guard: Callable[[], None] | None = None
         self._save_delay = save_delay
         self._run_limit_retry = run_limit_retry
         self._lock = threading.Lock()
@@ -131,6 +190,8 @@ class DirectorService:
         return cls(
             config.director_repo_path or config.workspace_path,
             fixture=config.director_fixture,
+            worktree_root=config.conversation_worktree_root,
+            find_sandbox=find_bwrap,
         )
 
     @property
@@ -163,6 +224,7 @@ class DirectorService:
             repo_path=str(self._repo_dir),
             is_git_repository=is_git_repository(self._repo_dir),
             fixture=self._fixture,
+            boundary_enforcement="sandbox" if self._bwrap else "checks",
         )
 
     async def start(self, launcher: PodLauncher) -> None:
@@ -172,6 +234,10 @@ class DirectorService:
         self._effects = asyncio.Queue()
         self._worker = asyncio.create_task(self._work(), name="director-effects")
         self._stop_status = launcher.on_status(self._on_status)
+        self._stop_guard = launcher.on_action(self.guard_action)
+        self._bwrap = await asyncio.to_thread(self._find_sandbox)
+        if self._bwrap is None:
+            logger.info("Director cannot confine shells here; it checks file tools")
         bind_director(self)
         if self._store is not None:
             self._enqueue(self._resync)
@@ -182,6 +248,9 @@ class DirectorService:
         if self._stop_status is not None:
             self._stop_status()
             self._stop_status = None
+        if self._stop_guard is not None:
+            self._stop_guard()
+            self._stop_guard = None
         if self._worker is not None:
             self._worker.cancel()
             await asyncio.gather(self._worker, return_exceptions=True)
@@ -229,6 +298,8 @@ class DirectorService:
             )
 
         ic_id = conversation.conversation_id or uuid4()
+        named = provisional_summary(request.task)
+        title = request.title or named.title
         additions = conversation.agent_launch_additions or AgentLaunchAdditions()
         suffix = "\n\n".join(
             part
@@ -242,17 +313,19 @@ class DirectorService:
                 OrgNodeInput(
                     id=ROOT_ID,
                     parent_id=None,
-                    title=request.title,
+                    title=title,
                     boundary=Boundary(path="", writable=["**"]),
                     isolation="worktree" if conversation.worktree else "shared",
                     worktree_path=str(workspace),
                     branch="",
                     agents=_new_pod(ic_id),
                     status="idle",
+                    headline=named.headline,
                     spec_summary=_summary_of(request.task),
                 )
             )
             try:
+                tool_params = await asyncio.to_thread(self._confine, ROOT_ID, "ic")
                 started = await launcher.start_root(
                     conversation.model_copy(
                         update={
@@ -266,7 +339,8 @@ class DirectorService:
                         }
                     ),
                     [Tool(name=name) for name in DIRECTOR_TOOL_NAMES],
-                    title=_agent_title(request.title, "ic"),
+                    title=_agent_title(title, "ic"),
+                    tool_params=tool_params,
                 )
             except BaseException:
                 store.remove(ROOT_ID)
@@ -277,9 +351,99 @@ class DirectorService:
                 isolation=started.isolation,
                 branch=await asyncio.to_thread(_branch_of, started.workspace),
             )
+        # First, so that both agents are told the name the team keeps.
+        self._enqueue(
+            lambda: self._summarize(
+                ROOT_ID, request.task, rename=request.title is None, first=True
+            )
+        )
         self._enqueue(lambda: self._brief(ROOT_ID, "ic", request.task))
         self._enqueue(lambda: self._launch_manager(ROOT_ID, request.task))
         return root
+
+    async def route_message(self, request: RouteMessageRequest) -> RoutedMessage:
+        """Hand what the human says to the team nearest to where they say it.
+
+        Without an org the message starts one and becomes its task.
+
+        Raises:
+            Unprocessable: The path is outside the repository, or there is no
+                org and the request does not say how to start one.
+            Conflict: No team of the org can take the message.
+            Unavailable: The director is not running.
+        """
+        self._require_launcher()
+        store = await asyncio.to_thread(lambda: self.store)
+        if store.root_id is None:
+            if request.conversation is None:
+                raise Unprocessable(
+                    "There is no org yet. Send `conversation` with the message "
+                    "so that it can start one."
+                )
+            root = await self.create_org(
+                CreateOrgRequest(task=request.text, conversation=request.conversation)
+            )
+            return RoutedMessage(
+                node_id=root.id,
+                conversation_id=agent_conversation(root, "ic") or "",
+                started_org=True,
+            )
+        path = await asyncio.to_thread(self._repo_relative, request.path or "")
+        node = nearest_team(store.all(), path, lost=AGENT_LOST)
+        conversation_id = agent_conversation(node, "ic") if node else None
+        if node is None or conversation_id is None:
+            raise Conflict(
+                "No team of the org can take a message about "
+                f"{path or 'the repository'!r}"
+            )
+        text = request.text
+        if path != node.boundary.path:
+            text = f"{text}\n\n(The human sent this from {path}.)"
+        self._enqueue(lambda: self._send(conversation_id, text))
+        return RoutedMessage(
+            node_id=node.id, conversation_id=conversation_id, started_org=False
+        )
+
+    def refresh_headline(self, node_id: str, report: str) -> None:
+        """Have a node's headline rewritten after it reported. Any thread."""
+        node = self.store.get(node_id)
+        if node is not None:
+            task = f"{node.spec_summary}\n\nLatest report of the team: {report}"
+            self._enqueue(lambda: self._summarize(node_id, task))
+
+    def guard_action(self, conversation_id: UUID, event: ActionEvent) -> str | None:
+        """Why an agent of the org may not carry out an action, if it may not.
+
+        A file tool is refused a write outside the boundary of the agent's
+        team. Called on the agent's own thread, before the action runs.
+        """
+        store = self._store
+        if store is None or event.action is None:
+            return None
+        found = store.find_by_conversation(str(conversation_id))
+        if found is None:
+            return None
+        paths = written_paths(event.tool_name, event.action.model_dump())
+        if not paths:
+            return None
+        node, role = found
+        sub_teams = store.children(node.id)
+        top = _checkout_root(node.worktree_path)
+        for named in paths:
+            target = Path(os.path.realpath(Path(node.worktree_path) / named))
+            if _is_in(target, top):
+                relative = target.relative_to(top).as_posix()
+                refusal = write_refusal(
+                    node, role, sub_teams, "" if relative == "." else relative
+                )
+                if refusal is not None:
+                    return refusal
+            elif any(_is_in(target, checkout) for checkout in self._checkouts()):
+                return (
+                    f"{named!r} is in a checkout of the org that is not your "
+                    "team's, so it was not changed."
+                )
+        return None
 
     def answer_escalation(
         self, node_id: str, escalation_id: str, answer: str
@@ -325,6 +489,72 @@ class DirectorService:
     def carry_out_split(self, node_id: str) -> None:
         """Start the sub-teams of a node's approved split. Safe from any thread."""
         self._enqueue(lambda: self._carry_out_split(node_id))
+
+    def _checkouts(self) -> list[Path]:
+        """Where the org's checkouts are: the repository and the worktrees."""
+        roots = [
+            self._repo_dir,
+            *([self._worktree_root] if self._worktree_root else []),
+        ]
+        return [Path(os.path.realpath(root)) for root in roots]
+
+    def _repo_relative(self, path: str) -> str:
+        """``path`` as a clean path relative to the repository.
+
+        Raises:
+            Unprocessable: It is not inside the director's directory.
+        """
+        if not Path(path).is_absolute():
+            try:
+                return clean_path(path)
+            except DomainError as error:
+                raise Unprocessable(str(error)) from error
+        target = Path(os.path.realpath(path))
+        top = _checkout_root(str(self._repo_dir))
+        if not _is_in(target, top):
+            raise Unprocessable(f"{path} is outside the org's repository {top}")
+        relative = target.relative_to(top).as_posix()
+        return "" if relative == "." else relative
+
+    def _confine(self, node_id: str, role: AgentRole) -> ToolParams | None:
+        """Write the shell that holds an agent's terminal to its boundary.
+
+        Returns:
+            What to start the agent's terminal with, or None when shells are
+            not confined on this server.
+        """
+        node = self.store.get(node_id)
+        conversation_id = agent_conversation(node, role) if node else None
+        if self._bwrap is None or node is None or conversation_id is None:
+            return None
+        git_dir = git(
+            self._repo_dir, ["rev-parse", "--path-format=absolute", "--git-common-dir"]
+        ).strip()
+        shells = Path(git_dir) / _SHELLS_DIR
+        script = shells / f"{conversation_id}.sh"
+        write_shell(
+            script,
+            shell_script(
+                self._bwrap,
+                shutil.which("bash") or "/bin/sh",
+                checkouts=self._checkouts(),
+                private=shells,
+                directory=node.boundary.path if role == "ic" else None,
+                sub_team_directories=[
+                    child.boundary.path for child in self.store.children(node_id)
+                ],
+            ),
+        )
+        # Only the subprocess terminal starts the shell it is given.
+        return {"terminal": {"terminal_type": "subprocess", "shell_path": str(script)}}
+
+    def _confine_all(self) -> None:
+        for node in self.store.all():
+            for agent in node.agents:
+                try:
+                    self._confine(node.id, agent.role)
+                except (GitError, OSError):
+                    logger.exception("Could not write the shell of node %s", node.id)
 
     def _require_launcher(self) -> PodLauncher:
         if self._launcher is None:
@@ -419,6 +649,9 @@ class DirectorService:
         ]
         if not agents:
             return
+        # Shells that were lost with the git directory come back for the
+        # agents that still start theirs.
+        await asyncio.to_thread(self._confine_all)
         statuses = await self._require_launcher().statuses(
             [conversation_id for _, _, conversation_id in agents]
         )
@@ -483,6 +716,7 @@ class DirectorService:
         launcher = self._require_launcher()
         text = await asyncio.to_thread(self._briefing, node, role, task)
         try:
+            tool_params = await asyncio.to_thread(self._confine, node_id, role)
             if parent_conversation is None:
                 raise NotFound(f"Node {node_id} has nobody to derive its {role} from")
             parent_id = UUID(parent_conversation)
@@ -494,6 +728,7 @@ class DirectorService:
                     task=text,
                     isolation=node.isolation if role == "ic" else "shared",
                     suffixes=[] if role == "ic" else [MANAGER_ROLE],
+                    tool_params=tool_params,
                 )
             )
         except Exception:
@@ -528,18 +763,80 @@ class DirectorService:
 
         parent_ic = agent_conversation(node, "ic")
         started: list[str] = []
+        summarized: list[tuple[str, str]] = []
         for child in proposal.children:
             child_node = store.upsert(self._child_node(store, node, child))
             if await self._start_agent(child_node.id, "ic", parent_ic, child.task):
                 await self._launch_manager(child_node.id, child.task)
             started.append(f"{child.title} ({child.path})")
+            summarized.append((child_node.id, child.task))
         store.update_node(node_id, pending_split=None)
+        # The shell the IC starts next can no longer write what it gave away.
+        with suppress(GitError, OSError):
+            await asyncio.to_thread(self._confine, node_id, "ic")
+        for child_id, task in summarized:
+            self._enqueue(
+                lambda child_id=child_id, task=task: self._summarize(
+                    child_id, task, first=True
+                )
+            )
         self.notify(
             parent_ic,
             "Your split was approved and these sub-teams now own their "
-            f"directories: {', '.join(started)}. Leave those directories to "
-            "them and carry on with what remains in your boundary.",
+            f"directories: {', '.join(started)}. You can no longer write "
+            "there; carry on with what remains in your boundary.",
         )
+
+    async def _summarize(
+        self, node_id: str, task: str, *, rename: bool = False, first: bool = False
+    ) -> None:
+        """Have a model write a node's headline and, with ``rename``, its title.
+
+        Args:
+            first: This is the summary of the task the team was made for. It
+                is dropped once the team has reported, which may happen
+                before the model was asked.
+        """
+        store = self.store
+
+        def reported() -> bool:
+            current = store.get(node_id)
+            return (
+                first
+                and current is not None
+                and current.headline != provisional_summary(task).headline
+            )
+
+        node = store.get(node_id)
+        conversation_id = agent_conversation(node, "ic") if node else None
+        if node is None or conversation_id is None or reported():
+            return
+        launcher = self._require_launcher()
+        try:
+            summary = await asyncio.wait_for(
+                launcher.summarize(UUID(conversation_id), task),
+                timeout=self._summary_timeout,
+            )
+        except (NotFound, TimeoutError):
+            return
+        if summary is None or reported():
+            return
+        changes: dict[str, object] = {"headline": summary.headline}
+        if rename:
+            changes["title"] = summary.title
+        try:
+            node = store.update_node(node_id, **changes)
+        except NotFound:
+            return
+        if not rename:
+            return
+        for agent in node.agents:
+            if agent.conversation_id is not None:
+                with suppress(NotFound):
+                    await launcher.rename(
+                        UUID(agent.conversation_id),
+                        _agent_title(summary.title, agent.role),
+                    )
 
     def _record_contracts(self, node: OrgNode, contracts: str) -> None:
         blackboard = GitBlackboard(self._repo_dir)
@@ -574,6 +871,7 @@ class DirectorService:
             branch=parent.branch,
             agents=_new_pod(uuid4()),
             status="idle",
+            headline=provisional_summary(child.task).headline,
             spec_summary=_summary_of(child.task),
         )
 

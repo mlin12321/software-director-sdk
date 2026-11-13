@@ -20,6 +20,10 @@ EscalationKind = Literal["critical_issue", "design_decision"]
 
 SplitStatus = Literal["proposed", "refine_requested", "approved"]
 
+# 'sandbox': an agent's shell can write only its team's directory, and its
+# file tools are checked. 'checks': only its file tools are checked.
+BoundaryEnforcement = Literal["sandbox", "checks"]
+
 
 class Boundary(BaseModel):
     """A codeowner boundary. All paths and globs are repo-relative."""
@@ -142,6 +146,13 @@ class OrgNodeInput(BaseModel):
     branch: str
     agents: list[AgentRef] = Field(default_factory=list)
     status: NodeStatus
+    headline: str = Field(
+        default="",
+        description=(
+            "One line on what the team is delivering, written by a model from "
+            "the team's task and its latest report."
+        ),
+    )
     spec_summary: str = ""
     escalations: list[Escalation] = Field(
         default_factory=list,
@@ -237,12 +248,27 @@ class OrgSummary(BaseModel):
     fixture: bool = Field(
         description="The tree is a fixed sample; its agents are not running."
     )
+    boundary_enforcement: BoundaryEnforcement = Field(
+        description=(
+            "How far a team is held to its boundary. 'sandbox': the shell of "
+            "an agent can write only the directory its team owns, and its "
+            "file tools are refused anything else. 'checks': only the file "
+            "tools are refused; the server cannot confine a shell."
+        )
+    )
 
 
 class CreateOrgRequest(BaseModel):
     """Start an org: a root team that works on ``task``."""
 
-    title: str = Field(min_length=1)
+    title: str | None = Field(
+        default=None,
+        min_length=1,
+        description=(
+            "The root team's name. Left out, the team is first named after "
+            "the task's first line and then by a model that summarizes it."
+        ),
+    )
     task: str = Field(min_length=1, description="What the org is to deliver.")
     conversation: StartConversationRequest = Field(
         description=(
@@ -250,6 +276,37 @@ class CreateOrgRequest(BaseModel):
             "derived from it. Its workspace must be the director's directory, "
             "and its initial message is ignored: the IC is briefed with `task`."
         )
+    )
+
+
+class RouteMessageRequest(BaseModel):
+    """Something the human says to the org, from somewhere in the repository."""
+
+    text: str = Field(min_length=1)
+    path: str | None = Field(
+        default=None,
+        description=(
+            "The directory the message is about: repo-relative, or absolute "
+            "inside the director's directory. Defaults to the repository root."
+        ),
+    )
+    conversation: StartConversationRequest | None = Field(
+        default=None,
+        description=(
+            "How to start the root team's IC when there is no org yet; the "
+            "message then becomes the org's task. See `CreateOrgRequest`. "
+            "Ignored when an org exists."
+        ),
+    )
+
+
+class RoutedMessage(BaseModel):
+    """Where a message to the org went."""
+
+    node_id: str = Field(description="The team that received it.")
+    conversation_id: str = Field(description="The conversation of that team's IC.")
+    started_org: bool = Field(
+        description="There was no org, and the message started one."
     )
 
 

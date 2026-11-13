@@ -2,11 +2,21 @@
 
 from collections.abc import AsyncIterator
 from pathlib import Path
-from uuid import UUID
+from types import SimpleNamespace
+from typing import cast
+from uuid import UUID, uuid4
 
 import pytest
 
-from openhands.agent_server.director.models import CreateOrgRequest
+from openhands.agent_server.director import pod_actions
+from openhands.agent_server.director.headline import TeamSummary
+from openhands.agent_server.director.models import (
+    AgentRole,
+    CreateOrgRequest,
+    OrgNode,
+    RouteMessageRequest,
+    SplitChild,
+)
 from openhands.agent_server.director.org_persistence import ORG_REF
 from openhands.agent_server.director.prompts import MANAGER_ROLE, POD_PROTOCOL
 from openhands.agent_server.director.service import (
@@ -18,6 +28,11 @@ from openhands.agent_server.director.service import (
 from openhands.sdk.conversation.request import AgentLaunchAdditions
 from openhands.sdk.conversation.state import ConversationExecutionStatus
 from openhands.sdk.errors import Conflict, NotFound, Unavailable, Unprocessable
+from openhands.sdk.event import ActionEvent
+from openhands.sdk.tool.tool import Action
+from openhands.tools.apply_patch.definition import ApplyPatchAction
+from openhands.tools.file_editor.definition import FileEditorAction
+from openhands.tools.terminal.definition import TerminalAction
 from tests.agent_server.director.conftest import (
     FakeLauncher,
     make_node,
@@ -267,3 +282,440 @@ async def test_an_escalation_a_team_still_holds_cannot_be_answered_by_the_human(
 
     api = service.store.get("api")
     assert api is not None and len(api.escalations) == 1
+
+
+async def split_root(service: DirectorService, *children: SplitChild) -> None:
+    """Have the root IC propose ``children`` and its Manager approve them."""
+    root = service.store.get("root")
+    assert root is not None
+
+    def caller(role: AgentRole) -> pod_actions.Caller:
+        conversation_id = agent_conversation(root, role)
+        assert conversation_id is not None
+        return pod_actions.caller_of(service, UUID(conversation_id))
+
+    pod_actions.propose_split(service, caller("ic"), list(children), "")
+    pod_actions.decide_split(service, caller("manager"), "approve", "")
+    await service.settled()
+
+
+API = SplitChild(title="API", path="services/api", task="Serve the checkout API")
+WEB = SplitChild(title="Web", path="apps/web", task="Build the checkout pages")
+
+
+def team(service: DirectorService, node_id: str) -> OrgNode:
+    node = service.store.get(node_id)
+    assert node is not None
+    return node
+
+
+async def test_an_org_without_a_title_is_named_by_a_model_from_its_task(
+    service: DirectorService, launcher: FakeLauncher, repo: Path
+):
+    launcher.summary = TeamSummary("Checkout Flow", "Builds the shop's checkout.")
+    request = org_request(repo).model_copy(update={"title": None})
+
+    root = await service.create_org(request)
+
+    assert (root.title, root.headline) == (
+        "Build the checkout flow",
+        "Build the checkout flow",
+    )
+    assert launcher.root_title == "Build the checkout flow (IC)"
+
+    await service.settled()
+
+    root = team(service, "root")
+    assert (root.title, root.headline) == (
+        "Checkout Flow",
+        "Builds the shop's checkout.",
+    )
+    ic, manager = agent_conversation(root, "ic"), agent_conversation(root, "manager")
+    assert ic is not None and manager is not None
+    assert launcher.summarized == [(UUID(ic), "Build the checkout flow\nwith tests")]
+    assert launcher.titles[UUID(ic)] == "Checkout Flow (IC)"
+    assert launcher.titles[UUID(manager)] == "Checkout Flow (Manager)"
+    [briefing] = launcher.messages_to(ic)
+    assert "the team 'Checkout Flow'" in briefing
+
+
+async def test_a_model_that_takes_too_long_does_not_hold_the_org_up(
+    repo: Path, launcher: FakeLauncher
+):
+    service = DirectorService(repo, save_delay=0, run_limit_retry=0, summary_timeout=0)
+    launcher.summary_delay = 60
+    await service.start(launcher)
+
+    await service.create_org(org_request(repo).model_copy(update={"title": None}))
+    await service.settled()
+    root = service.store.get("root")
+    await service.aclose()
+
+    assert root is not None and root.title == "Build the checkout flow"
+    assert len(launcher.messages_to(agent_conversation(root, "ic"))) == 1
+
+
+async def test_a_given_title_is_kept_and_only_the_headline_is_written(
+    service: DirectorService, launcher: FakeLauncher, repo: Path
+):
+    launcher.summary = TeamSummary("Checkout Flow", "Builds the shop's checkout.")
+
+    await service.create_org(org_request(repo))
+    await service.settled()
+
+    root = team(service, "root")
+    assert (root.title, root.headline) == ("Checkout", "Builds the shop's checkout.")
+    assert launcher.titles[UUID(agent_conversation(root, "ic") or "")] == (
+        "Checkout (IC)"
+    )
+
+
+async def test_a_team_keeps_its_first_name_when_the_model_gives_nothing(
+    service: DirectorService, repo: Path
+):
+    await service.create_org(org_request(repo).model_copy(update={"title": None}))
+    await service.settled()
+
+    root = team(service, "root")
+    assert (root.title, root.headline) == (
+        "Build the checkout flow",
+        "Build the checkout flow",
+    )
+
+
+async def test_every_sub_team_gets_a_headline_and_keeps_the_title_its_ic_gave(
+    service: DirectorService, launcher: FakeLauncher, repo: Path
+):
+    await service.create_org(org_request(repo))
+    await service.settled()
+    launcher.summary = TeamSummary("Something Else", "Serves the checkout over HTTP.")
+
+    await split_root(service, API, WEB)
+
+    api = team(service, "services.api")
+    assert (api.title, api.headline) == ("API", "Serves the checkout over HTTP.")
+    assert [task for _, task in launcher.summarized[-2:]] == [API.task, WEB.task]
+
+
+async def test_a_report_made_before_the_first_summary_is_not_overwritten_by_it(
+    service: DirectorService, launcher: FakeLauncher, repo: Path
+):
+    await service.create_org(org_request(repo))
+    await service.settled()
+    launcher.summary = TeamSummary("API", "Blocked on the session store.")
+
+    def report_at_once(conversation_id: UUID) -> None:
+        found = service.store.find_by_conversation(str(conversation_id))
+        if found is not None and found[1] == "ic":
+            service.refresh_headline(found[0].id, "it is blocked.")
+
+    launcher.on_derived = report_at_once
+    await split_root(service, API)
+
+    assert team(service, "services.api").headline == "Blocked on the session store."
+    assert [task for _, task in launcher.summarized[1:]] == [
+        "Serve the checkout API\n\nLatest report of the team: it is blocked."
+    ]
+
+
+async def test_a_report_rewrites_the_headline(
+    service: DirectorService, launcher: FakeLauncher, repo: Path
+):
+    await service.create_org(org_request(repo))
+    await service.settled()
+    launcher.summary = TeamSummary("Ignored", "Checkout is done; tax is left out.")
+
+    service.refresh_headline("root", "it is done. Tax is left out.")
+    await service.settled()
+
+    assert team(service, "root").headline == "Checkout is done; tax is left out."
+    assert launcher.summarized[-1][1] == (
+        "Build the checkout flow\n\nLatest report of the team: it is done. "
+        "Tax is left out."
+    )
+
+
+def attempt(
+    service: DirectorService, conversation_id: str | None, tool: str, action: Action
+) -> str | None:
+    """What the director says to an agent that is about to use ``tool``."""
+    event = cast(ActionEvent, SimpleNamespace(tool_name=tool, action=action))
+    return service.guard_action(UUID(conversation_id or ""), event)
+
+
+def create(path: Path | str) -> FileEditorAction:
+    return FileEditorAction(command="create", path=str(path), file_text="x")
+
+
+async def test_a_file_tool_is_refused_a_write_outside_the_teams_boundary(
+    service: DirectorService, repo: Path
+):
+    await service.create_org(org_request(repo))
+    await service.settled()
+    await split_root(service, API, WEB)
+    api_ic = agent_conversation(team(service, "services.api"), "ic")
+
+    def refusal(path: Path | str) -> str | None:
+        return attempt(service, api_ic, "file_editor", create(path))
+
+    assert refusal(repo / "services" / "api" / "pay.py") is None
+    assert "outside your team's boundary" in (refusal(repo / "README.md") or "")
+    assert "outside your team's boundary" in (
+        refusal(repo / "apps" / "web" / "page.tsx") or ""
+    )
+    assert "outside your team's boundary" in (
+        refusal(repo / "services" / "api" / ".." / ".." / "README.md") or ""
+    )
+
+
+async def test_a_link_out_of_the_boundary_does_not_carry_a_write_out(
+    service: DirectorService, repo: Path
+):
+    await service.create_org(org_request(repo))
+    await service.settled()
+    await split_root(service, API)
+    (repo / "services" / "api").mkdir(parents=True)
+    (repo / "services" / "api" / "up").symlink_to(repo)
+    api_ic = agent_conversation(team(service, "services.api"), "ic")
+
+    refused = attempt(
+        service,
+        api_ic,
+        "file_editor",
+        create(repo / "services" / "api" / "up" / "README.md"),
+    )
+
+    assert "outside your team's boundary" in (refused or "")
+
+
+async def test_reading_and_tools_that_name_no_file_are_never_refused(
+    service: DirectorService, repo: Path
+):
+    await service.create_org(org_request(repo))
+    await service.settled()
+    await split_root(service, API)
+    api_ic = agent_conversation(team(service, "services.api"), "ic")
+
+    view = FileEditorAction(command="view", path=str(repo / "README.md"))
+    assert attempt(service, api_ic, "file_editor", view) is None
+    command = TerminalAction(command="cat ../../README.md")
+    assert attempt(service, api_ic, "terminal", command) is None
+
+
+async def test_an_ic_is_refused_what_it_handed_to_a_sub_team_and_a_manager_all(
+    service: DirectorService, repo: Path
+):
+    await service.create_org(org_request(repo))
+    await service.settled()
+    root = team(service, "root")
+    root_ic = agent_conversation(root, "ic")
+    inside_api = create(repo / "services" / "api" / "pay.py")
+    assert attempt(service, root_ic, "file_editor", inside_api) is None
+
+    await split_root(service, API)
+
+    assert "sub-team 'API'" in (
+        attempt(service, root_ic, "file_editor", inside_api) or ""
+    )
+    assert attempt(service, root_ic, "file_editor", create(repo / "README.md")) is None
+    manager = agent_conversation(root, "manager")
+    assert "Manager" in (
+        attempt(service, manager, "file_editor", create(repo / "README.md")) or ""
+    )
+
+
+async def test_every_file_of_a_patch_must_be_in_the_boundary(
+    service: DirectorService, repo: Path
+):
+    await service.create_org(org_request(repo))
+    await service.settled()
+    await split_root(service, API)
+    api_ic = agent_conversation(team(service, "services.api"), "ic")
+
+    def patch(*files: str) -> ApplyPatchAction:
+        body = "".join(f"*** Add File: {name}\n+x\n" for name in files)
+        return ApplyPatchAction(patch=f"*** Begin Patch\n{body}*** End Patch\n")
+
+    assert attempt(service, api_ic, "apply_patch", patch("services/api/a.py")) is None
+    refused = attempt(
+        service, api_ic, "apply_patch", patch("services/api/a.py", "docs/b.md")
+    )
+    assert "'docs/b.md' is outside your team's boundary" in (refused or "")
+
+
+async def test_files_outside_the_org_and_other_conversations_are_left_alone(
+    service: DirectorService, repo: Path, tmp_path: Path
+):
+    await service.create_org(org_request(repo))
+    await service.settled()
+    await split_root(service, API)
+    api_ic = agent_conversation(team(service, "services.api"), "ic")
+
+    assert attempt(service, api_ic, "file_editor", create(tmp_path / "x.txt")) is None
+    stranger = str(uuid4())
+    assert attempt(service, stranger, "file_editor", create(repo / "README.md")) is None
+
+
+async def test_a_checkout_of_another_team_is_closed(
+    repo: Path, tmp_path: Path, launcher: FakeLauncher
+):
+    worktrees = tmp_path / "worktrees"
+    (worktrees / "other" / "repo").mkdir(parents=True)
+    service = DirectorService(
+        repo, save_delay=0, run_limit_retry=0, worktree_root=worktrees
+    )
+    await service.start(launcher)
+    await service.create_org(org_request(repo))
+    await service.settled()
+    root_ic = agent_conversation(team(service, "root"), "ic")
+
+    refused = attempt(
+        service,
+        root_ic,
+        "file_editor",
+        create(worktrees / "other" / "repo" / "README.md"),
+    )
+    await service.aclose()
+
+    assert "not your team's" in (refused or "")
+
+
+async def test_the_first_message_starts_the_org_when_there_is_none(
+    service: DirectorService, launcher: FakeLauncher, repo: Path
+):
+    launcher.summary = TeamSummary("Checkout Flow", "Builds the shop's checkout.")
+
+    routed = await service.route_message(
+        RouteMessageRequest(
+            text="Build the checkout flow", conversation=root_conversation(repo)
+        )
+    )
+    await service.settled()
+
+    root = team(service, "root")
+    assert (routed.node_id, routed.started_org) == ("root", True)
+    assert routed.conversation_id == agent_conversation(root, "ic")
+    assert root.title == "Checkout Flow"
+    [briefing] = launcher.messages_to(routed.conversation_id)
+    assert "Build the checkout flow" in briefing
+
+
+async def test_the_first_message_cannot_start_an_org_without_a_conversation(
+    service: DirectorService,
+):
+    with pytest.raises(Unprocessable, match="no org yet"):
+        await service.route_message(RouteMessageRequest(text="Build it"))
+
+    assert service.store.root_id is None
+
+
+async def test_a_message_goes_to_the_nearest_team_above_where_it_was_sent(
+    service: DirectorService, launcher: FakeLauncher, repo: Path
+):
+    await service.create_org(org_request(repo))
+    await service.settled()
+    await split_root(service, API, WEB)
+
+    async def send(path: str | None) -> tuple[str, bool]:
+        routed = await service.route_message(
+            RouteMessageRequest(text="Add a refund endpoint", path=path)
+        )
+        await service.settled()
+        assert launcher.messages_to(routed.conversation_id)[-1].startswith(
+            "Add a refund endpoint"
+        )
+        assert routed.conversation_id == agent_conversation(
+            team(service, routed.node_id), "ic"
+        )
+        return routed.node_id, routed.started_org
+
+    assert await send("services/api/handlers") == ("services.api", False)
+    assert await send(str(repo / "services" / "api")) == ("services.api", False)
+    assert await send("services/billing") == ("root", False)
+    assert await send(None) == ("root", False)
+
+    api_ic = agent_conversation(team(service, "services.api"), "ic")
+    assert launcher.messages_to(api_ic)[-2:] == [
+        "Add a refund endpoint\n\n(The human sent this from services/api/handlers.)",
+        "Add a refund endpoint",
+    ]
+
+
+async def test_a_message_passes_over_a_team_whose_ic_is_gone(
+    service: DirectorService, launcher: FakeLauncher, repo: Path
+):
+    await service.create_org(org_request(repo))
+    await service.settled()
+    await split_root(service, API)
+    service.store.set_agent("services.api", "ic", status=AGENT_LOST)
+
+    routed = await service.route_message(
+        RouteMessageRequest(text="Add a refund endpoint", path="services/api")
+    )
+
+    assert routed.node_id == "root"
+
+
+@pytest.mark.parametrize("path", ["../elsewhere", "/etc"])
+async def test_a_message_from_outside_the_repository_is_refused(
+    service: DirectorService, repo: Path, path: str
+):
+    await service.create_org(org_request(repo))
+    await service.settled()
+
+    with pytest.raises(Unprocessable):
+        await service.route_message(RouteMessageRequest(text="Hello", path=path))
+
+
+@pytest.fixture
+async def confining(
+    repo: Path, launcher: FakeLauncher
+) -> AsyncIterator[DirectorService]:
+    """A director on a server that can confine shells."""
+    service = DirectorService(
+        repo, save_delay=0, run_limit_retry=0, find_sandbox=lambda: "/usr/bin/bwrap"
+    )
+    await service.start(launcher)
+    yield service
+    await service.aclose()
+
+
+def shell_of(params: object) -> str:
+    """The script a started agent's terminal runs."""
+    assert isinstance(params, dict)
+    terminal = params["terminal"]
+    assert terminal["terminal_type"] == "subprocess"
+    return Path(terminal["shell_path"]).read_text()
+
+
+async def test_every_agent_starts_its_terminal_in_a_shell_held_to_its_boundary(
+    confining: DirectorService, launcher: FakeLauncher, repo: Path
+):
+    assert confining.summary().boundary_enforcement == "sandbox"
+    await confining.create_org(org_request(repo))
+    await confining.settled()
+    await split_root(confining, API)
+
+    root_shell = shell_of(launcher.root_tool_params)
+    manager, api_ic, api_manager = launcher.derived
+    assert 'own="$top"\n' in shell_of(launcher.root_tool_params)
+    assert "own=" not in shell_of(manager.tool_params)
+    assert 'own="$top"/services/api\n' in shell_of(api_ic.tool_params)
+    assert "own=" not in shell_of(api_manager.tool_params)
+    # The root's next shell no longer writes what it gave away.
+    assert '--ro-bind-try "$top"/services/api' in root_shell
+    script = Path(cast(dict, api_ic.tool_params)["terminal"]["shell_path"])
+    assert script.parent == repo / ".git" / "director-shells"
+    assert script.name == f"{api_ic.conversation_id}.sh"
+
+
+async def test_shells_are_left_alone_where_the_server_cannot_confine_them(
+    service: DirectorService, launcher: FakeLauncher, repo: Path
+):
+    assert service.summary().boundary_enforcement == "checks"
+    await service.create_org(org_request(repo))
+    await service.settled()
+
+    assert launcher.root_tool_params is None
+    assert launcher.derived[0].tool_params is None
+    assert not (repo / ".git" / "director-shells").exists()
