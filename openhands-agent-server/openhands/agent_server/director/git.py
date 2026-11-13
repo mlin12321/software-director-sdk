@@ -34,6 +34,7 @@ def git(
     *,
     env: Mapping[str, str] | None = None,
     stdin: str | None = None,
+    timeout: float = _TIMEOUT_SECONDS,
 ) -> str:
     """Run one git command in ``repo_dir`` and return its stdout.
 
@@ -50,7 +51,7 @@ def git(
         stdin=subprocess.DEVNULL if stdin is None else None,
         capture_output=True,
         check=False,
-        timeout=_TIMEOUT_SECONDS,
+        timeout=timeout,
     )
     stdout = result.stdout.decode(errors="replace")
     if result.returncode != 0:
@@ -91,6 +92,26 @@ def enclosing_repository(repo_dir: Path) -> Path | None:
     return Path(top) if top else None
 
 
+def pathspec(path: str) -> str:
+    """What names ``path`` of a checkout, from anywhere in it; '' is all of it."""
+    return f":(top,literal){path}" if path else ":(top)"
+
+
+def head_of(checkout: Path) -> str | None:
+    """The commit a checkout is on; None before its first commit."""
+    try:
+        return git(checkout, ["rev-parse", "--verify", "--quiet", "HEAD"]).strip()
+    except (GitError, OSError):
+        return None
+
+
+def uncommitted(checkout: Path, path: str) -> list[str]:
+    """The files under ``path`` that differ from the last commit or are new,
+    ignored files aside."""
+    listed = git(checkout, ["status", "--porcelain", "-uall", "--", pathspec(path)])
+    return [line[3:] for line in listed.splitlines() if line]
+
+
 def save_and_discard(checkout: Path, path: str, ref: str) -> str | None:
     """Discard what is uncommitted under ``path`` of a checkout, keeping it
     as a commit at ``ref``.
@@ -105,7 +126,7 @@ def save_and_discard(checkout: Path, path: str, ref: str) -> str | None:
         The commit that holds what was discarded, or None when everything
         under ``path`` was committed already.
     """
-    spec = [f":(top,literal){path}" if path else ":(top)"]
+    spec = [pathspec(path)]
     if not git(checkout, ["status", "--porcelain", "-uall", "--", *spec]):
         return None
     with tempfile.TemporaryDirectory(prefix="director-discard-") as scratch:
