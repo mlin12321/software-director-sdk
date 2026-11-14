@@ -2,10 +2,10 @@
 
 from openhands.agent_server.director.models import (
     AgentRole,
-    Autopsy,
     BoundaryContracts,
     InheritedSpec,
     OrgNode,
+    Report,
     Review,
     ReviewFinding,
 )
@@ -39,8 +39,6 @@ The IC owns the technical work of the team's boundary:
   runtime. The IC tells the team above only when a team there waits on that
   work, through `needed_above`; otherwise the work is simply part of its own
   team's, which it reports when all of it is done.
-- It records what whoever works in the boundary later must know with
-  `record_rule`.
 
 The Manager owns the team's make-up and unblocks it. It does not edit files;
 the runtime refuses it every write in the repository.
@@ -51,8 +49,12 @@ the runtime refuses it every write in the repository.
   passes it up with the reason it could not.
 - It watches the teams directly below. A team that is blocked with no way
   forward, or keeps trying what does not work, it removes with `prune_team`,
-  saying what the team tried and why it failed. With a new task, a fresh
-  team takes over the same directory.
+  saying why. The team's directory goes back to the IC.
+
+Both record what matters with `report`: a design decision and its reason,
+a setback, an approach that failed and why, a reflection on how the work
+went. Reports are kept for the two agents of the team and nobody else, and
+outlast what either remembers of a long conversation.
 
 Anything a team cannot settle itself is raised with `raise_escalation`. It
 goes to the Manager of the team above, never straight to the human. Settle
@@ -71,14 +73,19 @@ commands that change the repository; decide, unblock and escalate.
 DIRECTOR_PREFIX = "[director]"
 
 
+def report_line(report: Report) -> str:
+    """One report, with which agent of the team wrote it."""
+    writer = "IC" if report.role == "ic" else "Manager"
+    return f"{writer}, {report.at}: {report.text}"
+
+
 def brief(
     node: OrgNode,
     role: AgentRole,
     task: str,
     specs: list[InheritedSpec],
     contracts: list[BoundaryContracts],
-    rules: list[str],
-    autopsies: list[Autopsy],
+    reports: list[Report],
 ) -> str:
     """The first message of an agent: who it is and what it works to."""
     boundary = node.boundary.path or "the whole repository"
@@ -101,15 +108,9 @@ def brief(
             "(set by the team above; read-only):"
         )
         lines += ["", heading, agreed.contracts]
-    if rules:
-        lines += ["", "Rules that apply in this boundary:"]
-        lines += [f"- {rule}" for rule in rules]
-    if autopsies:
-        lines += ["", "Approaches that already failed in this boundary:"]
-        lines += [
-            f"- {autopsy.approach or 'An earlier attempt'}: {autopsy.why_failed}"
-            for autopsy in autopsies
-        ]
+    if reports:
+        lines += ["", "What your team has reported so far:"]
+        lines += [f"- {report_line(report)}" for report in reports]
     lines.append("")
     lines.append(
         "Start on the task now."

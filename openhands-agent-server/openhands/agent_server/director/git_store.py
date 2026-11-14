@@ -1,4 +1,4 @@
-"""Git-native blackboard: a virtual directory tree stored under a hidden ref.
+"""A virtual directory tree stored under a hidden git ref.
 
 Nothing here touches the working tree or the user's index. Every mutation
 builds a tree in a throwaway index file and lands with a compare-and-swap
@@ -20,33 +20,32 @@ from openhands.agent_server.director.git import (
     git_version,
 )
 from openhands.agent_server.director.models import (
-    Autopsy,
     BoundaryContracts,
-    BoundaryMemory,
     InheritedSpec,
+    Report,
 )
 from openhands.sdk.errors import Invalid, NotSupported, OperationFailed
 
 
-BLACKBOARD_REF = "refs/agents/blackboard"
+MEMORY_REF = "refs/agents/memory"
 SPEC_FILE = "spec.md"
 CONTRACTS_FILE = "contracts.md"
-MEMORY_FILE = "memory.json"
-AUTOPSIES_FILE = "autopsies.json"
-# What the rules of a boundary looked like when they were last consolidated.
-CONSOLIDATED_FILE = "consolidated.json"
+# One file of reports for each agent, named after its conversation.
+REPORTS_DIR = ".reports"
+# What team memory was called before; a repository that still has it is moved.
+_FORMER_MEMORY_REF = "refs/agents/blackboard"
 
 _ZERO_OID = "0" * 40
 _MAX_COMMIT_ATTEMPTS = 8
 _MERGE_MIN_GIT = (2, 38)
-_AUTOPSIES = TypeAdapter(list[Autopsy])
+_REPORTS = TypeAdapter(list[Report])
 
 
-class BlackboardScopeError(Invalid):
-    """A path escapes the blackboard or the scope it must stay inside."""
+class StoreScopeError(Invalid):
+    """A path escapes the store or the scope it must stay inside."""
 
 
-class BoardChange(NamedTuple):
+class StoreChange(NamedTuple):
     """One file to write. ``content=None`` deletes the file."""
 
     path: str
@@ -54,7 +53,7 @@ class BoardChange(NamedTuple):
 
 
 class Merged(NamedTuple):
-    """The outcome of merging another blackboard into this one."""
+    """The outcome of merging another store into this one."""
 
     head: str
     kept_local: list[str]
@@ -62,21 +61,21 @@ class Merged(NamedTuple):
 
 
 class Clash(NamedTuple):
-    """A file both blackboards changed the same lines of."""
+    """A file both stores changed the same lines of."""
 
     path: str
     ours: str | None
     theirs: str | None
 
 
-type BoardReader = Callable[[str], str | None]
+type StoreReader = Callable[[str], str | None]
 
 
-def normalize_board_path(path: str) -> str:
+def normalize_store_path(path: str) -> str:
     """Normalize a repo-relative path. ``""``, ``"."`` and ``"/"`` are the root.
 
     Raises:
-        BlackboardScopeError: The path could escape the virtual tree.
+        StoreScopeError: The path could escape the virtual tree.
     """
     segments = [
         segment
@@ -84,7 +83,7 @@ def normalize_board_path(path: str) -> str:
         if segment not in ("", ".")
     ]
     if any(segment in ("..", ".git") for segment in segments):
-        raise BlackboardScopeError(f"Path escapes the blackboard: {path}")
+        raise StoreScopeError(f"Path escapes the store: {path}")
     return "/".join(segments)
 
 
@@ -93,18 +92,18 @@ def _join(directory: str, file: str) -> str:
 
 
 def _scoped(scope_path: str, file: str) -> str:
-    relative = normalize_board_path(file)
+    relative = normalize_store_path(file)
     if not relative:
-        raise BlackboardScopeError("A blackboard write needs a file name")
-    return _join(normalize_board_path(scope_path), relative)
+        raise StoreScopeError("A store write needs a file name")
+    return _join(normalize_store_path(scope_path), relative)
 
 
-def _parse_memory(raw: str | None) -> BoundaryMemory:
-    return BoundaryMemory.model_validate_json(raw) if raw else BoundaryMemory()
+def _parse_reports(raw: str | None) -> list[Report]:
+    return _REPORTS.validate_json(raw) if raw else []
 
 
-def _parse_autopsies(raw: str | None) -> list[Autopsy]:
-    return _AUTOPSIES.validate_json(raw) if raw else []
+def _reports_file(conversation_id: str) -> str:
+    return f"{REPORTS_DIR}/{conversation_id}.json"
 
 
 def _serialize(value: object) -> str:
@@ -116,30 +115,38 @@ def _union[T](ours: list[T], theirs: list[T]) -> list[T]:
 
 
 def _settle(path: str, ours: str | None, theirs: str | None) -> tuple[str | None, bool]:
-    """What a file both blackboards changed becomes.
+    """What a file both stores changed becomes.
 
     Returns:
         The content, and whether the other side's text was left out of it.
     """
     if ours is None or theirs is None:
         return (theirs if ours is None else ours), False
-    name = path.rsplit("/", 1)[-1]
+    if not path.startswith(f"{REPORTS_DIR}/"):
+        return ours, True
     try:
-        if name == MEMORY_FILE:
-            rules = _union(_parse_memory(ours).rules, _parse_memory(theirs).rules)
-            return _serialize(BoundaryMemory(rules=rules).model_dump()), False
-        if name == AUTOPSIES_FILE:
-            autopsies = _union(_parse_autopsies(ours), _parse_autopsies(theirs))
-            return _serialize(_AUTOPSIES.dump_python(autopsies)), False
+        reports = _union(_parse_reports(ours), _parse_reports(theirs))
     except ValidationError:
         return ours, True
-    return ours, name != CONSOLIDATED_FILE
+    reports.sort(key=lambda report: report.at)
+    return _serialize(_REPORTS.dump_python(reports)), False
 
 
-class GitBlackboard:
-    """Reads and writes one blackboard ref of one repository."""
+def adopt_former_memory(repo_dir: Path) -> None:
+    """Move team memory kept under its former name to ``MEMORY_REF``."""
+    former = GitStore(repo_dir, _FORMER_MEMORY_REF)
+    commit = former.head()
+    if commit is None:
+        return
+    if GitStore(repo_dir).head() is None:
+        git(repo_dir, ["update-ref", MEMORY_REF, commit, _ZERO_OID])
+    git(repo_dir, ["update-ref", "-d", _FORMER_MEMORY_REF, commit])
 
-    def __init__(self, repo_dir: Path, ref: str = BLACKBOARD_REF) -> None:
+
+class GitStore:
+    """Reads and writes one store ref of one repository."""
+
+    def __init__(self, repo_dir: Path, ref: str = MEMORY_REF) -> None:
         self.repo_dir = repo_dir
         self.ref = ref
 
@@ -171,12 +178,12 @@ class GitBlackboard:
         Args:
             above: The boundary of the team above; None for the root team.
         """
-        own = normalize_board_path(boundary_path)
+        own = normalize_store_path(boundary_path)
         commit = self.head()
         spec = self._read_at(commit, _join(own, SPEC_FILE))
         contracts = [
             BoundaryContracts(path=path, contracts=text, own=path == own)
-            for path in ([] if above is None else [normalize_board_path(above)]) + [own]
+            for path in ([] if above is None else [normalize_store_path(above)]) + [own]
             if (text := self._read_at(commit, _join(path, CONTRACTS_FILE)))
         ]
         specs = (
@@ -192,58 +199,50 @@ class GitBlackboard:
         """
         path = _scoped(scope_path, file)
         return self.commit(
-            lambda _read: [BoardChange(path, content)], f"blackboard: write {path}"
+            lambda _read: [StoreChange(path, content)], f"memory: write {path}"
         )
 
-    def memory(self, scope_path: str) -> BoundaryMemory:
-        """The permanent memory of the boundary at ``scope_path``."""
-        return _parse_memory(self.read(_scoped(scope_path, MEMORY_FILE)))
+    def reports(self, conversation_id: str) -> list[Report]:
+        """What the agent of one conversation recorded, oldest first."""
+        return _parse_reports(self.read(_reports_file(conversation_id)))
 
-    def inherited_rules(self, boundary_path: str) -> list[str]:
-        """The rules of every boundary from the repository root down to
-        ``boundary_path``, outermost first, each once."""
-        target = normalize_board_path(boundary_path)
-        segments = target.split("/") if target else []
-        commit = self.head()
-        rules: list[str] = []
-        for depth in range(len(segments) + 1):
-            directory = "/".join(segments[:depth])
-            memory = _parse_memory(self._read_at(commit, _join(directory, MEMORY_FILE)))
-            rules.extend(rule for rule in memory.rules if rule not in rules)
-        return rules
+    def append_report(self, conversation_id: str, report: Report) -> list[Report]:
+        """Add to what an agent recorded and return all of it."""
+        path = _reports_file(conversation_id)
+        reports: list[Report] = []
 
-    def autopsies(self, scope_path: str) -> list[Autopsy]:
-        """The autopsies recorded for the boundary at ``scope_path``."""
-        return _parse_autopsies(self.read(_scoped(scope_path, AUTOPSIES_FILE)))
+        def mutate(read: StoreReader) -> list[StoreChange]:
+            nonlocal reports
+            reports = [*_parse_reports(read(path)), report]
+            return [StoreChange(path, _serialize(_REPORTS.dump_python(reports)))]
 
-    def teach(self, scope_path: str, rule: str) -> str | None:
-        """Append a rule to a boundary's permanent memory, once."""
-        path = _scoped(scope_path, MEMORY_FILE)
-        rule = rule.strip()
-        if not rule:
-            raise Invalid("A rule cannot be empty")
+        self.commit(mutate, f"memory: report {path}")
+        return reports
 
-        def mutate(read: BoardReader) -> list[BoardChange]:
-            memory = _parse_memory(read(path))
-            if rule in memory.rules:
+    def replace_reports(
+        self, conversation_id: str, read_as: list[Report], reports: list[Report]
+    ) -> bool:
+        """Put ``reports`` in place of an agent's, unless they changed since
+        they were read as ``read_as``.
+
+        Returns:
+            Whether they were replaced.
+        """
+        path = _reports_file(conversation_id)
+        replaced = False
+
+        def mutate(read: StoreReader) -> list[StoreChange]:
+            nonlocal replaced
+            replaced = _parse_reports(read(path)) == read_as
+            if not replaced:
                 return []
-            memory.rules.append(rule)
-            return [BoardChange(path, _serialize(memory.model_dump()))]
+            return [StoreChange(path, _serialize(_REPORTS.dump_python(reports)))]
 
-        return self.commit(mutate, f"blackboard: teach {path}")
-
-    def append_autopsy(self, scope_path: str, autopsy: Autopsy) -> str | None:
-        """Record why an attempt in a boundary was pruned."""
-        path = _scoped(scope_path, AUTOPSIES_FILE)
-
-        def mutate(read: BoardReader) -> list[BoardChange]:
-            autopsies = [*_parse_autopsies(read(path)), autopsy]
-            return [BoardChange(path, _serialize(_AUTOPSIES.dump_python(autopsies)))]
-
-        return self.commit(mutate, f"blackboard: autopsy {path}")
+        self.commit(mutate, f"memory: compact {path}")
+        return replaced
 
     def commit(
-        self, mutate: Callable[[BoardReader], list[BoardChange]], message: str
+        self, mutate: Callable[[StoreReader], list[StoreChange]], message: str
     ) -> str | None:
         """Read-modify-write against the ref.
 
@@ -268,18 +267,6 @@ class GitBlackboard:
             "contended attempts"
         )
 
-    def directories_with(self, file: str) -> list[str]:
-        """The directories of the blackboard that hold a file named ``file``."""
-        commit = self.head()
-        if commit is None:
-            return []
-        listed = git(self.repo_dir, ["ls-tree", "-r", "-z", "--name-only", commit])
-        return sorted(
-            path[: -len(file)].rstrip("/")
-            for path in listed.split("\0")
-            if path == file or path.endswith(f"/{file}")
-        )
-
     def clashes(self, theirs_ref: str) -> list[Clash]:
         """The files a merge of ``theirs_ref`` would keep this side's text of,
         because both sides changed the same lines.
@@ -298,11 +285,11 @@ class GitBlackboard:
         ]
 
     def merge(self, theirs_ref: str, take_theirs: Collection[str] = ()) -> Merged:
-        """Three-way merge another blackboard ref into this one.
+        """Three-way merge another store ref into this one.
 
         The merge happens entirely in the object store and needs git 2.38 or
         newer (``git merge-tree --write-tree``). Where both sides changed the
-        same lines of a file, rules and autopsies become those of both; of
+        same lines of a file, reports become those of both; of
         anything else this side's text is kept and the other's stays in its
         history.
 
@@ -328,7 +315,7 @@ class GitBlackboard:
                 continue
             tree, kept = self._merged_tree(ours, theirs, take_theirs)
             commit = self._commit_tree(
-                tree, [ours, theirs], f"blackboard: merge {theirs_ref}"
+                tree, [ours, theirs], f"memory: merge {theirs_ref}"
             )
             if self._swap(commit, ours):
                 return Merged(commit, kept)
@@ -338,7 +325,7 @@ class GitBlackboard:
         )
 
     def land(
-        self, changes: list[BoardChange], message: str, *, merging: str | None = None
+        self, changes: list[StoreChange], message: str, *, merging: str | None = None
     ) -> bool:
         """Commit ``changes`` on the head, once.
 
@@ -387,8 +374,7 @@ class GitBlackboard:
         version = git_version(self.repo_dir)
         if version < _MERGE_MIN_GIT:
             raise NotSupported(
-                "Blackboard merge needs git 2.38 or newer "
-                f"(found {version[0]}.{version[1]})"
+                f"A merge needs git 2.38 or newer (found {version[0]}.{version[1]})"
             )
         return git(
             self.repo_dir, ["rev-parse", "--verify", f"{theirs_ref}^{{commit}}"]
@@ -405,7 +391,7 @@ class GitBlackboard:
         self, ours: str, theirs: str, take_theirs: Collection[str]
     ) -> tuple[str, list[str]]:
         command = ["merge-tree", "--write-tree", "--name-only", "-z", "--no-messages"]
-        # Two blackboards that each started empty share no ancestor; merge
+        # Two stores that each started empty share no ancestor; merge
         # them against an empty base.
         command += ["--allow-unrelated-histories", ours, theirs]
         try:
@@ -415,7 +401,7 @@ class GitBlackboard:
                 raise
             # The tree git wrote comes first, then the files it could not merge.
             tree, *conflicted = error.stdout.split("\0")
-        changes: list[BoardChange] = []
+        changes: list[StoreChange] = []
         kept: list[str] = []
         for path in filter(None, conflicted):
             content, ours_kept = _settle(
@@ -423,7 +409,7 @@ class GitBlackboard:
             )
             if ours_kept and path in take_theirs:
                 content, ours_kept = self._read_at(theirs, path), False
-            changes.append(BoardChange(path, content))
+            changes.append(StoreChange(path, content))
             if ours_kept:
                 kept.append(path)
         return self._build_tree(tree.strip(), changes), kept
@@ -434,18 +420,18 @@ class GitBlackboard:
         try:
             return git(
                 self.repo_dir,
-                ["cat-file", "blob", f"{commit}:{normalize_board_path(path)}"],
+                ["cat-file", "blob", f"{commit}:{normalize_store_path(path)}"],
             )
         except GitError:
             return None
 
-    def _build_tree(self, parent: str | None, changes: list[BoardChange]) -> str:
-        with tempfile.TemporaryDirectory(prefix="director-blackboard-") as scratch:
+    def _build_tree(self, parent: str | None, changes: list[StoreChange]) -> str:
+        with tempfile.TemporaryDirectory(prefix="director-store-") as scratch:
             env = {"GIT_INDEX_FILE": str(Path(scratch) / "index")}
             if parent:
                 git(self.repo_dir, ["read-tree", parent], env=env)
             for change in changes:
-                path = normalize_board_path(change.path)
+                path = normalize_store_path(change.path)
                 if change.content is None:
                     git(
                         self.repo_dir,

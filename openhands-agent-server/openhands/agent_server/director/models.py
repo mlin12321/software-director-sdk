@@ -315,26 +315,20 @@ class OrgNodeDetail(BaseModel):
     children: list[OrgNode]
 
 
-class Autopsy(BaseModel):
-    """Why a pruned attempt failed, kept so successors do not repeat it."""
+class Report(BaseModel):
+    """Something an agent recorded for itself and the other agent of its
+    team: a design decision, a setback, a reflection."""
 
-    node_id: str
-    at: str = Field(description="ISO 8601 timestamp of the prune.")
-    approach: str
-    why_failed: str
-    saved_ref: str | None = Field(
-        default=None,
+    at: str = Field(description="ISO 8601 timestamp.")
+    role: AgentRole = Field(description="Which agent of the team wrote it.")
+    text: str = Field(min_length=1)
+    compacted: bool = Field(
+        default=False,
         description=(
-            "The git ref that holds the uncommitted changes the prune "
-            "discarded, when there were any."
+            "True for the one report a model wrote in place of the earlier "
+            "ones, once they had grown long."
         ),
     )
-
-
-class BoundaryMemory(BaseModel):
-    """Plain-English rules that every agent working in a boundary inherits."""
-
-    rules: list[str] = Field(default_factory=list)
 
 
 class InheritedSpec(BaseModel):
@@ -363,15 +357,17 @@ class BoundaryContracts(BaseModel):
     )
 
 
-class NodeBlackboard(BaseModel):
-    """Everything on the blackboard that applies to one node."""
+class NodeMemory(BaseModel):
+    """Everything in the team memory that concerns one node."""
 
     specs: list[InheritedSpec] = Field(
         description="The spec of the node's own boundary, when it has one."
     )
     contracts: list[BoundaryContracts] = Field(default_factory=list)
-    memory: BoundaryMemory
-    autopsies: list[Autopsy]
+    reports: list[Report] = Field(
+        default_factory=list,
+        description="What the team's own two agents recorded, oldest first.",
+    )
 
 
 class BoundaryOwner(BaseModel):
@@ -479,34 +475,28 @@ class NodeOwnership(BaseModel):
     )
 
 
-class TeachRequest(BaseModel):
-    """A rule to add to a boundary's permanent memory."""
-
-    rule: str = Field(min_length=1, description="The rule, in plain English.")
-
-
-class BlackboardSyncRequest(BaseModel):
-    """Which remote to share the blackboard with."""
+class MemorySyncRequest(BaseModel):
+    """Which remote to share the team memory with."""
 
     remote: str = Field(default="origin", min_length=1)
 
 
-class BlackboardSync(BaseModel):
-    """What a pull or a push of the blackboard did."""
+class MemorySync(BaseModel):
+    """What a pull or a push of the team memory did."""
 
     remote: str
     head: str | None = Field(
-        description="The local blackboard's commit afterwards; None when empty."
+        description="The local team memory's commit afterwards; None when empty."
     )
-    changed: bool = Field(description="The local blackboard took in remote changes.")
+    changed: bool = Field(description="The local team memory took in remote changes.")
     kept_local: list[str] = Field(
         default_factory=list,
         description=(
             "Specs and contracts both sides had changed. The local text was "
-            "kept; the remote text is in the blackboard's history."
+            "kept; the remote text is in the team memory's history."
         ),
     )
-    pushed: bool = Field(description="The remote now has the local blackboard.")
+    pushed: bool = Field(description="The remote now has the local team memory.")
 
 
 class DirectorSettings(BaseModel):
@@ -544,6 +534,14 @@ class DirectorSettings(BaseModel):
             "it up again as soon as the server is back, without being asked."
         ),
     )
+    report_compaction_chars: int = Field(
+        default=24_000,
+        ge=1_000,
+        description=(
+            "How many characters of reports one agent may have before a "
+            "model rewrites them into one shorter report."
+        ),
+    )
 
 
 class DirectorSettingsUpdate(BaseModel):
@@ -553,6 +551,7 @@ class DirectorSettingsUpdate(BaseModel):
     max_depth: int | None = Field(default=None, ge=1)
     allowed_profiles: list[str] | None = None
     resume_on_start: bool | None = None
+    report_compaction_chars: int | None = Field(default=None, ge=1_000)
 
 
 class DirectorSettingsState(DirectorSettings):
@@ -614,7 +613,7 @@ class OrgConflict(BaseModel):
             "changed the same lines of a spec or of contracts."
         )
     )
-    node_id: str = Field(description="The team; '' for a file of the blackboard.")
+    node_id: str = Field(description="The team; '' for a file of the team_memory.")
     title: str
     field: str = Field(description="The field, or the file's path.")
     mine: str | None = Field(description="What is here; None when removed here.")
@@ -680,8 +679,8 @@ class OrgSync(BaseModel):
     merge: OrgMerge | None = Field(
         default=None, description="The merge waiting for choices, if any."
     )
-    blackboard: BlackboardSync | None = Field(
-        default=None, description="What happened to specs, contracts and rules."
+    memory: MemorySync | None = Field(
+        default=None, description="What happened to specs, contracts and reports."
     )
     branches: list[BranchSync] = Field(
         default_factory=list, description="The teams' branches that changed."

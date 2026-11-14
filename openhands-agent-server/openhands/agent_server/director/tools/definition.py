@@ -119,27 +119,17 @@ class ReviewTeamAction(Action):
     )
 
 
-class RecordRuleAction(Action):
-    """Record a rule for everyone who works in your boundary later."""
+class ReportAction(Action):
+    """Record a design decision, a setback or a reflection."""
 
-    rule: str = Field(description="The rule, in plain English.")
+    text: str = Field(description="What to record, in plain English.")
 
 
 class PruneTeamAction(Action):
     """Remove a team below yours that is stuck."""
 
     node_id: str = Field(description="A team directly below yours.")
-    approach: str = Field(description="What the team tried.")
-    why_failed: str = Field(
-        description="Why it did not work, for whoever works there next."
-    )
-    replacement_task: str = Field(
-        default="",
-        description=(
-            "The task of a fresh team that takes over the directory. Leave "
-            "empty to give the directory back to your own team."
-        ),
-    )
+    reason: str = Field(description="Why the team is removed; its IC above is told.")
 
 
 class _DirectorTool[ActionT: Action](ToolDefinition[ActionT, DirectorObservation]):
@@ -181,7 +171,7 @@ class _DirectorTool[ActionT: Action](ToolDefinition[ActionT, DirectorObservation
 class ReadNodeContextTool(_DirectorTool[ReadNodeContextAction]):
     summary = (
         "Read your place in the org: your team, role and boundary, your spec, "
-        "the contracts you keep and the rules you inherit, your sub-teams "
+        "the contracts you keep and what your team has reported, your sub-teams "
         "and their status, a split that "
         "is waiting, and the escalations you raised or must settle."
     )
@@ -334,21 +324,22 @@ class ReviewTeamTool(_DirectorTool[ReviewTeamAction]):
         )
 
 
-class RecordRuleTool(_DirectorTool[RecordRuleAction]):
+class ReportTool(_DirectorTool[ReportAction]):
     summary = (
-        "Add a rule to the permanent memory of your team's boundary. Every "
-        "agent that works there or below it later is told it. For what must "
-        "hold from now on, not for notes on the current task."
+        "Record something worth keeping: a design decision and its reason, "
+        "a setback, an approach that failed and why, a reflection. Only you "
+        "and the other agent of your team read it. Reports are only added "
+        "to; once they grow long they are rewritten shorter for you."
     )
 
     @classmethod
     def action(cls):
-        return RecordRuleAction
+        return ReportAction
 
     @classmethod
     def act(cls):
-        return lambda service, caller, action: pod_actions.record_rule(
-            service, caller, action.rule
+        return lambda service, caller, action: pod_actions.report(
+            service, caller, action.text
         )
 
 
@@ -357,8 +348,7 @@ class PruneTeamTool(_DirectorTool[PruneTeamAction]):
         "Manager only. Remove a team directly below yours that is stuck or "
         "keeps failing, with every team below it. Its agents are deleted and "
         "the uncommitted changes in its directory are discarded (git keeps a "
-        "copy). What you say it tried and why it failed is kept for whoever "
-        "works there next."
+        "copy). The directory goes back to your team's IC, who is told why."
     )
 
     @classmethod
@@ -371,9 +361,7 @@ class PruneTeamTool(_DirectorTool[PruneTeamAction]):
             service,
             caller,
             action.node_id,
-            action.approach,
-            action.why_failed,
-            action.replacement_task,
+            action.reason,
         )
 
 
@@ -386,7 +374,7 @@ register_tool(ResolveEscalationTool.name, ResolveEscalationTool)
 register_tool(SetStatusTool.name, SetStatusTool)
 register_tool(PruneTeamTool.name, PruneTeamTool)
 register_tool(ReviewTeamTool.name, ReviewTeamTool)
-register_tool(RecordRuleTool.name, RecordRuleTool)
+register_tool(ReportTool.name, ReportTool)
 
 
 DIRECTOR_TOOLS: dict[str, type[_DirectorTool]] = {
@@ -400,7 +388,7 @@ DIRECTOR_TOOLS: dict[str, type[_DirectorTool]] = {
         ResolveEscalationTool,
         SetStatusTool,
         ReviewTeamTool,
-        RecordRuleTool,
+        ReportTool,
         PruneTeamTool,
     )
 }

@@ -6,7 +6,7 @@ from uuid import UUID
 
 import pytest
 
-from openhands.agent_server.director.git_blackboard import CONTRACTS_FILE
+from openhands.agent_server.director.git_store import CONTRACTS_FILE
 from openhands.agent_server.director.models import (
     DirectorSettingsUpdate,
     RouteMessageRequest,
@@ -244,7 +244,7 @@ async def test_a_split_cut_off_by_a_crash_is_finished_without_a_second_of_anythi
     assert node(second, "root").pending_split is None
     starts = [str(start.conversation_id) for start in launcher.derived]
     assert len(set(starts)) == len(starts) == 5
-    contracts = second.blackboard.read(CONTRACTS_FILE) or ""
+    contracts = second.team_memory.read(CONTRACTS_FILE) or ""
     assert contracts.count("POST /checkout returns {order_id}") == 1
     told = [text for text in launcher.messages_to(ic(second)) if "approved" in text]
     assert len(told) == 1
@@ -272,9 +272,8 @@ async def test_a_prune_cut_off_by_a_crash_is_finished_and_recorded_once(
 
     assert second.store.get("services.api") is None
     assert len(set(launcher.deleted)) == 2
-    [autopsy] = second.blackboard.autopsies("services/api")
     kept = run_git(repo, "for-each-ref", "--format=%(refname)", "refs/agents/pruned")
-    assert kept.split() == [autopsy.saved_ref]
+    assert len(kept.split()) == 1
     told = [text for text in launcher.messages_to(ic(second)) if "pruned" in text]
     assert len(told) == 1
     await second.aclose()

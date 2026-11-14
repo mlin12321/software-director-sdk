@@ -3571,8 +3571,7 @@ def _scripted_org_llm(
                 "prune_team",
                 {
                     "node_id": "services.api",
-                    "approach": "Serving it from one file",
-                    "why_failed": "The file grew past what one agent can hold.",
+                    "reason": "The file grew past what one agent can hold.",
                 },
             )
         return {"role": "assistant", "content": "Understood."}
@@ -3668,7 +3667,7 @@ def test_director_runs_an_org_whose_root_splits_into_sub_teams(
                 ]
                 == child_ic
             )
-        specs = client.get("/api/director/org/nodes/services.api/blackboard").json()
+        specs = client.get("/api/director/org/nodes/services.api/memory").json()
         assert specs["specs"] == []
         assert "POST /checkout" in specs["contracts"][0]["contracts"]
         # Everything the org keeps is in hidden refs, not in the working tree.
@@ -3794,7 +3793,7 @@ def test_director_has_done_work_reviewed_by_the_ic_above(
         assert node["base_commit"] == run_git_command(
             ["git", "rev-parse", "HEAD"], repo
         )
-        pulled = client.post("/api/director/org/blackboard/pull")
+        pulled = client.post("/api/director/org/memory/pull")
         assert pulled.status_code == 404, pulled.text
 
 
@@ -3862,18 +3861,6 @@ def test_director_prunes_a_blocked_team_and_maps_who_owns_what(
             for item in client.get("/api/conversations/search").json()["items"]
         ]
         assert "Web (IC)" in titles and "API (IC)" not in titles
-    autopsies = json.loads(
-        run_git_command(
-            ["git", "show", "refs/agents/blackboard:services/api/autopsies.json"],
-            repo,
-        )
-    )
-    assert [(entry["approach"], entry["why_failed"]) for entry in autopsies] == [
-        (
-            "Serving it from one file",
-            "The file grew past what one agent can hold.",
-        )
-    ]
 
 
 def test_director_starts_an_org_from_a_message_and_holds_teams_to_their_directories(

@@ -10,6 +10,7 @@ from uuid import UUID, uuid4
 
 import pytest
 
+from openhands.agent_server.director import pod_actions
 from openhands.agent_server.director.models import (
     CreateOrgRequest,
     OrgNode,
@@ -26,6 +27,7 @@ from openhands.agent_server.director.tools import (
     PruneTeamTool,
     RaiseEscalationTool,
     ReadNodeContextTool,
+    ReportTool,
     ResolveEscalationTool,
     SetStatusTool,
     WriteSpecTool,
@@ -36,6 +38,7 @@ from openhands.agent_server.director.tools.definition import (
     PruneTeamAction,
     RaiseEscalationAction,
     ReadNodeContextAction,
+    ReportAction,
     ResolveEscalationAction,
     SetStatusAction,
     WriteSpecAction,
@@ -129,8 +132,12 @@ async def split_root(service: DirectorService) -> None:
     )
 
 
-async def test_an_agent_reads_who_it_is_and_what_it_inherits(service: DirectorService):
-    service.blackboard.teach("", "Never log card numbers")
+async def test_an_agent_reads_who_it_is_and_what_its_team_reported(
+    service: DirectorService,
+):
+    await use(
+        service, ic(service), ReportTool, ReportAction(text="Never log card numbers")
+    )
 
     observation = await use(
         service, manager(service), ReadNodeContextTool, ReadNodeContextAction()
@@ -138,7 +145,8 @@ async def test_an_agent_reads_who_it_is_and_what_it_inherits(service: DirectorSe
 
     context = json.loads(observation.text)
     assert context["you"] == {"role": "manager", "node_id": "root", "team": "Checkout"}
-    assert context["rules"] == ["Never log card numbers"]
+    [reported] = context["reports_of_your_team"]
+    assert (reported["by"], reported["text"]) == ("ic", "Never log card numbers")
     assert context["sub_teams"] == []
 
 
@@ -163,7 +171,7 @@ async def test_the_ic_writes_the_spec_its_sub_teams_inherit(service: DirectorSer
 
     assert not written.is_error and refused.is_error
     assert node(service, "root").spec_summary == "Checkout"
-    [spec], _ = service.blackboard.applies_to("", None)
+    [spec], _ = service.team_memory.applies_to("", None)
     assert not spec.readonly and "integer cents" in spec.spec
 
 
@@ -262,7 +270,7 @@ async def test_an_approved_split_starts_a_pod_for_each_sub_team(
 
     assert node(service, "root").pending_split is None
     assert "API (services/api)" in launcher.messages_to(ic(service))[-1]
-    specs, [contracts] = service.blackboard.applies_to("services/api", "")
+    specs, [contracts] = service.team_memory.applies_to("services/api", "")
     assert specs == []
     assert not contracts.own and "POST /checkout" in contracts.contracts
 
@@ -380,12 +388,11 @@ async def test_a_team_that_says_it_is_blocked_stays_blocked_while_its_agents_run
 
 PRUNE_API = PruneTeamAction(
     node_id="services.api",
-    approach="Hand-written SQL per endpoint",
-    why_failed="Every schema change broke all of them.",
+    reason="Every schema change broke all of them.",
 )
 
 
-async def test_a_pruned_team_is_gone_with_its_agents_and_leaves_an_autopsy(
+async def test_a_pruned_team_is_gone_with_its_agents_and_its_ic_above_is_told(
     service: DirectorService, launcher: FakeLauncher, repo: Path
 ):
     await split_root(service)
@@ -400,18 +407,15 @@ async def test_a_pruned_team_is_gone_with_its_agents_and_leaves_an_autopsy(
     assert service.store.get("services.api") is None
     assert {str(gone) for gone in launcher.deleted} == agents
     assert launcher.stopped == launcher.deleted
-    [autopsy] = service.blackboard.autopsies("services/api")
-    assert (autopsy.approach, autopsy.why_failed) == (
-        "Hand-written SQL per endpoint",
-        "Every schema change broke all of them.",
-    )
     # Only the team's own uncommitted work went, and git still has it.
     assert not (repo / "services" / "api" / "half.py").exists()
     assert (repo / "README.md").read_text() == "the root team's own edit\n"
-    assert autopsy.saved_ref is not None
-    kept = run_git(repo, "show", f"{autopsy.saved_ref}:services/api/half.py")
-    assert kept == "broken\n"
+    [saved] = run_git(
+        repo, "for-each-ref", "--format=%(refname)", "refs/agents/pruned"
+    ).split()
+    assert run_git(repo, "show", f"{saved}:services/api/half.py") == "broken\n"
     told = launcher.messages_to(ic(service))[-1]
+    assert saved in told
     assert "Every schema change broke all of them." in told
     assert "services/api is yours again" in told
 
@@ -447,36 +451,26 @@ async def test_a_pruned_team_takes_the_teams_below_it_along(
     assert [team.id for team in service.store.children("root")] == ["apps.web"]
 
 
-async def test_a_replacement_starts_clean_and_is_told_what_failed_before(
-    service: DirectorService, launcher: FakeLauncher
-):
+async def test_reports_are_for_the_two_agents_of_one_team(service: DirectorService):
     await split_root(service)
-    first_ic = ic(service, "services.api")
 
     await use(
         service,
-        manager(service),
-        PruneTeamTool,
-        PRUNE_API.model_copy(update={"replacement_task": "Serve it through an ORM"}),
+        ic(service, "services.api"),
+        ReportTool,
+        ReportAction(text="Amounts are integer cents."),
     )
+    blank = await use(service, manager(service), ReportTool, ReportAction(text="  "))
 
-    team = node(service, "services.api")
-    assert team.status == "idle" and team.boundary.path == "services/api"
-    new_ic = ic(service, "services.api")
-    assert new_ic != first_ic
-    starts = {str(start.conversation_id): start for start in launcher.derived}
-    briefing = starts[str(new_ic)].task
-    assert str(starts[str(new_ic)].parent_id) == ic(service)
-    assert "Serve it through an ORM" in briefing
-    assert "Hand-written SQL per endpoint: Every schema change broke" in briefing
-    assert str(manager(service, "services.api")) in starts
-    context = await use(service, new_ic, ReadNodeContextTool, ReadNodeContextAction())
-    assert json.loads(context.text)["failed_here_before"] == [
-        {
-            "approach": "Hand-written SQL per endpoint",
-            "why_failed": "Every schema change broke all of them.",
-        }
-    ]
+    def read_by(conversation_id: str | None) -> list[str]:
+        caller = pod_actions.caller_of(service, UUID(conversation_id or ""))
+        context = json.loads(pod_actions.node_context(service, caller))
+        return [report["text"] for report in context["reports_of_your_team"]]
+
+    assert read_by(manager(service, "services.api")) == ["Amounts are integer cents."]
+    assert read_by(ic(service)) == []
+    assert read_by(ic(service, "apps.web")) == []
+    assert blank.is_error
 
 
 @pytest.mark.parametrize(
@@ -491,8 +485,8 @@ async def test_a_replacement_starts_clean_and_is_told_what_failed_before(
         ),
         pytest.param(
             "manager",
-            PRUNE_API.model_copy(update={"why_failed": " "}),
-            "Say why the team failed",
+            PRUNE_API.model_copy(update={"reason": " "}),
+            "Say why the team is removed",
             id="no reason",
         ),
     ],

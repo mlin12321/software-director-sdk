@@ -13,8 +13,8 @@ from openhands.agent_server import director_router
 from openhands.agent_server.api import create_app
 from openhands.agent_server.config import Config
 from openhands.agent_server.director.git import git_version
-from openhands.agent_server.director.git_blackboard import GitBlackboard
-from openhands.agent_server.director.models import Autopsy
+from openhands.agent_server.director.git_store import GitStore
+from openhands.agent_server.director.models import AgentRef, Report
 from openhands.agent_server.director.org_persistence import (
     create_org_board,
     save_org,
@@ -82,13 +82,12 @@ def test_returns_a_node_with_its_ancestors_and_children(client: TestClient):
 def test_an_unknown_node_is_not_found_on_every_node_route(client: TestClient):
     responses = [
         client.get("/api/director/org/nodes/missing"),
-        client.get("/api/director/org/nodes/missing/blackboard"),
+        client.get("/api/director/org/nodes/missing/memory"),
         client.get("/api/director/org/nodes/missing/ownership"),
-        client.post("/api/director/org/nodes/missing/teach", json={"rule": "x"}),
         client.get("/api/director/org/tree-stream", params={"node": "missing"}),
     ]
 
-    assert [response.status_code for response in responses] == [404] * 5
+    assert [response.status_code for response in responses] == [404] * 4
 
 
 def test_routes_require_the_session_key_when_one_is_configured(saved_tree: Path):
@@ -165,72 +164,50 @@ def test_ownership_lists_a_nodes_files_by_the_report_that_owns_them(repo: Path):
     }
 
 
-class TestBlackboard:
-    def test_returns_what_applies_to_the_nodes_boundary(
-        self, client: TestClient, saved_tree: Path
+class TestTeamMemory:
+    def test_returns_what_applies_to_the_nodes_boundary_and_what_its_agents_reported(
+        self, repo: Path
     ):
-        board = GitBlackboard(saved_tree)
+        store = OrgStore()
+        store.replace_all(small_tree())
+        store.update_node(
+            "a",
+            agents=[
+                AgentRef(role="ic", status="idle", conversation_id="ic-of-a"),
+                AgentRef(role="manager", status="idle", conversation_id="manager-of-a"),
+            ],
+        )
+        save_org(create_org_board(repo), store)
+        board = GitStore(repo)
         board.write("", "spec.md", "root spec")
         board.write("svc/a", "spec.md", "a spec")
         board.write("svc/b", "spec.md", "b spec")
         board.write("", "contracts.md", "a serves b")
-        board.teach("svc/a", "Rule for a.")
-        autopsy = Autopsy(
-            node_id="a", at="2026-11-01T00:00:00Z", approach="x", why_failed="y"
+        later = Report(at="2026-11-02T00:00:00+00:00", role="ic", text="Chose SQLite.")
+        earlier = Report(
+            at="2026-11-01T00:00:00+00:00", role="manager", text="Two sub-teams."
         )
-        board.append_autopsy("svc/a", autopsy)
+        board.append_report("ic-of-a", later)
+        board.append_report("manager-of-a", earlier)
+        board.append_report("someone-else", later)
 
-        response = client.get("/api/director/org/nodes/a/blackboard")
+        response = make_client(repo).get("/api/director/org/nodes/a/memory")
 
         assert response.status_code == 200
         assert response.json() == {
             "specs": [{"path": "svc/a", "spec": "a spec", "readonly": False}],
             "contracts": [{"path": "", "contracts": "a serves b", "own": False}],
-            "memory": {"rules": ["Rule for a."]},
-            "autopsies": [autopsy.model_dump()],
+            "reports": [earlier.model_dump(), later.model_dump()],
         }
-
-    def test_teaching_stores_the_rule_in_the_nodes_own_boundary(
-        self, client: TestClient, saved_tree: Path
-    ):
-        first = client.post(
-            "/api/director/org/nodes/a/teach", json={"rule": "  Be kind.  "}
-        )
-        again = client.post(
-            "/api/director/org/nodes/a/teach", json={"rule": "Be kind."}
-        )
-
-        assert first.status_code == 200
-        assert first.json() == {"rules": ["Be kind."]}
-        assert again.json() == {"rules": ["Be kind."]}
-        board = GitBlackboard(saved_tree)
-        assert json.loads(board.read("svc/a/memory.json") or "") == {
-            "rules": ["Be kind."]
-        }
-        assert board.memory("svc/b").rules == []
-
-    @pytest.mark.parametrize(
-        ("body", "status"),
-        [({"rule": "   "}, 400), ({"rule": ""}, 422), ({}, 422)],
-        ids=["blank", "empty", "missing"],
-    )
-    def test_a_rule_without_text_is_rejected(
-        self, client: TestClient, saved_tree: Path, body: dict, status: int
-    ):
-        response = client.post("/api/director/org/nodes/a/teach", json=body)
-
-        assert response.status_code == status
-        assert GitBlackboard(saved_tree).head() is None
 
     def test_is_unavailable_when_the_directory_is_not_a_repository(
         self, tmp_path: Path
     ):
         client = make_client(tmp_path, director_fixture=True)
 
-        read = client.get("/api/director/org/nodes/root/blackboard")
-        write = client.post("/api/director/org/nodes/root/teach", json={"rule": "x"})
+        read = client.get("/api/director/org/nodes/root/memory")
 
-        assert (read.status_code, write.status_code) == (503, 503)
+        assert read.status_code == 503
 
 
 class TestTreeStream:
@@ -655,7 +632,7 @@ async def test_a_message_that_cannot_be_routed_is_refused(running, repo):
     assert blank.status_code == 422
 
 
-def test_the_blackboard_is_pushed_to_and_pulled_from_a_remote(
+def test_the_team_memory_is_pushed_to_and_pulled_from_a_remote(
     saved_tree: Path, tmp_path: Path
 ):
     if git_version(saved_tree) < (2, 38):
@@ -664,34 +641,34 @@ def test_the_blackboard_is_pushed_to_and_pulled_from_a_remote(
     run_git(tmp_path, "clone", "--quiet", "--bare", str(saved_tree), str(bare))
     run_git(saved_tree, "remote", "add", "origin", str(bare))
     run_git(tmp_path, "clone", "--quiet", str(bare), str(clone))
-    GitBlackboard(saved_tree).teach("svc/a", "Be kind.")
+    GitStore(saved_tree).write("svc/a", "spec.md", "Be kind.")
     client = make_client(saved_tree)
 
-    pushed = client.post("/api/director/org/blackboard/push")
+    pushed = client.post("/api/director/org/memory/push")
     pulled = make_client(clone).post(
-        "/api/director/org/blackboard/pull", json={"remote": "origin"}
+        "/api/director/org/memory/pull", json={"remote": "origin"}
     )
 
     assert pushed.status_code == 200 and pushed.json()["pushed"] is True
     assert pulled.status_code == 200
     assert pulled.json() == {
         "remote": "origin",
-        "head": GitBlackboard(saved_tree).head(),
+        "head": GitStore(saved_tree).head(),
         "changed": True,
         "kept_local": [],
         "pushed": False,
     }
-    assert GitBlackboard(clone).memory("svc/a").rules == ["Be kind."]
+    assert GitStore(clone).read("svc/a/spec.md") == "Be kind."
 
 
-def test_sharing_the_blackboard_reports_what_is_missing(saved_tree: Path):
+def test_sharing_the_team_memory_reports_what_is_missing(saved_tree: Path):
     client = make_client(saved_tree)
 
-    no_remote = client.post("/api/director/org/blackboard/pull")
+    no_remote = client.post("/api/director/org/memory/pull")
     run_git(saved_tree, "remote", "add", "origin", str(saved_tree / "nowhere.git"))
-    nothing_to_push = client.post("/api/director/org/blackboard/push")
-    GitBlackboard(saved_tree).teach("", "Rule.")
-    unreachable = client.post("/api/director/org/blackboard/push")
+    nothing_to_push = client.post("/api/director/org/memory/push")
+    GitStore(saved_tree).write("", "spec.md", "Spec.")
+    unreachable = client.post("/api/director/org/memory/push")
 
     assert [
         response.status_code for response in (no_remote, nothing_to_push, unreachable)
@@ -711,6 +688,7 @@ def test_the_limits_on_new_teams_are_read_changed_and_kept(saved_tree: Path):
         "max_depth": 8,
         "allowed_profiles": [],
         "resume_on_start": False,
+        "report_compaction_chars": 24_000,
         "agents": 10,
         "depth": 3,
         "max_concurrent_runs": 7,

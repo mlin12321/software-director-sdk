@@ -110,16 +110,19 @@ async def test_the_org_protocol_is_added_to_what_the_caller_appends(
     assert suffix == f"Prefer small commits.\n\n{POD_PROTOCOL}"
 
 
-async def test_an_agent_is_briefed_with_the_rules_taught_for_its_boundary(
+async def test_a_team_started_again_is_briefed_with_what_it_reported(
     service: DirectorService, launcher: FakeLauncher, repo: Path
 ):
-    service.blackboard.teach("", "Never log card numbers")
-
     root = await service.create_org(org_request(repo))
     await service.settled()
+    service.report(root, "manager", "The API team needs a schema first.")
 
-    [briefing] = launcher.messages_to(agent_conversation(root, "ic"))
-    assert "Never log card numbers" in briefing
+    briefing = service._briefing(root, "ic", "Build")
+
+    assert "Manager, " in briefing
+    assert "The API team needs a schema first." in briefing
+    [first] = launcher.messages_to(agent_conversation(root, "ic"))
+    assert "reported so far" not in first
 
 
 async def test_a_director_has_one_org(service: DirectorService, repo: Path):
@@ -946,7 +949,7 @@ async def test_a_pruned_agents_shell_and_index_are_removed(
     # agent would be started by, and the index with its marker.
     assert len(left) == 7
 
-    service.prune("services.api", approach="", why_failed="x", replacement_task=None)
+    service.prune("services.api", "x")
     await service.settled()
 
     assert not [path for path in left if path.exists()]

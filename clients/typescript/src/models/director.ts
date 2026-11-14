@@ -282,7 +282,7 @@ export interface DirectorOrgConflict {
   /** Names the conflict in a resolve request. */
   id: string;
   kind: 'field' | 'team' | 'file';
-  /** The team; '' for a file of the blackboard. */
+  /** The team; '' for a file of the team_memory. */
   node_id: string;
   title: string;
   /** The field, or the file's path. */
@@ -320,7 +320,7 @@ export interface DirectorOrgSync {
   head: string | null;
   /** The merge waiting for choices, when `result` is `conflicts`. */
   merge: DirectorOrgMerge | null;
-  blackboard: DirectorBlackboardSync | null;
+  memory: DirectorMemorySync | null;
   /** The teams' branches that changed. */
   branches: DirectorBranchSync[];
   /** Unfinished work dropped because its team was changed. */
@@ -367,17 +367,15 @@ export interface DirectorOpenEscalation {
   path: DirectorEscalationPathStep[];
 }
 
-export interface DirectorAutopsy {
-  node_id: DirectorNodeId;
+/** Something an agent recorded for itself and the other agent of its team. */
+export interface DirectorReport {
+  /** ISO 8601 timestamp. */
   at: string;
-  approach: string;
-  why_failed: string;
-  /** The git ref that holds the uncommitted changes the prune discarded. */
-  saved_ref?: string | null;
-}
-
-export interface DirectorBoundaryMemory {
-  rules: string[];
+  /** Which agent of the team wrote it. */
+  role: DirectorAgentRole;
+  text: string;
+  /** True for the one report a model wrote in place of earlier ones. */
+  compacted?: boolean;
 }
 
 export interface DirectorInheritedSpec {
@@ -399,12 +397,12 @@ export interface DirectorBoundaryContracts {
   own: boolean;
 }
 
-export interface DirectorNodeBlackboard {
+export interface DirectorNodeMemory {
   /** The spec of the node's own boundary, when it has one. */
   specs: DirectorInheritedSpec[];
   contracts?: DirectorBoundaryContracts[];
-  memory: DirectorBoundaryMemory;
-  autopsies: DirectorAutopsy[];
+  /** What the team's own two agents recorded, oldest first. */
+  reports?: DirectorReport[];
 }
 
 /** A direct report, as the owner of a directory. */
@@ -528,6 +526,11 @@ export interface DirectorSettings {
    * servers that cannot pause an org.
    */
   resume_on_start?: boolean;
+  /**
+   * How many characters of reports one agent may have before a model
+   * rewrites them into one shorter report. Absent on servers without reports.
+   */
+  report_compaction_chars?: number;
 }
 
 /** The settings, beside what the org has now. */
@@ -549,18 +552,18 @@ export interface DirectorTeamMatch {
   path: string;
 }
 
-/** What a pull or a push of the blackboard did. */
-export interface DirectorBlackboardSync {
+/** What a pull or a push of the team memory did. */
+export interface DirectorMemorySync {
   remote: string;
-  /** The local blackboard's commit afterwards; `null` when it is empty. */
+  /** The local team memory's commit afterwards; `null` when it is empty. */
   head: string | null;
-  /** The local blackboard took in remote changes. */
+  /** The local team memory took in remote changes. */
   changed: boolean;
   /**
    * Specs and contracts both sides had changed. The local text was kept;
-   * the remote text is in the blackboard's history.
+   * the remote text is in the team memory's history.
    */
   kept_local: string[];
-  /** The remote now has the local blackboard. */
+  /** The remote now has the local team_memory. */
   pushed: boolean;
 }

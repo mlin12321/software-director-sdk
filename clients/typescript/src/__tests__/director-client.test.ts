@@ -107,24 +107,21 @@ describe('DirectorClient', () => {
   });
 
   it('calls the node routes with the node id escaped and the session key', async () => {
-    const fetchMock = mockFetch(() => jsonResponse({ rules: ['Never mock the clock'] }));
+    const fetchMock = mockFetch(() => jsonResponse({ specs: [], reports: [] }));
     const client = new DirectorClient({ host: 'http://example.com/', apiKey: 'secret' });
 
     await client.getNode('payments/api');
-    await client.getNodeBlackboard('payments.api');
+    const memory = await client.getNodeMemory('payments.api');
     await client.getNodeOwnership('payments.api');
-    const memory = await client.teach('payments.api', 'Never mock the clock');
 
     const calls = fetchMock.mock.calls;
     expect(calls.map(([url, init]) => `${init.method} ${url}`)).toEqual([
       'GET http://example.com/api/director/org/nodes/payments%2Fapi',
-      'GET http://example.com/api/director/org/nodes/payments.api/blackboard',
+      'GET http://example.com/api/director/org/nodes/payments.api/memory',
       'GET http://example.com/api/director/org/nodes/payments.api/ownership',
-      'POST http://example.com/api/director/org/nodes/payments.api/teach',
     ]);
-    expect(JSON.parse(calls[3][1].body)).toEqual({ rule: 'Never mock the clock' });
     expect(calls[0][1].headers['X-Session-API-Key']).toBe('secret');
-    expect(memory).toEqual({ rules: ['Never mock the clock'] });
+    expect(memory).toEqual({ specs: [], reports: [] });
   });
 
   it("lists a team's changes, shows a file and writes one by hand", async () => {
@@ -146,18 +143,18 @@ describe('DirectorClient', () => {
     expect(edit).toEqual({ path: 'api/a.py', commit: 'abc' });
   });
 
-  it('pulls and pushes the blackboard, from origin unless told otherwise', async () => {
+  it('pulls and pushes the team memory, from origin unless told otherwise', async () => {
     const sync = { remote: 'origin', head: 'abc', changed: true, kept_local: [], pushed: false };
     const fetchMock = mockFetch(() => jsonResponse(sync));
     const client = new DirectorClient({ host: 'http://example.com' });
 
-    const pulled = await client.pullBlackboard();
-    await client.pushBlackboard('upstream');
+    const pulled = await client.pullMemory();
+    await client.pushMemory('upstream');
 
     const calls = fetchMock.mock.calls;
     expect(calls.map(([url, init]) => `${init.method} ${url}`)).toEqual([
-      'POST http://example.com/api/director/org/blackboard/pull',
-      'POST http://example.com/api/director/org/blackboard/push',
+      'POST http://example.com/api/director/org/memory/pull',
+      'POST http://example.com/api/director/org/memory/push',
     ]);
     expect(calls.map(([, init]) => JSON.parse(init.body))).toEqual([
       { remote: 'origin' },
@@ -219,7 +216,7 @@ describe('DirectorClient', () => {
       result: 'conflicts',
       head: 'abc',
       merge: { remote: 'origin', theirs: 'def', conflicts: [] },
-      blackboard: null,
+      memory: null,
       branches: [],
       put_aside: [],
     };
