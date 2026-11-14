@@ -3551,22 +3551,24 @@ def _scripted_org_llm(
                 return tool_call(*(api_ic or [])[done])
         if last.role == "user" and "You are the IC of the team 'Checkout'" in text:
             return tool_call(
-                "propose_boundary_split",
+                "msg_manager",
                 {
-                    "children": [
-                        {"title": "API", "path": "services/api", "task": "Serve it"},
-                        {"title": "Web", "path": "apps/web", "task": "Show it"},
-                    ],
-                    "contracts": "POST /checkout returns an order id",
+                    "text": "Two teams can build this side by side.\n\n"
+                    "```teams\n"
+                    "contracts: POST /checkout returns an order id\n"
+                    "teams:\n"
+                    "  - {name: API, path: services/api, instruction: Serve it}\n"
+                    "  - {name: Web, path: apps/web, instruction: Show it}\n"
+                    "```"
                 },
             )
-        if last.role == "user" and "Your IC proposes to split" in text:
-            return tool_call("decide_split", {"decision": "approve"})
+        if last.role == "user" and "Your IC writes:" in text and "```teams" in text:
+            return tool_call("approve_teams", {})
         if last.role == "user" and "Review mode. Team 'API'" in text:
             return tool_call(
                 "review_team", {"node_id": "services.api", "decision": "accept"}
             )
-        if last.role == "user" and "Team 'API'" in text and "it is blocked" in text:
+        if last.role == "user" and "Team 'API'" in text and "escalates" in text:
             return tool_call(
                 "prune_team",
                 {
@@ -3647,6 +3649,10 @@ def test_director_runs_an_org_whose_root_splits_into_sub_teams(
             "apps.web",
         ]
         assert detail["node"]["pending_split"] is None
+        [thread] = client.get("/api/director/org/nodes/root/messages").json()
+        assert (thread["manager_node_id"], thread["ic_node_id"]) == ("root", "root")
+        [proposal] = thread["messages"]
+        assert proposal["sender"] == "ic" and "```teams" in proposal["text"]
         root_ic, root_manager = (agent["conversation_id"] for agent in root["agents"])
         manager = client.get(f"/api/conversations/{root_manager}").json()
         assert manager["parent_conversation_id"] == root_ic
@@ -3803,7 +3809,12 @@ def test_director_prunes_a_blocked_team_and_maps_who_owns_what(
     repo = server_env["workspace_path"]
     _scripted_org_llm(
         monkeypatch,
-        api_ic=[("set_status", {"status": "blocked", "summary": "Too much."})],
+        api_ic=[
+            (
+                "raise_escalation",
+                {"category": "critical_issue", "title": "Too much for one team"},
+            )
+        ],
     )
     run_git_command(["git", "init", "-b", "main"], repo)
     for path in ("services/api/app.py", "apps/web/index.html"):

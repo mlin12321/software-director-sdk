@@ -36,21 +36,26 @@ from openhands.agent_server.director.sandbox import (
 )
 from openhands.agent_server.director.service import DirectorService
 from openhands.agent_server.director.tools import (
-    DecideSplitTool,
-    ProposeBoundarySplitTool,
+    ApproveTeamsTool,
+    MsgManagerTool,
 )
 from openhands.agent_server.director.tools.definition import (
-    DecideSplitAction,
-    ProposeBoundarySplitAction,
+    MsgManagerAction,
 )
 from openhands.sdk.agent import ACPAgent
 from openhands.sdk.conversation.state import ConversationExecutionStatus
 from tests.agent_server.director.conftest import FakeLauncher, root_conversation
 from tests.agent_server.director.test_director_router import server_config
-from tests.agent_server.director.test_director_tools import ic, manager, node, use
+from tests.agent_server.director.test_director_tools import (
+    APPROVE,
+    ic,
+    manager,
+    node,
+    proposing,
+    use,
+)
 
 
-APPROVE = DecideSplitAction(decision="approve")
 CLAUDE = ["npx", "-y", "@agentclientprotocol/claude-agent-acp"]
 
 
@@ -73,13 +78,13 @@ async def started(repo: Path, launcher: FakeLauncher, **options) -> DirectorServ
     return service
 
 
-def split(*children: SplitChild) -> ProposeBoundarySplitAction:
-    return ProposeBoundarySplitAction(children=list(children), contracts="")
+def split(*children: SplitChild) -> MsgManagerAction:
+    return proposing(list(children))
 
 
 async def carry_out(service: DirectorService, *children: SplitChild) -> None:
-    await use(service, ic(service), ProposeBoundarySplitTool, split(*children))
-    await use(service, manager(service), DecideSplitTool, APPROVE)
+    await use(service, ic(service), MsgManagerTool, split(*children))
+    await use(service, manager(service), ApproveTeamsTool, APPROVE)
 
 
 def test_a_token_names_its_agent_only_with_the_key_it_was_made_with():
@@ -309,11 +314,9 @@ async def test_an_agent_calls_the_directors_tools_with_its_token_alone(
     spec = await client.post(
         "/api/director/tools/write_spec", headers=headers, json={"content": "# Spec"}
     )
-    # Only a Manager decides a split, and this is the IC.
+    # Only a Manager approves sub-teams, and this is the IC.
     refused = await client.post(
-        "/api/director/tools/decide_split",
-        headers=headers,
-        json={"decision": "approve"},
+        "/api/director/tools/approve_teams", headers=headers, json={}
     )
     malformed = await client.post(
         "/api/director/tools/write_spec", headers=headers, json={}
@@ -321,8 +324,8 @@ async def test_an_agent_calls_the_directors_tools_with_its_token_alone(
 
     assert listed.status_code == 200
     tools = {tool["name"]: tool for tool in listed.json()}
-    assert "propose_boundary_split" in tools and "review_team" in tools
-    assert "children" in tools["propose_boundary_split"]["inputSchema"]["properties"]
+    assert {"msg_manager", "msg_ic", "review_team"} <= set(tools)
+    assert "text" in tools["msg_manager"]["inputSchema"]["properties"]
     assert spec.json()["is_error"] is False
     assert service.team_memory.applies_to("", None)[0][0].spec == "# Spec"
     assert refused.status_code == 200 and refused.json()["is_error"] is True
@@ -444,11 +447,11 @@ async def test_a_sub_team_runs_on_another_agent_profile_when_the_org_allows_it(
     service = await started(repo, launcher)
     codex = SplitChild(title="API", path="svc/api", task="Serve", agent_profile="codex")
 
-    refused = await use(service, ic(service), ProposeBoundarySplitTool, split(codex))
+    refused = await use(service, ic(service), MsgManagerTool, split(codex))
     service.update_settings(DirectorSettingsUpdate(allowed_profiles=["codex"]))
     await carry_out(service, codex, SplitChild(title="Web", path="web", task="Pages"))
 
-    assert refused.is_error and "leave `agent_profile` out" in refused.text
+    assert refused.is_error and "leave `model` out" in refused.text
     starts = {start.title: start for start in launcher.derived}
     assert starts["API (IC)"].profile == "codex"
     assert starts["API (IC)"].suffixes == [POD_PROTOCOL]
@@ -477,7 +480,7 @@ async def test_the_profiles_a_sub_team_may_run_on_are_kept_and_told_to_the_ic(
     other = await use(
         service,
         ic(service),
-        ProposeBoundarySplitTool,
+        MsgManagerTool,
         split(SplitChild(title="A", path="a", task="x", agent_profile="claude")),
     )
 

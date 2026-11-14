@@ -85,6 +85,8 @@ from openhands.agent_server.director.models import (
     SyncResult,
     TeamEnforcement,
     TeamMatch,
+    Thread,
+    ThreadMessage,
 )
 from openhands.agent_server.director.org_merge import (
     Nodes,
@@ -139,6 +141,8 @@ from openhands.agent_server.director.split import (
     check_limits,
     child_boundary,
     clean_path,
+    home_of,
+    normalize_split,
 )
 from openhands.agent_server.event_service import ConversationRunLimitExceeded
 from openhands.sdk.agent import ACPAgent
@@ -165,8 +169,9 @@ ROOT_ID = "root"
 DIRECTOR_TOOL_NAMES = (
     "read_node_context",
     "write_spec",
-    "propose_boundary_split",
-    "decide_split",
+    "msg_manager",
+    "msg_ic",
+    "approve_teams",
     "raise_escalation",
     "resolve_escalation",
     "set_status",
@@ -349,6 +354,9 @@ class DirectorService:
         self._at_once: set[int] = set()
         # The conversations last recorded as running.
         self._running: set[str] = set()
+        # The teams each step waits for the agents of to stop, by the id of
+        # its intent, and the lane the step is carried out in.
+        self._settling: dict[int, tuple[set[str], str]] = {}
         # The conversations a resume is about to run again.
         self._resuming: set[str] = set()
         self._save_asked = False
@@ -948,6 +956,58 @@ class DirectorService:
         the team above. Safe from any thread."""
         self.store.update_node(node_id, status="blocked")
         self._begin("prune", node_id, reason=reason)
+
+    def message(
+        self,
+        manager_node_id: str,
+        ic_node_id: str,
+        sender: AgentRole,
+        text: str,
+        note: str = "",
+    ) -> None:
+        """Keep and deliver a message between a Manager and an IC. Safe
+        from any thread.
+
+        Args:
+            manager_node_id: The Manager's team.
+            ic_node_id: The IC's team: the same one, or one directly below.
+            note: What the director adds for the reader; it is not kept.
+        """
+        store = self.store
+        manager_node, ic_node = store.get(manager_node_id), store.get(ic_node_id)
+        if manager_node is None or ic_node is None:
+            raise NotFound("That team is no longer in the org")
+        self._memory().append_message(
+            manager_node_id,
+            ic_node_id,
+            ThreadMessage(at=_instant(), sender=sender, text=text),
+        )
+        if sender == "ic":
+            reader = agent_conversation(manager_node, "manager")
+            heading = "Your IC writes:"
+        else:
+            reader = agent_conversation(ic_node, "ic")
+            heading = (
+                "Your Manager writes:"
+                if manager_node_id == ic_node_id
+                else f"The Manager of the team above ({manager_node.title}) writes:"
+            )
+        self.notify(reader, f"{heading}\n{text}{note}")
+
+    def threads_of(self, node: OrgNode) -> list[Thread]:
+        """What the agents of a team have said to Managers and ICs: its own
+        two to each other, its Manager to the ICs directly below, and the
+        Manager above to its IC. Threads nobody wrote in are left out."""
+        team_memory = self._memory()
+        pairs = [(node.id, node.id)]
+        pairs += [(node.id, child_id) for child_id in node.child_ids]
+        if node.parent_id is not None:
+            pairs.append((node.parent_id, node.id))
+        return [
+            Thread(manager_node_id=manager, ic_node_id=ic, messages=messages)
+            for manager, ic in pairs
+            if (messages := team_memory.thread(manager, ic))
+        ]
 
     def reports_of(self, node: OrgNode) -> list[Report]:
         """What the two agents of a team recorded, oldest first."""
@@ -2048,7 +2108,10 @@ class DirectorService:
             return
         if not run.is_held(seq):
             return
-        if seq not in self._at_once and self._in_a_turn_of_its_own(conversation_id):
+        if seq not in self._at_once and (
+            self._in_a_turn_of_its_own(conversation_id)
+            or self._settles(conversation_id)
+        ):
             return
         self._delivering.add(seq)
         self._at_once.discard(seq)
@@ -2074,6 +2137,38 @@ class DirectorService:
             return False
         node, role = found
         return any(agent.role == role and agent.kind == "acp" for agent in node.agents)
+
+    def _settles(self, conversation_id: str) -> bool:
+        """Whether the agent's team is about to be changed, so that nothing
+        new is started in it."""
+        found = self.store.find_by_conversation(conversation_id)
+        return found is not None and any(
+            found[0].id in teams for teams, _ in self._settling.values()
+        )
+
+    def _wait_until_quiet(self, intent: Intent, node_ids: list[str]) -> None:
+        """Hold a step until no agent of the teams is in a turn. Messages to
+        them wait meanwhile, so that no new turn begins.
+
+        Raises:
+            _Held: An agent of theirs is still running; the step is taken
+                up again when it stops.
+        """
+        self._settling[intent.id] = (set(node_ids), _lane_for(intent))
+        store = self.store
+        for team in map(store.get, node_ids):
+            for agent in team.agents if team else []:
+                if agent.conversation_id in self._running:
+                    raise _Held
+
+    def _let_go(self, intent: Intent) -> None:
+        """Deliver what waited for the teams a step has now changed."""
+        teams, _ = self._settling.pop(intent.id, (set(), ""))
+        store = self.store
+        for team in map(store.get, teams):
+            for agent in team.agents if team else []:
+                if agent.conversation_id is not None:
+                    self._deliver_what_waited(agent.conversation_id)
 
     def _deliver_what_waited(self, conversation_id: str) -> None:
         """Deliver the messages that waited for an agent's turn to end."""
@@ -2215,6 +2310,12 @@ class DirectorService:
             run.unmark(RUNNING, conversation_id)
             if self._loop is not None:
                 self._deliver_what_waited(conversation_id)
+                for intent_id, (teams, lane) in list(self._settling.items()):
+                    if node_id in teams:
+                        self._enqueue(
+                            lambda intent_id=intent_id: self._carry_out(intent_id),
+                            lane,
+                        )
 
     def _shown(self, conversation_id: str, status: ConversationExecutionStatus) -> str:
         """An agent's status as the org shows it. One that was running when
@@ -2425,6 +2526,14 @@ class DirectorService:
         checkout = intent.payload.get("checkout")
         if await self._start_agent(node_id, "ic", parent_ic, task, checkout):
             await self._launch_manager(node_id, task)
+            node = self.store.get(node_id)
+            # Sub-teams it took over from a team it replaced.
+            for below in self.store.children(node_id):
+                if node and below.review and below.review.state == "pending":
+                    self.notify(
+                        agent_conversation(node, "ic"),
+                        review_request(below, below.review),
+                    )
         self._enqueue(lambda: self._summarize(node_id, task, first=True), node_id)
 
     async def _do_finish_split(self, intent: Intent) -> None:
@@ -2439,6 +2548,46 @@ class DirectorService:
     async def _do_halt(self, intent: Intent) -> None:
         await self._halt(intent.node_id)
 
+    def _decline(self, node: OrgNode, reason: str) -> None:
+        """Put approved sub-teams aside and tell the IC that proposed them."""
+        self.store.update_node(node.id, pending_split=None)
+        self.notify(
+            agent_conversation(node, "ic"),
+            f"The sub-teams your Manager approved could not be set up: {reason} "
+            "Nothing was changed. Tell your Manager with msg_manager, with a "
+            "new proposal if you have one.",
+        )
+
+    def _take_in(self, node: OrgNode, teams: list[OrgNode], stamp: str) -> str | None:
+        """Bring what the teams committed in checkouts of their own into
+        the checkout of ``node``, and put their uncommitted work aside.
+
+        Nothing uncommitted is touched unless every team's work came in.
+
+        Returns:
+            Why a team's work could not be brought in; None when all was.
+        """
+        # A team in the node's own checkout has its files there already.
+        apart = [team for team in teams if team.worktree_path != node.worktree_path]
+        for team in apart:
+            merged = merge_back(
+                Path(node.worktree_path),
+                Path(team.worktree_path),
+                team.boundary.path,
+                team.title,
+            )
+            if merged.outcome in ("conflicts", "outside", "refused"):
+                detail = ", ".join(merged.files) or merged.detail
+                return (
+                    f"the work {team.title!r} committed does not merge into "
+                    f"your checkout ({merged.outcome}: {detail})."
+                )
+        for team in teams:
+            self._forget_shells(team)
+        for team in apart:
+            self._discard_work([team], stamp)
+        return None
+
     async def _carry_out_split(self, intent: Intent) -> None:
         store = self.store
         run = self._runs()
@@ -2449,42 +2598,99 @@ class DirectorService:
             return
         if "planned" not in intent.steps:
             try:
-                # The org may have grown since the split was proposed.
-                check_limits(store, node, len(proposal.children), self.settings)
-            except OrgStoreError as error:
-                store.update_node(
-                    node_id,
-                    pending_split=proposal.model_copy(
-                        update={"status": "refine_requested", "feedback": str(error)}
-                    ),
+                # The org may have changed since the sub-teams were approved.
+                split = normalize_split(store, node, proposal.children)
+                check_limits(
+                    store,
+                    node,
+                    len(split.children) - len(split.replaces),
+                    self.settings,
                 )
-                for conversation_id in (
-                    agent_conversation(node, "ic"),
-                    agent_conversation(node, "manager"),
-                ):
-                    self.notify(
-                        conversation_id,
-                        f"The approved split cannot be carried out: {error}",
-                    )
+            except OrgStoreError as error:
+                self._decline(node, str(error))
                 return
-            taken = {team.id for team in store.all()}
-            # Fixed before any of them exists, so that carrying the split
-            # out again makes the same teams and no others.
+            gone = {team.id for team in split.replaces}
+            taken = {team.id for team in store.all()} - gone
+            teams = [_child_node(taken, node, child) for child in split.children]
+            by_path = {team.boundary.path: team.id for team in teams}
+            # Fixed before anything changes, so that carrying the split out
+            # again makes the same teams, removes the same and no others.
             intent = run.step_done(
                 intent,
                 "planned",
-                teams=[
-                    _child_node(taken, node, child).model_dump(mode="json")
-                    for child in proposal.children
+                teams=[team.model_dump(mode="json") for team in teams],
+                replaces=sorted(gone),
+                moves={
+                    below.id: home_of(below, node_id, by_path)
+                    for team in split.replaces
+                    for below in store.children(team.id)
+                },
+                conversations=[
+                    agent.conversation_id
+                    for team in split.replaces
+                    for agent in team.agents
+                    if agent.conversation_id is not None
                 ],
+                stamp=datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ"),
             )
+        plan = intent.payload
+        moves: dict[str, str] = plan["moves"]
+        replaced = [team for team in map(store.get, plan["replaces"]) if team]
+        if replaced and "replaced" not in intent.steps:
+            watched = [team.id for team in replaced]
+            for team_id in list(watched):
+                watched.extend(below.id for below in store.children(team_id))
+            self._wait_until_quiet(intent, watched)
+            refusal = await asyncio.to_thread(
+                self._take_in, node, replaced, plan["stamp"]
+            )
+            if refusal is not None:
+                self._let_go(intent)
+                self._decline(node, refusal)
+                return
+            launcher = self._require_launcher()
+            for conversation_id in map(UUID, plan["conversations"]):
+                await launcher.stop(conversation_id)
+                await launcher.delete(conversation_id)
+        if "replaced" not in intent.steps:
+            intent = run.step_done(intent, "replaced")
+        # Done whenever a replaced team is still in the tree: the tree may
+        # have been saved before the step that removed it.
+        if replaced:
+            # Their sub-teams stay: under the node for now, then under the
+            # new team that holds them.
+            for below_id in moves:
+                if store.get(below_id) is not None:
+                    store.move(below_id, node_id)
+            for team in replaced:
+                store.remove(team.id)
         if proposal.contracts.strip():
             await asyncio.to_thread(self._record_contracts, node, proposal.contracts)
-        teams = [OrgNodeInput.model_validate(team) for team in intent.payload["teams"]]
+
+        teams = [OrgNodeInput.model_validate(team) for team in plan["teams"]]
         for team in teams:
             if store.get(team.id) is None:
                 store.upsert(team)
+        for below_id, home in moves.items():
+            if store.get(below_id) is not None and store.get(home) is not None:
+                store.move(below_id, home)
+        self._let_go(intent)
         await self._save()
+        if "handed_over" not in intent.steps:
+            # What a sub-team that stayed had waiting for review is now for
+            # the IC of the team it reports to; a new team's IC is told
+            # when it starts.
+            for below in store.children(node_id):
+                if (
+                    below.id in moves
+                    and below.review
+                    and below.review.state == "pending"
+                ):
+                    self.notify(
+                        agent_conversation(node, "ic"),
+                        review_request(below, below.review),
+                    )
+            intent = run.step_done(intent, "handed_over")
         # The sub-teams start side by side, each in its own lane; the split
         # is over when the last of them has.
         for team, child in zip(teams, proposal.children, strict=True):
@@ -2506,9 +2712,15 @@ class DirectorService:
         started = [f"{child.title} ({child.path})" for child in proposal.children]
         self.notify(
             agent_conversation(node, "ic"),
-            "Your split was approved and these sub-teams now own their "
+            "Your Manager approved your sub-teams and they now own their "
             f"directories: {', '.join(started)}. You can no longer write "
-            "there; carry on with what remains in your boundary.",
+            "there; carry on with what remains in your boundary."
+            + (
+                " The teams they replaced are gone; what those had committed "
+                "is in your checkout."
+                if proposal.replaces
+                else ""
+            ),
         )
 
     async def _prune(self, intent: Intent) -> None:
@@ -2547,6 +2759,9 @@ class DirectorService:
         where = plan["path"]
         conversations = [UUID(agent) for agent in plan["conversations"]]
         if "stopped" not in intent.steps:
+            # A team is removed only once it and the teams below it are at
+            # rest, so nothing is cut off in the middle.
+            self._wait_until_quiet(intent, plan["teams"])
             for conversation_id in conversations:
                 await launcher.stop(conversation_id)
             intent = run.step_done(intent, "stopped")
@@ -2568,6 +2783,7 @@ class DirectorService:
                 await asyncio.to_thread(self._confine, plan["parent"], "ic")
             await self._save()
             intent = run.step_done(intent, "removed")
+        self._settling.pop(intent.id, None)
         self.notify(
             parent_ic,
             f"Your Manager pruned the team {plan['title']!r} ({where}): "

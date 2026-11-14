@@ -45,6 +45,7 @@ from openhands.agent_server.director.models import (
     StartAgainRequest,
     TeamChanges,
     TeamMatch,
+    Thread,
 )
 from openhands.agent_server.director.org_store import OrgChange
 from openhands.agent_server.director.ownership import node_ownership
@@ -471,6 +472,20 @@ def get_node_memory(
     return NodeMemory(
         specs=specs, contracts=contracts, reports=service.reports_of(node)
     )
+
+
+@director_router.get(
+    "/org/nodes/{node_id}/messages",
+    response_model=list[Thread],
+    responses=error_responses({**_NODE_NOT_FOUND, **_NO_MEMORY}),
+)
+def get_node_messages(
+    node_id: str, service: DirectorService = Depends(get_director_service)
+) -> list[Thread]:
+    """Get what a node's agents have said to Managers and ICs: its IC and
+    its Manager to each other, its Manager to the ICs directly below, and
+    the Manager above to its IC."""
+    return service.threads_of(_require_node(service, node_id))
 
 
 @director_router.get(

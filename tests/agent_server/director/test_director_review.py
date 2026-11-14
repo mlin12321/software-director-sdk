@@ -14,14 +14,12 @@ from openhands.agent_server.director.models import (
 )
 from openhands.agent_server.director.service import DirectorService
 from openhands.agent_server.director.tools import (
-    DecideSplitTool,
-    ProposeBoundarySplitTool,
+    ApproveTeamsTool,
+    MsgManagerTool,
     ReviewTeamTool,
     SetStatusTool,
 )
 from openhands.agent_server.director.tools.definition import (
-    DecideSplitAction,
-    ProposeBoundarySplitAction,
     ReviewTeamAction,
     SetStatusAction,
 )
@@ -31,9 +29,11 @@ from tests.agent_server.director.conftest import (
     run_git,
 )
 from tests.agent_server.director.test_director_tools import (
+    APPROVE,
     ic,
     manager,
     node,
+    proposing,
     split_root,
     use,
 )
@@ -263,22 +263,17 @@ async def split_api(service: DirectorService) -> None:
     await use(
         service,
         ic(service, "services.api"),
-        ProposeBoundarySplitTool,
-        ProposeBoundarySplitAction(
-            children=[
+        MsgManagerTool,
+        proposing(
+            [
                 SplitChild(
                     title="Schema", path="services/api/schema", task="Define orders"
                 )
             ],
-            contracts="Order has an id.",
+            "Order has an id.",
         ),
     )
-    await use(
-        service,
-        manager(service, "services.api"),
-        DecideSplitTool,
-        DecideSplitAction(decision="approve"),
-    )
+    await use(service, manager(service, "services.api"), ApproveTeamsTool, APPROVE)
 
 
 @pytest.mark.parametrize("needed_above", ["", "Web builds its forms from the schema."])

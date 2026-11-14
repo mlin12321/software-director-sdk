@@ -19,14 +19,19 @@ from openhands.agent_server.director.models import (
     OrgNode,
     Review,
     ReviewFinding,
-    SplitChild,
     SplitProposal,
 )
 from openhands.agent_server.director.service import (
     DirectorService,
     agent_conversation,
 )
-from openhands.agent_server.director.split import check_limits, normalize_split
+from openhands.agent_server.director.split import (
+    TEAMS_FENCE,
+    Proposed,
+    check_limits,
+    normalize_split,
+    proposed_teams,
+)
 from openhands.sdk.errors import Conflict, Invalid, NotFound
 
 
@@ -148,91 +153,144 @@ def write_spec(service: DirectorService, caller: Caller, content: str) -> str:
     return f"Saved the spec of {path or 'the repository'}."
 
 
-def propose_split(
-    service: DirectorService,
-    caller: Caller,
-    children: list[SplitChild],
-    contracts: str,
-) -> str:
-    """Put a split of the caller's boundary before its Manager."""
-    _only(caller, "ic", "propose a split")
-    node = caller.node
-    if node.pending_split and node.pending_split.status != "refine_requested":
-        raise Conflict(
-            "Your team already has a split waiting; it must be decided or "
-            "carried out first"
-        )
+def _checked(
+    service: DirectorService, node: OrgNode, proposed: Proposed
+) -> SplitProposal:
+    """The sub-teams a message proposes, held to what the org allows."""
     store = service.store
-    check_limits(store, node, len(children), service.settings)
     allowed = service.settings.allowed_profiles
-    for child in children:
+    for child in proposed.children:
         if child.agent_profile and child.agent_profile not in allowed:
             raise Invalid(
-                f"Sub-team {child.title!r} cannot run on the agent profile "
+                f"Sub-team {child.title!r} cannot run on the model "
                 f"{child.agent_profile!r}. "
                 + (
                     f"The org allows: {', '.join(allowed)}."
                     if allowed
-                    else "The org allows none; leave `agent_profile` out."
+                    else "The org allows none; leave `model` out."
                 )
             )
-    proposal = SplitProposal(
-        children=normalize_split(node, store.children(node.id), children),
-        contracts=contracts,
+    split = normalize_split(store, node, proposed.children)
+    check_limits(
+        store, node, len(split.children) - len(split.replaces), service.settings
+    )
+    return SplitProposal(
+        children=split.children,
+        contracts=proposed.contracts,
+        replaces=[team.id for team in split.replaces],
         proposed_at=datetime.now(UTC).isoformat(timespec="seconds"),
     )
-    store.update_node(node.id, pending_split=proposal)
-    listing = "\n".join(
-        f"- {child.title}: {child.path} ({child.isolation}"
-        f"{f', agent profile {child.agent_profile}' if child.agent_profile else ''}"
-        f"). Task: {child.task}"
-        for child in proposal.children
-    )
-    service.notify(
-        agent_conversation(node, "manager"),
-        f"Your IC proposes to split {node.boundary.path or 'the repository'} "
-        f"into these sub-teams:\n{listing}\n\nContracts between them:\n"
-        f"{contracts.strip() or '(none given)'}\n\n"
-        "Decide with decide_split: approve, or ask for a refinement.",
-    )
-    return "Proposed. Your Manager decides; you will be told the outcome."
 
 
-def decide_split(
-    service: DirectorService,
-    caller: Caller,
-    decision: Literal["approve", "refine"],
-    feedback: str,
-) -> str:
-    """Approve the split the caller's IC proposed, or ask for a refinement."""
-    _only(caller, "manager", "decide a split")
+def msg_manager(service: DirectorService, caller: Caller, text: str) -> str:
+    """Send the caller's Manager a message, and put before it the sub-teams
+    the message proposes, if any."""
+    _only(caller, "ic", "message its Manager")
+    node = caller.node
+    text = text.strip()
+    if not text:
+        raise Invalid("A message cannot be empty")
+    proposed = proposed_teams(text)
+    if proposed is None and not node.child_ids:
+        raise Invalid(
+            "A team without sub-teams messages its Manager only to propose "
+            f"some, in a ```{TEAMS_FENCE} block. Raise anything else with "
+            "raise_escalation."
+        )
+    note = ""
+    if proposed is not None:
+        if node.pending_split and node.pending_split.status == "approved":
+            raise Conflict("The sub-teams your Manager approved are still being set up")
+        proposal = _checked(service, node, proposed)
+        service.store.update_node(node.id, pending_split=proposal)
+        replaced = [
+            team.title
+            for team in map(service.store.get, proposal.replaces)
+            if team is not None
+        ]
+        note = (
+            "\n\n[director] The sub-teams in this message passed the org's "
+            "checks."
+            + (
+                f" They take the place of: {', '.join(replaced)}, whose own "
+                "sub-teams stay."
+                if replaced
+                else ""
+            )
+            + " approve_teams sets them up exactly as written; to ask for "
+            "changes or decline, answer with msg_ic."
+        )
+    service.message(node.id, node.id, "ic", text, note)
+    if proposed is None:
+        return "Sent to your Manager."
+    return (
+        "Sent to your Manager with the sub-teams you proposed. Nothing "
+        "starts until it approves; you will hear either way."
+    )
+
+
+def msg_ic(service: DirectorService, caller: Caller, text: str, team: str) -> str:
+    """Send a message to the caller's own IC, or to the IC of a team
+    directly below."""
+    _only(caller, "manager", "message an IC")
+    node = caller.node
+    text = text.strip()
+    if not text:
+        raise Invalid("A message cannot be empty")
+    target = node
+    if team.strip() and team.strip() != node.id:
+        found = service.store.get(team.strip())
+        if found is None or found.parent_id != node.id:
+            raise Invalid(f"{team.strip()} is not your team or one directly below it")
+        target = found
+    note = ""
+    if (
+        target.id == node.id
+        and node.pending_split
+        and node.pending_split.status == "proposed"
+    ):
+        # An answer other than approval puts the proposal aside.
+        service.store.update_node(node.id, pending_split=None)
+        note = (
+            "\n\n[director] The sub-teams you proposed were not approved. "
+            "Propose again in a new message if you still want them."
+        )
+    service.message(node.id, target.id, "manager", text, note)
+    return f"Sent to the IC of {target.title!r}."
+
+
+def approve_teams(service: DirectorService, caller: Caller) -> str:
+    """Set up the sub-teams the caller's IC proposed, as written."""
+    _only(caller, "manager", "approve sub-teams")
     node = caller.node
     proposal = node.pending_split
     if proposal is None or proposal.status != "proposed":
-        raise Conflict("Your IC has no split waiting for a decision")
-    if decision == "refine":
-        if not feedback.strip():
-            raise Invalid("Asking for a refinement needs feedback on what to change")
-        service.store.update_node(
-            node.id,
-            pending_split=proposal.model_copy(
-                update={"status": "refine_requested", "feedback": feedback.strip()}
-            ),
-        )
-        service.notify(
-            agent_conversation(node, "ic"),
-            "Your Manager asks you to refine the split before it is approved:\n"
-            f"{feedback.strip()}\nPropose it again, or do the work yourself.",
-        )
-        return "Asked the IC to refine the split."
+        raise Conflict("Your IC has no proposed sub-teams waiting for you")
+    # The org may have changed since they were proposed.
+    split = normalize_split(service.store, node, proposal.children)
+    check_limits(
+        service.store,
+        node,
+        len(split.children) - len(split.replaces),
+        service.settings,
+    )
     service.store.update_node(
-        node.id, pending_split=proposal.model_copy(update={"status": "approved"})
+        node.id,
+        pending_split=proposal.model_copy(
+            update={
+                "status": "approved",
+                "replaces": [team.id for team in split.replaces],
+            }
+        ),
     )
     service.carry_out_split(node.id)
-    return (
-        f"Approved. {len(proposal.children)} sub-teams are being started; they "
-        "appear under read_node_context."
+    waits = (
+        " The teams they replace are removed first, once their agents have "
+        "finished what they are doing."
+        if split.replaces
+        else ""
     )
+    return f"Approved. {len(proposal.children)} sub-teams are being set up.{waits}"
 
 
 def raise_escalation(
@@ -336,8 +394,7 @@ def set_status(
 ) -> str:
     """Declare the state of the caller's team.
 
-    Done work goes to the IC of the team above for review; a block is told
-    to the Manager there.
+    Done work goes to the IC of the team above for review.
     """
     store = service.store
     node = caller.node
@@ -366,12 +423,6 @@ def set_status(
     node = store.update_node(node.id, status=status, review=review)
     if status == "done":
         service.request_review(node.id)
-    if parent is not None and status == "blocked":
-        service.notify(
-            agent_conversation(parent, "manager"),
-            f"Team {node.title!r} (node {node.id}) reports it is blocked."
-            + (f"\n{summary}" if summary else ""),
-        )
     if summary:
         service.refresh_headline(node.id, f"it is {status}. {summary}")
     if status == "done" and parent is not None:

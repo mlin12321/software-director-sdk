@@ -25,8 +25,8 @@ from openhands.agent_server.director.service import (
     DirectorService,
 )
 from openhands.agent_server.director.tools import (
-    DecideSplitTool,
-    ProposeBoundarySplitTool,
+    ApproveTeamsTool,
+    MsgManagerTool,
     PruneTeamTool,
     ReviewTeamTool,
     SetStatusTool,
@@ -34,7 +34,6 @@ from openhands.agent_server.director.tools import (
 from openhands.sdk.conversation.state import ConversationExecutionStatus
 from tests.agent_server.director.conftest import FakeLauncher, make_node, run_git
 from tests.agent_server.director.test_director_limits import (
-    APPROVE,
     eventually,
     split,
     started,
@@ -47,6 +46,7 @@ from tests.agent_server.director.test_director_review import (
     reject,
 )
 from tests.agent_server.director.test_director_tools import (
+    APPROVE,
     PRUNE_API,
     SPLIT,
     ic,
@@ -162,10 +162,10 @@ async def test_what_an_agent_decides_while_the_org_is_paused_is_done_after_resum
     repo: Path, launcher: FakeLauncher
 ):
     service = await started(repo, launcher)
-    await use(service, ic(service), ProposeBoundarySplitTool, SPLIT)
+    await use(service, ic(service), MsgManagerTool, SPLIT)
 
     await service.pause()
-    answer = await use(service, manager(service), DecideSplitTool, APPROVE)
+    answer = await use(service, manager(service), ApproveTeamsTool, APPROVE)
 
     assert not answer.is_error and node(service, "root").child_ids == []
     assert ("root", "continue") in kinds(await service.recovery())
@@ -184,8 +184,8 @@ async def test_a_server_stopped_while_teams_wait_starts_them_in_order_once_resum
 ):
     first = await started(repo, launcher, run_limit_retry=3600)
     launcher.full_for = 1_000_000
-    await use(first, ic(first), ProposeBoundarySplitTool, split("a", 3))
-    approve = asyncio.create_task(use(first, manager(first), DecideSplitTool, APPROVE))
+    await use(first, ic(first), MsgManagerTool, split("a", 3))
+    approve = asyncio.create_task(use(first, manager(first), ApproveTeamsTool, APPROVE))
     await eventually(
         lambda: sum(team.waiting_to_start for team in first.store.children("root")) == 3
     )
@@ -223,10 +223,10 @@ async def test_a_split_cut_off_by_a_crash_is_finished_without_a_second_of_anythi
     repo: Path, launcher: FakeLauncher
 ):
     first = await started(repo, launcher)
-    await use(first, ic(first), ProposeBoundarySplitTool, SPLIT)
+    await use(first, ic(first), MsgManagerTool, SPLIT)
     # The server ends as the first sub-team's IC has just been started.
     ended = end_server_at(launcher, "derived")
-    approve = asyncio.create_task(use(first, manager(first), DecideSplitTool, APPROVE))
+    approve = asyncio.create_task(use(first, manager(first), ApproveTeamsTool, APPROVE))
     await ended.wait()
     approve.cancel()
     await asyncio.gather(approve, return_exceptions=True)
@@ -304,9 +304,11 @@ async def test_the_end_of_a_split_cut_off_by_a_crash_is_told_once(
     repo: Path, launcher: FakeLauncher
 ):
     first = await started(repo, launcher)
-    await use(first, ic(first), ProposeBoundarySplitTool, SPLIT)
-    ended = end_server_at_message(launcher, "Your split was approved")
-    await cut_off(launcher, ended, use(first, manager(first), DecideSplitTool, APPROVE))
+    await use(first, ic(first), MsgManagerTool, SPLIT)
+    ended = end_server_at_message(launcher, "Your Manager approved your sub-teams")
+    await cut_off(
+        launcher, ended, use(first, manager(first), ApproveTeamsTool, APPROVE)
+    )
 
     second = await again(repo, launcher)
     assert ("root", "message") in kinds(await second.recovery())

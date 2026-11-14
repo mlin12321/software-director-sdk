@@ -6,6 +6,7 @@ from pathlib import Path
 from uuid import UUID
 
 import pytest
+import yaml
 
 from openhands.agent_server.conversation_service import (
     AgentAdapter,
@@ -23,6 +24,7 @@ from openhands.agent_server.director.models import (
     IsolationMode,
     NodeStatus,
     OrgNodeInput,
+    SplitChild,
 )
 from openhands.agent_server.director.pods import StartedAgent
 from openhands.agent_server.event_service import (
@@ -125,6 +127,30 @@ def make_escalation(
             for node_id in passed_up_by
         ],
     )
+
+
+def teams_block(children: list[SplitChild], contracts: str = "") -> str:
+    """The block an IC proposes ``children`` in, as it writes it."""
+    teams = []
+    for child in children:
+        team: dict[str, str | list[str]] = {
+            "name": child.title,
+            "path": child.path,
+            "instruction": child.task,
+        }
+        if child.agent_profile:
+            team["model"] = child.agent_profile
+        if child.writable:
+            team["writable"] = child.writable
+        if child.readonly:
+            team["readonly"] = child.readonly
+        if child.isolation != "shared":
+            team["isolation"] = child.isolation
+        teams.append(team)
+    written = (
+        {"contracts": contracts, "teams": teams} if contracts else {"teams": teams}
+    )
+    return f"```teams\n{yaml.safe_dump(written, sort_keys=False)}```"
 
 
 def small_tree() -> list[OrgNodeInput]:

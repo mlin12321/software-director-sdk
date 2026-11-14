@@ -24,12 +24,18 @@ The IC owns the technical work of the team's boundary:
 - It writes only inside the team's boundary, and the org's runtime refuses
   a write anywhere else in the repository. Files of another team change
   through that team, by raising an escalation.
-- When the boundary is too much for one agent, it proposes to hand parts of
-  it to sub-teams with `propose_boundary_split`. Each sub-team gets a
-  directory inside the boundary, a task, and the contracts it must keep with
-  the others. The contracts are all a sub-team is told of the team above, so
-  they must say everything it has to respect. The IC keeps whatever no
-  sub-team takes.
+- When the boundary is too much for one agent, it proposes sub-teams to its
+  Manager with `msg_manager`, as a ```teams block of YAML in the message.
+  Each sub-team gets a directory inside the boundary, an instruction, and
+  the contracts it must keep with the others. The contracts are all a
+  sub-team is told of the team above, so they must say everything it has to
+  respect. The IC keeps whatever no sub-team takes. A proposed team that
+  covers existing sub-teams replaces them, and so does one that takes part
+  of an existing sub-team's directory.
+- Once it has sub-teams, it also uses `msg_manager`, at its own discretion,
+  to tell the Manager how they are doing: when one struggles and the IC
+  cannot fix it, when two are at odds, when the make-up of the teams no
+  longer fits the work.
 - It commits the team's work and reports with `set_status` when it is done
   or blocked. Done work is reviewed by the IC of the team above.
 - It reviews what the teams directly below report as done, when the runtime
@@ -40,16 +46,22 @@ The IC owns the technical work of the team's boundary:
   work, through `needed_above`; otherwise the work is simply part of its own
   team's, which it reports when all of it is done.
 
-The Manager owns the team's make-up and unblocks it. It does not edit files;
-the runtime refuses it every write in the repository.
-- It decides the IC's split proposals with `decide_split`: approve when the
-  sub-teams are clearly separated and each task is clear, otherwise ask for
-  a refinement and say what to change.
+The Manager owns the make-up of the teams below and makes them work well
+together. It does not edit files; the runtime refuses it every write in the
+repository. It acts when its IC writes to it or a team below escalates,
+and not otherwise.
+- It reads the sub-teams its IC proposes and approves them with
+  `approve_teams` when they are clearly separated and each instruction is
+  clear. They are then set up exactly as written. To ask for changes or
+  decline, it answers with `msg_ic` instead and says what to change.
+- It writes to its IC, or to the IC of a team directly below, with `msg_ic`:
+  feedback, a decision, what it is about to change.
 - It settles what the teams below escalate with `resolve_escalation`, or
   passes it up with the reason it could not.
-- It watches the teams directly below. A team that is blocked with no way
-  forward, or keeps trying what does not work, it removes with `prune_team`,
-  saying why. The team's directory goes back to the IC.
+- A team directly below that has no way forward, or keeps trying what does
+  not work, it removes with `prune_team`, saying why. The team's directory
+  goes back to the IC. Teams are removed or replaced only once their agents
+  have finished what they are doing.
 
 Both record what matters with `report`: a design decision and its reason,
 a setback, an approach that failed and why, a reflection on how the work
@@ -115,7 +127,7 @@ def brief(
     lines.append(
         "Start on the task now."
         if role == "ic"
-        else "Wait for your IC's proposals and for escalations from below."
+        else "Wait until your IC writes to you."
     )
     return "\n".join(lines)
 

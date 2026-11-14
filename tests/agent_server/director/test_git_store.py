@@ -18,7 +18,7 @@ from openhands.agent_server.director.git_store import (
     StoreScopeError,
     adopt_former_memory,
 )
-from openhands.agent_server.director.models import Report
+from openhands.agent_server.director.models import Report, ThreadMessage
 from openhands.sdk.errors import NotSupported
 from tests.agent_server.director.conftest import run_git
 
@@ -159,6 +159,22 @@ def test_reports_are_replaced_only_as_they_were_read(board: GitStore):
     assert board.reports("agent-1") == shorter
 
 
+def said(text: str, at: str = "2026-11-01T00:00:00+00:00") -> ThreadMessage:
+    return ThreadMessage(at=at, sender="ic", text=text)
+
+
+def test_messages_are_kept_in_order_and_apart_by_manager_and_ic(board: GitStore):
+    first, second = said("Split in two?"), said("Or three?")
+
+    board.append_message("root", "root", first)
+    board.append_message("root", "root", second)
+    board.append_message("root", "svc.a", said("Status?"))
+
+    assert board.thread("root", "root") == [first, second]
+    assert [message.text for message in board.thread("root", "svc.a")] == ["Status?"]
+    assert board.thread("svc.a", "svc.a") == []
+
+
 def test_racing_writers_lose_no_update(board: GitStore):
     reports = [a_report(f"report {i}") for i in range(6)]
 
@@ -259,6 +275,23 @@ class TestMerge:
 
         assert merged.kept_local == []
         assert board.reports("agent-1") == [shared, their, ours]
+
+    def test_messages_both_sides_added_are_all_kept_in_order(
+        self, board: GitStore, theirs: GitStore, merge_supported: bool
+    ):
+        if not merge_supported:
+            pytest.skip("needs git 2.38")
+        shared = said("Shared.", "2026-11-01T00:00:00+00:00")
+        ours = said("Ours.", "2026-11-03T00:00:00+00:00")
+        their = said("Theirs.", "2026-11-02T00:00:00+00:00")
+        for store, own in ((board, ours), (theirs, their)):
+            store.append_message("root", "root", shared)
+            store.append_message("root", "root", own)
+
+        merged = board.merge(theirs.ref)
+
+        assert merged.kept_local == []
+        assert board.thread("root", "root") == [shared, their, ours]
 
     def test_of_a_spec_both_sides_changed_ours_is_kept_and_named(
         self, board: GitStore, theirs: GitStore, merge_supported: bool

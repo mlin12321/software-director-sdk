@@ -124,6 +124,23 @@ describe('DirectorClient', () => {
     expect(memory).toEqual({ specs: [], reports: [] });
   });
 
+  it('reads the threads of a node', async () => {
+    const thread = {
+      manager_node_id: 'root',
+      ic_node_id: 'payments.api',
+      messages: [{ at: '2026-11-01T00:00:00+00:00', sender: 'manager', text: 'Status?' }],
+    };
+    const fetchMock = mockFetch(() => jsonResponse([thread]));
+    const client = new DirectorClient({ host: 'http://example.com' });
+
+    const threads = await client.getNodeMessages('payments.api');
+
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      'http://example.com/api/director/org/nodes/payments.api/messages'
+    );
+    expect(threads).toEqual([thread]);
+  });
+
   it("lists a team's changes, shows a file and writes one by hand", async () => {
     const fetchMock = mockFetch(() => jsonResponse({ path: 'api/a.py', commit: 'abc' }));
     const client = new DirectorClient({ host: 'http://example.com' });

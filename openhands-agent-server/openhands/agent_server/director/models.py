@@ -18,7 +18,7 @@ IsolationMode = Literal["worktree", "shared"]
 
 EscalationKind = Literal["critical_issue", "design_decision"]
 
-SplitStatus = Literal["proposed", "refine_requested", "approved"]
+SplitStatus = Literal["proposed", "approved"]
 
 # 'pending': the IC of the team above has the team's work to review.
 # 'unreviewed': the root team's, which has nobody above.
@@ -149,7 +149,8 @@ class SplitChild(BaseModel):
 
 
 class SplitProposal(BaseModel):
-    """An IC's proposal to split its boundary, for its Manager to decide."""
+    """The sub-teams an IC proposed in a message to its Manager, as they
+    were read from the message and checked."""
 
     children: list[SplitChild] = Field(min_length=1)
     contracts: str = Field(
@@ -157,8 +158,13 @@ class SplitProposal(BaseModel):
         description="The interfaces the sub-teams must keep between them.",
     )
     status: SplitStatus = "proposed"
-    feedback: str = Field(
-        default="", description="What the Manager wants changed, when it asked."
+    replaces: list[str] = Field(
+        default_factory=list,
+        description=(
+            "The sub-teams the node already has that the proposed ones take "
+            "the place of: ones a proposed team covers, and ones a proposed "
+            "team takes part of."
+        ),
     )
     proposed_at: str = Field(description="ISO 8601 timestamp.")
 
@@ -313,6 +319,26 @@ class OrgNodeDetail(BaseModel):
     node: OrgNode
     ancestors: list[OrgNode] = Field(description="Root first, excluding the node.")
     children: list[OrgNode]
+
+
+class ThreadMessage(BaseModel):
+    """One message between a Manager and an IC."""
+
+    at: str = Field(description="ISO 8601 timestamp.")
+    sender: AgentRole = Field(description="Which of the two wrote it.")
+    text: str = Field(min_length=1)
+
+
+class Thread(BaseModel):
+    """Everything one Manager and one IC have said to each other."""
+
+    manager_node_id: str = Field(description="The team the Manager belongs to.")
+    ic_node_id: str = Field(
+        description=(
+            "The team the IC belongs to: the Manager's own, or one directly below it."
+        )
+    )
+    messages: list[ThreadMessage] = Field(default_factory=list)
 
 
 class Report(BaseModel):

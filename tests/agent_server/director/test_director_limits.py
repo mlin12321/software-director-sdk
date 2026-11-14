@@ -17,13 +17,12 @@ from openhands.agent_server.director.models import (
 from openhands.agent_server.director.org_store import OrgStore
 from openhands.agent_server.director.service import DirectorService
 from openhands.agent_server.director.tools import (
-    DecideSplitTool,
-    ProposeBoundarySplitTool,
+    ApproveTeamsTool,
+    MsgManagerTool,
     SetStatusTool,
 )
 from openhands.agent_server.director.tools.definition import (
-    DecideSplitAction,
-    ProposeBoundarySplitAction,
+    MsgManagerAction,
     SetStatusAction,
 )
 from openhands.sdk.conversation.state import ConversationExecutionStatus
@@ -34,15 +33,14 @@ from tests.agent_server.director.conftest import (
     run_git,
 )
 from tests.agent_server.director.test_director_tools import (
+    APPROVE,
     ic,
     manager,
     node,
+    proposing,
     split_root,
     use,
 )
-
-
-APPROVE = DecideSplitAction(decision="approve")
 
 
 @pytest.fixture
@@ -74,13 +72,12 @@ async def service(repo: Path, launcher: FakeLauncher) -> AsyncIterator[DirectorS
     await service.aclose()
 
 
-def split(below: str, count: int) -> ProposeBoundarySplitAction:
-    return ProposeBoundarySplitAction(
-        children=[
+def split(below: str, count: int) -> MsgManagerAction:
+    return proposing(
+        [
             SplitChild(title=f"{below} {n}", path=f"{below}/t{n}", task="Work")
             for n in range(count)
-        ],
-        contracts="",
+        ]
     )
 
 
@@ -97,14 +94,14 @@ async def test_a_split_that_gives_a_team_too_many_agents_is_refused_and_says_wha
 ):
     service.update_settings(DirectorSettingsUpdate(max_agents=8))
 
-    refused = await use(service, ic(service), ProposeBoundarySplitTool, split("a", 4))
+    refused = await use(service, ic(service), MsgManagerTool, split("a", 4))
 
     assert refused.is_error and node(service, "root").pending_split is None
     assert "at most 8 agents" in refused.text and "has 2" in refused.text
     assert "At most 3 more sub-teams fit" in refused.text
 
-    fits = await use(service, ic(service), ProposeBoundarySplitTool, split("a", 3))
-    await use(service, manager(service), DecideSplitTool, APPROVE)
+    fits = await use(service, ic(service), MsgManagerTool, split("a", 3))
+    await use(service, manager(service), ApproveTeamsTool, APPROVE)
 
     assert not fits.is_error and len(node(service, "root").child_ids) == 3
 
@@ -116,7 +113,7 @@ async def test_the_agents_of_the_teams_above_count_too(service: DirectorService)
     refused = await use(
         service,
         ic(service, "services.api"),
-        ProposeBoundarySplitTool,
+        MsgManagerTool,
         split("services/api", 2),
     )
 
@@ -131,7 +128,7 @@ async def test_teams_cannot_go_deeper_than_the_limit(service: DirectorService):
     refused = await use(
         service,
         ic(service, "services.api"),
-        ProposeBoundarySplitTool,
+        MsgManagerTool,
         split("services/api", 1),
     )
 
@@ -148,23 +145,25 @@ async def test_a_lowered_limit_removes_nothing_and_stops_the_next_split(
 
     assert (state.agents, state.depth) == (6, 2)
     assert len(service.store) == 3
-    refused = await use(service, ic(service), ProposeBoundarySplitTool, split("a", 1))
+    refused = await use(service, ic(service), MsgManagerTool, split("a", 1))
     assert refused.is_error
 
 
-async def test_a_split_approved_after_the_org_grew_goes_back_to_the_ic(
+async def test_sub_teams_approved_after_the_limits_were_lowered_go_back_to_the_ic(
     service: DirectorService, launcher: FakeLauncher
 ):
-    await use(service, ic(service), ProposeBoundarySplitTool, split("a", 3))
+    await use(service, ic(service), MsgManagerTool, split("a", 3))
     service.update_settings(DirectorSettingsUpdate(max_agents=4))
 
-    await use(service, manager(service), DecideSplitTool, APPROVE)
+    told_the_manager = launcher.messages_to(manager(service))
+
+    refused = await use(service, manager(service), ApproveTeamsTool, APPROVE)
 
     root = node(service, "root")
+    assert refused.is_error and "at most 4 agents" in refused.text
     assert root.child_ids == [] and root.pending_split is not None
-    assert root.pending_split.status == "refine_requested"
-    assert "cannot be carried out" in launcher.messages_to(ic(service))[-1]
-    assert "cannot be carried out" in launcher.messages_to(manager(service))[-1]
+    assert root.pending_split.status == "proposed"
+    assert launcher.messages_to(manager(service)) == told_the_manager
 
 
 async def test_settings_are_kept_for_the_next_start_beside_the_repository(
@@ -235,9 +234,9 @@ async def test_teams_wait_for_a_free_run_and_start_when_one_ends(
 ):
     service = await started(repo, launcher, run_limit_retry=3600)
     launcher.full_for = 1_000_000
-    await use(service, ic(service), ProposeBoundarySplitTool, split("a", 2))
+    await use(service, ic(service), MsgManagerTool, split("a", 2))
     approve = asyncio.create_task(
-        use(service, manager(service), DecideSplitTool, APPROVE)
+        use(service, manager(service), ApproveTeamsTool, APPROVE)
     )
     await eventually(
         lambda: (

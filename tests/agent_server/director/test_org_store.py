@@ -734,6 +734,61 @@ def test_updating_a_node_cannot_move_it(store: OrgStore):
         store.update_node("a1", parent_id="b")
 
 
+def test_a_moved_node_takes_what_is_below_it_and_the_rollups_follow(
+    store: OrgStore,
+):
+    events = record(store, "root")
+
+    moved = store.move("a", "b")
+
+    assert moved.parent_id == "b"
+    assert [node.id for node in store.children("root")] == ["b"]
+    assert [node.id for node in store.children("b")] == ["a"]
+    assert [node.id for node in store.ancestors("a1")] == ["root", "b", "a"]
+    b = store.get("b")
+    assert b is not None and (b.descendant_counts.blocked, b.child_ids) == (1, ["a"])
+    # Both parents are announced with their new reports; the node is not
+    # announced as removed, since it is still in the org.
+    assert {"root", "b"} <= {node_id for _, node_id in describe(events)}
+    assert ("node_removed", "a") not in describe(events)
+
+
+def test_an_escalation_of_a_moved_team_is_held_by_the_team_now_above_it(
+    store: OrgStore,
+):
+    store.raise_escalation("a1", "jwt", kind="design_decision", title="JWT?")
+    store.pass_up_escalation("a1", "jwt", reason="needs b too")
+    store.raise_escalation("a2", "fresh", kind="design_decision", title="Cache?")
+
+    store.move("a1", "b")
+    store.move("a2", "root")
+
+    a1, a2 = store.get("a1"), store.get("a2")
+    assert a1 is not None and a2 is not None
+    # a is no longer above a1, so what it said goes and b gets to answer.
+    assert (a1.escalations[0].held_by, a1.escalations[0].handoffs) == ("b", [])
+    assert a2.escalations[0].held_by == "root"
+
+
+@pytest.mark.parametrize(
+    ("node_id", "parent_id", "error"),
+    [
+        pytest.param("root", "a", OrgStoreError, id="the root"),
+        pytest.param("a", "a", OrgStoreError, id="under itself"),
+        pytest.param("a", "a1", OrgStoreError, id="under a team below it"),
+        pytest.param("a", "missing", NotFound, id="under a team there is not"),
+        pytest.param("missing", "a", NotFound, id="a team there is not"),
+    ],
+)
+def test_a_node_moves_only_to_where_the_tree_stays_a_tree(
+    store: OrgStore, node_id: str, parent_id: str, error: type[Exception]
+):
+    with pytest.raises(error):
+        store.move(node_id, parent_id)
+
+    assert [node.id for node in store.children("root")] == ["a", "b"]
+
+
 def test_change_listeners_hear_every_change_until_stopped(store: OrgStore):
     calls: list[int] = []
     stop = store.on_change(lambda: calls.append(1))
