@@ -14,7 +14,7 @@ from openhands.agent_server.api import create_app
 from openhands.agent_server.config import Config
 from openhands.agent_server.director.git import git_version
 from openhands.agent_server.director.git_store import GitStore
-from openhands.agent_server.director.models import AgentRef, Report
+from openhands.agent_server.director.models import AgentRef, Report, ThreadMessage
 from openhands.agent_server.director.org_persistence import (
     create_org_board,
     save_org,
@@ -208,6 +208,46 @@ class TestTeamMemory:
         read = client.get("/api/director/org/nodes/root/memory")
 
         assert read.status_code == 503
+
+    def test_returns_the_threads_the_nodes_agents_take_part_in(self, repo: Path):
+        store = OrgStore()
+        store.replace_all(small_tree())
+        save_org(create_org_board(repo), store)
+        board = GitStore(repo)
+        asked = ThreadMessage(
+            at="2026-11-01T00:00:00+00:00", sender="ic", text="Split?"
+        )
+        told = ThreadMessage(
+            at="2026-11-02T00:00:00+00:00", sender="manager", text="Status?"
+        )
+        board.append_message("a", "a", asked)
+        board.append_message("root", "a", told)
+        board.append_message("a", "a1", told)
+        board.append_message("root", "b", told)
+
+        client = make_client(repo)
+        response = client.get("/api/director/org/nodes/a/messages")
+
+        assert response.status_code == 200
+        assert response.json() == [
+            {
+                "manager_node_id": "a",
+                "ic_node_id": "a",
+                "messages": [asked.model_dump()],
+            },
+            {
+                "manager_node_id": "a",
+                "ic_node_id": "a1",
+                "messages": [told.model_dump()],
+            },
+            {
+                "manager_node_id": "root",
+                "ic_node_id": "a",
+                "messages": [told.model_dump()],
+            },
+        ]
+        assert client.get("/api/director/org/nodes/a2/messages").json() == []
+        assert client.get("/api/director/org/nodes/missing/messages").status_code == 404
 
 
 class TestTreeStream:

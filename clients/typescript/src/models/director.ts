@@ -86,7 +86,7 @@ export interface DirectorEscalation {
 
 export type DirectorStatusCounts = Record<DirectorNodeStatus, number>;
 
-export type DirectorSplitStatus = 'proposed' | 'refine_requested' | 'approved';
+export type DirectorSplitStatus = 'proposed' | 'approved';
 
 /** A sub-team an IC proposes to hand part of its boundary to. */
 export interface DirectorSplitChild {
@@ -105,14 +105,20 @@ export interface DirectorSplitChild {
   agent_profile: string | null;
 }
 
-/** An IC's proposal to split its boundary, for its Manager to decide. */
+/**
+ * The sub-teams an IC proposed in a message to its Manager, which approves
+ * them as written or answers with a message.
+ */
 export interface DirectorSplitProposal {
   children: DirectorSplitChild[];
   /** The interfaces the sub-teams must keep between them. */
   contracts: string;
   status: DirectorSplitStatus;
-  /** What the Manager wants changed, when it asked. */
-  feedback: string;
+  /**
+   * The sub-teams the node has now that the proposed ones take the place of.
+   * Their own sub-teams stay.
+   */
+  replaces?: DirectorNodeId[];
   /** ISO 8601 timestamp. */
   proposed_at: string;
 }
@@ -376,6 +382,25 @@ export interface DirectorReport {
   text: string;
   /** True for the one report a model wrote in place of earlier ones. */
   compacted?: boolean;
+}
+
+/** One message between a Manager and an IC. */
+export interface DirectorThreadMessage {
+  /** ISO 8601 timestamp. */
+  at: string;
+  /** Which of the two wrote it. */
+  sender: DirectorAgentRole;
+  text: string;
+}
+
+/**
+ * What one Manager and one IC have said to each other, oldest first. The IC
+ * is the Manager's own, or the IC of a team directly below it.
+ */
+export interface DirectorThread {
+  manager_node_id: DirectorNodeId;
+  ic_node_id: DirectorNodeId;
+  messages: DirectorThreadMessage[];
 }
 
 export interface DirectorInheritedSpec {

@@ -22,8 +22,9 @@ from openhands.agent_server.director.service import (
     agent_conversation,
 )
 from openhands.agent_server.director.tools import (
-    DecideSplitTool,
-    ProposeBoundarySplitTool,
+    ApproveTeamsTool,
+    MsgIcTool,
+    MsgManagerTool,
     PruneTeamTool,
     RaiseEscalationTool,
     ReadNodeContextTool,
@@ -33,8 +34,9 @@ from openhands.agent_server.director.tools import (
     WriteSpecTool,
 )
 from openhands.agent_server.director.tools.definition import (
-    DecideSplitAction,
-    ProposeBoundarySplitAction,
+    ApproveTeamsAction,
+    MsgIcAction,
+    MsgManagerAction,
     PruneTeamAction,
     RaiseEscalationAction,
     ReadNodeContextAction,
@@ -53,6 +55,7 @@ from tests.agent_server.director.conftest import (
     FakeLauncher,
     root_conversation,
     run_git,
+    teams_block,
 )
 
 
@@ -108,8 +111,14 @@ def manager(service: DirectorService, node_id: str = "root") -> str | None:
     return agent_conversation(node(service, node_id), "manager")
 
 
-SPLIT = ProposeBoundarySplitAction(
-    children=[
+def proposing(children: list[SplitChild], contracts: str = "") -> MsgManagerAction:
+    return MsgManagerAction(
+        text=f"I propose these sub-teams.\n\n{teams_block(children, contracts)}"
+    )
+
+
+SPLIT = proposing(
+    [
         SplitChild(title="API", path="services/api", task="Serve the checkout API"),
         SplitChild(
             title="Web",
@@ -118,18 +127,14 @@ SPLIT = ProposeBoundarySplitAction(
             isolation="worktree",
         ),
     ],
-    contracts="POST /checkout returns {order_id}",
+    "POST /checkout returns {order_id}",
 )
+APPROVE = ApproveTeamsAction()
 
 
 async def split_root(service: DirectorService) -> None:
-    await use(service, ic(service), ProposeBoundarySplitTool, SPLIT)
-    await use(
-        service,
-        manager(service),
-        DecideSplitTool,
-        DecideSplitAction(decision="approve"),
-    )
+    await use(service, ic(service), MsgManagerTool, SPLIT)
+    await use(service, manager(service), ApproveTeamsTool, APPROVE)
 
 
 async def test_an_agent_reads_who_it_is_and_what_its_team_reported(
@@ -175,10 +180,10 @@ async def test_the_ic_writes_the_spec_its_sub_teams_inherit(service: DirectorSer
     assert not spec.readonly and "integer cents" in spec.spec
 
 
-async def test_a_proposed_split_waits_for_the_manager(
+async def test_proposed_sub_teams_wait_for_the_manager(
     service: DirectorService, launcher: FakeLauncher
 ):
-    observation = await use(service, ic(service), ProposeBoundarySplitTool, SPLIT)
+    observation = await use(service, ic(service), MsgManagerTool, SPLIT)
 
     assert not observation.is_error
     proposal = node(service, "root").pending_split
@@ -189,61 +194,218 @@ async def test_a_proposed_split_waits_for_the_manager(
     ]
     assert service.store.children("root") == []
     told = launcher.messages_to(manager(service))[-1]
+    assert told.startswith("[director] Your IC writes:\nI propose these sub-teams.")
     assert "services/api" in told and "POST /checkout" in told
+    assert "approve_teams sets them up exactly as written" in told
 
 
-async def test_only_the_ic_proposes_and_only_the_manager_decides(
+async def test_only_the_ic_proposes_and_only_the_manager_approves(
     service: DirectorService,
 ):
-    by_manager = await use(service, manager(service), ProposeBoundarySplitTool, SPLIT)
-    await use(service, ic(service), ProposeBoundarySplitTool, SPLIT)
-    by_ic = await use(
-        service, ic(service), DecideSplitTool, DecideSplitAction(decision="approve")
-    )
+    by_manager = await use(service, manager(service), MsgManagerTool, SPLIT)
+    nothing_yet = await use(service, manager(service), ApproveTeamsTool, APPROVE)
+    await use(service, ic(service), MsgManagerTool, SPLIT)
+    by_ic = await use(service, ic(service), ApproveTeamsTool, APPROVE)
 
     assert by_manager.is_error and by_ic.is_error
+    assert nothing_yet.is_error and "no proposed sub-teams" in nothing_yet.text
     assert service.store.children("root") == []
 
 
-async def test_an_overlapping_split_is_refused_and_nothing_waits(
+@pytest.mark.parametrize(
+    ("children", "refusal"),
+    [
+        pytest.param(
+            [
+                SplitChild(title="API", path="services/api", task="a"),
+                SplitChild(title="Auth", path="services/api/auth", task="b"),
+            ],
+            "overlap",
+            id="overlapping",
+        ),
+        pytest.param(
+            [SplitChild(title="API", path="../api", task="a")],
+            "not a path inside the repository",
+            id="outside the repository",
+        ),
+        pytest.param(
+            [SplitChild(title="API", path="api", task="a", agent_profile="gpt")],
+            "cannot run on the model 'gpt'",
+            id="a model the org does not allow",
+        ),
+    ],
+)
+async def test_sub_teams_that_fail_a_check_never_reach_the_manager(
+    service: DirectorService,
+    launcher: FakeLauncher,
+    children: list[SplitChild],
+    refusal: str,
+):
+    before = launcher.messages_to(manager(service))
+
+    observation = await use(service, ic(service), MsgManagerTool, proposing(children))
+
+    assert observation.is_error and refusal in observation.text
+    assert node(service, "root").pending_split is None
+    assert launcher.messages_to(manager(service)) == before
+    assert service.threads_of(node(service, "root")) == []
+
+
+async def test_a_block_that_cannot_be_read_is_refused_with_what_is_wrong(
     service: DirectorService,
 ):
-    overlapping = ProposeBoundarySplitAction(
-        children=[
-            SplitChild(title="API", path="services/api", task="a"),
-            SplitChild(title="Auth", path="services/api/auth", task="b"),
-        ],
-        contracts="",
+    observation = await use(
+        service,
+        ic(service),
+        MsgManagerTool,
+        MsgManagerAction(text="```teams\nteams:\n  - name: API\n```"),
     )
 
-    observation = await use(service, ic(service), ProposeBoundarySplitTool, overlapping)
+    assert observation.is_error
+    assert "teams.0.path" in observation.text
+    assert "teams.0.instruction" in observation.text
 
-    assert observation.is_error and "overlap" in observation.text
-    assert node(service, "root").pending_split is None
 
-
-async def test_the_manager_can_send_a_split_back_and_the_ic_can_propose_again(
+async def test_an_answer_from_the_manager_puts_the_proposal_aside(
     service: DirectorService, launcher: FakeLauncher
 ):
-    await use(service, ic(service), ProposeBoundarySplitTool, SPLIT)
-    again_too_early = await use(service, ic(service), ProposeBoundarySplitTool, SPLIT)
-    without_feedback = await use(
-        service, manager(service), DecideSplitTool, DecideSplitAction(decision="refine")
+    await use(service, ic(service), MsgManagerTool, SPLIT)
+
+    answer = await use(
+        service,
+        manager(service),
+        MsgIcTool,
+        MsgIcAction(text="Web and API share a schema; keep them together."),
     )
+
+    assert not answer.is_error
+    assert node(service, "root").pending_split is None
+    told = launcher.messages_to(ic(service))[-1]
+    assert told.startswith(
+        "[director] Your Manager writes:\nWeb and API share a schema"
+    )
+    assert "were not approved" in told
+    too_late = await use(service, manager(service), ApproveTeamsTool, APPROVE)
+    assert too_late.is_error
+    again = await use(service, ic(service), MsgManagerTool, SPLIT)
+    assert not again.is_error and node(service, "root").pending_split is not None
+
+
+async def test_a_later_proposal_takes_the_place_of_the_one_that_waits(
+    service: DirectorService,
+):
+    await use(service, ic(service), MsgManagerTool, SPLIT)
 
     await use(
         service,
-        manager(service),
-        DecideSplitTool,
-        DecideSplitAction(decision="refine", feedback="Web and API share a schema."),
+        ic(service),
+        MsgManagerTool,
+        proposing([SplitChild(title="Docs", path="docs", task="Write the docs")]),
+    )
+    await use(service, manager(service), ApproveTeamsTool, APPROVE)
+
+    assert [team.title for team in service.store.children("root")] == ["Docs"]
+
+
+async def test_a_team_without_sub_teams_writes_to_its_manager_only_to_propose(
+    service: DirectorService, launcher: FakeLauncher
+):
+    before = launcher.messages_to(manager(service))
+
+    refused = await use(
+        service, ic(service), MsgManagerTool, MsgManagerAction(text="I am stuck.")
+    )
+    blank = await use(service, ic(service), MsgManagerTool, MsgManagerAction(text=" "))
+
+    assert refused.is_error and "raise_escalation" in refused.text
+    assert blank.is_error
+    assert launcher.messages_to(manager(service)) == before
+
+
+async def test_an_ic_with_sub_teams_tells_its_manager_how_they_are_doing(
+    service: DirectorService, launcher: FakeLauncher
+):
+    await split_root(service)
+
+    sent = await use(
+        service,
+        ic(service),
+        MsgManagerTool,
+        MsgManagerAction(text="Web was sent back twice for the same bug."),
     )
 
-    assert again_too_early.is_error and without_feedback.is_error
-    proposal = node(service, "root").pending_split
-    assert proposal is not None and proposal.status == "refine_requested"
-    assert "share a schema" in launcher.messages_to(ic(service))[-1]
-    again = await use(service, ic(service), ProposeBoundarySplitTool, SPLIT)
-    assert not again.is_error
+    assert not sent.is_error
+    assert launcher.messages_to(manager(service))[-1] == (
+        "[director] Your IC writes:\nWeb was sent back twice for the same bug."
+    )
+    assert node(service, "root").pending_split is None
+
+
+async def test_a_manager_writes_to_its_own_ic_and_to_the_ics_directly_below(
+    service: DirectorService, launcher: FakeLauncher
+):
+    await split_root(service)
+    api = "services.api"
+    await use(
+        service,
+        ic(service, api),
+        MsgManagerTool,
+        proposing([SplitChild(title="DB", path="services/api/db", task="Schema")]),
+    )
+    await use(service, manager(service, api), ApproveTeamsTool, APPROVE)
+
+    below = await use(
+        service,
+        manager(service),
+        MsgIcTool,
+        MsgIcAction(text="Where does the schema stand?", team=api),
+    )
+    too_deep = await use(
+        service,
+        manager(service),
+        MsgIcTool,
+        MsgIcAction(text="And you?", team="services.api.db"),
+    )
+    upward = await use(
+        service, manager(service, api), MsgIcTool, MsgIcAction(text="Hi", team="root")
+    )
+    by_ic = await use(service, ic(service), MsgIcTool, MsgIcAction(text="Hi", team=api))
+
+    assert not below.is_error
+    assert launcher.messages_to(ic(service, api))[-1] == (
+        "[director] The Manager of the team above (Checkout) writes:\n"
+        "Where does the schema stand?"
+    )
+    for refused in (too_deep, upward):
+        assert refused.is_error and "directly below" in refused.text
+    assert by_ic.is_error and "Only the Manager" in by_ic.text
+
+
+async def test_each_agent_sees_the_threads_it_takes_part_in(service: DirectorService):
+    await split_root(service)
+    api = "services.api"
+    await use(
+        service, ic(service), MsgManagerTool, MsgManagerAction(text="API is slow.")
+    )
+    await use(
+        service, manager(service), MsgIcTool, MsgIcAction(text="Status?", team=api)
+    )
+
+    def threads(node_id: str) -> list[tuple[str, str, list[tuple[str, str]]]]:
+        return [
+            (
+                thread.manager_node_id,
+                thread.ic_node_id,
+                [(message.sender, message.text) for message in thread.messages],
+            )
+            for thread in service.threads_of(node(service, node_id))
+        ]
+
+    own = ("root", "root", [("ic", SPLIT.text), ("ic", "API is slow.")])
+    down = ("root", api, [("manager", "Status?")])
+    assert threads("root") == [own, down]
+    assert threads(api) == [down]
+    assert threads("apps.web") == []
 
 
 async def test_an_approved_split_starts_a_pod_for_each_sub_team(
@@ -280,16 +442,11 @@ async def test_a_sub_team_that_cannot_start_is_shown_as_blocked(
 ):
     root_ic = ic(service)
     assert root_ic is not None
-    await use(service, root_ic, ProposeBoundarySplitTool, SPLIT)
+    await use(service, root_ic, MsgManagerTool, SPLIT)
     # The IC's conversation is deleted before its Manager approves.
     del launcher.known[UUID(root_ic)]
 
-    await use(
-        service,
-        manager(service),
-        DecideSplitTool,
-        DecideSplitAction(decision="approve"),
-    )
+    await use(service, manager(service), ApproveTeamsTool, APPROVE)
 
     api, web = service.store.children("root")
     assert (api.status, web.status) == ("blocked", "blocked")
@@ -428,20 +585,12 @@ async def test_a_pruned_team_takes_the_teams_below_it_along(
     await use(
         service,
         ic(service, api),
-        ProposeBoundarySplitTool,
-        ProposeBoundarySplitAction(
-            children=[
-                SplitChild(title="DB", path="services/api/db", task="Own the schema")
-            ],
-            contracts="",
+        MsgManagerTool,
+        proposing(
+            [SplitChild(title="DB", path="services/api/db", task="Own the schema")]
         ),
     )
-    await use(
-        service,
-        manager(service, api),
-        DecideSplitTool,
-        DecideSplitAction(decision="approve"),
-    )
+    await use(service, manager(service, api), ApproveTeamsTool, APPROVE)
     below = ic(service, "services.api.db")
 
     await use(service, manager(service), PruneTeamTool, PRUNE_API)

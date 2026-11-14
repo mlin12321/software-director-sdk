@@ -23,6 +23,7 @@ from openhands.agent_server.director.models import (
     BoundaryContracts,
     InheritedSpec,
     Report,
+    ThreadMessage,
 )
 from openhands.sdk.errors import Invalid, NotSupported, OperationFailed
 
@@ -32,6 +33,8 @@ SPEC_FILE = "spec.md"
 CONTRACTS_FILE = "contracts.md"
 # One file of reports for each agent, named after its conversation.
 REPORTS_DIR = ".reports"
+# One file for each Manager and IC that have written to each other.
+THREADS_DIR = ".threads"
 # What team memory was called before; a repository that still has it is moved.
 _FORMER_MEMORY_REF = "refs/agents/blackboard"
 
@@ -39,6 +42,7 @@ _ZERO_OID = "0" * 40
 _MAX_COMMIT_ATTEMPTS = 8
 _MERGE_MIN_GIT = (2, 38)
 _REPORTS = TypeAdapter(list[Report])
+_MESSAGES = TypeAdapter(list[ThreadMessage])
 
 
 class StoreScopeError(Invalid):
@@ -106,6 +110,14 @@ def _reports_file(conversation_id: str) -> str:
     return f"{REPORTS_DIR}/{conversation_id}.json"
 
 
+def _parse_messages(raw: str | None) -> list[ThreadMessage]:
+    return _MESSAGES.validate_json(raw) if raw else []
+
+
+def _thread_file(manager_node_id: str, ic_node_id: str) -> str:
+    return f"{THREADS_DIR}/{manager_node_id}/{ic_node_id}.json"
+
+
 def _serialize(value: object) -> str:
     return json.dumps(value, indent=2) + "\n"
 
@@ -122,14 +134,18 @@ def _settle(path: str, ours: str | None, theirs: str | None) -> tuple[str | None
     """
     if ours is None or theirs is None:
         return (theirs if ours is None else ours), False
-    if not path.startswith(f"{REPORTS_DIR}/"):
-        return ours, True
     try:
-        reports = _union(_parse_reports(ours), _parse_reports(theirs))
+        if path.startswith(f"{REPORTS_DIR}/"):
+            reports = _union(_parse_reports(ours), _parse_reports(theirs))
+            reports.sort(key=lambda report: report.at)
+            return _serialize(_REPORTS.dump_python(reports)), False
+        if path.startswith(f"{THREADS_DIR}/"):
+            messages = _union(_parse_messages(ours), _parse_messages(theirs))
+            messages.sort(key=lambda message: message.at)
+            return _serialize(_MESSAGES.dump_python(messages)), False
     except ValidationError:
-        return ours, True
-    reports.sort(key=lambda report: report.at)
-    return _serialize(_REPORTS.dump_python(reports)), False
+        pass
+    return ours, True
 
 
 def adopt_former_memory(repo_dir: Path) -> None:
@@ -219,6 +235,22 @@ class GitStore:
         self.commit(mutate, f"memory: report {path}")
         return reports
 
+    def thread(self, manager_node_id: str, ic_node_id: str) -> list[ThreadMessage]:
+        """What a Manager and an IC have said to each other, oldest first."""
+        return _parse_messages(self.read(_thread_file(manager_node_id, ic_node_id)))
+
+    def append_message(
+        self, manager_node_id: str, ic_node_id: str, message: ThreadMessage
+    ) -> None:
+        """Add to what a Manager and an IC have said to each other."""
+        path = _thread_file(manager_node_id, ic_node_id)
+
+        def mutate(read: StoreReader) -> list[StoreChange]:
+            messages = [*_parse_messages(read(path)), message]
+            return [StoreChange(path, _serialize(_MESSAGES.dump_python(messages)))]
+
+        self.commit(mutate, f"memory: message {path}")
+
     def replace_reports(
         self, conversation_id: str, read_as: list[Report], reports: list[Report]
     ) -> bool:
@@ -289,7 +321,7 @@ class GitStore:
 
         The merge happens entirely in the object store and needs git 2.38 or
         newer (``git merge-tree --write-tree``). Where both sides changed the
-        same lines of a file, reports become those of both; of
+        same lines of a file, reports and messages become those of both; of
         anything else this side's text is kept and the other's stays in its
         history.
 

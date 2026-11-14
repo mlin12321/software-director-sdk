@@ -273,6 +273,75 @@ class OrgStore:
             self._changed()
             return node
 
+    def move(self, node_id: str, parent_id: str) -> OrgNode:
+        """Put a node, with everything below it, under another parent.
+
+        An escalation of the node or of a node below it keeps the handoffs
+        of the teams that are still above it in the same order, and is held
+        by the next team above those.
+
+        Raises:
+            NotFound: The node or the new parent does not exist.
+            OrgStoreError: The node is the root, or the new parent is the
+                node itself or below it.
+        """
+        with self._lock:
+            node = self._require(node_id)
+            self._require(parent_id)
+            former = node.parent_id
+            if former is None or node_id in [
+                parent_id,
+                *self._chain(self._nodes, parent_id),
+            ]:
+                raise OrgStoreError(f"Node {node_id} cannot move under {parent_id}")
+            if former == parent_id:
+                return node
+            old_parent = self._nodes[former]
+            self._nodes[former] = old_parent.model_copy(
+                update={"child_ids": [c for c in old_parent.child_ids if c != node_id]}
+            )
+            new_parent = self._nodes[parent_id]
+            self._nodes[parent_id] = new_parent.model_copy(
+                update={"child_ids": [*new_parent.child_ids, node_id]}
+            )
+            self._nodes[node_id] = node.model_copy(update={"parent_id": parent_id})
+            moved = [node_id]
+            for current in moved:
+                moved.extend(self._nodes[current].child_ids)
+            for current in moved:
+                below = self._nodes[current]
+                chain = self._chain(self._nodes, below.parent_id)
+                self._nodes[current] = below.model_copy(
+                    update={
+                        "escalations": [
+                            self._rerouted(escalation, chain)
+                            for escalation in below.escalations
+                        ]
+                    }
+                )
+            # The node's own rollup first, then both lines of teams above it.
+            for current in reversed(moved):
+                self._refresh_ancestors(current, always_announce_first=False)
+            for current in moved:
+                below = self._nodes[current]
+                self._emit(NodeUpsertEvent(node=below), below.id, below.parent_id)
+            self._refresh_ancestors(former, always_announce_first=True)
+            self._refresh_ancestors(parent_id, always_announce_first=True)
+            self._announce_escalations()
+            self._changed()
+            return self._nodes[node_id]
+
+    @staticmethod
+    def _rerouted(escalation: Escalation, chain: list[str]) -> Escalation:
+        """An escalation as it stands when the teams above it are ``chain``."""
+        kept: list[EscalationHandoff] = []
+        for handoff, above in zip(escalation.handoffs, chain, strict=False):
+            if handoff.node_id != above:
+                break
+            kept.append(handoff)
+        holder = chain[len(kept)] if len(kept) < len(chain) else None
+        return escalation.model_copy(update={"handoffs": kept, "held_by": holder})
+
     def remove(self, node_id: str) -> bool:
         """Remove a node and everything below it.
 

@@ -92,6 +92,8 @@ export type {
   DirectorSplitChild,
   DirectorSplitProposal,
   DirectorSplitStatus,
+  DirectorThread,
+  DirectorThreadMessage,
 } from './models/director';
 export type { FileClientOptions, FileUploadContent } from './client/file-client';
 export type { HooksClientOptions } from './client/hooks-client';

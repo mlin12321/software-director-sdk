@@ -12,6 +12,7 @@ import type {
   DirectorOrgNodeDetail,
   DirectorOrgSummary,
   DirectorRoutedMessage,
+  DirectorThread,
   DirectorOrgMerge,
   DirectorOrgSync,
   DirectorRecovery,
@@ -204,6 +205,16 @@ export class DirectorClient {
   /** The spec and contracts a node works to, and what its agents reported. */
   async getNodeMemory(nodeId: DirectorNodeId): Promise<DirectorNodeMemory> {
     const response = await this.client.get<DirectorNodeMemory>(nodePath(nodeId, 'memory'));
+    return response.data;
+  }
+
+  /**
+   * The threads a node's agents take part in: its IC and its Manager with
+   * each other, its Manager with the ICs directly below, and the Manager above
+   * with its IC. Threads nobody wrote in are left out.
+   */
+  async getNodeMessages(nodeId: DirectorNodeId): Promise<DirectorThread[]> {
+    const response = await this.client.get<DirectorThread[]>(nodePath(nodeId, 'messages'));
     return response.data;
   }
 
