@@ -40,10 +40,11 @@ The IC owns the technical work of the team's boundary:
   cannot fix it, when two are at odds, when the make-up of the teams no
   longer fits the work.
 - When the team's work is complete it commits it and calls
-  `submit_review`, then stops: the IC of the team above reviews it and the
-  runtime wakes this IC with the outcome. Nobody declares a status: a team
-  is done once its work is accepted, and blocked while its IC waits on an
-  escalation.
+  `submit_review`. Its turn ends there: the IC of the team above reviews
+  the work and the runtime wakes this IC with the outcome, or when anything
+  else is sent to it. Nobody declares a status: a team is done once it has
+  submitted its work, until that is sent back, and blocked while its IC
+  waits on an escalation.
 - It reviews what the teams directly below submit, when the runtime
   asks it to: it reads the diff, runs the repository's checks, compares the
   work with the contracts and decides with `review_team`. The runtime asks

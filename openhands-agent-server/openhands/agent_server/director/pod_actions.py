@@ -364,15 +364,18 @@ def submit_review(service: DirectorService, caller: Caller, summary: str) -> str
             at=datetime.now(UTC).isoformat(timespec="seconds"),
         ),
     )
+    service.rest(node.id)
     service.request_review(node.id)
     service.refresh_headline(node.id, f"it submitted its work. {summary}")
     if parent is None:
         return (
-            "Submitted. Nobody is above your team: the human sees its work. Stop here."
+            "Submitted. Nobody is above your team: the human sees its work. "
+            "Your turn ends here."
         )
     return (
-        "Submitted. The IC of the team above reviews it. Stop here: you are "
-        "woken when it is accepted or sent back."
+        "Submitted. The IC of the team above reviews it. Your turn ends "
+        "here: you are woken when it is accepted or sent back, or when "
+        "something else is sent to you."
     )
 
 

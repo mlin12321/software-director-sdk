@@ -701,7 +701,7 @@ def test_setting_an_agent_status_announces_the_node_once(store: OrgStore):
         pytest.param("working", None, None, "working", id="an agent runs"),
         pytest.param("blocked", None, None, "blocked", id="an agent failed"),
         pytest.param("lost", None, None, "blocked", id="an agent is gone"),
-        pytest.param("idle", "pending", None, "idle", id="its work waits for review"),
+        pytest.param("idle", "pending", None, "done", id="its work waits for review"),
         pytest.param("idle", "changes_requested", None, "idle", id="work sent back"),
         pytest.param("idle", "accepted", None, "done", id="its work is accepted"),
         pytest.param("idle", "unreviewed", None, "done", id="the top team submitted"),
