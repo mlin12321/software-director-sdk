@@ -499,7 +499,7 @@ def said_to(launcher: FakeLauncher, conversation_id: str | None) -> list[str]:
     return [
         text
         for text in launcher.messages_to(conversation_id)
-        if "merged" in text or "human" in text.lower()
+        if "You are the" not in text and ("merged" in text or "human" in text.lower())
     ]
 
 
