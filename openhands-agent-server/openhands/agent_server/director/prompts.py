@@ -16,7 +16,10 @@ POD_PROTOCOL = """\
 You are one agent in an org of agent teams that builds software together.
 Each team owns a boundary: a directory of the repository. A team is two
 agents, an IC and a Manager. Your first message says which team and which of
-the two you are; `read_node_context` repeats it at any time.
+the two you are, with everything of the org that concerns your team. What
+changes of that later is added to the next message you get, under
+`[director] context update`. `read_node_context` returns all of it again and
+is not needed in normal work.
 
 The IC owns the technical work of the team's boundary:
 - It writes the team's spec with `write_spec` and does the code work itself.
@@ -108,8 +111,13 @@ def brief(
     specs: list[InheritedSpec],
     contracts: list[BoundaryContracts],
     reports: list[Report],
+    context: str = "",
 ) -> str:
-    """The first message of an agent: who it is and what it works to."""
+    """The first message of an agent: who it is and what it works to.
+
+    Args:
+        context: The rest of the team's context, as the agent is to read it.
+    """
     boundary = node.boundary.path or "the whole repository"
     lines = [
         f"{DIRECTOR_PREFIX} You are the {'IC' if role == 'ic' else 'Manager'} of "
@@ -133,6 +141,8 @@ def brief(
     if reports:
         lines += ["", "What your team has reported so far:"]
         lines += [f"- {report_line(report)}" for report in reports]
+    if context:
+        lines += ["", context]
     lines.append("")
     lines.append(
         "Start on the task now."

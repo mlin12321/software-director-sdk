@@ -24,6 +24,7 @@ RUNNING = "running"  # conversation id -> node id
 WAITING = "waiting"  # node id, waiting for the server to have room
 HELD = "held"  # node id, its review request waits for the teams beside it
 TEAM = "team"  # node id -> what the team was made of at the last save
+TOLD = "told"  # conversation id -> the context its agent was last told
 
 _TABLES = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
