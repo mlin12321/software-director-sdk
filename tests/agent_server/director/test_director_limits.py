@@ -19,11 +19,11 @@ from openhands.agent_server.director.service import DirectorService
 from openhands.agent_server.director.tools import (
     ApproveTeamsTool,
     MsgManagerTool,
-    SetStatusTool,
+    SubmitReviewTool,
 )
 from openhands.agent_server.director.tools.definition import (
     MsgManagerAction,
-    SetStatusAction,
+    SubmitReviewAction,
 )
 from openhands.sdk.conversation.state import ConversationExecutionStatus
 from tests.agent_server.director.conftest import (
@@ -212,8 +212,8 @@ async def test_a_team_whose_review_is_slow_does_not_hold_up_another_team(
         use(
             service,
             ic(service, "services.api"),
-            SetStatusTool,
-            SetStatusAction(status="done", summary="Shipped."),
+            SubmitReviewTool,
+            SubmitReviewAction(summary="Shipped."),
         )
     )
     await eventually(lambda: launcher.agents_asked)

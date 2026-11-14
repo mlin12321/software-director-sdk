@@ -94,15 +94,23 @@ class EscalationHandoff(BaseModel):
 
 
 class Escalation(BaseModel):
-    """Something a node cannot settle itself.
+    """Something an agent of a node cannot settle itself.
 
-    It goes to the node above, which settles it or passes it up in turn. It
-    waits on the human only once every node above the one that raised it has
-    passed it up.
+    It goes to the agent of the same role in the node above (an IC's to the
+    IC there, a Manager's to the Manager), which settles it or passes it up
+    in turn. It waits on the human only once every node above the one that
+    raised it has passed it up.
     """
 
     id: str = Field(description="Unique within the node that raised it.")
     kind: EscalationKind
+    raised_by: AgentRole = Field(
+        default="ic",
+        description=(
+            "Which agent of the node raised it. The agents of that role in "
+            "the nodes above are the ones that settle it or pass it up."
+        ),
+    )
     title: str
     detail: str = ""
     raised_at: str = Field(description="ISO 8601 timestamp.")
@@ -181,7 +189,7 @@ class ReviewFinding(BaseModel):
 
 
 class Review(BaseModel):
-    """The review of the work a team reported as done.
+    """The review of the work a team submitted.
 
     The IC of the team above reviews it. Before that, the team's own IC is
     asked to describe the changes and to review them, and both answers are
@@ -270,7 +278,7 @@ class OrgNodeInput(BaseModel):
     )
     review: Review | None = Field(
         default=None,
-        description="The review of what the team last reported as done.",
+        description="The review of what the team last submitted.",
     )
     agent_profile: str | None = Field(
         default=None,

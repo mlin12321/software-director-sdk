@@ -213,7 +213,7 @@ def tools_route() -> Iterator[tuple[str, list[tuple[str, str, object]]]]:
         def do_GET(self) -> None:
             asked.append((self.path, self.headers[mcp_shim.TOKEN_HEADER], None))
             self._answer(
-                [{"name": "set_status", "description": "Report", "inputSchema": {}}]
+                [{"name": "submit_review", "description": "Submit", "inputSchema": {}}]
             )
 
         def do_POST(self) -> None:
@@ -241,7 +241,7 @@ def test_the_mcp_server_lists_the_directors_tools_and_passes_calls_on(tools_rout
             "jsonrpc": "2.0",
             "id": 3,
             "method": "tools/call",
-            "params": {"name": "set_status", "arguments": {"status": "done"}},
+            "params": {"name": "submit_review", "arguments": {"summary": "Shipped."}},
         },
         {
             "jsonrpc": "2.0",
@@ -268,7 +268,7 @@ def test_the_mcp_server_lists_the_directors_tools_and_passes_calls_on(tools_rout
     replies = {reply["id"]: reply for reply in map(json.loads, ran.stdout.splitlines())}
     assert sorted(replies) == [1, 2, 3, 4, 5]
     assert replies[1]["result"]["capabilities"] == {"tools": {}}
-    assert [tool["name"] for tool in replies[2]["result"]["tools"]] == ["set_status"]
+    assert [tool["name"] for tool in replies[2]["result"]["tools"]] == ["submit_review"]
     assert replies[3]["result"] == {
         "content": [{"type": "text", "text": "Recorded."}],
         "isError": False,
@@ -279,7 +279,7 @@ def test_the_mcp_server_lists_the_directors_tools_and_passes_calls_on(tools_rout
     assert replies[5]["error"]["code"] == -32601
     assert asked == [
         ("/tools", "token-1", None),
-        ("/tools/set_status", "token-1", {"status": "done"}),
+        ("/tools/submit_review", "token-1", {"summary": "Shipped."}),
         ("/tools/missing", "token-1", {}),
     ]
 
@@ -354,9 +354,9 @@ async def test_the_tool_routes_refuse_whoever_has_no_agents_token(running, repo:
         ),
     ]
     not_in_the_org = await client.post(
-        "/api/director/tools/set_status",
+        "/api/director/tools/submit_review",
         headers={mcp_shim.TOKEN_HEADER: stranger},
-        json={"status": "done", "summary": "x"},
+        json={"summary": "x"},
     )
     unknown_tool = await client.post(
         "/api/director/tools/format_disk",

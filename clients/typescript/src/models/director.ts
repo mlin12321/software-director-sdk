@@ -78,6 +78,11 @@ export interface DirectorEscalation {
   detail: string;
   /** ISO 8601 timestamp. */
   raised_at: string;
+  /**
+   * Which agent of the node raised it. The same agent of each node above
+   * handles it, and the answer goes back to this one.
+   */
+  raised_by: DirectorAgentRole;
   /** The node working on it now; `null` when it waits on the human. */
   held_by: DirectorNodeId | null;
   /** The nodes that passed it up, nearest to the one that raised it first. */
@@ -138,7 +143,7 @@ export interface DirectorReviewFinding {
   evidence: string;
 }
 
-/** The review of the work a team reported as done. */
+/** The review of the work a team submitted. */
 export interface DirectorReview {
   state: DirectorReviewState;
   /** 1 the first time; one more each time the work comes back after changes. */
@@ -182,7 +187,7 @@ export interface DirectorOrgNode {
   pending_split: DirectorSplitProposal | null;
   /** The commit the team's work is compared with when it is reviewed. */
   base_commit: string;
-  /** The review of what the team last reported as done. */
+  /** The review of what the team last submitted. */
   review: DirectorReview | null;
   /**
    * An agent of the team could not be started yet because the server runs

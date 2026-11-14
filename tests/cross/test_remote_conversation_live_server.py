@@ -3508,14 +3508,21 @@ def test_max_budget_per_run_set_updated_and_cleared_over_live_server(
 
 
 def _scripted_org_llm(
-    monkeypatch: pytest.MonkeyPatch, api_ic: list[tuple[str, dict]] | None = None
+    monkeypatch: pytest.MonkeyPatch,
+    api_ic: list[tuple[str, dict]] | None = None,
+    web_ic: list[tuple[str, dict]] | None = None,
 ) -> None:
     """Agents of an org that split the root once: the IC proposes when it is
     briefed, its Manager approves when it is told, everyone else just replies.
 
+    The top IC accepts every team it is asked to review, and tells its Manager
+    of what the API team escalates; the Manager then removes that team.
+
     Args:
         api_ic: Tool calls the IC of the API sub-team makes, one per turn.
+        web_ic: The same for the IC of the Web sub-team.
     """
+    scripted = {"API": api_ic or [], "Web": web_ic or []}
 
     def tool_call(name: str, arguments: dict) -> dict:
         return {
@@ -3545,10 +3552,25 @@ def _scripted_org_llm(
                 "role": "assistant",
                 "content": "Title: Checkout\nHeadline: Builds the checkout flow.",
             }
-        if any("the IC of the team 'API'" in text_of(m) for m in messages):
-            done = sum(message.role == "tool" for message in messages)
-            if done < len(api_ic or []):
-                return tool_call(*(api_ic or [])[done])
+        for team, calls in scripted.items():
+            if any(f"the IC of the team {team!r}" in text_of(m) for m in messages):
+                done = sum(message.role == "tool" for message in messages)
+                if done < len(calls):
+                    return tool_call(*calls[done])
+        asked = [at for at, m in enumerate(messages) if "Review mode." in text_of(m)]
+        if asked:
+            # One call a turn: the teams of the request, in its order.
+            request = text_of(messages[asked[-1]])
+            waiting = [
+                node_id
+                for node_id in ("services.api", "apps.web")
+                if f"`review_team` for node {node_id}:" in request
+            ]
+            reviewed = sum(m.role == "tool" for m in messages[asked[-1] :])
+            if reviewed < len(waiting):
+                return tool_call(
+                    "review_team", {"node_id": waiting[reviewed], "decision": "accept"}
+                )
         if last.role == "user" and "You are the IC of the team 'Checkout'" in text:
             return tool_call(
                 "msg_manager",
@@ -3564,11 +3586,12 @@ def _scripted_org_llm(
             )
         if last.role == "user" and "Your IC writes:" in text and "```teams" in text:
             return tool_call("approve_teams", {})
-        if last.role == "user" and "Review mode. Team 'API'" in text:
+        if last.role == "user" and "The IC of team 'API'" in text:
             return tool_call(
-                "review_team", {"node_id": "services.api", "decision": "accept"}
+                "msg_manager",
+                {"text": "The API team cannot go on. Its IC escalated: too much."},
             )
-        if last.role == "user" and "Team 'API'" in text and "escalates" in text:
+        if last.role == "user" and "The API team cannot go on" in text:
             return tool_call(
                 "prune_team",
                 {
@@ -3747,13 +3770,14 @@ def test_director_holds_a_paused_org_and_takes_it_up_again(
     assert run_git_command(["git", "status", "--porcelain"], repo) == ""
 
 
-def test_director_has_done_work_reviewed_by_the_ic_above(
+def test_director_has_submitted_work_reviewed_once_all_teams_submitted(
     server_env, monkeypatch: pytest.MonkeyPatch
 ):
     repo = server_env["workspace_path"]
     _scripted_org_llm(
         monkeypatch,
-        api_ic=[("set_status", {"status": "done", "summary": "Served."})],
+        api_ic=[("submit_review", {"summary": "Served."})],
+        web_ic=[("submit_review", {"summary": "Shown."})],
     )
     run_git_command(["git", "init", "-b", "main"], repo)
     run_git_command(
