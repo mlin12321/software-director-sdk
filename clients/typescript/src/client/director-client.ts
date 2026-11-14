@@ -1,11 +1,10 @@
 import { HttpClient, HttpError } from './http-client';
 import type { CreateConversationPayload } from './conversation-client';
 import type {
-  DirectorBlackboardSync,
-  DirectorBoundaryMemory,
+  DirectorMemorySync,
   DirectorFileEdit,
   DirectorFileSides,
-  DirectorNodeBlackboard,
+  DirectorNodeMemory,
   DirectorNodeOwnership,
   DirectorNodeId,
   DirectorOrgEvent,
@@ -113,7 +112,7 @@ async function* readServerSentData(body: ReadableStream<Uint8Array>): AsyncGener
 }
 
 /**
- * The org tree of agent teams and the blackboard that applies to each node.
+ * The org tree of agent teams and the team memory that applies to each node.
  *
  * Client-ahead of the pinned Agent Server release: these calls need a server
  * that provides the director API and answer 404 on one that does not.
@@ -202,9 +201,9 @@ export class DirectorClient {
     return response.data;
   }
 
-  /** The spec, contracts, memory and autopsies a node works to. */
-  async getNodeBlackboard(nodeId: DirectorNodeId): Promise<DirectorNodeBlackboard> {
-    const response = await this.client.get<DirectorNodeBlackboard>(nodePath(nodeId, 'blackboard'));
+  /** The spec and contracts a node works to, and what its agents reported. */
+  async getNodeMemory(nodeId: DirectorNodeId): Promise<DirectorNodeMemory> {
+    const response = await this.client.get<DirectorNodeMemory>(nodePath(nodeId, 'memory'));
     return response.data;
   }
 
@@ -261,43 +260,31 @@ export class DirectorClient {
   }
 
   /**
-   * Add a rule to the permanent memory of a node's boundary.
-   *
-   * @returns The boundary's memory after the change.
-   */
-  async teach(nodeId: DirectorNodeId, rule: string): Promise<DirectorBoundaryMemory> {
-    const response = await this.client.post<DirectorBoundaryMemory>(nodePath(nodeId, 'teach'), {
-      rule,
-    });
-    return response.data;
-  }
-
-  /**
-   * Take in the blackboard a remote of the repository has. Rules and
-   * autopsies of both sides are kept; of a spec or contracts both changed,
+   * Take in the team memory a remote of the repository has. Reports of
+   * both sides are kept; of a spec or contracts both changed,
    * the local text is, and the file is named in `kept_local`.
    *
    * @throws HttpError 404 when the repository has no such remote, 502 when
    *   it cannot be reached.
    */
-  async pullBlackboard(remote = 'origin'): Promise<DirectorBlackboardSync> {
-    const response = await this.client.post<DirectorBlackboardSync>(
-      `${DIRECTOR_PATH}/org/blackboard/pull`,
+  async pullMemory(remote = 'origin'): Promise<DirectorMemorySync> {
+    const response = await this.client.post<DirectorMemorySync>(
+      `${DIRECTOR_PATH}/org/memory/pull`,
       { remote }
     );
     return response.data;
   }
 
   /**
-   * Give a remote of the repository the local blackboard. What the remote
-   * has that the local blackboard lacks is pulled in first.
+   * Give a remote of the repository the local team memory. What the remote
+   * has that the local team memory lacks is pulled in first.
    *
    * @throws HttpError 404 when the repository has no such remote, 409 when
-   *   there is no blackboard yet, 502 when the remote cannot be reached.
+   *   there is no team memory yet, 502 when the remote cannot be reached.
    */
-  async pushBlackboard(remote = 'origin'): Promise<DirectorBlackboardSync> {
-    const response = await this.client.post<DirectorBlackboardSync>(
-      `${DIRECTOR_PATH}/org/blackboard/push`,
+  async pushMemory(remote = 'origin'): Promise<DirectorMemorySync> {
+    const response = await this.client.post<DirectorMemorySync>(
+      `${DIRECTOR_PATH}/org/memory/push`,
       { remote }
     );
     return response.data;
@@ -305,7 +292,7 @@ export class DirectorClient {
 
   /**
    * Take in the org a remote of the repository has, as a merge: the tree,
-   * the blackboard and the branches of the teams' work. When both sides
+   * the team memory and the branches of the teams' work. When both sides
    * changed the same thing the result is `conflicts` and nothing is written
    * until `resolveMerge` has a choice for each, or `abortMerge` is called.
    *
@@ -320,7 +307,7 @@ export class DirectorClient {
   }
 
   /**
-   * Give a remote of the repository the org, the blackboard and the branches
+   * Give a remote of the repository the org, the team memory and the branches
    * of the teams' work.
    *
    * @throws HttpError 409 when there is no org, a merge waits, or the remote

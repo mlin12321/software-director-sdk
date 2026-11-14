@@ -1,7 +1,7 @@
 """Exchanges an org with a remote of its repository, as git does a branch.
 
 Nothing is exchanged on its own. A push gives the remote the org tree, the
-blackboard and the branch of every team that has a checkout of its own; a
+team memory and the branch of every team that has a checkout of its own; a
 fetch brings the remote's here, beside what is here, for a merge. The teams'
 branches are kept on the remote under ``refs/agents/teams/``, so they do not
 appear among its branches.
@@ -11,7 +11,7 @@ from collections.abc import Iterable
 from pathlib import Path
 
 from openhands.agent_server.director.git import GitError, git
-from openhands.agent_server.director.git_blackboard import BLACKBOARD_REF
+from openhands.agent_server.director.git_store import MEMORY_REF
 from openhands.agent_server.director.models import BranchSync, OrgNode
 from openhands.agent_server.director.org_persistence import ORG_REF
 from openhands.sdk.errors import NotFound, UpstreamFailed
@@ -27,8 +27,8 @@ def remote_org(remote: str) -> str:
     return f"refs/remotes/{remote}/agents/org"
 
 
-def remote_blackboard(remote: str) -> str:
-    return f"refs/remotes/{remote}/agents/blackboard"
+def remote_memory(remote: str) -> str:
+    return f"refs/remotes/{remote}/agents/memory"
 
 
 def _remote_team(remote: str, node_id: str) -> str:
@@ -52,7 +52,7 @@ def _is_ancestor(repo_dir: Path, older: str, newer: str) -> bool:
 
 
 def fetch(repo_dir: Path, remote: str) -> None:
-    """Bring the remote's org, blackboard and team branches beside ours.
+    """Bring the remote's org, team memory and team branches beside ours.
 
     Raises:
         NotFound: The repository has no such remote.
@@ -155,10 +155,10 @@ def _branch(node: OrgNode, result: str, ref: str | None = None) -> BranchSync:
 
 
 def behind(repo_dir: Path, remote: str) -> bool:
-    """Whether the fetched org or blackboard has commits ours lacks."""
+    """Whether the fetched org or team memory has commits ours lacks."""
     for ours, theirs in (
         (ORG_REF, remote_org(remote)),
-        (BLACKBOARD_REF, remote_blackboard(remote)),
+        (MEMORY_REF, remote_memory(remote)),
     ):
         there = commit_at(repo_dir, theirs)
         if there is None:
@@ -170,7 +170,7 @@ def behind(repo_dir: Path, remote: str) -> bool:
 
 
 def push(repo_dir: Path, remote: str, nodes: Iterable[OrgNode]) -> list[BranchSync]:
-    """Give the remote the org, the blackboard and the teams' branches.
+    """Give the remote the org, the team memory and the teams' branches.
 
     A team's branch that the remote has other commits on is left out and
     reported as diverged.
@@ -180,7 +180,7 @@ def push(repo_dir: Path, remote: str, nodes: Iterable[OrgNode]) -> list[BranchSy
     """
     refs = [
         f"{ref}:{ref}"
-        for ref in (ORG_REF, BLACKBOARD_REF)
+        for ref in (ORG_REF, MEMORY_REF)
         if commit_at(repo_dir, ref) is not None
     ]
     branches: list[BranchSync] = []

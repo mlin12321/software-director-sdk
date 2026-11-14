@@ -10,10 +10,10 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from openhands.agent_server.director.git_blackboard import (
-    BoardChange,
-    BoardReader,
-    GitBlackboard,
+from openhands.agent_server.director.git_store import (
+    GitStore,
+    StoreChange,
+    StoreReader,
 )
 from openhands.agent_server.director.models import OrgNodeInput
 from openhands.agent_server.director.org_store import OrgStore
@@ -29,9 +29,9 @@ class _PersistedOrg(BaseModel):
     nodes: list[OrgNodeInput]
 
 
-def create_org_board(repo_dir: Path) -> GitBlackboard:
-    """The blackboard that holds the org tree of ``repo_dir``."""
-    return GitBlackboard(repo_dir, ref=ORG_REF)
+def create_org_board(repo_dir: Path) -> GitStore:
+    """The store that holds the org tree of ``repo_dir``."""
+    return GitStore(repo_dir, ref=ORG_REF)
 
 
 def _persisted(node: OrgNodeInput) -> dict[str, Any]:
@@ -51,13 +51,13 @@ def _persisted(node: OrgNodeInput) -> dict[str, Any]:
     return data
 
 
-def org_file(nodes: list[dict[str, Any]]) -> BoardChange:
+def org_file(nodes: list[dict[str, Any]]) -> StoreChange:
     """The file that holds a tree of saved nodes."""
     content = json.dumps({"version": _VERSION, "nodes": nodes}, indent=2) + "\n"
-    return BoardChange(_ORG_FILE, content)
+    return StoreChange(_ORG_FILE, content)
 
 
-def saved_nodes(board: GitBlackboard, commit: str | None) -> list[dict[str, Any]]:
+def saved_nodes(board: GitStore, commit: str | None) -> list[dict[str, Any]]:
     """The nodes of the tree saved at ``commit``, as they are stored.
 
     Raises:
@@ -79,17 +79,17 @@ def stored_nodes(store: OrgStore) -> list[dict[str, Any]]:
     return [_persisted(node) for node in store.all()]
 
 
-def save_org(board: GitBlackboard, store: OrgStore) -> None:
+def save_org(board: GitStore, store: OrgStore) -> None:
     """Write the tree to ``board`` unless it is already stored unchanged."""
     content = org_file(stored_nodes(store)).content
 
-    def mutate(read: BoardReader) -> list[BoardChange]:
-        return [] if read(_ORG_FILE) == content else [BoardChange(_ORG_FILE, content)]
+    def mutate(read: StoreReader) -> list[StoreChange]:
+        return [] if read(_ORG_FILE) == content else [StoreChange(_ORG_FILE, content)]
 
     board.commit(mutate, "org: save tree")
 
 
-def load_org(board: GitBlackboard, store: OrgStore) -> bool:
+def load_org(board: GitStore, store: OrgStore) -> bool:
     """Load the saved tree into ``store``.
 
     Returns:
