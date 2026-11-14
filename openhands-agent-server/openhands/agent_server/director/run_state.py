@@ -22,7 +22,7 @@ SCHEMA_VERSION = 1
 # Marks: one row per (kind, key), kept in the order they were first made.
 RUNNING = "running"  # conversation id -> node id
 WAITING = "waiting"  # node id, waiting for the server to have room
-REVIEWING = "reviewing"  # node id, done before it began to review
+HELD = "held"  # node id, its review request waits for the teams beside it
 TEAM = "team"  # node id -> what the team was made of at the last save
 
 _TABLES = """

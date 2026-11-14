@@ -36,28 +36,36 @@ The IC owns the technical work of the team's boundary:
   to tell the Manager how they are doing: when one struggles and the IC
   cannot fix it, when two are at odds, when the make-up of the teams no
   longer fits the work.
-- It commits the team's work and reports with `set_status` when it is done
-  or blocked. Done work is reviewed by the IC of the team above.
-- It reviews what the teams directly below report as done, when the runtime
+- When the team's work is complete it commits it and calls
+  `submit_review`, then stops: the IC of the team above reviews it and the
+  runtime wakes this IC with the outcome. Nobody declares a status: a team
+  is done once its work is accepted, and blocked while its IC waits on an
+  escalation.
+- It reviews what the teams directly below submit, when the runtime
   asks it to: it reads the diff, runs the repository's checks, compares the
-  work with the contracts and decides with `review_team`. Accepted work of a
-  team with its own worktree is merged into the IC's checkout by the
-  runtime. The IC tells the team above only when a team there waits on that
-  work, through `needed_above`; otherwise the work is simply part of its own
-  team's, which it reports when all of it is done.
+  work with the contracts and decides with `review_team`. The runtime asks
+  once every sub-team has submitted or is blocked, so that the IC can wait
+  in between. Accepted work of a team with its own worktree is merged into
+  the IC's checkout by the runtime.
+- Each change is reviewed once, by the IC directly above the team that made
+  it. If the IC changed nothing itself, its sub-teams' accepted work goes
+  on up without another review. If it did, it calls `submit_review` when
+  its own part is complete, and the accepted work goes up with it.
+- It settles what the ICs of the teams directly below escalate with
+  `resolve_escalation`, or passes it up with the reason it could not.
 
 The Manager owns the make-up of the teams below and makes them work well
 together. It does not edit files; the runtime refuses it every write in the
-repository. It acts when its IC writes to it or a team below escalates,
-and not otherwise.
+repository. It acts when its IC writes to it or the Manager of a team
+below escalates, and not otherwise.
 - It reads the sub-teams its IC proposes and approves them with
   `approve_teams` when they are clearly separated and each instruction is
   clear. They are then set up exactly as written. To ask for changes or
   decline, it answers with `msg_ic` instead and says what to change.
 - It writes to its IC, or to the IC of a team directly below, with `msg_ic`:
   feedback, a decision, what it is about to change.
-- It settles what the teams below escalate with `resolve_escalation`, or
-  passes it up with the reason it could not.
+- It settles what the Managers of the teams directly below escalate with
+  `resolve_escalation`, or passes it up with the reason it could not.
 - A team directly below that has no way forward, or keeps trying what does
   not work, it removes with `prune_team`, saying why. The team's directory
   goes back to the IC. Teams are removed or replaced only once their agents
@@ -68,9 +76,11 @@ a setback, an approach that failed and why, a reflection on how the work
 went. Reports are kept for the two agents of the team and nobody else, and
 outlast what either remembers of a long conversation.
 
-Anything a team cannot settle itself is raised with `raise_escalation`. It
-goes to the Manager of the team above, never straight to the human. Settle
-what you can; pass up only what you cannot, and say why.
+Anything an agent cannot settle itself is raised with `raise_escalation`.
+An IC's goes to the IC of the team above, a Manager's to the Manager
+there, never straight to the human; from the top team it waits on the
+human. An IC that cannot go on raises one: that is what shows its team as
+blocked. Settle what you can; pass up only what you cannot, and say why.
 
 Messages that begin with [director] come from the org's runtime, not from a
 person.
@@ -143,11 +153,11 @@ def _finding_lines(findings: list[ReviewFinding]) -> list[str]:
 
 
 def review_request(team: OrgNode, review: Review) -> str:
-    """What the IC above is told when a team below reports its work done."""
+    """What the IC above is told when a team below submits its work."""
     directory = team.boundary.path or "."
     lines = [
-        f"Review mode. Team {team.title!r} (node {team.id}) reports its work in "
-        f"{directory} done"
+        f"Review mode. Team {team.title!r} (node {team.id}) submits its work in "
+        f"{directory}"
         + (f" (review round {review.round})." if review.round > 1 else "."),
     ]
     if review.summary:
@@ -196,7 +206,7 @@ def changes_requested(reviewer: OrgNode, findings: list[ReviewFinding]) -> str:
             f"The IC of {reviewer.title!r} reviewed your work and asks for "
             "changes before it is accepted:",
             *_finding_lines(findings),
-            "Make them, commit, and report done again with `set_status`.",
+            "Make them, commit, and submit the work again with `submit_review`.",
         ]
     )
 

@@ -39,7 +39,9 @@ from openhands.agent_server.director.git import (
     git,
     head_of,
     is_git_repository,
+    pathspec,
     save_and_discard,
+    uncommitted,
 )
 from openhands.agent_server.director.git_index import (
     excludes_file,
@@ -76,6 +78,7 @@ from openhands.agent_server.director.models import (
     RecoveryItem,
     Report,
     ResolveMergeRequest,
+    Review,
     ReviewFinding,
     RoutedMessage,
     RouteMessageRequest,
@@ -102,7 +105,11 @@ from openhands.agent_server.director.org_persistence import (
     saved_nodes,
     stored_nodes,
 )
-from openhands.agent_server.director.org_store import OrgStore, OrgStoreError
+from openhands.agent_server.director.org_store import (
+    AGENT_LOST,
+    OrgStore,
+    OrgStoreError,
+)
 from openhands.agent_server.director.pods import PodLauncher, StartedAgent
 from openhands.agent_server.director.prompts import (
     MANAGER_ROLE,
@@ -121,7 +128,7 @@ from openhands.agent_server.director.recovery import (
     restore_worktrees,
 )
 from openhands.agent_server.director.run_state import (
-    REVIEWING,
+    HELD,
     RUNNING,
     TEAM,
     WAITING,
@@ -174,7 +181,7 @@ DIRECTOR_TOOL_NAMES = (
     "approve_teams",
     "raise_escalation",
     "resolve_escalation",
-    "set_status",
+    "submit_review",
     "review_team",
     "report",
     "prune_team",
@@ -189,12 +196,10 @@ SUMMARY_TIMEOUT_SECONDS = 20.0
 # How long a model may take over a team's diff, or over an agent's reports.
 MODEL_CALL_TIMEOUT_SECONDS = 120.0
 # A team whose work is sent back this many times is stopped.
-MAX_REVIEW_ROUNDS = 3
 # Where, in the org's repository, the uncommitted work a prune discarded is
 # kept.
 PRUNED_REFS = "refs/agents/pruned"
 # An agent whose conversation is gone, or could not be started.
-AGENT_LOST = "lost"
 # An agent that was running when its org was paused, and runs again when it
 # is resumed.
 AGENT_PAUSED = "paused"
@@ -373,7 +378,6 @@ class DirectorService:
             "request_review": self._do_request_review,
             "accept": self._do_accept,
             "prune": self._prune,
-            "halt": self._do_halt,
         }
         self._memory_adopted_in: Path | None = None
         self._bwrap: str | None = None
@@ -904,7 +908,7 @@ class DirectorService:
     ) -> OrgNode:
         """Settle an escalation that waits on the human with their answer.
 
-        The answer goes to the IC of the team that raised it.
+        The answer goes to the agent that raised it.
 
         Raises:
             NotFound: The node or the escalation does not exist.
@@ -929,7 +933,7 @@ class DirectorService:
             )
         store.settle_escalation(node_id, escalation_id)
         self.notify(
-            agent_conversation(node, "ic"),
+            agent_conversation(node, escalation.raised_by),
             f"The human answered your escalation {escalation.title!r}:\n{answer}",
             at_once=True,
         )
@@ -954,7 +958,6 @@ class DirectorService:
     def prune(self, node_id: str, reason: str) -> None:
         """Remove a team and what is below it; its boundary goes back to
         the team above. Safe from any thread."""
-        self.store.update_node(node_id, status="blocked")
         self._begin("prune", node_id, reason=reason)
 
     def message(
@@ -1038,17 +1041,13 @@ class DirectorService:
             self._enqueue(lambda: self._compact(conversation_id), MODELS_LANE)
 
     def request_review(self, node_id: str) -> None:
-        """Have the work a team reported done reviewed. Safe from any thread."""
+        """Have the work a team submitted reviewed. Safe from any thread."""
         self._begin("request_review", node_id)
 
-    def request_changes(self, node_id: str, findings: list[ReviewFinding]) -> bool:
+    def request_changes(self, node_id: str, findings: list[ReviewFinding]) -> None:
         """Send a team's work back to it with what must change.
 
         Safe from any thread.
-
-        Returns:
-            Whether this was once too often: the team is then stopped and
-            left blocked instead.
 
         Raises:
             NotFound: The node does not exist.
@@ -1064,41 +1063,71 @@ class DirectorService:
             update={"state": "changes_requested", "findings": findings, "at": _now()}
         )
         above = store.get(node.parent_id) if node.parent_id else None
-        if review.round >= MAX_REVIEW_ROUNDS:
-            store.update_node(node_id, status="blocked", review=review)
-            self._begin("halt", node_id)
-            self._reviewed(above)
-            return True
-        store.update_node(node_id, status="working", review=review)
-        self._reviewed(above)
+        store.set_review(node_id, review)
         self.notify(
             agent_conversation(node, "ic"), changes_requested(above or node, findings)
         )
-        return False
 
-    def declared_status(self, node_id: str) -> None:
-        """A team declared its own status, which now stands."""
-        self._runs().unmark(REVIEWING, node_id)
+    def release_reviews(self, node_id: str | None, *, now: bool = False) -> None:
+        """Hand a team's IC the reviews its sub-teams wait for, if it is
+        time (see :meth:`_release_reviews`). Safe from any thread."""
+        if node_id is not None and self._loop is not None:
+            self._enqueue(lambda: self._released(node_id, now), f"review:{node_id}")
 
-    def _reviewed(self, reviewer: OrgNode | None) -> None:
-        """Put a team that was done before it reviewed back to done, once
-        none of its teams waits for it."""
-        run = self._runs()
-        if reviewer is None or reviewer.id not in run.marked(REVIEWING):
-            return
+    async def _released(self, node_id: str, now: bool) -> None:
+        self._release_reviews(node_id, now=now)
+
+    def _release_reviews(self, node_id: str | None, *, now: bool = False) -> None:
+        """Hand a team's IC the reviews its sub-teams wait for.
+
+        They are held until every sub-team has submitted its work or is
+        blocked, so that the IC is woken once for all of them. They go at
+        once when the IC is in a turn anyway, or when ``now`` says that
+        something else wakes it.
+        """
         store = self.store
-        waiting = any(
-            team is not None
-            and team.review is not None
-            and team.review.state == "pending"
-            for team in map(store.get, reviewer.child_ids)
-        )
-        if waiting:
+        node = store.get(node_id) if node_id else None
+        if node is None or self._paused is not None:
             return
-        run.unmark(REVIEWING, reviewer.id)
-        now = store.get(reviewer.id)
-        if now is not None and now.status in ("working", "idle"):
-            store.update_node(reviewer.id, status="done")
+        run = self._runs()
+        held = run.marked(HELD)
+        teams = store.children(node.id)
+        waiting: list[OrgNode] = []
+        for team in teams:
+            if team.id not in held:
+                continue
+            if team.review is not None and team.review.state == "pending":
+                waiting.append(team)
+            else:
+                # Decided on, or taken back, some other way meanwhile.
+                run.unmark(HELD, team.id)
+        if not waiting:
+            return
+        reviewer = agent_conversation(node, "ic")
+        # A team whose own account of its work is still being written has
+        # not finished submitting.
+        preparing = {
+            intent.node_id
+            for intent in run.open_intents()
+            if intent.kind == "request_review" and intent.node_id not in held
+        }
+        settled = all(
+            team.status == "blocked"
+            or (
+                team.review is not None
+                and team.review.state in ("pending", "accepted")
+                and team.id not in preparing
+            )
+            for team in teams
+        )
+        if not (now or settled or reviewer in self._running):
+            return
+        requests = []
+        for team in waiting:
+            run.unmark(HELD, team.id)
+            if team.review is not None:
+                requests.append(review_request(team, team.review))
+        self.notify(reviewer, "\n\n---\n\n".join(requests))
 
     def accept_review(self, node_id: str, needed_above: str) -> None:
         """Take a team's reviewed work into the team above. Safe from any
@@ -1183,6 +1212,9 @@ class DirectorService:
                 ),
                 held.node_id or ORG_LANE,
             )
+        for node_id in run.marked(HELD):
+            submitted = store.get(node_id)
+            self.release_reviews(submitted.parent_id if submitted else None)
         for conversation_id, note in again.items():
             self._enqueue(
                 lambda conversation_id=conversation_id, note=note: self._run_again(
@@ -2296,7 +2328,14 @@ class DirectorService:
             self._note_running(
                 agent, node.id, status == ConversationExecutionStatus.RUNNING
             )
-        store.set_agent(node.id, role, status=self._shown(agent, status))
+        was = node.status
+        now = store.set_agent(node.id, role, status=self._shown(agent, status))
+        if self._paused is None and self._loop is not None:
+            if now.status == "blocked" and was != "blocked":
+                # A blocked team is no longer waited for.
+                self.release_reviews(node.parent_id)
+            if role == "ic" and status == ConversationExecutionStatus.RUNNING:
+                self.release_reviews(node.id, now=True)
 
     def _note_running(self, conversation_id: str, node_id: str, running: bool) -> None:
         if running == (conversation_id in self._running):
@@ -2422,7 +2461,6 @@ class DirectorService:
         except Exception:
             logger.exception("Could not start the %s of node %s", role, node_id)
             store.set_agent(node_id, role, status=AGENT_LOST)
-            store.update_node(node_id, status="blocked")
             return False
         store.set_agent(node_id, role, kind=started.kind, acp_server=started.acp_server)
         if role == "ic":
@@ -2544,9 +2582,6 @@ class DirectorService:
 
     async def _do_accept(self, intent: Intent) -> None:
         await self._accept(intent.node_id, intent.payload["needed_above"])
-
-    async def _do_halt(self, intent: Intent) -> None:
-        await self._halt(intent.node_id)
 
     def _decline(self, node: OrgNode, reason: str) -> None:
         """Put approved sub-teams aside and tell the IC that proposed them."""
@@ -2877,14 +2912,10 @@ class DirectorService:
                 "automated": found or [],
             }
         )
-        node = store.update_node(node_id, review=review)
-        above = store.get(node.parent_id) if node.parent_id else None
-        if above is not None:
-            if above.status == "done":
-                # Reviewing is work; it is done again once it has decided.
-                self._runs().mark(REVIEWING, above.id)
-                store.update_node(above.id, status="working")
-            self.notify(agent_conversation(above, "ic"), review_request(node, review))
+        node = store.set_review(node_id, review)
+        if node.parent_id is not None:
+            self._runs().mark(HELD, node_id)
+            self._release_reviews(node.parent_id)
         elif found:
             self.notify(
                 agent_conversation(node, "ic"),
@@ -2897,9 +2928,13 @@ class DirectorService:
         store = self.store
         node = store.get(node_id)
         above = store.get(node.parent_id) if node and node.parent_id else None
-        if node is None or above is None:
+        if node is None or above is None or node.review is None:
             return
-        if node.review is None or node.review.state != "pending":
+        if node.review.state == "accepted":
+            # Cut off after the acceptance was made: what follows it is
+            # still owed.
+            await self._pass_up(above.id, acted=True)
+        if node.review.state != "pending":
             return
         reviewer = agent_conversation(above, "ic")
         where = node.boundary.path or "the repository"
@@ -2934,29 +2969,23 @@ class DirectorService:
                     else f"These files are outside {where}, which is all your "
                     "team owns. Take them out of your commits."
                 )
-                halted = self.request_changes(
+                self.request_changes(
                     node_id, [ReviewFinding(path=", ".join(result.files), issue=issue)]
                 )
                 self.notify(
                     reviewer,
                     f"The work of {node.title!r} was not taken into your "
                     f"checkout: {issue} ({', '.join(result.files)}) "
-                    + (
-                        "It was sent back for the last time; the team is "
-                        "stopped and blocked."
-                        if halted
-                        else "It was sent back to the team."
-                    ),
+                    "It was sent back to the team.",
                 )
                 return
             merged = result.outcome == "merged"
         tip = await asyncio.to_thread(head_of, team)
-        store.update_node(
+        store.set_review(
             node_id,
-            review=node.review.model_copy(update={"state": "accepted", "at": _now()}),
+            node.review.model_copy(update={"state": "accepted", "at": _now()}),
             base_commit=tip or node.base_commit,
         )
-        self._reviewed(above)
         self.notify(
             agent_conversation(node, "ic"),
             f"The IC of {above.title!r} accepted your team's work"
@@ -2966,6 +2995,7 @@ class DirectorService:
             self.notify(
                 reviewer, f"The work of {node.title!r} is merged into your checkout."
             )
+        await self._pass_up(above.id, acted=True)
         further = store.get(above.parent_id) if above.parent_id else None
         if needed_above and further is not None:
             self.notify(
@@ -2977,15 +3007,123 @@ class DirectorService:
                 + (f" on branch {above.branch}." if above.branch else "."),
             )
 
-    async def _halt(self, node_id: str) -> None:
-        """Stop the agents of a team where they are."""
-        node = self.store.get(node_id)
-        if node is None:
+    def _own_changes(self, node: OrgNode, teams: list[OrgNode]) -> list[str] | None:
+        """The files a team changed itself since its work was last taken
+        up, committed or not: those in its directory that are in no
+        sub-team's.
+
+        Returns:
+            None when git cannot tell.
+        """
+        if not node.base_commit:
+            return None
+        checkout = Path(node.worktree_path)
+        try:
+            names = git(
+                checkout,
+                ["diff", "--name-only", node.base_commit, "HEAD", "--"]
+                + [pathspec(node.boundary.path)],
+            ).splitlines()
+            names += uncommitted(checkout, node.boundary.path)
+        except (GitError, OSError):
+            return None
+        given = [team.boundary.path for team in teams]
+        return sorted(
+            {
+                name
+                for name in names
+                if name
+                and not any(
+                    name == path or name.startswith(f"{path}/") for path in given
+                )
+            }
+        )
+
+    async def _pass_up(self, node_id: str, *, acted: bool) -> None:
+        """Take a team's work into the team above without another review,
+        when all of it is work of its sub-teams that was accepted.
+
+        Each change is reviewed once, by the IC directly above the team
+        that made it. A team that changed something itself submits its work
+        as a whole instead.
+
+        Args:
+            acted: Whether the team's IC has just accepted the last of its
+                sub-teams itself; otherwise their work came up on its own.
+        """
+        store = self.store
+        node = store.get(node_id)
+        if node is None or not node.child_ids:
             return
-        launcher = self._require_launcher()
-        for agent in node.agents:
-            if agent.conversation_id is not None:
-                await launcher.stop(UUID(agent.conversation_id))
+        teams = store.children(node_id)
+        if any(
+            team.review is None or team.review.state != "accepted" for team in teams
+        ):
+            return
+        if node.review is not None and node.review.state == "pending":
+            return
+        ic = agent_conversation(node, "ic")
+        above = store.get(node.parent_id) if node.parent_id else None
+        own = await asyncio.to_thread(self._own_changes, node, teams)
+        if own is None:
+            return
+        if own or above is None:
+            if not acted:
+                self.notify(
+                    ic,
+                    "The work of all your sub-teams is accepted and in your "
+                    "checkout. "
+                    + (
+                        "Your team also changed files itself that nobody has "
+                        f"reviewed ({', '.join(own[:10])}). "
+                        if own
+                        else ""
+                    )
+                    + "Call `submit_review` when your team's work is complete.",
+                )
+            return
+        team, checkout = Path(node.worktree_path), Path(above.worktree_path)
+        if _checkout_root(str(team)) != _checkout_root(str(checkout)):
+            try:
+                result = await asyncio.to_thread(
+                    merge_back, checkout, team, node.boundary.path, node.title
+                )
+                problem = (
+                    f"{result.outcome}: {', '.join(result.files) or result.detail}"
+                    if result.outcome in ("refused", "conflicts", "outside")
+                    else None
+                )
+            except (GitError, OSError) as error:
+                problem = str(error)
+            if problem is not None:
+                self.notify(
+                    ic,
+                    "The work of all your sub-teams is accepted, but your "
+                    "team's checkout does not merge into the checkout of "
+                    f"{above.title!r} ({problem}). Merge its branch into "
+                    "yours, resolve what is in the way, commit, and call "
+                    "`submit_review`.",
+                )
+                return
+        tip = await asyncio.to_thread(head_of, team)
+        store.set_review(
+            node_id,
+            Review(
+                state="accepted",
+                summary="The accepted work of its sub-teams, with no changes of "
+                "its own.",
+                at=_now(),
+            ),
+            base_commit=tip or node.base_commit,
+        )
+        if acted:
+            self.notify(
+                ic,
+                f"Your team changed nothing itself, so its work went up to "
+                f"{above.title!r} without another review.",
+            )
+        self._release_reviews(above.id)
+        await self._pass_up(above.id, acted=False)
 
     async def _compact(self, conversation_id: str) -> None:
         """Have a model rewrite one agent's reports shorter, if they are
@@ -3175,9 +3313,7 @@ def _shared_root(nodes: list[dict[str, Any]]) -> str | None:
 # Steps whose outcome is in the tree alone. The steps that start agents are
 # not among them: their outcome is the conversation, and nothing may come
 # between an IC's start and its Manager's.
-_SAVED_BEFORE_FORGOTTEN = frozenset(
-    {"accept", "finish_split", "request_review", "halt"}
-)
+_SAVED_BEFORE_FORGOTTEN = frozenset({"accept", "finish_split", "request_review"})
 
 
 def _lane_for(intent: Intent) -> str:

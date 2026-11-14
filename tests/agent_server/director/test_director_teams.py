@@ -12,7 +12,7 @@ from openhands.agent_server.director.tools import (
     MsgIcTool,
     MsgManagerTool,
     PruneTeamTool,
-    SetStatusTool,
+    SubmitReviewTool,
 )
 from openhands.agent_server.director.tools.definition import MsgIcAction
 from openhands.sdk.conversation.state import ConversationExecutionStatus
@@ -231,7 +231,7 @@ async def test_work_a_kept_sub_team_had_in_review_goes_to_the_ic_it_now_reports_
         service, API, SplitChild(title="DB", path="services/api/db", task="Schema")
     )
     commit(repo, "services/api/db/schema.sql", "create table orders (id int);\n")
-    await use(service, ic(service, DB), SetStatusTool, DONE)
+    await use(service, ic(service, DB), SubmitReviewTool, DONE)
     assert node(service, DB).review is not None
 
     await use(service, ic(service), MsgManagerTool, SERVICES)

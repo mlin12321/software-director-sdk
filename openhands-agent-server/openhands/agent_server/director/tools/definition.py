@@ -10,7 +10,7 @@ from openhands.agent_server.director.models import (
     EscalationKind,
     ReviewFinding,
 )
-from openhands.agent_server.director.pod_actions import Caller, DeclaredStatus
+from openhands.agent_server.director.pod_actions import Caller
 from openhands.agent_server.director.service import DirectorService
 from openhands.agent_server.director.tools.impl import (
     DirectorExecutor,
@@ -115,17 +115,14 @@ class ResolveEscalationAction(Action):
     )
 
 
-class SetStatusAction(Action):
-    """Declare whether your team is working, done or blocked."""
+class SubmitReviewAction(Action):
+    """Submit your team's work for review."""
 
-    status: DeclaredStatus
-    summary: str = Field(
-        default="", description="What was delivered, or what blocks the team."
-    )
+    summary: str = Field(description="What your team delivered.")
 
 
 class ReviewTeamAction(Action):
-    """Decide on the work a team below yours reported done."""
+    """Decide on the work a team below yours submitted."""
 
     node_id: str = Field(description="A team directly below yours.")
     decision: Literal["accept", "reject"]
@@ -290,9 +287,10 @@ class ApproveTeamsTool(_DirectorTool[ApproveTeamsAction]):
 
 class RaiseEscalationTool(_DirectorTool[RaiseEscalationAction]):
     summary = (
-        "Raise something your team cannot settle itself. It goes to the "
-        "Manager of the team above, which settles it or passes it up; it "
-        "reaches the human only when no team could."
+        "Raise something you cannot settle yourself. An IC's goes to the IC "
+        "of the team above and a Manager's to the Manager there, which "
+        "settles it or passes it up; it reaches the human only when no team "
+        "could. A team is shown as blocked while its IC waits on one."
     )
 
     @classmethod
@@ -308,9 +306,9 @@ class RaiseEscalationTool(_DirectorTool[RaiseEscalationAction]):
 
 class ResolveEscalationTool(_DirectorTool[ResolveEscalationAction]):
     summary = (
-        "Manager only. Settle an escalation a team below raised and your "
-        "team holds, with your answer; or pass it one team up with the reason "
-        "you cannot settle it."
+        "Settle an escalation that the agent of your own role in a team "
+        "below raised and your team holds, with your answer; or pass it one "
+        "team up with the reason you cannot settle it."
     )
 
     @classmethod
@@ -329,30 +327,32 @@ class ResolveEscalationTool(_DirectorTool[ResolveEscalationAction]):
         )
 
 
-class SetStatusTool(_DirectorTool[SetStatusAction]):
+class SubmitReviewTool(_DirectorTool[SubmitReviewAction]):
     summary = (
-        "Declare that your team is done or blocked, or working again. Commit "
-        "the work first: done work is reviewed by the IC of the team above. "
-        "The Manager of the team above is told of a block."
+        "IC only. Submit your team's work when it is complete: commit it "
+        "first, say what you delivered, then stop. The IC of the team above "
+        "reviews it and you are woken with the outcome; the top team's work "
+        "is shown to the human. Work of your sub-teams that you accepted "
+        "goes with it."
     )
 
     @classmethod
     def action(cls):
-        return SetStatusAction
+        return SubmitReviewAction
 
     @classmethod
     def act(cls):
-        return lambda service, caller, action: pod_actions.set_status(
-            service, caller, action.status, action.summary
+        return lambda service, caller, action: pod_actions.submit_review(
+            service, caller, action.summary
         )
 
 
 class ReviewTeamTool(_DirectorTool[ReviewTeamAction]):
     summary = (
-        "IC only. Accept the work a team directly below yours reported done, "
-        "or reject it with what must change. Accepted work of a team with its "
-        "own worktree is merged into your checkout. A team whose work is "
-        "rejected a third time is stopped and left blocked."
+        "IC only. Accept the work a team directly below yours submitted, or "
+        "reject it with what must change. Accepted work of a team with its "
+        "own worktree is merged into your checkout. If your team changed "
+        "nothing itself, accepted work goes on up without another review."
     )
 
     @classmethod
@@ -419,7 +419,7 @@ register_tool(MsgIcTool.name, MsgIcTool)
 register_tool(ApproveTeamsTool.name, ApproveTeamsTool)
 register_tool(RaiseEscalationTool.name, RaiseEscalationTool)
 register_tool(ResolveEscalationTool.name, ResolveEscalationTool)
-register_tool(SetStatusTool.name, SetStatusTool)
+register_tool(SubmitReviewTool.name, SubmitReviewTool)
 register_tool(PruneTeamTool.name, PruneTeamTool)
 register_tool(ReviewTeamTool.name, ReviewTeamTool)
 register_tool(ReportTool.name, ReportTool)
@@ -435,7 +435,7 @@ DIRECTOR_TOOLS: dict[str, type[_DirectorTool]] = {
         ApproveTeamsTool,
         RaiseEscalationTool,
         ResolveEscalationTool,
-        SetStatusTool,
+        SubmitReviewTool,
         ReviewTeamTool,
         ReportTool,
         PruneTeamTool,
