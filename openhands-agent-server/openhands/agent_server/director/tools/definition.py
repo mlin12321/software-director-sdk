@@ -9,7 +9,6 @@ from openhands.agent_server.director import pod_actions
 from openhands.agent_server.director.models import (
     EscalationKind,
     ReviewFinding,
-    SplitChild,
 )
 from openhands.agent_server.director.pod_actions import Caller, DeclaredStatus
 from openhands.agent_server.director.service import DirectorService
@@ -35,32 +34,56 @@ class WriteSpecAction(Action):
     content: str = Field(description="The whole spec, in Markdown.")
 
 
-class ProposeBoundarySplitAction(Action):
-    """Propose to hand parts of your boundary to sub-teams."""
+TEAMS_EXAMPLE = """\
+```teams
+contracts: |
+  What the sub-teams must keep between them: types, endpoints, file formats.
+teams:
+  - name: API
+    path: services/api
+    instruction: What this team is to deliver.
+    model: a-profile-name      # optional
+    writable: [services/api/**]  # optional; all of path when left out
+    readonly: [shared/**]        # optional
+    isolation: shared            # optional; or worktree
+```"""
 
-    children: list[SplitChild] = Field(
+
+class MsgManagerAction(Action):
+    """Write to your team's Manager."""
+
+    text: str = Field(
         description=(
-            "The sub-teams. Each owns one directory strictly inside your "
-            "boundary; no two may overlap. `isolation` is `shared` to work in "
-            "your directory or `worktree` for an own git worktree and branch."
+            "The message, in your own words. To propose sub-teams, include "
+            "one block like this:\n"
+            f"{TEAMS_EXAMPLE}\n"
+            "Each team owns one directory strictly inside what your team "
+            "may write; no two may overlap. `model` is one of the profiles "
+            "read_node_context lists. A team whose directory covers "
+            "sub-teams you already have replaces them, and so does one that "
+            "takes part of an existing sub-team's directory; what the new "
+            "teams leave of it is yours again. The sub-teams cannot see "
+            "each other's work or your spec, so the contracts must hold "
+            "everything they have to respect."
         )
     )
-    contracts: str = Field(
+
+
+class MsgIcAction(Action):
+    """Write to an IC."""
+
+    text: str = Field(description="The message, in your own words.")
+    team: str = Field(
+        default="",
         description=(
-            "The interfaces the sub-teams must keep between them: types, "
-            "endpoints, file formats. They cannot see each other's work or "
-            "your spec, so include all of it they must respect."
-        )
+            "The node id of a team directly below yours, to write to its "
+            "IC. Leave empty for your own team's IC."
+        ),
     )
 
 
-class DecideSplitAction(Action):
-    """Decide the split your IC proposed."""
-
-    decision: Literal["approve", "refine"]
-    feedback: str = Field(
-        default="", description="What to change; required when asking to refine."
-    )
+class ApproveTeamsAction(Action):
+    """Approve the sub-teams your IC proposed, as written."""
 
 
 class RaiseEscalationAction(Action):
@@ -206,38 +229,62 @@ class WriteSpecTool(_DirectorTool[WriteSpecAction]):
         )
 
 
-class ProposeBoundarySplitTool(_DirectorTool[ProposeBoundarySplitAction]):
+class MsgManagerTool(_DirectorTool[MsgManagerAction]):
     summary = (
-        "IC only. Propose to hand directories of your boundary to sub-teams, "
-        "each with its own IC and Manager, when the work is too much for one "
-        "agent. Your Manager decides. Nothing starts until it approves."
+        "IC only. Write to your team's Manager, in your own words: propose "
+        "sub-teams, say how the teams below are doing, say when one "
+        "struggles and you cannot fix it, or when two of them are at odds. "
+        "To propose sub-teams, put one ```teams block of YAML in the "
+        "message; it is checked at once and nothing starts until the "
+        "Manager approves. A team without sub-teams uses this only to "
+        "propose some."
     )
 
     @classmethod
     def action(cls):
-        return ProposeBoundarySplitAction
+        return MsgManagerAction
 
     @classmethod
     def act(cls):
-        return lambda service, caller, action: pod_actions.propose_split(
-            service, caller, action.children, action.contracts
+        return lambda service, caller, action: pod_actions.msg_manager(
+            service, caller, action.text
         )
 
 
-class DecideSplitTool(_DirectorTool[DecideSplitAction]):
+class MsgIcTool(_DirectorTool[MsgIcAction]):
     summary = (
-        "Manager only. Approve the split your IC proposed, which starts the "
-        "sub-teams, or ask the IC to refine it and say what to change."
+        "Manager only. Write to your team's IC, or to the IC of a team "
+        "directly below: feedback, a decision, what you are about to "
+        "change. Answering your IC while its proposed sub-teams wait puts "
+        "that proposal aside."
     )
 
     @classmethod
     def action(cls):
-        return DecideSplitAction
+        return MsgIcAction
 
     @classmethod
     def act(cls):
-        return lambda service, caller, action: pod_actions.decide_split(
-            service, caller, action.decision, action.feedback
+        return lambda service, caller, action: pod_actions.msg_ic(
+            service, caller, action.text, action.team
+        )
+
+
+class ApproveTeamsTool(_DirectorTool[ApproveTeamsAction]):
+    summary = (
+        "Manager only. Approve the sub-teams your IC proposed. They are set "
+        "up exactly as its message wrote them; you cannot change them here. "
+        "To ask for changes or decline, answer with msg_ic instead."
+    )
+
+    @classmethod
+    def action(cls):
+        return ApproveTeamsAction
+
+    @classmethod
+    def act(cls):
+        return lambda service, caller, _action: pod_actions.approve_teams(
+            service, caller
         )
 
 
@@ -367,8 +414,9 @@ class PruneTeamTool(_DirectorTool[PruneTeamAction]):
 
 register_tool(ReadNodeContextTool.name, ReadNodeContextTool)
 register_tool(WriteSpecTool.name, WriteSpecTool)
-register_tool(ProposeBoundarySplitTool.name, ProposeBoundarySplitTool)
-register_tool(DecideSplitTool.name, DecideSplitTool)
+register_tool(MsgManagerTool.name, MsgManagerTool)
+register_tool(MsgIcTool.name, MsgIcTool)
+register_tool(ApproveTeamsTool.name, ApproveTeamsTool)
 register_tool(RaiseEscalationTool.name, RaiseEscalationTool)
 register_tool(ResolveEscalationTool.name, ResolveEscalationTool)
 register_tool(SetStatusTool.name, SetStatusTool)
@@ -382,8 +430,9 @@ DIRECTOR_TOOLS: dict[str, type[_DirectorTool]] = {
     for tool in (
         ReadNodeContextTool,
         WriteSpecTool,
-        ProposeBoundarySplitTool,
-        DecideSplitTool,
+        MsgManagerTool,
+        MsgIcTool,
+        ApproveTeamsTool,
         RaiseEscalationTool,
         ResolveEscalationTool,
         SetStatusTool,

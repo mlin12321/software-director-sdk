@@ -40,6 +40,7 @@ from tests.agent_server.director.conftest import (
     make_node,
     root_conversation,
     run_git,
+    teams_block,
 )
 
 
@@ -380,8 +381,8 @@ async def split_root(service: DirectorService, *children: SplitChild) -> None:
         assert conversation_id is not None
         return pod_actions.caller_of(service, UUID(conversation_id))
 
-    pod_actions.propose_split(service, caller("ic"), list(children), "")
-    pod_actions.decide_split(service, caller("manager"), "approve", "")
+    pod_actions.msg_manager(service, caller("ic"), teams_block(list(children)))
+    pod_actions.approve_teams(service, caller("manager"))
     await service.settled()
 
 
