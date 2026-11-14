@@ -20,7 +20,7 @@ from openhands.agent_server.director.models import (
 )
 from openhands.agent_server.director.org_store import OrgStore
 from openhands.agent_server.director.run_state import (
-    REVIEWING,
+    HELD,
     RUNNING,
     TEAM,
     WAITING,
@@ -46,7 +46,6 @@ _WHAT: dict[str, str] = {
     "request_review": "Its work is put up for review",
     "accept": "Its accepted work is merged into the team above",
     "prune": "Pruning it is finished",
-    "halt": "Its agents are stopped",
 }
 
 
@@ -131,7 +130,7 @@ def put_aside_stale(
     for conversation_id, node_id in run.marked(RUNNING).items():
         if node_id in stale or conversation_id not in agents:
             run.unmark(RUNNING, conversation_id)
-    for kind in (WAITING, REVIEWING):
+    for kind in (WAITING, HELD):
         for node_id in run.marked(kind):
             if node_id in stale or node_id not in nodes:
                 run.unmark(kind, node_id)
@@ -315,7 +314,8 @@ def _unfit(intent: Intent, nodes: Mapping[str, OrgNode]) -> str | None:
         if review is None or review.state not in ("pending", "unreviewed"):
             return "its work no longer waits for a review"
     elif intent.kind == "accept":
-        if review is None or review.state != "pending":
+        # Accepted already: what follows the acceptance may still be owed.
+        if review is None or review.state not in ("pending", "accepted"):
             return "its work no longer waits for a review"
     return None
 

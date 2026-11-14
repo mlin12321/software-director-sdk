@@ -15,6 +15,7 @@ from openhands.agent_server.director.git import uncommitted
 from openhands.agent_server.director.git_store import SPEC_FILE
 from openhands.agent_server.director.models import (
     AgentRole,
+    Escalation,
     EscalationKind,
     OrgNode,
     Review,
@@ -33,9 +34,6 @@ from openhands.agent_server.director.split import (
     proposed_teams,
 )
 from openhands.sdk.errors import Conflict, Invalid, NotFound
-
-
-DeclaredStatus = Literal["working", "done", "blocked"]
 
 
 @dataclass(frozen=True)
@@ -88,7 +86,7 @@ def node_context(service: DirectorService, caller: Caller) -> str:
         }
         for other in store.all()
         for escalation in other.escalations
-        if escalation.held_by == node.id
+        if escalation.held_by == node.id and escalation.raised_by == caller.role
     ]
     context = {
         "you": {"role": caller.role, "node_id": node.id, "team": node.title},
@@ -135,8 +133,9 @@ def node_context(service: DirectorService, caller: Caller) -> str:
                 "with": escalation.held_by or "the human",
             }
             for escalation in node.escalations
+            if escalation.raised_by == caller.role
         ],
-        "escalations_for_your_manager_to_settle": to_settle,
+        "escalations_for_you_to_settle": to_settle,
     }
     return json.dumps(context, indent=2)
 
@@ -293,6 +292,10 @@ def approve_teams(service: DirectorService, caller: Caller) -> str:
     return f"Approved. {len(proposal.children)} sub-teams are being set up.{waits}"
 
 
+def _role_name(role: AgentRole) -> str:
+    return "IC" if role == "ic" else "Manager"
+
+
 def raise_escalation(
     service: DirectorService,
     caller: Caller,
@@ -300,23 +303,29 @@ def raise_escalation(
     title: str,
     detail: str,
 ) -> str:
-    """Send something the caller's team cannot settle to the team above."""
+    """Send something the caller cannot settle to the agent of its own role
+    in the team above."""
     if not title.strip():
         raise Invalid("An escalation needs a title")
     store = service.store
     node = caller.node
     escalation = store.raise_escalation(
-        node.id, uuid4().hex[:8], kind=kind, title=title.strip(), detail=detail.strip()
+        node.id,
+        uuid4().hex[:8],
+        kind=kind,
+        title=title.strip(),
+        detail=detail.strip(),
+        raised_by=caller.role,
     )
     if escalation.held_by is None:
         return (
             f"Raised as {escalation.id}. Nobody is above your team: it waits "
             "on the human."
         )
-    _hand_to(service, escalation.held_by, node, escalation.id, title, detail, [])
+    _hand_to(service, escalation.held_by, node, escalation, [])
     return (
-        f"Raised as {escalation.id}. It is with the Manager of the team above; "
-        "you will be told the answer."
+        f"Raised as {escalation.id}. It is with the {_role_name(caller.role)} "
+        "of the team above; you will be told the answer."
     )
 
 
@@ -328,8 +337,10 @@ def resolve_escalation(
     action: Literal["settle", "pass_up"],
     text: str,
 ) -> str:
-    """Settle an escalation the caller's team holds, or pass it one team up."""
-    _only(caller, "manager", "resolve an escalation")
+    """Settle an escalation the caller holds, or pass it one team up.
+
+    An IC holds what the ICs below raised, a Manager what the Managers did.
+    """
     if not text.strip():
         raise Invalid("Say what you decided, or why you cannot")
     store = service.store
@@ -344,14 +355,20 @@ def resolve_escalation(
         raise NotFound(f"Node {node_id} has no escalation {escalation_id}")
     if escalation.held_by != caller.node.id:
         raise Invalid(f"Escalation {escalation_id} is not with your team")
+    if escalation.raised_by != caller.role:
+        raise Invalid(
+            f"Escalation {escalation_id} was raised by "
+            f"{'an IC' if escalation.raised_by == 'ic' else 'a Manager'}: it is "
+            f"for your team's {_role_name(escalation.raised_by)} to settle"
+        )
     if action == "settle":
         store.settle_escalation(node_id, escalation_id)
         service.notify(
-            agent_conversation(raiser, "ic"),
-            f"The Manager of {caller.node.title!r} settled your escalation "
-            f"{escalation.title!r}:\n{text.strip()}",
+            agent_conversation(raiser, escalation.raised_by),
+            f"The {_role_name(caller.role)} of {caller.node.title!r} settled "
+            f"your escalation {escalation.title!r}:\n{text.strip()}",
         )
-        return "Settled; the team that raised it has your answer."
+        return "Settled; the agent that raised it has your answer."
     passed = store.pass_up_escalation(node_id, escalation_id, reason=text)
     if passed.held_by is None:
         return "Passed up. Nobody is above your team: it now waits on the human."
@@ -359,78 +376,77 @@ def resolve_escalation(
         service,
         passed.held_by,
         raiser,
-        escalation_id,
-        escalation.title,
-        escalation.detail,
+        passed,
         [f"{handoff.node_id}: {handoff.reason}" for handoff in passed.handoffs],
     )
-    return "Passed up to the Manager of the team above."
+    return f"Passed up to the {_role_name(caller.role)} of the team above."
 
 
 def _hand_to(
     service: DirectorService,
     holder_id: str,
     raiser: OrgNode,
-    escalation_id: str,
-    title: str,
-    detail: str,
+    escalation: Escalation,
     passed_up: list[str],
 ) -> None:
     holder = service.store.get(holder_id)
     if holder is None:
         return
     history = "".join(f"\nPassed up by {entry}" for entry in passed_up)
+    if escalation.raised_by == "ic":
+        # It is woken now anyway, so it gets what waits for its review too.
+        service.release_reviews(holder_id, now=True)
     service.notify(
-        agent_conversation(holder, "manager"),
-        f"Team {raiser.title!r} (node {raiser.id}) escalates {title.strip()!r} "
-        f"(escalation {escalation_id}):\n{detail.strip() or '(no detail)'}{history}\n"
+        agent_conversation(holder, escalation.raised_by),
+        f"The {_role_name(escalation.raised_by)} of team {raiser.title!r} "
+        f"(node {raiser.id}) escalates {escalation.title!r} (escalation "
+        f"{escalation.id}):\n{escalation.detail or '(no detail)'}{history}\n"
         "Settle it with resolve_escalation if you can; pass it up only with "
         "the reason you cannot.",
     )
 
 
-def set_status(
-    service: DirectorService, caller: Caller, status: DeclaredStatus, summary: str
-) -> str:
-    """Declare the state of the caller's team.
-
-    Done work goes to the IC of the team above for review.
-    """
+def submit_review(service: DirectorService, caller: Caller, summary: str) -> str:
+    """Hand the work of the caller's team to the IC of the team above for
+    review; the top team's is shown to the human."""
+    _only(caller, "ic", "submit its team's work")
     store = service.store
     node = caller.node
-    parent = store.get(node.parent_id) if node.parent_id else None
     summary = summary.strip()
+    if not summary:
+        raise Invalid("Say what your team delivered")
     review = node.review
-    if status == "done":
-        if parent is not None:
-            left = uncommitted(Path(node.worktree_path), node.boundary.path)
-            if left:
-                raise Conflict(
-                    "Commit your team's work before you report it done. Not "
-                    f"committed: {', '.join(left[:10])}"
-                    + (f" and {len(left) - 10} more" if len(left) > 10 else "")
-                )
-        again = review is not None and review.state == "changes_requested"
-        review = Review(
+    if review is not None and review.state == "pending":
+        raise Conflict("Your team's work already waits for its review")
+    parent = store.get(node.parent_id) if node.parent_id else None
+    if parent is not None:
+        left = uncommitted(Path(node.worktree_path), node.boundary.path)
+        if left:
+            raise Conflict(
+                "Commit your team's work before you submit it. Not "
+                f"committed: {', '.join(left[:10])}"
+                + (f" and {len(left) - 10} more" if len(left) > 10 else "")
+            )
+    again = review is not None and review.state == "changes_requested"
+    store.set_review(
+        node.id,
+        Review(
             state="unreviewed" if parent is None else "pending",
             round=review.round + 1 if review is not None and again else 1,
             summary=summary,
             at=datetime.now(UTC).isoformat(timespec="seconds"),
-        )
-    elif review is not None and review.state == "pending":
-        review = None
-    service.declared_status(node.id)
-    node = store.update_node(node.id, status=status, review=review)
-    if status == "done":
-        service.request_review(node.id)
-    if summary:
-        service.refresh_headline(node.id, f"it is {status}. {summary}")
-    if status == "done" and parent is not None:
+        ),
+    )
+    service.request_review(node.id)
+    service.refresh_headline(node.id, f"it submitted its work. {summary}")
+    if parent is None:
         return (
-            "Your team is now done. The IC of the team above reviews the work; "
-            "you are told if it wants changes."
+            "Submitted. Nobody is above your team: the human sees its work. Stop here."
         )
-    return f"Your team is now {status}."
+    return (
+        "Submitted. The IC of the team above reviews it. Stop here: you are "
+        "woken when it is accepted or sent back."
+    )
 
 
 def review_team(
@@ -441,7 +457,7 @@ def review_team(
     findings: list[ReviewFinding],
     needed_above: str,
 ) -> str:
-    """Accept the work a team directly below reported done, or send it back."""
+    """Accept the work a team directly below submitted, or send it back."""
     _only(caller, "ic", "review the work of a team")
     team = service.store.get(node_id)
     if team is None or team.parent_id != caller.node.id:
@@ -451,11 +467,7 @@ def review_team(
     if decision == "reject":
         if not findings:
             raise Invalid("Say what must change before you can accept the work")
-        if service.request_changes(node_id, findings):
-            return (
-                f"Sent back for the last time: {team.title!r} did not get its "
-                "work accepted and is now stopped and blocked."
-            )
+        service.request_changes(node_id, findings)
         return f"Sent back to {team.title!r} with what must change."
     service.accept_review(node_id, needed_above.strip())
     return (

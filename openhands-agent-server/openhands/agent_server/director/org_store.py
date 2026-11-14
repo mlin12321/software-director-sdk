@@ -25,6 +25,7 @@ from openhands.agent_server.director.models import (
     OpenEscalation,
     OrgNode,
     OrgNodeInput,
+    Review,
     SnapshotEvent,
     StatusCounts,
 )
@@ -32,6 +33,30 @@ from openhands.sdk.errors import Invalid, NotFound
 
 
 NODE_STATUSES: tuple[NodeStatus, ...] = get_args(NodeStatus)
+# An agent whose conversation failed, and one that has none on this server.
+AGENT_FAILED = "blocked"
+AGENT_LOST = "lost"
+
+
+def status_of(node: OrgNode | OrgNodeInput) -> NodeStatus:
+    """The status a team has by what is known of it; no team declares one.
+
+    Blocked while its IC waits on an escalation or an agent of it failed,
+    working while an agent of it is in a turn, done once its work is
+    accepted (the top team's: once it submitted it), blocked when an agent
+    has no conversation here, idle otherwise.
+    """
+    agents = {agent.status for agent in node.agents}
+    if AGENT_FAILED in agents or any(
+        escalation.raised_by == "ic" for escalation in node.escalations
+    ):
+        return "blocked"
+    if "working" in agents:
+        return "working"
+    if node.review is not None and node.review.state in ("accepted", "unreviewed"):
+        return "done"
+    return "blocked" if AGENT_LOST in agents else "idle"
+
 
 type OrgChange = NodeUpsertEvent | NodeRemovedEvent | EscalationsEvent
 type OrgListener = Callable[[OrgChange], None]
@@ -163,10 +188,7 @@ class OrgStore:
         """Change the conversation, the status or the kind of one agent of a
         node.
 
-        The node's own status follows its agents: it works while one of them
-        does and idles when none does. An agent that is ``blocked`` blocks it
-        until no agent of the node is. Done and blocked that the team declared
-        for the node stay, so an agent waking up does not reopen it.
+        The node's status follows (see :func:`status_of`).
 
         Raises:
             NotFound: The node does not exist or has no agent in that role.
@@ -188,25 +210,24 @@ class OrgStore:
                 )
                 for agent in node.agents
             ]
-            working = any(agent.status == "working" for agent in agents)
-            was_blocked = any(
-                agent.role == role and agent.status == "blocked"
-                for agent in node.agents
-            )
-            node_status = node.status
-            if any(agent.status == "blocked" for agent in agents):
-                if status == "blocked":
-                    node_status = "blocked"
-            elif node.status == "blocked":
-                if was_blocked:
-                    node_status = "working" if working else "idle"
-            elif working and node.status == "idle":
-                node_status = "working"
-            elif not working and node.status == "working":
-                node_status = "idle"
-            if agents == node.agents and node_status == node.status:
+            if agents == node.agents:
                 return node
-            return self.update_node(node_id, agents=agents, status=node_status)
+            status = status_of(node.model_copy(update={"agents": agents}))
+            return self.update_node(node_id, agents=agents, status=status)
+
+    def set_review(
+        self, node_id: str, review: Review | None, **changes: object
+    ) -> OrgNode:
+        """Change where the review of a node's work stands, and with it the
+        node's status. ``changes`` are other fields to change with it.
+
+        Raises:
+            NotFound: The node does not exist.
+        """
+        with self._lock:
+            node = self._require(node_id)
+            status = status_of(node.model_copy(update={"review": review}))
+            return self.update_node(node_id, review=review, status=status, **changes)
 
     def upsert(self, node_input: OrgNodeInput) -> OrgNode:
         """Insert a node or update an existing one.
@@ -440,11 +461,13 @@ class OrgStore:
         title: str,
         detail: str = "",
         at: str | None = None,
+        raised_by: AgentRole = "ic",
     ) -> Escalation:
-        """Record something ``node_id`` cannot settle itself.
+        """Record something an agent of ``node_id`` cannot settle itself.
 
         It goes to the node above, never straight to the human, unless
-        ``node_id`` is the root and has nobody above it.
+        ``node_id`` is the root and has nobody above it. One an IC raised
+        blocks its team until it is settled.
 
         Raises:
             NotFound: The node does not exist.
@@ -459,6 +482,7 @@ class OrgStore:
             escalation = Escalation(
                 id=escalation_id,
                 kind=kind,
+                raised_by=raised_by,
                 title=title,
                 detail=detail,
                 raised_at=at or _now(),
@@ -753,7 +777,8 @@ class OrgStore:
         raise NotFound(f"Node {node.id} has no escalation {escalation_id}")
 
     def _set_escalations(self, node: OrgNode, escalations: list[Escalation]) -> None:
-        self.update_node(node.id, escalations=escalations)
+        status = status_of(node.model_copy(update={"escalations": escalations}))
+        self.update_node(node.id, escalations=escalations, status=status)
 
     def _index_agents(self, old: OrgNode | None, new: OrgNode | None) -> None:
         if old is not None:

@@ -29,7 +29,7 @@ from openhands.agent_server.director.tools import (
     MsgManagerTool,
     PruneTeamTool,
     ReviewTeamTool,
-    SetStatusTool,
+    SubmitReviewTool,
 )
 from openhands.sdk.conversation.state import ConversationExecutionStatus
 from tests.agent_server.director.conftest import FakeLauncher, make_node, run_git
@@ -40,10 +40,11 @@ from tests.agent_server.director.test_director_limits import (
 )
 from tests.agent_server.director.test_director_review import (
     DONE,
+    SCHEMA,
     accept,
-    api_reports_done,
+    api_submits,
     commit,
-    reject,
+    split_api,
 )
 from tests.agent_server.director.test_director_tools import (
     APPROVE,
@@ -327,11 +328,13 @@ async def test_a_review_request_cut_off_by_a_crash_reaches_the_reviewer_once(
 ):
     first = await started(repo, launcher)
     await split_root(first)
+    commit(repo, "apps/web/page.tsx", "export {}\n")
+    await use(first, ic(first, "apps.web"), SubmitReviewTool, DONE)
     commit(repo, "services/api/app.py", "order_id = '1'\n")
-    # The server ends as the team is asked for its account of the work.
+    # The server ends as the last team is asked for its account of the work.
     ended = end_server_at(launcher, "ask_agent")
     await cut_off(
-        launcher, ended, use(first, ic(first, "services.api"), SetStatusTool, DONE)
+        launcher, ended, use(first, ic(first, "services.api"), SubmitReviewTool, DONE)
     )
 
     second = await again(repo, launcher)
@@ -341,8 +344,11 @@ async def test_a_review_request_cut_off_by_a_crash_reaches_the_reviewer_once(
 
     review = node(second, "services.api").review
     assert review is not None and review.state == "pending"
-    asked = [text for text in launcher.messages_to(ic(second)) if "Review mode" in text]
-    assert len(asked) == 1
+    [asked] = [
+        text for text in launcher.messages_to(ic(second)) if "Review mode" in text
+    ]
+    # Both teams have submitted, so the reviewer is woken once for the two.
+    assert "Team 'Web'" in asked and "Team 'API'" in asked
     await second.aclose()
 
 
@@ -351,7 +357,7 @@ async def test_an_acceptance_the_server_ended_before_saving_is_not_lost(
 ):
     first = await started(repo, launcher)
     await split_root(first)
-    await api_reports_done(first, repo)
+    await api_submits(first, repo)
     ended = asyncio.Event()
 
     def nothing_more(_: str) -> None:
@@ -386,32 +392,40 @@ async def test_an_acceptance_the_server_ended_before_saving_is_not_lost(
     await second.aclose()
 
 
-async def test_stopping_a_team_cut_off_by_a_crash_stops_all_its_agents(
-    repo: Path, launcher: FakeLauncher
+async def test_accepted_work_the_server_ended_before_passing_up_still_goes_up(
+    repo: Path, launcher: FakeLauncher, monkeypatch: pytest.MonkeyPatch
 ):
     first = await started(repo, launcher)
     await split_root(first)
-    for attempt in range(3):
-        commit(repo, "services/api/app.py", f"order_id = {attempt}\n")
-        await use(first, ic(first, "services.api"), SetStatusTool, DONE)
-        if attempt < 2:
-            await use(first, ic(first), ReviewTeamTool, reject())
-    # The third rejection stops the team; the server ends at the first stop.
-    ended = end_server_at(launcher, "stop")
-    await cut_off(launcher, ended, use(first, ic(first), ReviewTeamTool, reject()))
-    assert launcher.stopped == []
-    await first._save()
+    await split_api(first)
+    commit(repo, "services/api/schema/order.py", "id: int\n")
+    await use(first, ic(first, SCHEMA), SubmitReviewTool, DONE)
+    ended = asyncio.Event()
+
+    async def end_instead(node_id: str, *, acted: bool) -> None:
+        await first._save()
+        ended.set()
+        raise ServerEnded
+
+    # The server ends with the sub-team's work accepted and saved, before
+    # the team above it is looked at.
+    monkeypatch.setattr(first, "_pass_up", end_instead)
+    await cut_off(
+        launcher,
+        ended,
+        use(first, ic(first, "services.api"), ReviewTeamTool, accept(SCHEMA)),
+    )
 
     second = await again(repo, launcher)
-    assert ("services.api", "continue") in kinds(await second.recovery())
+    saved = node(second, SCHEMA).review
+    assert saved is not None and saved.state == "accepted"
+    assert node(second, "services.api").review is None
     await second.resume()
     await second.settled()
 
     api = node(second, "services.api")
-    assert api.status == "blocked"
-    assert {UUID(str(agent.conversation_id)) for agent in api.agents} <= set(
-        launcher.stopped
-    )
+    assert api.review is not None and api.review.state == "accepted"
+    assert api.status == "done"
     await second.aclose()
 
 
@@ -604,7 +618,7 @@ def test_run_state_is_kept_as_it_was_written_and_in_order(tmp_path: Path):
     run = RunState(path)
     split_ = run.begin("split", "root", {"why": "too large"})
     run.begin("accept", "api", {})
-    done = run.begin("halt", "web", {})
+    done = run.begin("prune", "web", {})
     run.finish(done.id)
     run.step_done(split_, "planned", teams=["a", "b"])
     sent = run.hold("c1", "root", "one")

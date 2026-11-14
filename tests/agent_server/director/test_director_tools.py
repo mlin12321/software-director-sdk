@@ -5,13 +5,14 @@ import json
 from collections.abc import AsyncIterator
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any, Literal, cast
 from uuid import UUID, uuid4
 
 import pytest
 
 from openhands.agent_server.director import pod_actions
 from openhands.agent_server.director.models import (
+    AgentRole,
     CreateOrgRequest,
     OrgNode,
     SplitChild,
@@ -30,7 +31,6 @@ from openhands.agent_server.director.tools import (
     ReadNodeContextTool,
     ReportTool,
     ResolveEscalationTool,
-    SetStatusTool,
     WriteSpecTool,
 )
 from openhands.agent_server.director.tools.definition import (
@@ -42,7 +42,6 @@ from openhands.agent_server.director.tools.definition import (
     ReadNodeContextAction,
     ReportAction,
     ResolveEscalationAction,
-    SetStatusAction,
     WriteSpecAction,
 )
 from openhands.agent_server.director.tools.impl import DirectorObservation
@@ -453,94 +452,163 @@ async def test_a_sub_team_that_cannot_start_is_shown_as_blocked(
     assert [agent.status for agent in api.agents] == ["lost", "idle"]
 
 
-async def test_an_escalation_climbs_through_the_managers_to_the_human(
+READ = ReadNodeContextAction()
+CENTS = RaiseEscalationAction(
+    category="design_decision", title="Cents or decimals?", detail="For totals."
+)
+
+
+def resolving(
+    node_id: str, escalation_id: str, action: Literal["settle", "pass_up"], text: str
+) -> ResolveEscalationAction:
+    return ResolveEscalationAction(
+        node_id=node_id, escalation_id=escalation_id, action=action, text=text
+    )
+
+
+async def test_what_an_ic_escalates_goes_to_the_ic_above_and_then_to_the_human(
     service: DirectorService, launcher: FakeLauncher
 ):
     await split_root(service)
     api = "services.api"
+    to_manager = len(launcher.messages_to(manager(service)))
 
-    raised = await use(
-        service,
-        ic(service, api),
-        RaiseEscalationTool,
-        RaiseEscalationAction(
-            category="design_decision", title="Cents or decimals?", detail="For totals."
-        ),
-    )
+    raised = await use(service, ic(service, api), RaiseEscalationTool, CENTS)
+
     [escalation] = node(service, api).escalations
-    assert not raised.is_error and escalation.held_by == "root"
-    assert "Cents or decimals?" in launcher.messages_to(manager(service))[-1]
+    assert not raised.is_error
+    assert (escalation.held_by, escalation.raised_by) == ("root", "ic")
+    told = launcher.messages_to(ic(service))[-1]
+    assert "The IC of team 'API'" in told and "Cents or decimals?" in told
+    assert len(launcher.messages_to(manager(service))) == to_manager
     assert service.store.escalations("root") == []
+    seen = {
+        role: json.loads((await use(service, agent, ReadNodeContextTool, READ)).text)
+        for role, agent in (("ic", ic(service)), ("manager", manager(service)))
+    }
+    [to_settle] = seen["ic"]["escalations_for_you_to_settle"]
+    assert to_settle["escalation_id"] == escalation.id
+    assert seen["manager"]["escalations_for_you_to_settle"] == []
 
-    not_theirs = await use(
+    by_a_peer = await use(
         service,
-        manager(service, "apps.web"),
+        ic(service, "apps.web"),
         ResolveEscalationTool,
-        ResolveEscalationAction(
-            node_id=api, escalation_id=escalation.id, action="settle", text="Cents."
-        ),
+        resolving(api, escalation.id, "settle", "Cents."),
     )
-    passed = await use(
+    by_the_manager = await use(
         service,
         manager(service),
         ResolveEscalationTool,
-        ResolveEscalationAction(
-            node_id=api,
-            escalation_id=escalation.id,
-            action="pass_up",
-            text="Finance has to choose.",
-        ),
+        resolving(api, escalation.id, "settle", "Cents."),
+    )
+    passed = await use(
+        service,
+        ic(service),
+        ResolveEscalationTool,
+        resolving(api, escalation.id, "pass_up", "Finance has to choose."),
     )
 
-    assert not_theirs.is_error and not passed.is_error
+    assert by_a_peer.is_error and "not with your team" in by_a_peer.text
+    assert by_the_manager.is_error and "raised by an IC" in by_the_manager.text
+    assert not passed.is_error and "waits on the human" in passed.text
     [waiting] = service.store.escalations("root")
     assert waiting.escalation.held_by is None
     assert waiting.escalation.handoffs[0].reason == "Finance has to choose."
 
+    service.answer_escalation(api, escalation.id, "Cents.")
+    await service.settled()
 
-async def test_a_manager_settles_what_it_can_and_the_team_below_is_told(
+    assert "Cents." in launcher.messages_to(ic(service, api))[-1]
+    assert node(service, api).escalations == []
+
+
+async def test_a_team_is_blocked_while_its_ic_waits_on_an_escalation(
     service: DirectorService, launcher: FakeLauncher
 ):
     await split_root(service)
     api = "services.api"
-    await use(
-        service,
-        ic(service, api),
-        RaiseEscalationTool,
-        RaiseEscalationAction(category="design_decision", title="Cents or decimals?"),
-    )
+    api_ic = ic(service, api)
+    assert api_ic is not None
+
+    await use(service, api_ic, RaiseEscalationTool, CENTS)
+    launcher.report(api_ic, ConversationExecutionStatus.RUNNING)
+
     [escalation] = node(service, api).escalations
+    assert node(service, api).status == "blocked"
 
     await use(
         service,
-        manager(service),
+        ic(service),
         ResolveEscalationTool,
-        ResolveEscalationAction(
-            node_id=api, escalation_id=escalation.id, action="settle", text="Cents."
-        ),
+        resolving(api, escalation.id, "settle", "Cents."),
     )
 
     assert node(service, api).escalations == []
-    assert "Cents." in launcher.messages_to(ic(service, api))[-1]
+    assert node(service, api).status == "working"
+    told = launcher.messages_to(api_ic)[-1]
+    assert "The IC of 'Checkout' settled" in told and "Cents." in told
 
 
-async def test_a_team_that_says_it_is_blocked_stays_blocked_while_its_agents_run(
+async def test_what_a_manager_escalates_goes_to_the_manager_above(
     service: DirectorService, launcher: FakeLauncher
 ):
     await split_root(service)
-    api_ic = ic(service, "services.api")
-    assert api_ic is not None
-    launcher.report(api_ic, ConversationExecutionStatus.RUNNING)
+    api = "services.api"
+    to_ic = len(launcher.messages_to(ic(service)))
 
-    await use(
+    raised = await use(service, manager(service, api), RaiseEscalationTool, CENTS)
+
+    [escalation] = node(service, api).escalations
+    assert not raised.is_error and "Manager of the team above" in raised.text
+    assert (escalation.held_by, escalation.raised_by) == ("root", "manager")
+    assert node(service, api).status != "blocked"
+    told = launcher.messages_to(manager(service))[-1]
+    assert "The Manager of team 'API'" in told and "For totals." in told
+    assert len(launcher.messages_to(ic(service))) == to_ic
+
+    by_the_ic = await use(
         service,
-        api_ic,
-        SetStatusTool,
-        SetStatusAction(status="blocked", summary="No schema to build against."),
+        ic(service),
+        ResolveEscalationTool,
+        resolving(api, escalation.id, "settle", "Cents."),
     )
-    launcher.report(api_ic, ConversationExecutionStatus.RUNNING)
+    settled = await use(
+        service,
+        manager(service),
+        ResolveEscalationTool,
+        resolving(api, escalation.id, "settle", "Cents."),
+    )
 
-    assert node(service, "services.api").status == "blocked"
+    assert by_the_ic.is_error and "raised by a Manager" in by_the_ic.text
+    assert not settled.is_error and node(service, api).escalations == []
+    assert "Cents." in launcher.messages_to(manager(service, api))[-1]
+    assert launcher.messages_to(ic(service, api)) == []
+
+
+@pytest.mark.parametrize("role", ["ic", "manager"])
+async def test_what_the_top_team_escalates_waits_on_the_human(
+    service: DirectorService, launcher: FakeLauncher, role: AgentRole
+):
+    raiser = agent_conversation(node(service, "root"), role)
+    other = agent_conversation(
+        node(service, "root"), "manager" if role == "ic" else "ic"
+    )
+    heard = len(launcher.messages_to(other))
+
+    raised = await use(service, raiser, RaiseEscalationTool, CENTS)
+
+    assert "waits on the human" in raised.text
+    [waiting] = service.store.escalations("root")
+    assert waiting.escalation.held_by is None
+    assert node(service, "root").status == ("blocked" if role == "ic" else "idle")
+
+    service.answer_escalation("root", waiting.escalation.id, "Cents.")
+    await service.settled()
+
+    assert "The human answered" in launcher.messages_to(raiser)[-1]
+    assert len(launcher.messages_to(other)) == heard
+    assert node(service, "root").status == "idle"
 
 
 PRUNE_API = PruneTeamAction(

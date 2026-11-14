@@ -5,7 +5,13 @@ from pathlib import Path
 import pytest
 
 from openhands.agent_server.director.fixture import build_fixture_nodes
-from openhands.agent_server.director.models import AgentRef, StatusCounts
+from openhands.agent_server.director.models import (
+    AgentRef,
+    AgentRole,
+    Review,
+    ReviewState,
+    StatusCounts,
+)
 from openhands.agent_server.director.org_persistence import (
     ORG_REF,
     create_org_board,
@@ -16,6 +22,7 @@ from openhands.agent_server.director.org_store import (
     OrgChange,
     OrgStore,
     OrgStoreError,
+    status_of,
 )
 from openhands.sdk.errors import NotFound
 from tests.agent_server.director.conftest import (
@@ -24,6 +31,9 @@ from tests.agent_server.director.conftest import (
     run_git,
     small_tree,
 )
+
+
+AT = "2026-01-01T00:00:00+00:00"
 
 
 @pytest.fixture
@@ -685,22 +695,69 @@ def test_setting_an_agent_status_announces_the_node_once(store: OrgStore):
 
 
 @pytest.mark.parametrize(
-    ("node_id", "agent_status", "expected"),
+    ("agent", "review", "escalated_by", "expected"),
     [
-        pytest.param("a2", "working", "working", id="an idle node starts working"),
-        pytest.param("a", "working", "blocked", id="a declared block stays"),
-        pytest.param("root", "idle", "idle", id="a working node goes idle"),
-        pytest.param("a2", "blocked", "blocked", id="a failed agent blocks its node"),
-        pytest.param("b", "working", "done", id="a done node stays done"),
-        pytest.param("a", "idle", "blocked", id="a blocked node stays blocked"),
+        pytest.param("idle", None, None, "idle", id="nothing under way"),
+        pytest.param("working", None, None, "working", id="an agent runs"),
+        pytest.param("blocked", None, None, "blocked", id="an agent failed"),
+        pytest.param("lost", None, None, "blocked", id="an agent is gone"),
+        pytest.param("idle", "pending", None, "idle", id="its work waits for review"),
+        pytest.param("idle", "changes_requested", None, "idle", id="work sent back"),
+        pytest.param("idle", "accepted", None, "done", id="its work is accepted"),
+        pytest.param("idle", "unreviewed", None, "done", id="the top team submitted"),
+        pytest.param("working", "accepted", None, "working", id="it works on"),
+        pytest.param("lost", "accepted", None, "done", id="done and then gone"),
+        pytest.param("working", None, "ic", "blocked", id="its IC waits on an answer"),
+        pytest.param("idle", "accepted", "ic", "blocked", id="an answer comes first"),
+        pytest.param("working", None, "manager", "working", id="its Manager waits"),
     ],
 )
-def test_a_nodes_status_follows_its_agents(
-    store: OrgStore, node_id: str, agent_status: str, expected: str
+def test_a_teams_status_is_worked_out_and_never_declared(
+    store: OrgStore,
+    agent: str,
+    review: ReviewState | None,
+    escalated_by: AgentRole | None,
+    expected: str,
 ):
-    node = store.set_agent(node_id, "ic", status=agent_status)
+    if review is not None:
+        store.set_review("a2", Review(state=review, at=AT))
+    if escalated_by is not None:
+        store.raise_escalation(
+            "a2", "jwt", kind="design_decision", title="JWT?", raised_by=escalated_by
+        )
+
+    node = store.set_agent("a2", "ic", status=agent)
 
     assert node.status == expected
+    assert status_of(node) == expected
+
+
+def test_a_team_stops_being_blocked_when_its_ics_escalation_is_settled(
+    store: OrgStore,
+):
+    store.set_agent("a2", "ic", status="working")
+    blocked = store.raise_escalation(
+        "a2", "jwt", kind="design_decision", title="JWT?", raised_by="ic"
+    )
+    waiting = store.get("a2")
+
+    store.settle_escalation("a2", blocked.id)
+    after = store.get("a2")
+
+    assert waiting is not None and waiting.status == "blocked"
+    assert after is not None and after.status == "working"
+
+
+def test_a_review_set_on_a_team_shows_in_its_status_and_keeps_other_changes(
+    store: OrgStore,
+):
+    node = store.set_review("a2", Review(state="accepted", at=AT), base_commit="abc")
+
+    assert (node.status, node.base_commit) == ("done", "abc")
+    parent = store.get("a")
+    assert parent is not None and parent.descendant_counts.done == 2
+    with pytest.raises(NotFound):
+        store.set_review("nowhere", Review(state="pending", at=AT))
 
 
 def test_a_node_blocked_by_a_failed_agent_resumes_when_that_agent_does(
