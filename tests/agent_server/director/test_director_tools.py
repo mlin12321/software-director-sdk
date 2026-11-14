@@ -334,9 +334,12 @@ async def test_an_ic_with_sub_teams_tells_its_manager_how_they_are_doing(
     )
 
     assert not sent.is_error
-    assert launcher.messages_to(manager(service))[-1] == (
+    message, _, update = launcher.messages_to(manager(service))[-1].partition("\n\n")
+    assert message == (
         "[director] Your IC writes:\nWeb was sent back twice for the same bug."
     )
+    # Its team got sub-teams since it last heard: that comes with the message.
+    assert update.startswith("[director] context update") and "apps.web" in update
     assert node(service, "root").pending_split is None
 
 

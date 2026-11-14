@@ -32,6 +32,12 @@ from openhands.agent_server.director.boundary import (
     written_paths,
 )
 from openhands.agent_server.director.changes import require_editable, write_by_hand
+from openhands.agent_server.director.context import (
+    briefing_block,
+    changed,
+    steady,
+    update_block,
+)
 from openhands.agent_server.director.fixture import build_fixture_nodes
 from openhands.agent_server.director.git import (
     GitError,
@@ -131,6 +137,7 @@ from openhands.agent_server.director.run_state import (
     HELD,
     RUNNING,
     TEAM,
+    TOLD,
     WAITING,
     Intent,
     RunState,
@@ -1011,6 +1018,83 @@ class DirectorService:
             for manager, ic in pairs
             if (messages := team_memory.thread(manager, ic))
         ]
+
+    def context_of(self, node: OrgNode, role: AgentRole) -> dict[str, Any]:
+        """Who an agent is and everything of the org that concerns its
+        team. Safe from any thread."""
+        store = self.store
+        team_memory = self.team_memory
+        above = store.get(node.parent_id) if node.parent_id else None
+        specs, contracts = team_memory.applies_to(
+            node.boundary.path, above.boundary.path if above else None
+        )
+        to_settle = [
+            {
+                "node_id": other.id,
+                "team": other.title,
+                "escalation_id": escalation.id,
+                "kind": escalation.kind,
+                "title": escalation.title,
+                "detail": escalation.detail,
+                "passed_up": [
+                    {"by": handoff.node_id, "reason": handoff.reason}
+                    for handoff in escalation.handoffs
+                ],
+            }
+            for other in store.all()
+            for escalation in other.escalations
+            if escalation.held_by == node.id and escalation.raised_by == role
+        ]
+        context: dict[str, Any] = {
+            "you": {"role": role, "node_id": node.id, "team": node.title},
+            "team_above": node.parent_id,
+            "status": node.status,
+            "boundary": node.boundary.model_dump(),
+            "workspace": {
+                "path": node.worktree_path,
+                "branch": node.branch,
+                "isolation": node.isolation,
+            },
+            "spec": specs[0].spec if specs else None,
+            "contracts_with_the_teams_beside_you": [
+                agreed.contracts for agreed in contracts if not agreed.own
+            ],
+            "contracts_between_your_sub_teams": [
+                agreed.contracts for agreed in contracts if agreed.own
+            ],
+            "reports_of_your_team": [
+                {"by": report.role, "at": report.at, "text": report.text}
+                for report in self.reports_of(node)
+            ],
+            "sub_teams": [
+                {
+                    "node_id": child.id,
+                    "team": child.title,
+                    "path": child.boundary.path,
+                    "status": child.status,
+                    "headline": child.headline,
+                    "summary": child.spec_summary,
+                    "review": child.review.state if child.review else None,
+                }
+                for child in store.children(node.id)
+            ],
+            "review_of_your_work": node.review.model_dump() if node.review else None,
+            "agent_profiles_a_sub_team_may_run_on": self.settings.allowed_profiles,
+            "pending_split": (
+                node.pending_split.model_dump() if node.pending_split else None
+            ),
+            "escalations_you_raised": [
+                {
+                    "escalation_id": escalation.id,
+                    "title": escalation.title,
+                    "with": escalation.held_by or "the human",
+                }
+                for escalation in node.escalations
+                if escalation.raised_by == role
+            ],
+            "escalations_for_you_to_settle": to_settle,
+        }
+        return context
 
     def reports_of(self, node: OrgNode) -> list[Report]:
         """What the two agents of a team recorded, oldest first."""
@@ -2148,7 +2232,12 @@ class DirectorService:
         self._delivering.add(seq)
         self._at_once.discard(seq)
         try:
+            text, told = await asyncio.to_thread(
+                self._with_what_changed, conversation_id, text
+            )
             await self._require_launcher().send(UUID(conversation_id), text)
+            if told is not None:
+                run.mark(TOLD, conversation_id, told)
         except NotFound:
             store = self.store
             found = store.find_by_conversation(conversation_id)
@@ -2158,6 +2247,32 @@ class DirectorService:
         finally:
             self._delivering.discard(seq)
         run.delivered(seq)
+
+    def _with_what_changed(
+        self, conversation_id: str, text: str
+    ) -> tuple[str, str | None]:
+        """A message to an agent with what changed in its team's context
+        since it was last told, so that no message has to be sent for a
+        change alone.
+
+        Returns:
+            The message, and the context to keep as told once it is sent;
+            None when it tells nothing new.
+        """
+        found = self.store.find_by_conversation(conversation_id)
+        if found is None:
+            return text, None
+        node, role = found
+        try:
+            now = steady(self.context_of(node, role))
+        except (GitError, OSError):
+            return text, None
+        before = self._runs().marked(TOLD).get(conversation_id)
+        # An agent briefed before contexts were kept is told all of it once.
+        news = changed(json.loads(before) if before else {}, now, role)
+        if not news:
+            return text, None
+        return f"{text}\n\n{update_block(news)}", json.dumps(now)
 
     def _in_a_turn_of_its_own(self, conversation_id: str) -> bool:
         """Whether a message now would cut short the turn of an agent that
@@ -2407,13 +2522,25 @@ class DirectorService:
         seq = self._runs().hold(conversation_id, found[0].id if found else "", text)
         await self._deliver(seq, conversation_id, text)
 
-    def _briefing(self, node: OrgNode, role: AgentRole, task: str) -> str:
+    def _briefing(self, node: OrgNode, role: AgentRole, task: str) -> tuple[str, str]:
+        """An agent's first message, and the context it tells, as kept to
+        find later what changed."""
         team_memory = self._memory()
         above = self.store.get(node.parent_id) if node.parent_id else None
         specs, contracts = team_memory.applies_to(
             node.boundary.path, above.boundary.path if above else None
         )
-        return brief(node, role, task, specs, contracts, self.reports_of(node))
+        context = self.context_of(node, role)
+        text = brief(
+            node,
+            role,
+            task,
+            specs,
+            contracts,
+            self.reports_of(node),
+            briefing_block(context),
+        )
+        return text, json.dumps(steady(context))
 
     async def _brief(self, node_id: str, role: AgentRole, task: str) -> None:
         node = self.store.get(node_id)
@@ -2421,7 +2548,8 @@ class DirectorService:
             return
         conversation_id = agent_conversation(node, role)
         if conversation_id is not None:
-            text = await asyncio.to_thread(self._briefing, node, role, task)
+            text, told = await asyncio.to_thread(self._briefing, node, role, task)
+            self._runs().mark(TOLD, conversation_id, told)
             await self._send(conversation_id, text)
 
     async def _start_agent(
@@ -2492,7 +2620,7 @@ class DirectorService:
         """
         node_id = node.id
         launcher = self._require_launcher()
-        text = await asyncio.to_thread(self._briefing, node, role, task)
+        text, told = await asyncio.to_thread(self._briefing, node, role, task)
         tool_params = await asyncio.to_thread(self._confine, node_id, role)
         if parent_conversation is None:
             raise NotFound(f"Node {node_id} has nobody to derive its {role} from")
@@ -2540,7 +2668,9 @@ class DirectorService:
                 checkout=checkout,
             )
 
-        return await self._when_there_is_room(node_id, start)
+        started = await self._when_there_is_room(node_id, start)
+        self._runs().mark(TOLD, conversation_id, told)
+        return started
 
     async def _launch_manager(self, node_id: str, task: str) -> None:
         node = self.store.get(node_id)
@@ -2687,6 +2817,7 @@ class DirectorService:
             for conversation_id in map(UUID, plan["conversations"]):
                 await launcher.stop(conversation_id)
                 await launcher.delete(conversation_id)
+                run.unmark(TOLD, str(conversation_id))
         if "replaced" not in intent.steps:
             intent = run.step_done(intent, "replaced")
         # Done whenever a replaced team is still in the tree: the tree may
@@ -2808,6 +2939,7 @@ class DirectorService:
         if "deleted" not in intent.steps:
             for conversation_id in conversations:
                 await launcher.delete(conversation_id)
+                run.unmark(TOLD, str(conversation_id))
             intent = run.step_done(intent, "deleted")
         above = store.get(plan["parent"])
         parent_ic = agent_conversation(above, "ic") if above else None
