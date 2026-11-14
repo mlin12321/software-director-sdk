@@ -3546,6 +3546,17 @@ def _scripted_org_llm(
 
     def reply_to(messages: list[Message]) -> dict:
         last = messages[-1]
+        if last.role == "user" and "has already been delivered" in text_of(last):
+            # A message came in the middle of a turn: the SDK points back
+            # at it, and it is the one to answer.
+            last = next(
+                (
+                    message
+                    for message in reversed(messages[:-1])
+                    if message.role == "user"
+                ),
+                last,
+            )
         text = text_of(last)
         if "You label the work of software teams" in text_of(messages[0]):
             return {

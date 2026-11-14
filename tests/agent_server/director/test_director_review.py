@@ -3,6 +3,7 @@
 import json
 from collections.abc import AsyncIterator
 from pathlib import Path
+from uuid import UUID
 
 import pytest
 
@@ -128,7 +129,7 @@ async def test_submitted_work_goes_to_the_ic_above_with_the_teams_own_account(
     await reviewer_wakes(service, launcher)
 
     api = node(service, "services.api")
-    assert api.status == "idle"
+    assert api.status == "done"
     assert api.review is not None
     assert (api.review.state, api.review.round) == ("pending", 1)
     assert api.review.automated == [FINDING]
@@ -262,6 +263,38 @@ async def test_an_ic_submits_once_and_says_what_its_team_delivered(
     assert twice.is_error and "already waits" in twice.text
 
 
+async def test_an_ic_that_submitted_rests_and_its_team_shows_as_done(
+    service: DirectorService, launcher: FakeLauncher, repo: Path
+):
+    await split_root(service)
+    api = ic(service, "services.api")
+    assert api is not None
+    launcher.report(api, ConversationExecutionStatus.RUNNING)
+    assert node(service, "services.api").status == "working"
+
+    await api_submits(service, repo)
+
+    # Its turn was ended for it; nothing is left to its own word.
+    assert launcher.paused == [UUID(api)]
+    assert node(service, "services.api").status == "done"
+
+    await use(service, ic(service), ReviewTeamTool, reject())
+    launcher.report(api, ConversationExecutionStatus.RUNNING)
+
+    # Sent back, it is woken and no longer done.
+    assert "asks for" in launcher.messages_to(api)[-1]
+    assert node(service, "services.api").status == "working"
+
+
+async def test_the_top_team_rests_after_it_submits_too(
+    service: DirectorService, launcher: FakeLauncher, repo: Path
+):
+    await use(service, ic(service), SubmitReviewTool, DONE)
+
+    assert launcher.paused == [UUID(str(ic(service)))]
+    assert node(service, "root").status == "done"
+
+
 async def test_reviews_wait_until_every_sub_team_has_submitted(
     service: DirectorService, launcher: FakeLauncher, repo: Path
 ):
@@ -269,7 +302,7 @@ async def test_reviews_wait_until_every_sub_team_has_submitted(
 
     submitted = await api_submits(service, repo)
 
-    assert "Stop here" in submitted.text
+    assert "Your turn ends here" in submitted.text
     assert requests(service, launcher) == []
 
     commit(repo, "apps/web/page.tsx", "export {}\n")
@@ -321,7 +354,10 @@ async def test_an_escalation_brings_the_reviews_that_wait_with_it(
         RaiseEscalationAction(category="design_decision", title="Which router?"),
     )
 
-    escalation, review = launcher.messages_to(ic(service))[-2:]
+    # The two come on their own lanes, in either order.
+    review, escalation = sorted(
+        launcher.messages_to(ic(service))[-2:], key=lambda text: "escalates" in text
+    )
     assert "Which router?" in escalation
     assert "Review mode" in review and "Team 'API'" in review
 

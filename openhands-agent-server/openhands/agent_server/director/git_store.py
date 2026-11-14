@@ -37,6 +37,7 @@ REPORTS_DIR = ".reports"
 THREADS_DIR = ".threads"
 # What team memory was called before; a repository that still has it is moved.
 _FORMER_MEMORY_REF = "refs/agents/blackboard"
+_FORMER_FILES = ("memory.json", "autopsies.json", "consolidated.json")
 
 _ZERO_OID = "0" * 40
 _MAX_COMMIT_ATTEMPTS = 8
@@ -157,6 +158,28 @@ def adopt_former_memory(repo_dir: Path) -> None:
     if GitStore(repo_dir).head() is None:
         git(repo_dir, ["update-ref", MEMORY_REF, commit, _ZERO_OID])
     git(repo_dir, ["update-ref", "-d", _FORMER_MEMORY_REF, commit])
+
+
+def drop_former_files(repo_dir: Path) -> list[str]:
+    """Remove from team memory the files nothing reads any more: the
+    rules, autopsies and consolidation notes of before there were reports.
+
+    Returns:
+        The paths removed.
+    """
+    store = GitStore(repo_dir)
+    if store.head() is None:
+        return []
+    listed = git(repo_dir, ["ls-tree", "-r", "--name-only", "-z", MEMORY_REF])
+    former = [
+        path for path in listed.split("\0") if path.rsplit("/", 1)[-1] in _FORMER_FILES
+    ]
+    if former:
+        store.commit(
+            lambda _read: [StoreChange(path, None) for path in former],
+            "memory: remove files of before reports",
+        )
+    return former
 
 
 class GitStore:

@@ -42,9 +42,9 @@ def status_of(node: OrgNode | OrgNodeInput) -> NodeStatus:
     """The status a team has by what is known of it; no team declares one.
 
     Blocked while its IC waits on an escalation or an agent of it failed,
-    working while an agent of it is in a turn, done once its work is
-    accepted (the top team's: once it submitted it), blocked when an agent
-    has no conversation here, idle otherwise.
+    working while an agent of it is in a turn, done once it has submitted
+    its work (until that is sent back), blocked when an agent has no
+    conversation here, idle otherwise.
     """
     agents = {agent.status for agent in node.agents}
     if AGENT_FAILED in agents or any(
@@ -53,7 +53,8 @@ def status_of(node: OrgNode | OrgNodeInput) -> NodeStatus:
         return "blocked"
     if "working" in agents:
         return "working"
-    if node.review is not None and node.review.state in ("accepted", "unreviewed"):
+    if node.review is not None and node.review.state != "changes_requested":
+        # Submitted: it rests until its reviewer or something else wakes it.
         return "done"
     return "blocked" if AGENT_LOST in agents else "idle"
 

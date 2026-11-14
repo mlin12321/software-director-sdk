@@ -58,6 +58,7 @@ from openhands.agent_server.director.git_store import (
     CONTRACTS_FILE,
     GitStore,
     adopt_former_memory,
+    drop_former_files,
 )
 from openhands.agent_server.director.headline import provisional_summary
 from openhands.agent_server.director.merge_back import merge_back
@@ -250,6 +251,10 @@ _AGENT_STATUS: dict[ConversationExecutionStatus, str] = {
     ConversationExecutionStatus.STUCK: "blocked",
 }
 
+# How long a message waits for an IC that submitted to end its turn.
+_REST_CHECKS = 600
+_REST_CHECK_SECONDS = 0.05
+
 type Effect = Callable[[], Awaitable[None]]
 
 
@@ -392,6 +397,7 @@ class DirectorService:
         self._save_delay = save_delay
         self._run_limit_retry = run_limit_retry
         self._lock = threading.Lock()
+        self._saving = threading.Lock()
         self._remember_lock = threading.Lock()
         self._store: OrgStore | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -460,6 +466,7 @@ class DirectorService:
     def _memory(self) -> GitStore:
         if self._memory_adopted_in != self._repo_dir:
             adopt_former_memory(self._repo_dir)
+            drop_former_files(self._repo_dir)
             self._memory_adopted_in = self._repo_dir
         return GitStore(self._repo_dir)
 
@@ -685,6 +692,9 @@ class DirectorService:
         for worker in workers:
             worker.cancel()
         await asyncio.gather(*workers, return_exceptions=True)
+        # A save that was cut off goes on in its thread: nothing of this
+        # director may write the tree after it has closed.
+        await asyncio.to_thread(self._wait_for_save)
         if self._save_timer is not None:
             self._save_timer.cancel()
             self._save_timer = None
@@ -1127,6 +1137,29 @@ class DirectorService:
     def request_review(self, node_id: str) -> None:
         """Have the work a team submitted reviewed. Safe from any thread."""
         self._begin("request_review", node_id)
+
+    def rest(self, node_id: str) -> None:
+        """End the turn of a team's IC after the step it is in: it has
+        handed its work over and acts again when something is sent to it.
+        Safe from any thread."""
+        if self._loop is not None:
+            self._enqueue(lambda: self._rest(node_id), node_id)
+
+    async def _rest(self, node_id: str) -> None:
+        node = self.store.get(node_id)
+        conversation_id = agent_conversation(node, "ic") if node else None
+        if node is None or conversation_id is None or self._paused is not None:
+            return
+        if any(agent.role == "ic" and agent.kind == "acp" for agent in node.agents):
+            # It runs its own turn; stopping it would end its process.
+            return
+        await self._require_launcher().pause(UUID(conversation_id))
+        # This runs in the lane of the team's messages: nothing is sent to
+        # the agent before it has stopped, or it would lie there unread.
+        for _ in range(_REST_CHECKS):
+            if conversation_id not in self._running:
+                break
+            await asyncio.sleep(_REST_CHECK_SECONDS)
 
     def request_changes(self, node_id: str, findings: list[ReviewFinding]) -> None:
         """Send a team's work back to it with what must change.
@@ -2420,11 +2453,18 @@ class DirectorService:
             logger.exception("Could not save the org tree to %s", self._repo_dir)
 
     def _save_tree(self, store: OrgStore) -> None:
-        board = create_org_board(self._repo_dir)
-        save_org(board, store)
-        run = self._runs()
-        run.replace_marks(TEAM, {node.id: fingerprint(node) for node in store.all()})
-        run.put("org_commit", board.head())
+        with self._saving:
+            board = create_org_board(self._repo_dir)
+            save_org(board, store)
+            run = self._runs()
+            run.replace_marks(
+                TEAM, {node.id: fingerprint(node) for node in store.all()}
+            )
+            run.put("org_commit", board.head())
+
+    def _wait_for_save(self) -> None:
+        with self._saving:
+            pass
 
     def _on_status(
         self, conversation_id: UUID, status: ConversationExecutionStatus

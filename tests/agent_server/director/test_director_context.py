@@ -203,9 +203,13 @@ async def test_reviews_and_escalations_below_come_with_what_wakes_the_ic(
         RaiseEscalationAction(category="design_decision", title="Which router?"),
     )
 
-    escalation = launcher.messages_to(ic(service))[-2]
-    told = update_of(escalation)
-    assert told is not None
+    # The escalation and the review request come in either order; the
+    # first of the two carries what changed.
+    told = next(
+        told
+        for told in map(update_of, launcher.messages_to(ic(service))[-2:])
+        if told is not None
+    )
     [to_settle] = told["escalations_for_you_to_settle"]["added"]
     assert to_settle["title"] == "Which router?"
     by_team = {team["node_id"]: team for team in told["sub_teams"]}
