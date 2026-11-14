@@ -85,11 +85,6 @@ there, never straight to the human; from the top team it waits on the
 human. An IC that cannot go on raises one: that is what shows its team as
 blocked. Settle what you can; pass up only what you cannot, and say why.
 
-Feel free to push back. An instruction, a contract, a review or a decision
-you think is wrong is better questioned than worked around: say so and why,
-an IC to its Manager with `msg_manager` or to the IC above with
-`raise_escalation`, a Manager to its IC with `msg_ic`.
-
 Messages that begin with [director] come from the org's runtime, not from a
 person.
 </ORG_PROTOCOL>"""
