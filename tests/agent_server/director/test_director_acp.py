@@ -324,7 +324,7 @@ async def test_an_agent_calls_the_directors_tools_with_its_token_alone(
     assert "propose_boundary_split" in tools and "review_team" in tools
     assert "children" in tools["propose_boundary_split"]["inputSchema"]["properties"]
     assert spec.json()["is_error"] is False
-    assert service.blackboard.applies_to("", None)[0][0].spec == "# Spec"
+    assert service.team_memory.applies_to("", None)[0][0].spec == "# Spec"
     assert refused.status_code == 200 and refused.json()["is_error"] is True
     assert "Manager" in refused.json()["text"]
     assert malformed.json()["is_error"] is True

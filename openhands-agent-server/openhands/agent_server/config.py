@@ -287,7 +287,7 @@ class Config(BaseModel):
     director_repo_path: Path | None = Field(
         default=None,
         description=(
-            "Git repository the director keeps its org tree and blackboard in, "
+            "Git repository the director keeps its org tree and team memory in, "
             "under the hidden refs `refs/agents/*`. Defaults to `workspace_path`."
         ),
     )
@@ -305,15 +305,6 @@ class Config(BaseModel):
             "agents of an org that run their own tools and call the "
             "director's from their own process. By default the director "
             "uses the address its own requests arrive at."
-        ),
-    )
-    director_consolidation_seconds: float = Field(
-        default=900.0,
-        ge=0,
-        description=(
-            "How often the director looks for boundaries whose rules have "
-            "grown enough to have a model rewrite them into fewer. 0 turns "
-            "this off."
         ),
     )
     conversation_worktree_root: Path = Field(

@@ -1,6 +1,5 @@
-"""GitBlackboard against real temporary git repositories."""
+"""GitStore against real temporary git repositories."""
 
-import json
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -12,20 +11,25 @@ from openhands.agent_server.director.git import (
     git_version,
     is_git_repository,
 )
-from openhands.agent_server.director.git_blackboard import (
-    BLACKBOARD_REF,
-    BlackboardScopeError,
-    BoardChange,
-    GitBlackboard,
+from openhands.agent_server.director.git_store import (
+    MEMORY_REF,
+    GitStore,
+    StoreChange,
+    StoreScopeError,
+    adopt_former_memory,
 )
-from openhands.agent_server.director.models import Autopsy
-from openhands.sdk.errors import Invalid, NotSupported
+from openhands.agent_server.director.models import Report
+from openhands.sdk.errors import NotSupported
 from tests.agent_server.director.conftest import run_git
 
 
 @pytest.fixture
-def board(repo: Path) -> GitBlackboard:
-    return GitBlackboard(repo)
+def board(repo: Path) -> GitStore:
+    return GitStore(repo)
+
+
+def a_report(text: str, at: str = "2026-11-01T00:00:00+00:00") -> Report:
+    return Report(at=at, role="ic", text=text)
 
 
 def test_git_reports_the_exit_code_and_stderr_of_a_failed_command(repo: Path):
@@ -42,21 +46,20 @@ def test_a_plain_or_missing_directory_is_not_a_repository(tmp_path: Path, repo: 
     assert not is_git_repository(tmp_path / "missing")
 
 
-def test_reads_nothing_before_the_first_write(board: GitBlackboard):
+def test_reads_nothing_before_the_first_write(board: GitStore):
     assert board.head() is None
     assert board.read("spec.md") is None
     assert board.applies_to("svc/a", "svc") == ([], [])
-    assert board.memory("svc/a").rules == []
-    assert board.autopsies("svc/a") == []
+    assert board.reports("agent-1") == []
 
 
-def test_writes_only_under_the_hidden_ref(repo: Path, board: GitBlackboard):
+def test_writes_only_under_the_hidden_ref(repo: Path, board: GitStore):
     branch_before = run_git(repo, "rev-parse", "main")
 
     commit = board.write("svc/a", "spec.md", "# A\n")
 
-    assert run_git(repo, "rev-parse", BLACKBOARD_REF).strip() == commit
-    assert run_git(repo, "ls-tree", "-r", "--name-only", BLACKBOARD_REF) == (
+    assert run_git(repo, "rev-parse", MEMORY_REF).strip() == commit
+    assert run_git(repo, "ls-tree", "-r", "--name-only", MEMORY_REF) == (
         "svc/a/spec.md\n"
     )
     assert run_git(repo, "status", "--porcelain") == ""
@@ -64,16 +67,16 @@ def test_writes_only_under_the_hidden_ref(repo: Path, board: GitBlackboard):
     assert run_git(repo, "rev-parse", "main") == branch_before
 
 
-def test_writing_again_keeps_earlier_files_and_history(board: GitBlackboard):
+def test_writing_again_keeps_earlier_files_and_history(board: GitStore):
     first = board.write("svc/a", "spec.md", "# A\n")
     board.write("svc/b", "spec.md", "# B\n")
 
     assert board.read("svc/a/spec.md") == "# A\n"
     assert board.read("svc/b/spec.md") == "# B\n"
-    assert run_git(board.repo_dir, "rev-parse", f"{BLACKBOARD_REF}~1").strip() == first
+    assert run_git(board.repo_dir, "rev-parse", f"{MEMORY_REF}~1").strip() == first
 
 
-def test_content_round_trips_byte_for_byte(board: GitBlackboard):
+def test_content_round_trips_byte_for_byte(board: GitStore):
     content = "naïve ✓ 日本語\r\nno trailing newline"
 
     board.write("", "notes.txt", content)
@@ -82,7 +85,7 @@ def test_content_round_trips_byte_for_byte(board: GitBlackboard):
 
 
 def test_a_team_works_to_its_own_spec_and_the_contracts_around_it(
-    board: GitBlackboard,
+    board: GitStore,
 ):
     board.write("", "spec.md", "root spec")
     board.write("", "contracts.md", "set at the root")
@@ -104,7 +107,7 @@ def test_a_team_works_to_its_own_spec_and_the_contracts_around_it(
     ]
 
 
-def test_the_root_team_has_nothing_from_above(board: GitBlackboard):
+def test_the_root_team_has_nothing_from_above(board: GitStore):
     board.write("", "contracts.md", "between the first teams")
 
     specs, contracts = board.applies_to("", None)
@@ -123,84 +126,87 @@ def test_the_root_team_has_nothing_from_above(board: GitBlackboard):
         ("svc/a", "."),
     ],
 )
-def test_rejects_writes_that_leave_the_scope(
-    board: GitBlackboard, scope: str, file: str
-):
-    with pytest.raises(BlackboardScopeError):
+def test_rejects_writes_that_leave_the_scope(board: GitStore, scope: str, file: str):
+    with pytest.raises(StoreScopeError):
         board.write(scope, file, "x")
 
     assert board.head() is None
 
 
-def test_an_absolute_looking_file_stays_inside_the_scope(board: GitBlackboard):
+def test_an_absolute_looking_file_stays_inside_the_scope(board: GitStore):
     board.write("svc/a", "/etc/passwd", "x")
 
     assert board.read("svc/a/etc/passwd") == "x"
 
 
-def test_teach_accumulates_rules_once_and_rejects_blanks(board: GitBlackboard):
-    board.teach("svc/a", "  Use idempotency keys.  ")
-    board.teach("svc/a", "Never log card numbers.")
-    head = board.head()
-    board.teach("svc/a", "Use idempotency keys.")
+def test_reports_are_added_in_order_and_kept_apart_by_agent(board: GitStore):
+    first, second = a_report("Chose SQLite."), a_report("The ORM was too slow.")
 
-    assert board.memory("svc/a").rules == [
-        "Use idempotency keys.",
-        "Never log card numbers.",
+    board.append_report("agent-1", first)
+    kept = board.append_report("agent-1", second)
+
+    assert kept == board.reports("agent-1") == [first, second]
+    assert board.reports("agent-2") == []
+
+
+def test_reports_are_replaced_only_as_they_were_read(board: GitStore):
+    read = board.append_report("agent-1", a_report("Long."))
+    shorter = [a_report("Short.").model_copy(update={"compacted": True})]
+    board.append_report("agent-1", a_report("Added meanwhile."))
+
+    assert not board.replace_reports("agent-1", read, shorter)
+    assert board.replace_reports("agent-1", board.reports("agent-1"), shorter)
+    assert board.reports("agent-1") == shorter
+
+
+def test_racing_writers_lose_no_update(board: GitStore):
+    reports = [a_report(f"report {i}") for i in range(6)]
+
+    with ThreadPoolExecutor(max_workers=len(reports)) as pool:
+        list(pool.map(lambda report: board.append_report("agent-1", report), reports))
+
+    assert sorted(report.text for report in board.reports("agent-1")) == [
+        report.text for report in reports
     ]
-    assert board.head() == head
-    assert board.memory("svc/b").rules == []
-    with pytest.raises(Invalid):
-        board.teach("svc/a", "   ")
 
 
-def test_autopsies_append_in_order(board: GitBlackboard):
-    first = Autopsy(
-        node_id="a", at="2026-11-01T00:00:00Z", approach="x", why_failed="y"
-    )
-    second = first.model_copy(update={"approach": "z"})
+def test_memory_under_its_former_name_is_moved(repo: Path):
+    former = GitStore(repo, "refs/agents/blackboard")
+    head = former.write("svc/a", "spec.md", "x")
 
-    board.append_autopsy("svc/a", first)
-    board.append_autopsy("svc/a", second)
+    adopt_former_memory(repo)
+    adopt_former_memory(repo)
 
-    assert board.autopsies("svc/a") == [first, second]
-
-
-def test_racing_writers_lose_no_update(board: GitBlackboard):
-    rules = [f"rule {i}" for i in range(6)]
-
-    with ThreadPoolExecutor(max_workers=len(rules)) as pool:
-        list(pool.map(lambda rule: board.teach("svc/a", rule), rules))
-
-    assert sorted(board.memory("svc/a").rules) == rules
+    assert GitStore(repo).head() == head
+    assert former.head() is None
 
 
-def test_a_change_with_no_content_deletes_the_file(board: GitBlackboard):
+def test_a_change_with_no_content_deletes_the_file(board: GitStore):
     board.write("svc/a", "spec.md", "x")
     board.write("svc/a", "keep.md", "y")
 
-    board.commit(lambda _read: [BoardChange("svc/a/spec.md", None)], "delete")
+    board.commit(lambda _read: [StoreChange("svc/a/spec.md", None)], "delete")
 
     assert board.read("svc/a/spec.md") is None
     assert board.read("svc/a/keep.md") == "y"
 
 
-def test_a_mutation_without_changes_makes_no_commit(board: GitBlackboard):
+def test_a_mutation_without_changes_makes_no_commit(board: GitStore):
     head = board.write("svc/a", "spec.md", "x")
 
     assert board.commit(lambda _read: [], "nothing") == head
     assert board.head() == head
 
 
-def test_a_linked_worktree_shares_the_blackboard(
-    repo: Path, tmp_path: Path, board: GitBlackboard
+def test_a_linked_worktree_shares_the_team_memory(
+    repo: Path, tmp_path: Path, board: GitStore
 ):
     linked = tmp_path / "linked"
     run_git(repo, "worktree", "add", "--quiet", "-b", "feature", str(linked))
 
-    GitBlackboard(linked).teach("svc/a", "From the worktree.")
+    GitStore(linked).write("svc/a", "spec.md", "From the worktree.")
 
-    assert board.memory("svc/a").rules == ["From the worktree."]
+    assert board.read("svc/a/spec.md") == "From the worktree."
     assert run_git(linked, "status", "--porcelain") == ""
 
 
@@ -210,55 +216,52 @@ class TestMerge:
         return git_version(repo) >= (2, 38)
 
     @pytest.fixture
-    def theirs(self, repo: Path) -> GitBlackboard:
-        return GitBlackboard(repo, ref="refs/agents/theirs")
+    def theirs(self, repo: Path) -> GitStore:
+        return GitStore(repo, ref="refs/agents/theirs")
 
     def test_old_git_is_reported_as_unsupported(
-        self, board: GitBlackboard, theirs: GitBlackboard, merge_supported: bool
+        self, board: GitStore, theirs: GitStore, merge_supported: bool
     ):
         if merge_supported:
             pytest.skip("the installed git can merge")
-        theirs.teach("svc/b", "B")
+        theirs.write("svc/b", "spec.md", "B")
 
         with pytest.raises(NotSupported, match="2.38"):
             board.merge(theirs.ref)
 
     def test_combines_changes_to_different_files(
-        self, board: GitBlackboard, theirs: GitBlackboard, merge_supported: bool
+        self, board: GitStore, theirs: GitStore, merge_supported: bool
     ):
         if not merge_supported:
             pytest.skip("needs git 2.38")
-        board.teach("svc/a", "A")
-        theirs.teach("svc/b", "B")
+        board.write("svc/a", "spec.md", "A")
+        theirs.write("svc/b", "spec.md", "B")
 
         board.merge(theirs.ref)
 
-        assert board.memory("svc/a").rules == ["A"]
-        assert board.memory("svc/b").rules == ["B"]
+        assert board.read("svc/a/spec.md") == "A"
+        assert board.read("svc/b/spec.md") == "B"
 
-    def test_rules_and_autopsies_both_sides_added_are_all_kept(
-        self, board: GitBlackboard, theirs: GitBlackboard, merge_supported: bool
+    def test_reports_both_sides_added_are_all_kept_in_order(
+        self, board: GitStore, theirs: GitStore, merge_supported: bool
     ):
         if not merge_supported:
             pytest.skip("needs git 2.38")
-        board.teach("svc/a", "Ours")
-        theirs.teach("svc/a", "Theirs")
-        theirs.teach("svc/a", "Ours")
-        ours_autopsy = Autopsy(
-            node_id="a", at="2026-11-10T00:00:00Z", approach="x", why_failed="y"
-        )
-        theirs_autopsy = ours_autopsy.model_copy(update={"approach": "z"})
-        board.append_autopsy("svc/a", ours_autopsy)
-        theirs.append_autopsy("svc/a", theirs_autopsy)
+        shared = a_report("Shared.", "2026-11-01T00:00:00+00:00")
+        ours = a_report("Ours.", "2026-11-03T00:00:00+00:00")
+        their = a_report("Theirs.", "2026-11-02T00:00:00+00:00")
+        board.append_report("agent-1", shared)
+        board.append_report("agent-1", ours)
+        theirs.append_report("agent-1", shared)
+        theirs.append_report("agent-1", their)
 
         merged = board.merge(theirs.ref)
 
         assert merged.kept_local == []
-        assert board.memory("svc/a").rules == ["Ours", "Theirs"]
-        assert board.autopsies("svc/a") == [ours_autopsy, theirs_autopsy]
+        assert board.reports("agent-1") == [shared, their, ours]
 
     def test_of_a_spec_both_sides_changed_ours_is_kept_and_named(
-        self, board: GitBlackboard, theirs: GitBlackboard, merge_supported: bool
+        self, board: GitStore, theirs: GitStore, merge_supported: bool
     ):
         if not merge_supported:
             pytest.skip("needs git 2.38")
@@ -275,38 +278,22 @@ class TestMerge:
         assert theirs.head() in history
 
     def test_merging_what_is_already_merged_changes_nothing(
-        self, board: GitBlackboard, theirs: GitBlackboard, merge_supported: bool
+        self, board: GitStore, theirs: GitStore, merge_supported: bool
     ):
         if not merge_supported:
             pytest.skip("needs git 2.38")
-        board.teach("svc/a", "A")
-        theirs.teach("svc/b", "B")
+        board.write("svc/a", "spec.md", "A")
+        theirs.write("svc/b", "spec.md", "B")
         head = board.merge(theirs.ref).head
 
         assert board.merge(theirs.ref).head == head
 
-    def test_an_empty_blackboard_adopts_the_other_ref(
-        self, board: GitBlackboard, theirs: GitBlackboard, merge_supported: bool
+    def test_an_empty_team_memory_adopts_the_other_ref(
+        self, board: GitStore, theirs: GitStore, merge_supported: bool
     ):
         if not merge_supported:
             pytest.skip("needs git 2.38")
-        theirs.teach("svc/b", "B")
+        theirs.write("svc/b", "spec.md", "B")
 
         assert board.merge(theirs.ref).head == theirs.head()
-        assert json.loads(board.read("svc/b/memory.json") or "")["rules"] == ["B"]
-
-
-def test_a_boundary_inherits_the_rules_of_every_boundary_above_it(repo: Path):
-    board = GitBlackboard(repo)
-    board.teach("", "Never log card numbers")
-    board.teach("services", "Every endpoint is versioned")
-    board.teach("services/api", "Never log card numbers")
-    board.teach("services/api", "Totals are integer cents")
-    board.teach("apps", "Pages are server-rendered")
-
-    assert board.inherited_rules("services/api") == [
-        "Never log card numbers",
-        "Every endpoint is versioned",
-        "Totals are integer cents",
-    ]
-    assert board.inherited_rules("docs") == ["Never log card numbers"]
+        assert board.read("svc/b/spec.md") == "B"

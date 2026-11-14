@@ -12,7 +12,7 @@ from typing import Literal
 from uuid import UUID, uuid4
 
 from openhands.agent_server.director.git import uncommitted
-from openhands.agent_server.director.git_blackboard import SPEC_FILE
+from openhands.agent_server.director.git_store import SPEC_FILE
 from openhands.agent_server.director.models import (
     AgentRole,
     EscalationKind,
@@ -63,9 +63,9 @@ def node_context(service: DirectorService, caller: Caller) -> str:
     """Who the agent is and everything of the org that concerns its team."""
     store = service.store
     node = caller.node
-    blackboard = service.blackboard
+    team_memory = service.team_memory
     above = store.get(node.parent_id) if node.parent_id else None
-    specs, contracts = blackboard.applies_to(
+    specs, contracts = team_memory.applies_to(
         node.boundary.path, above.boundary.path if above else None
     )
     to_settle = [
@@ -102,10 +102,9 @@ def node_context(service: DirectorService, caller: Caller) -> str:
         "contracts_between_your_sub_teams": [
             agreed.contracts for agreed in contracts if agreed.own
         ],
-        "rules": blackboard.inherited_rules(node.boundary.path),
-        "failed_here_before": [
-            {"approach": autopsy.approach, "why_failed": autopsy.why_failed}
-            for autopsy in blackboard.autopsies(node.boundary.path)
+        "reports_of_your_team": [
+            {"by": report.role, "at": report.at, "text": report.text}
+            for report in service.reports_of(node)
         ],
         "sub_teams": [
             {
@@ -143,7 +142,7 @@ def write_spec(service: DirectorService, caller: Caller, content: str) -> str:
     if not content.strip():
         raise Invalid("A spec cannot be empty")
     path = caller.node.boundary.path
-    service.blackboard.write(path, SPEC_FILE, content)
+    service.team_memory.write(path, SPEC_FILE, content)
     summary = content.strip().splitlines()[0].lstrip("# ").strip()[:200]
     service.store.update_node(caller.node.id, spec_summary=summary)
     return f"Saved the spec of {path or 'the repository'}."
@@ -414,36 +413,26 @@ def review_team(
     )
 
 
-def record_rule(service: DirectorService, caller: Caller, rule: str) -> str:
-    """Add a rule to the permanent memory of the caller's boundary."""
-    path = caller.node.boundary.path
-    service.blackboard.teach(path, rule)
-    return f"Recorded for everyone who works in {path or 'the repository'}."
+def report(service: DirectorService, caller: Caller, text: str) -> str:
+    """Record something for the two agents of the caller's team."""
+    service.report(caller.node, caller.role, text)
+    return "Recorded for you and the other agent of your team."
 
 
 def prune_team(
     service: DirectorService,
     caller: Caller,
     node_id: str,
-    approach: str,
-    why_failed: str,
-    replacement_task: str,
+    reason: str,
 ) -> str:
-    """Remove a team directly below the caller's, keeping why it failed."""
+    """Remove a team directly below the caller's."""
     _only(caller, "manager", "prune a team")
-    if not why_failed.strip():
-        raise Invalid("Say why the team failed; whoever works there next reads it")
+    if not reason.strip():
+        raise Invalid("Say why the team is removed; your team's IC is told")
     team = service.store.get(node_id)
     if team is None or team.parent_id != caller.node.id:
         raise Invalid(f"{node_id} is not a team directly below yours")
-    service.prune(
-        node_id,
-        approach=approach.strip(),
-        why_failed=why_failed.strip(),
-        replacement_task=replacement_task.strip() or None,
-    )
-    if replacement_task.strip():
-        return f"Pruning {team.title!r}; a fresh team takes over its directory."
+    service.prune(node_id, reason.strip())
     return (
         f"Pruning {team.title!r}. Its directory goes back to your team's IC "
         "when it is gone."

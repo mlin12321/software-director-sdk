@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from openhands.agent_server.director import org_sync
-from openhands.agent_server.director.git_blackboard import SPEC_FILE
+from openhands.agent_server.director.git_store import SPEC_FILE
 from openhands.agent_server.director.models import (
     OrgNode,
     OrgNodeInput,
@@ -212,7 +212,7 @@ async def test_a_pushed_org_is_whole_in_another_clone_except_for_its_agents(
 ):
     here = await started(repo, launcher)
     await split_root(here)
-    here.blackboard.teach("", "Never log card numbers")
+    here.report(node(here, API), "ic", "Never log card numbers")
 
     pushed = await here.push_org("origin")
     there, clone = await elsewhere(remote, tmp_path)
@@ -222,8 +222,9 @@ async def test_a_pushed_org_is_whole_in_another_clone_except_for_its_agents(
     assert pushed.result == "pushed" and pulled.result == "fast_forward"
     assert [team.id for team in there.store.all()] == ["root", API, WEB]
     assert node(there, API).title == "API" and node(there, API).spec_summary
-    assert there.blackboard.memory("").rules == ["Never log card numbers"]
-    assert there.blackboard.applies_to("services/api", "")[1]
+    [carried] = there.reports_of(node(there, API))
+    assert carried.text == "Never log card numbers"
+    assert there.team_memory.applies_to("services/api", "")[1]
     assert node(there, "root").worktree_path == str(clone)
     assert {agent.status for team in there.store.all() for agent in team.agents} == {
         AGENT_LOST
@@ -378,9 +379,9 @@ async def test_a_spec_both_sides_rewrote_is_a_conflict_about_the_file(
     repo: Path, launcher: FakeLauncher, remote: Path, tmp_path: Path
 ):
     here, there = await an_org_on_two_machines(repo, launcher, remote, tmp_path)
-    here.blackboard.write("services/api", SPEC_FILE, "Serve orders over REST\n")
-    there.blackboard.write("services/api", SPEC_FILE, "Serve orders over gRPC\n")
-    there.blackboard.write("apps/web", SPEC_FILE, "Pages for checkout\n")
+    here.team_memory.write("services/api", SPEC_FILE, "Serve orders over REST\n")
+    there.team_memory.write("services/api", SPEC_FILE, "Serve orders over gRPC\n")
+    there.team_memory.write("apps/web", SPEC_FILE, "Pages for checkout\n")
     await there.push_org("origin")
 
     pulled = await here.pull_org("origin")
@@ -396,9 +397,9 @@ async def test_a_spec_both_sides_rewrote_is_a_conflict_about_the_file(
     assert conflict.mine == "Serve orders over REST\n"
     assert conflict.theirs == "Serve orders over gRPC\n"
     assert done.result == "merged"
-    assert done.blackboard is not None and done.blackboard.kept_local == []
-    assert here.blackboard.read("services/api/spec.md") == "Serve orders over gRPC\n"
-    assert here.blackboard.read("apps/web/spec.md") == "Pages for checkout\n"
+    assert done.memory is not None and done.memory.kept_local == []
+    assert here.team_memory.read("services/api/spec.md") == "Serve orders over gRPC\n"
+    assert here.team_memory.read("apps/web/spec.md") == "Pages for checkout\n"
     await here.aclose()
     await there.aclose()
 
@@ -430,7 +431,7 @@ async def test_a_team_without_agents_here_is_started_again_on_its_work(
 ):
     here, there = await an_org_on_two_machines(repo, launcher, remote, tmp_path)
     clone = Path(node(there, "root").worktree_path)
-    there.blackboard.write("services/api", SPEC_FILE, "Serve orders over REST\n")
+    there.team_memory.write("services/api", SPEC_FILE, "Serve orders over REST\n")
     fake = there._require_launcher()
     assert isinstance(fake, FakeLauncher)
 

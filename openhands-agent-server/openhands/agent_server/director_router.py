@@ -1,7 +1,7 @@
 """Director router for OpenHands Agent Server.
 
 Serves the org tree of agent teams, a live stream of its changes, and the
-blackboard that applies to each node. State lives in ``director/``.
+team memory that applies to each node. State lives in ``director/``.
 """
 
 import asyncio
@@ -14,22 +14,21 @@ from fastapi.responses import StreamingResponse
 
 # The org's agents get their tools from this server, so it registers them.
 import openhands.agent_server.director.tools  # noqa: F401
-from openhands.agent_server.director import blackboard_sync
+from openhands.agent_server.director import memory_sync
 from openhands.agent_server.director.acp import TOOLS_PATH
 from openhands.agent_server.director.changes import file_sides, team_changes
 from openhands.agent_server.director.mcp_shim import TOKEN_HEADER
 from openhands.agent_server.director.models import (
     AnswerEscalationRequest,
-    BlackboardSync,
-    BlackboardSyncRequest,
-    BoundaryMemory,
     CreateOrgRequest,
     DirectorSettingsState,
     DirectorSettingsUpdate,
     EditFileRequest,
     FileEdit,
     FileSides,
-    NodeBlackboard,
+    MemorySync,
+    MemorySyncRequest,
+    NodeMemory,
     NodeOwnership,
     OrgMerge,
     OrgNode,
@@ -44,7 +43,6 @@ from openhands.agent_server.director.models import (
     RouteMessageRequest,
     SnapshotEvent,
     StartAgainRequest,
-    TeachRequest,
     TeamChanges,
     TeamMatch,
 )
@@ -82,16 +80,16 @@ STREAM_HEARTBEAT_SECONDS = 15.0
 _NODE_NOT_FOUND: dict[type[DomainError], str] = {
     NotFound: "No such node in the org tree"
 }
-_NO_BLACKBOARD: dict[type[DomainError], str] = {
+_NO_MEMORY: dict[type[DomainError], str] = {
     Unavailable: "The director's directory is not a git repository",
 }
 
 
 _NO_REMOTE: dict[type[DomainError], str] = {
-    **_NO_BLACKBOARD,
+    **_NO_MEMORY,
     NotFound: "The repository has no remote of that name",
     UpstreamFailed: "The remote could not be reached, or refused",
-    NotSupported: "The installed git is too old to merge blackboards",
+    NotSupported: "The installed git is too old to merge team memories",
 }
 
 
@@ -455,28 +453,23 @@ def get_org_node(
 
 
 @director_router.get(
-    "/org/nodes/{node_id}/blackboard",
-    response_model=NodeBlackboard,
-    responses=error_responses({**_NODE_NOT_FOUND, **_NO_BLACKBOARD}),
+    "/org/nodes/{node_id}/memory",
+    response_model=NodeMemory,
+    responses=error_responses({**_NODE_NOT_FOUND, **_NO_MEMORY}),
 )
-def get_node_blackboard(
+def get_node_memory(
     node_id: str, service: DirectorService = Depends(get_director_service)
-) -> NodeBlackboard:
+) -> NodeMemory:
     """Get what a node works to: the spec of its boundary, the contracts
-    between its sub-teams and the ones the team above set for it, its
-    memory and its autopsies."""
+    between its sub-teams and the ones the team above set for it, and
+    what its two agents reported."""
     node = _require_node(service, node_id)
-    path = node.boundary.path
     above = service.store.get(node.parent_id) if node.parent_id else None
-    blackboard = service.blackboard
-    specs, contracts = blackboard.applies_to(
-        path, above.boundary.path if above else None
+    specs, contracts = service.team_memory.applies_to(
+        node.boundary.path, above.boundary.path if above else None
     )
-    return NodeBlackboard(
-        specs=specs,
-        contracts=contracts,
-        memory=blackboard.memory(path),
-        autopsies=blackboard.autopsies(path),
+    return NodeMemory(
+        specs=specs, contracts=contracts, reports=service.reports_of(node)
     )
 
 
@@ -565,68 +558,42 @@ async def edit_node_file(
 
 
 @director_router.post(
-    "/org/nodes/{node_id}/teach",
-    response_model=BoundaryMemory,
-    responses=error_responses(
-        {
-            **_NODE_NOT_FOUND,
-            **_NO_BLACKBOARD,
-            Invalid: "The rule is blank",
-        }
-    ),
-)
-def teach_node(
-    node_id: str,
-    request: TeachRequest,
-    service: DirectorService = Depends(get_director_service),
-) -> BoundaryMemory:
-    """Add a rule to the permanent memory of a node's boundary.
-
-    Teaching a rule the boundary already has changes nothing.
-    """
-    path = _require_node(service, node_id).boundary.path
-    blackboard = service.blackboard
-    blackboard.teach(path, request.rule)
-    return blackboard.memory(path)
-
-
-@director_router.post(
-    "/org/blackboard/pull",
-    response_model=BlackboardSync,
+    "/org/memory/pull",
+    response_model=MemorySync,
     responses=error_responses(_NO_REMOTE),
 )
-def pull_blackboard(
-    request: BlackboardSyncRequest | None = None,
+def pull_memory(
+    request: MemorySyncRequest | None = None,
     service: DirectorService = Depends(get_director_service),
-) -> BlackboardSync:
-    """Take in the blackboard a remote of the repository has.
+) -> MemorySync:
+    """Take in the team memory a remote of the repository has.
 
-    Rules and autopsies both sides added are kept from both. Where both
+    Reports both sides added are kept from both. Where both
     changed a spec or contracts, the local text is kept and the file is
     named in `kept_local`.
     """
-    remote = (request or BlackboardSyncRequest()).remote
-    return blackboard_sync.pull(service.blackboard, remote)
+    remote = (request or MemorySyncRequest()).remote
+    return memory_sync.pull(service.team_memory, remote)
 
 
 @director_router.post(
-    "/org/blackboard/push",
-    response_model=BlackboardSync,
+    "/org/memory/push",
+    response_model=MemorySync,
     responses=error_responses(
-        {**_NO_REMOTE, Conflict: "There is no blackboard to push yet"}
+        {**_NO_REMOTE, Conflict: "There is no team memory to push yet"}
     ),
 )
-def push_blackboard(
-    request: BlackboardSyncRequest | None = None,
+def push_memory(
+    request: MemorySyncRequest | None = None,
     service: DirectorService = Depends(get_director_service),
-) -> BlackboardSync:
-    """Give a remote of the repository the local blackboard.
+) -> MemorySync:
+    """Give a remote of the repository the local team_memory.
 
-    If the remote has changes the local blackboard lacks, they are pulled
+    If the remote has changes the local team memory lacks, they are pulled
     in first, as `pull` does, and the push is made once more.
     """
-    remote = (request or BlackboardSyncRequest()).remote
-    return blackboard_sync.push(service.blackboard, remote)
+    remote = (request or MemorySyncRequest()).remote
+    return memory_sync.push(service.team_memory, remote)
 
 
 @director_router.post(
@@ -646,7 +613,7 @@ async def pull_org(
 ) -> OrgSync:
     """Take in the org a remote of the repository has, as git merges a branch.
 
-    The tree, the blackboard and the branches of the teams' work are
+    The tree, the team memory and the branches of the teams' work are
     fetched. A team changed on one side only is taken from that side, and so
     is a field of a team; a repository without an org takes the remote's.
     Where both sides changed the same thing the result is `conflicts`:
@@ -673,7 +640,7 @@ async def push_org(
     request: OrgSyncRequest | None = None,
     service: DirectorService = Depends(get_director_service),
 ) -> OrgSync:
-    """Give a remote of the repository the org, the blackboard and the
+    """Give a remote of the repository the org, the team memory and the
     branches of the teams' work.
 
     The branches are kept on the remote under `refs/agents/teams/`. A push

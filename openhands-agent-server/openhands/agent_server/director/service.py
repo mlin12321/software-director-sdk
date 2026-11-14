@@ -1,4 +1,4 @@
-"""The director's state for one server: an org tree and its blackboard."""
+"""The director's state for one server: an org tree and its team_memory."""
 
 import asyncio
 import json
@@ -19,7 +19,7 @@ from uuid import UUID, uuid4
 
 from openhands.agent_server.config import Config
 from openhands.agent_server.conversation_service import ToolParams
-from openhands.agent_server.director import bugbot, memory, org_sync
+from openhands.agent_server.director import bugbot, compaction, org_sync
 from openhands.agent_server.director.acp import (
     agent_token,
     as_org_agent,
@@ -41,14 +41,15 @@ from openhands.agent_server.director.git import (
     is_git_repository,
     save_and_discard,
 )
-from openhands.agent_server.director.git_blackboard import (
-    CONTRACTS_FILE,
-    GitBlackboard,
-)
 from openhands.agent_server.director.git_index import (
     excludes_file,
     git_script,
     rcfile,
+)
+from openhands.agent_server.director.git_store import (
+    CONTRACTS_FILE,
+    GitStore,
+    adopt_former_memory,
 )
 from openhands.agent_server.director.headline import provisional_summary
 from openhands.agent_server.director.merge_back import merge_back
@@ -56,14 +57,13 @@ from openhands.agent_server.director.models import (
     AgentKind,
     AgentRef,
     AgentRole,
-    Autopsy,
-    BlackboardSync,
     Boundary,
     CreateOrgRequest,
     DirectorSettings,
     DirectorSettingsState,
     DirectorSettingsUpdate,
     FileEdit,
+    MemorySync,
     OrgConflict,
     OrgMerge,
     OrgNode,
@@ -74,6 +74,7 @@ from openhands.agent_server.director.models import (
     PauseReason,
     Recovery,
     RecoveryItem,
+    Report,
     ResolveMergeRequest,
     ReviewFinding,
     RoutedMessage,
@@ -147,6 +148,7 @@ from openhands.sdk.conversation.state import ConversationExecutionStatus
 from openhands.sdk.errors import (
     Conflict,
     DomainError,
+    Invalid,
     NotFound,
     Unavailable,
     Unprocessable,
@@ -169,7 +171,7 @@ DIRECTOR_TOOL_NAMES = (
     "resolve_escalation",
     "set_status",
     "review_team",
-    "record_rule",
+    "report",
     "prune_team",
 )
 # How long tree changes are gathered before they are saved as one commit.
@@ -179,12 +181,10 @@ RUN_LIMIT_RETRY_SECONDS = 5.0
 # How long a model may take to name a team before the team keeps the name
 # it has; the root's agents are not briefed until then.
 SUMMARY_TIMEOUT_SECONDS = 20.0
-# How long a model may take over a team's diff, or over a boundary's rules.
+# How long a model may take over a team's diff, or over an agent's reports.
 MODEL_CALL_TIMEOUT_SECONDS = 120.0
 # A team whose work is sent back this many times is stopped.
 MAX_REVIEW_ROUNDS = 3
-# How often the rules of the blackboard are looked over for consolidation.
-CONSOLIDATION_SECONDS = 900.0
 # Where, in the org's repository, the uncommitted work a prune discarded is
 # kept.
 PRUNED_REFS = "refs/agents/pruned"
@@ -218,7 +218,7 @@ _ACP_LAUNCHER = ".acp.sh"
 _REMEMBERED_FILE = "director.json"
 # The lane of what concerns the org as a whole, such as saving its tree.
 ORG_LANE = "org"
-# The lane of the rules' consolidation.
+# The lane reports are rewritten shorter in.
 MODELS_LANE = "models"
 # The lane agents are paused in, so that nothing waits for their last step.
 PAUSE_LANE = "pause"
@@ -272,7 +272,7 @@ def _is_in(path: Path, directory: Path) -> bool:
 
 
 class DirectorService:
-    """Owns the org tree and the blackboard of one repository.
+    """Owns the org tree and the team memory of one repository.
 
     An org lives in the repository its first conversation was opened in,
     which need not be the directory the server was started for; the director
@@ -281,7 +281,7 @@ class DirectorService:
     and is a submodule of one that has stands for the nearest such
     repository above it, in both cases.
 
-    Nothing is read from disk until the tree or the blackboard is first used,
+    Nothing is read from disk until the tree or the team memory is first used,
     so creating the service is free for servers that never use the director.
 
     The tree can be read and taught without :meth:`start`. Running agents
@@ -305,7 +305,6 @@ class DirectorService:
         remembered: Path | None = None,
         find_review_instructions: Callable[[], str | None] = lambda: None,
         model_call_timeout: float = MODEL_CALL_TIMEOUT_SECONDS,
-        consolidate_every: float = 0,
         max_concurrent_runs: int | None = None,
         server_url: str | None = None,
     ) -> None:
@@ -319,8 +318,6 @@ class DirectorService:
             find_review_instructions: Returns what a model is told when it
                 reads a team's diff before the IC above reviews it, or None
                 to leave that pass out.
-            consolidate_every: Seconds between looks at the blackboard's
-                rules for boundaries to consolidate; 0 for never.
             remembered: A file to keep the org's repository in, so that an
                 org started outside ``repo_dir`` is found again after a
                 restart.
@@ -370,8 +367,7 @@ class DirectorService:
             "prune": self._prune,
             "halt": self._do_halt,
         }
-        self._consolidate_every = consolidate_every
-        self._consolidator: asyncio.Task[None] | None = None
+        self._memory_adopted_in: Path | None = None
         self._bwrap: str | None = None
         self._stop_guard: Callable[[], None] | None = None
         self._save_delay = save_delay
@@ -415,7 +411,6 @@ class DirectorService:
             find_sandbox=find_bwrap,
             remembered=config.conversations_path.parent / _REMEMBERED_FILE,
             find_review_instructions=bugbot.review_instructions,
-            consolidate_every=config.director_consolidation_seconds,
             max_concurrent_runs=config.max_concurrent_runs,
             server_url=config.director_server_url,
         )
@@ -429,8 +424,8 @@ class DirectorService:
             return self._store
 
     @property
-    def blackboard(self) -> GitBlackboard:
-        """The blackboard of the director's repository.
+    def team_memory(self) -> GitStore:
+        """The team memory of the director's repository.
 
         Raises:
             Unavailable: The director's directory is not a git repository.
@@ -438,10 +433,16 @@ class DirectorService:
         _ = self.store  # settles which repository the org is in
         if not is_git_repository(self._repo_dir):
             raise Unavailable(
-                f"The director has no blackboard: {self._repo_dir} is not a git "
+                f"The director has no team memory: {self._repo_dir} is not a git "
                 "repository. Point OH_DIRECTOR_REPO_PATH at one."
             )
-        return GitBlackboard(self._repo_dir)
+        return self._memory()
+
+    def _memory(self) -> GitStore:
+        if self._memory_adopted_in != self._repo_dir:
+            adopt_former_memory(self._repo_dir)
+            self._memory_adopted_in = self._repo_dir
+        return GitStore(self._repo_dir)
 
     def state(self) -> OrgStateEvent:
         """Whether the org is paused or in the middle of a merge."""
@@ -635,10 +636,6 @@ class DirectorService:
         if self._bwrap is None:
             logger.info("Director cannot confine shells here; it checks file tools")
         bind_director(self)
-        if self._consolidate_every > 0 and not self._fixture:
-            self._consolidator = asyncio.create_task(
-                self._consolidate_regularly(), name="director-consolidation"
-            )
         if self._store is not None:
             self._enqueue(self._came_back)
         elif await asyncio.to_thread(self._remembered_repo) is not None:
@@ -665,10 +662,6 @@ class DirectorService:
         if self._stop_guard is not None:
             self._stop_guard()
             self._stop_guard = None
-        if self._consolidator is not None:
-            self._consolidator.cancel()
-            await asyncio.gather(self._consolidator, return_exceptions=True)
-            self._consolidator = None
         workers = list(self._workers)
         for worker in workers:
             worker.cancel()
@@ -950,28 +943,39 @@ class DirectorService:
         """Start the sub-teams of a node's approved split. Safe from any thread."""
         self._begin("split", node_id)
 
-    def prune(
-        self,
-        node_id: str,
-        *,
-        approach: str,
-        why_failed: str,
-        replacement_task: str | None,
-    ) -> None:
-        """Remove a team and what is below it. Safe from any thread.
-
-        Args:
-            replacement_task: What a fresh team does in the same boundary;
-                None to leave the boundary to the team above.
-        """
+    def prune(self, node_id: str, reason: str) -> None:
+        """Remove a team and what is below it; its boundary goes back to
+        the team above. Safe from any thread."""
         self.store.update_node(node_id, status="blocked")
-        self._begin(
-            "prune",
-            node_id,
-            approach=approach,
-            why_failed=why_failed,
-            replacement_task=replacement_task,
+        self._begin("prune", node_id, reason=reason)
+
+    def reports_of(self, node: OrgNode) -> list[Report]:
+        """What the two agents of a team recorded, oldest first."""
+        team_memory = self._memory()
+        reports = [
+            report
+            for agent in node.agents
+            if agent.conversation_id is not None
+            for report in team_memory.reports(agent.conversation_id)
+        ]
+        return sorted(reports, key=lambda report: report.at)
+
+    def report(self, node: OrgNode, role: AgentRole, text: str) -> None:
+        """Record something for the two agents of a team. Safe from any
+        thread.
+
+        Raises:
+            Invalid: There is nothing to record.
+        """
+        text = text.strip()
+        conversation_id = agent_conversation(node, role)
+        if not text or conversation_id is None:
+            raise Invalid("A report cannot be empty")
+        reports = self._memory().append_report(
+            conversation_id, Report(at=_instant(), role=role, text=text)
         )
+        if compaction.due(reports, self.settings.report_compaction_chars):
+            self._enqueue(lambda: self._compact(conversation_id), MODELS_LANE)
 
     def request_review(self, node_id: str) -> None:
         """Have the work a team reported done reviewed. Safe from any thread."""
@@ -1194,7 +1198,7 @@ class DirectorService:
             )
 
     async def push_org(self, remote: str) -> OrgSync:
-        """Give a remote of the repository the org, the blackboard and the
+        """Give a remote of the repository the org, the team memory and the
         branches of the teams' work.
 
         Raises:
@@ -1414,7 +1418,7 @@ class DirectorService:
         """What a team that is started again is to do, from what the org
         kept of it."""
         above = self.store.get(node.parent_id) if node.parent_id else None
-        specs, _ = self.blackboard.applies_to(
+        specs, _ = self.team_memory.applies_to(
             node.boundary.path, above.boundary.path if above else None
         )
         task = specs[0].spec if specs else node.spec_summary
@@ -1467,13 +1471,13 @@ class DirectorService:
             here = rehomed(nodes, {}, _shared_root(nodes), str(repo))
             if here != nodes:
                 board.land([org_file(here)], f"org: at home in {repo.name}")
-            blackboard = self._pull_blackboard(repo, remote, ())
+            pulled = self._pull_memory(repo, remote, ())
             self._join(repo)
             return OrgSync(
                 remote=remote,
                 result="fast_forward",
                 head=board.head(),
-                blackboard=blackboard,
+                memory=pulled,
                 branches=org_sync.take_in_branches(repo, remote, self.store.all()),
             )
 
@@ -1513,8 +1517,8 @@ class DirectorService:
         theirs: str | None = state["theirs"]
         choices: dict[str, Side] = state["choices"]
         board = create_org_board(repo)
-        blackboard = GitBlackboard(repo)
-        their_board = org_sync.commit_at(repo, org_sync.remote_blackboard(remote))
+        team_memory = GitStore(repo)
+        their_board = org_sync.commit_at(repo, org_sync.remote_memory(remote))
         files = [
             OrgConflict(
                 id=f"file:{clash.path}",
@@ -1526,7 +1530,7 @@ class DirectorService:
                 theirs=clash.theirs,
                 choice=choices.get(f"file:{clash.path}"),
             )
-            for clash in (blackboard.clashes(their_board) if their_board else [])
+            for clash in (team_memory.clashes(their_board) if their_board else [])
         ]
         for _ in range(_MERGE_ATTEMPTS):
             save_org(board, store)
@@ -1575,7 +1579,7 @@ class DirectorService:
         else:
             raise Conflict("The org kept changing while it was merged. Pull once more.")
         taken = [conflict.field for conflict in files if conflict.choice == "theirs"]
-        synced = self._pull_blackboard(repo, remote, taken)
+        synced = self._pull_memory(repo, remote, taken)
         if result == "up_to_date" and synced is not None and synced.changed:
             result = "merged"
         branches = org_sync.take_in_branches(repo, remote, store.all())
@@ -1586,21 +1590,21 @@ class DirectorService:
             remote=remote,
             result=result,
             head=board.head(),
-            blackboard=synced,
+            memory=synced,
             branches=branches,
             put_aside=self._dropped()[already:],
         )
 
-    def _pull_blackboard(
+    def _pull_memory(
         self, repo: Path, remote: str, take_theirs: Collection[str]
-    ) -> BlackboardSync | None:
-        ref = org_sync.remote_blackboard(remote)
+    ) -> MemorySync | None:
+        ref = org_sync.remote_memory(remote)
         if org_sync.commit_at(repo, ref) is None:
             return None
-        board = GitBlackboard(repo)
+        board = GitStore(repo)
         before = board.head()
         merged = board.merge(ref, take_theirs)
-        return BlackboardSync(
+        return MemorySync(
             remote=remote,
             head=merged.head,
             changed=merged.head != before,
@@ -2264,21 +2268,12 @@ class DirectorService:
         await self._deliver(seq, conversation_id, text)
 
     def _briefing(self, node: OrgNode, role: AgentRole, task: str) -> str:
-        blackboard = GitBlackboard(self._repo_dir)
-        path = node.boundary.path
+        team_memory = self._memory()
         above = self.store.get(node.parent_id) if node.parent_id else None
-        specs, contracts = blackboard.applies_to(
-            path, above.boundary.path if above else None
+        specs, contracts = team_memory.applies_to(
+            node.boundary.path, above.boundary.path if above else None
         )
-        return brief(
-            node,
-            role,
-            task,
-            specs,
-            contracts,
-            blackboard.inherited_rules(path),
-            blackboard.autopsies(path),
-        )
+        return brief(node, role, task, specs, contracts, self.reports_of(node))
 
     async def _brief(self, node_id: str, role: AgentRole, task: str) -> None:
         node = self.store.get(node_id)
@@ -2547,11 +2542,9 @@ class DirectorService:
                     if agent.conversation_id is not None
                 ],
                 stamp=now.strftime("%Y%m%dT%H%M%SZ"),
-                at=now.isoformat(timespec="seconds"),
-                fresh=str(uuid4()),
             )
         plan = intent.payload
-        where, replacement_task = plan["path"], plan["replacement_task"]
+        where = plan["path"]
         conversations = [UUID(agent) for agent in plan["conversations"]]
         if "stopped" not in intent.steps:
             for conversation_id in conversations:
@@ -2566,66 +2559,22 @@ class DirectorService:
             for conversation_id in conversations:
                 await launcher.delete(conversation_id)
             intent = run.step_done(intent, "deleted")
-        autopsy = Autopsy(
-            node_id=node_id,
-            at=plan["at"],
-            approach=plan["approach"],
-            why_failed=plan["why_failed"],
-            saved_ref=saved,
-        )
-        try:
-            await asyncio.to_thread(self._record_autopsy, where, autopsy)
-        except (GitError, DomainError):
-            logger.exception("Could not record the autopsy of node %s", node_id)
-
         above = store.get(plan["parent"])
         parent_ic = agent_conversation(above, "ic") if above else None
         if "removed" not in intent.steps:
-            if replacement_task is None:
-                store.remove(node_id)
-                # The shell the IC above starts next can write there again.
-                with suppress(GitError, OSError):
-                    await asyncio.to_thread(self._confine, plan["parent"], "ic")
-            elif above is not None:
-                for child in store.children(node_id):
-                    store.remove(child.id)
-                store.update_node(
-                    node_id,
-                    agents=_new_pod(UUID(plan["fresh"])),
-                    status="idle",
-                    worktree_path=above.worktree_path,
-                    branch=above.branch,
-                    base_commit="",
-                    escalations=[],
-                    pending_split=None,
-                    review=None,
-                    headline=provisional_summary(replacement_task).headline,
-                    spec_summary=_summary_of(replacement_task),
-                )
+            store.remove(node_id)
+            # The shell the IC above starts next can write there again.
+            with suppress(GitError, OSError):
+                await asyncio.to_thread(self._confine, plan["parent"], "ic")
             await self._save()
             intent = run.step_done(intent, "removed")
-        if replacement_task is None:
-            outcome = f"{where} is yours again"
-        else:
-            if await self._start_agent(node_id, "ic", parent_ic, replacement_task):
-                await self._launch_manager(node_id, replacement_task)
-            self._enqueue(
-                lambda: self._summarize(node_id, replacement_task, first=True),
-                node_id,
-            )
-            outcome = f"a fresh team now works in {where}"
         self.notify(
             parent_ic,
             f"Your Manager pruned the team {plan['title']!r} ({where}): "
-            f"{plan['why_failed']} Its uncommitted changes were discarded"
+            f"{plan['reason']} Its uncommitted changes were discarded"
             + (f" (kept in git as {saved})" if saved else "")
-            + f"; {outcome}.",
+            + f"; {where} is yours again.",
         )
-
-    def _record_autopsy(self, where: str, autopsy: Autopsy) -> None:
-        board = GitBlackboard(self._repo_dir)
-        if autopsy not in board.autopsies(where):
-            board.append_autopsy(where, autopsy)
 
     async def _own_account(
         self, node: OrgNode
@@ -2656,7 +2605,7 @@ class DirectorService:
             return description or "", None
         above = self.store.get(node.parent_id) if node.parent_id else None
         specs, contracts = await asyncio.to_thread(
-            GitBlackboard(self._repo_dir).applies_to,
+            GitStore(self._repo_dir).applies_to,
             node.boundary.path,
             above.boundary.path if above else None,
         )
@@ -2822,41 +2771,28 @@ class DirectorService:
             if agent.conversation_id is not None:
                 await launcher.stop(UUID(agent.conversation_id))
 
-    async def _consolidate_regularly(self) -> None:
-        while True:
-            await asyncio.sleep(self._consolidate_every)
-            # One pass at a time.
-            done = asyncio.Event()
-
-            async def consolidate(done: asyncio.Event = done) -> None:
-                try:
-                    await self._consolidate()
-                finally:
-                    done.set()
-
-            self._enqueue(consolidate, MODELS_LANE)
-            await done.wait()
-
-    async def _consolidate(self) -> None:
-        """Have a model rewrite the rules of every boundary that has gained
-        enough of them."""
+    async def _compact(self, conversation_id: str) -> None:
+        """Have a model rewrite one agent's reports shorter, if they are
+        still too long."""
         store = self._store
         root = store.get(store.root_id) if store and store.root_id else None
         asker = agent_conversation(root, "ic") if root else None
-        if asker is None or not is_git_repository(self._repo_dir):
+        if asker is None or self._paused is not None:
             return
-        if self._paused is not None:
+        team_memory = self._memory()
+        reports = await asyncio.to_thread(team_memory.reports, conversation_id)
+        if not compaction.due(reports, self.settings.report_compaction_chars):
             return
-        board = GitBlackboard(self._repo_dir)
-        for item in await asyncio.to_thread(memory.due, board):
-            answer = await self._ask(asker, *memory.prompt(item), memory.USAGE_ID)
-            rules = memory.parse_rules(answer, item) if answer else None
-            if rules is None:
-                logger.warning(
-                    "No usable consolidation of the rules of %r", item.directory
-                )
-                continue
-            await asyncio.to_thread(memory.apply, board, item, rules)
+        answer = await self._ask(
+            asker, *compaction.prompt(reports), compaction.USAGE_ID
+        )
+        shorter = compaction.compacted(answer or "", reports, _instant())
+        if shorter is None:
+            logger.warning("No usable rewrite of the reports of %s", conversation_id)
+            return
+        await asyncio.to_thread(
+            team_memory.replace_reports, conversation_id, reports, shorter
+        )
 
     def _discard_work(self, teams: list[OrgNode], stamp: str) -> str | None:
         """Discard the uncommitted work of ``teams``, the pruned team first.
@@ -2969,15 +2905,15 @@ class DirectorService:
 
     def _record_contracts(self, node: OrgNode, contracts: str) -> None:
         """Add the contracts of a split to those of the node's boundary."""
-        blackboard = GitBlackboard(self._repo_dir)
+        team_memory = self._memory()
         path = node.boundary.path
-        earlier = blackboard.read(
+        earlier = team_memory.read(
             f"{path}/{CONTRACTS_FILE}" if path else CONTRACTS_FILE
         )
         text = f"{contracts.strip()}\n"
         if earlier and text.strip() in earlier:
             return
-        blackboard.write(
+        team_memory.write(
             path,
             CONTRACTS_FILE,
             f"{earlier.rstrip()}\n\n{text}" if earlier and earlier.strip() else text,
@@ -3047,6 +2983,11 @@ def _base_of(workspace: str) -> str:
 
 def _now() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
+
+
+def _instant() -> str:
+    """Now, fine enough to put what two agents record in order."""
+    return datetime.now(UTC).isoformat()
 
 
 def _branch_of(workspace: str) -> str:
