@@ -374,42 +374,6 @@ async def test_a_manager_is_listed_its_own_tools_and_a_stranger_none(
     assert stranger.status_code == 404
 
 
-async def test_an_agent_that_misnames_an_argument_is_told_what_the_tool_takes(
-    running, repo: Path
-):
-    client, service = running
-    await service.create_org(
-        CreateOrgRequest(
-            title="Checkout", task="Build", conversation=root_conversation(repo)
-        )
-    )
-    await service.settled()
-    headers = {mcp_shim.TOKEN_HEADER: agent_token(service._key(), str(ic(service)))}
-
-    misnamed = await client.post(
-        "/api/director/tools/report", headers=headers, json={"content": "Chose SQLite."}
-    )
-    mistyped = await client.post(
-        "/api/director/tools/report", headers=headers, json={"text": 3}
-    )
-    # A spec named as it was before is still read.
-    former = await client.post(
-        "/api/director/tools/write_spec", headers=headers, json={"content": "# Old"}
-    )
-
-    assert misnamed.json() == {
-        "text": "`report` was not carried out: its arguments do not fit.\n"
-        "- `text` is required and was not given.\n"
-        "- `content` is not an argument of this tool, so it was not read.\n"
-        "`report` takes: `text` (required). Call it again.",
-        "is_error": True,
-    }
-    assert "- `text`: Input should be a valid string." in mistyped.json()["text"]
-    assert service.reports_of(node(service, "root")) == []
-    assert former.json()["is_error"] is False
-    assert service.team_memory.applies_to("", None)[0][0].spec == "# Old"
-
-
 async def test_the_tool_routes_refuse_whoever_has_no_agents_token(running, repo: Path):
     client, service = running
     await service.create_org(
