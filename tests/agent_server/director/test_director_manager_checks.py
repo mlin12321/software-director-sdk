@@ -159,7 +159,7 @@ async def test_the_two_counts_are_kept_apart(
 ):
     service.update_settings(
         DirectorSettingsUpdate(
-            manager_check_accepted_reviews=2, manager_check_ic_escalations=2
+            manager_check_accepted_reviews=2, manager_check_ic_setbacks=2
         )
     )
     await escalates(service, WEB)
@@ -187,7 +187,7 @@ async def test_each_check_can_be_turned_off(
 ):
     service.update_settings(
         DirectorSettingsUpdate(
-            manager_check_accepted_reviews=0, manager_check_ic_escalations=0
+            manager_check_accepted_reviews=0, manager_check_ic_setbacks=0
         )
     )
 

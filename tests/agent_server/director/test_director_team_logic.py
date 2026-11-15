@@ -120,7 +120,7 @@ async def test_a_look_tells_the_success_rate_of_each_team(
     assert web.endswith("success rate 2 of 2 tasks (100%)")
     assert api.endswith("success rate 0 of 1 task (0%)")
     # The number it is counted against is the one that wakes the Manager.
-    limit = service.settings.manager_check_ic_escalations
+    limit = service.settings.manager_check_ic_setbacks
     assert (
         "A team's success rate is the share of its tasks that were accepted "
         f"without its IC escalating {limit} times on them"
@@ -179,7 +179,7 @@ async def test_work_sent_back_as_often_as_the_limit_wakes_the_manager_once(
 async def test_send_backs_wake_nobody_when_the_check_is_off(
     service: DirectorService, launcher: FakeLauncher, repo: Path
 ):
-    service.update_settings(DirectorSettingsUpdate(manager_check_ic_escalations=0))
+    service.update_settings(DirectorSettingsUpdate(manager_check_ic_setbacks=0))
 
     await sent_back(service, repo, API, times=3)
 

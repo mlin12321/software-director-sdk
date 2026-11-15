@@ -43,10 +43,9 @@ export interface DirectorBoundary {
 export interface DirectorAgentRef {
   role: DirectorAgentRole;
   /**
-   * Set on an IC that is, or last was, in hand-over mode. Absent on servers
-   * that have no such mode.
+   * Set on an IC that is, or last was, in hand-over mode.
    */
-  hand_over?: DirectorHandOverMode | null;
+  hand_over: DirectorHandOverMode | null;
   /** `null` until a conversation has been started for this agent. */
   conversation_id: string | null;
   status: string;
@@ -274,9 +273,9 @@ export interface DirectorOrgSummary {
   boundary_enforcement: DirectorBoundaryEnforcement;
   /**
    * Why the org's agents are held and its steps and messages wait; `null`
-   * when the org runs. Absent from servers that cannot pause an org.
+   * when the org runs.
    */
-  paused?: DirectorPauseReason | null;
+  paused: DirectorPauseReason | null;
   /** A pull stopped on conflicts and waits for choices. */
   merging?: boolean;
 }
@@ -688,32 +687,31 @@ export interface DirectorSettings {
   allowed_profiles: string[];
   /**
    * Whether an org that was stopped in the middle of its work takes it up
-   * again as soon as the server is back, without being asked. Absent from
-   * servers that cannot pause an org.
+   * again as soon as the server is back, without being asked.
    */
-  resume_on_start?: boolean;
+  resume_on_start: boolean;
   /**
    * How many characters of reports one agent may have before a model
-   * rewrites them into one shorter report. Absent on servers without reports.
+   * rewrites them into one shorter report.
    */
-  report_compaction_chars?: number;
+  report_compaction_chars: number;
   /**
    * How many minutes a team may show no progress, with nothing submitted or
    * with its work sent back, before the IC of the team above is told. 0
-   * turns the check off. Absent on servers without the check.
+   * turns the check off.
    */
-  stall_check_minutes?: number;
+  stall_check_minutes: number;
   /**
    * After how many reviews its IC accepted a Manager is woken to look at its
    * teams, without a message from its IC. 0 turns the check off.
    */
-  manager_check_accepted_reviews?: number;
+  manager_check_accepted_reviews: number;
   /**
-   * After how many escalations the IC of one team directly below raised, on
-   * the work it has in hand, a Manager is woken to look at its teams. 0 turns
-   * the check off.
+   * After how many escalations the IC of one team directly below raised on
+   * the work it has in hand, and after how many times that work was sent
+   * back, a Manager is woken to look at its teams. 0 turns the check off.
    */
-  manager_check_ic_escalations?: number;
+  manager_check_ic_setbacks: number;
 }
 
 /** The settings, beside what the org has now. */

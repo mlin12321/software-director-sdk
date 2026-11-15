@@ -829,7 +829,7 @@ class DirectorSettings(BaseModel):
             "check off."
         ),
     )
-    manager_check_ic_escalations: int = Field(
+    manager_check_ic_setbacks: int = Field(
         default=3,
         ge=0,
         description=(
@@ -851,7 +851,7 @@ class DirectorSettingsUpdate(BaseModel):
     report_compaction_chars: int | None = Field(default=None, ge=1_000)
     stall_check_minutes: int | None = Field(default=None, ge=0)
     manager_check_accepted_reviews: int | None = Field(default=None, ge=0)
-    manager_check_ic_escalations: int | None = Field(default=None, ge=0)
+    manager_check_ic_setbacks: int | None = Field(default=None, ge=0)
 
 
 class DirectorSettingsState(DirectorSettings):
