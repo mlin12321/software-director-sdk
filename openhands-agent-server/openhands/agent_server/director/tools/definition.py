@@ -3,7 +3,7 @@
 from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING, ClassVar, Literal, Self
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from openhands.agent_server.director import pod_actions
 from openhands.agent_server.director.models import (
@@ -31,7 +31,17 @@ class ReadNodeContextAction(Action):
 class WriteSpecAction(Action):
     """Replace the spec of your team's boundary."""
 
-    content: str = Field(description="The whole spec, in Markdown.")
+    text: str = Field(description="The whole spec, in Markdown.")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _text_once_named_content(cls, data: object) -> object:
+        """Read a call that names the spec `content`, as conversations kept
+        before the argument was named like every other tool's do."""
+        if isinstance(data, dict) and "text" not in data and "content" in data:
+            kept = {key: value for key, value in data.items() if key != "content"}
+            return {**kept, "text": data["content"]}
+        return data
 
 
 TEAMS_EXAMPLE = """\
@@ -273,7 +283,7 @@ class WriteSpecTool(_DirectorTool[WriteSpecAction]):
     @classmethod
     def act(cls):
         return lambda service, caller, action: pod_actions.write_spec(
-            service, caller, action.content
+            service, caller, action.text
         )
 
 

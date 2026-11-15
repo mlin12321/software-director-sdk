@@ -19,6 +19,7 @@ from openhands.agent_server.director.service import (
 )
 from openhands.agent_server.director.tools.definition import DIRECTOR_TOOLS
 from openhands.sdk.errors import DomainError, NotFound
+from openhands.sdk.tool.tool import Action
 
 
 class RemoteTool(BaseModel):
@@ -57,6 +58,29 @@ def list_tools(service: DirectorService, conversation_id: UUID) -> list[RemoteTo
     ]
 
 
+def wrong_arguments(name: str, action: type[Action], error: ValidationError) -> str:
+    """What an agent is told when a call's arguments do not fit the tool:
+    that nothing was done, what was wrong with each argument, and what the
+    tool takes."""
+    schema = action.to_mcp_schema()
+    takes: dict[str, Any] = schema.get("properties", {})
+    required = set(schema.get("required", []))
+    said = {
+        "missing": " is required and was not given",
+        "extra_forbidden": " is not an argument of this tool, so it was not read",
+    }
+    lines = [f"`{name}` was not carried out: its arguments do not fit."]
+    for wrong in error.errors():
+        where = ".".join(str(part) for part in wrong["loc"]) or "the arguments"
+        lines.append(f"- `{where}`{said.get(wrong['type'], ': ' + wrong['msg'])}.")
+    listed = ", ".join(
+        f"`{argument}`" + (" (required)" if argument in required else "")
+        for argument in takes
+    )
+    lines.append(f"`{name}` takes: {listed or 'no arguments'}. Call it again.")
+    return "\n".join(lines)
+
+
 def call_tool(
     service: DirectorService, conversation_id: UUID, name: str, arguments: Any
 ) -> ToolAnswer:
@@ -71,7 +95,9 @@ def call_tool(
     try:
         action = tool.action().model_validate(arguments)
     except ValidationError as error:
-        return ToolAnswer(text=str(error), is_error=True)
+        return ToolAnswer(
+            text=wrong_arguments(name, tool.action(), error), is_error=True
+        )
     try:
         caller = caller_of(service, conversation_id)
         return ToolAnswer(text=tool.act()(service, caller, action), is_error=False)

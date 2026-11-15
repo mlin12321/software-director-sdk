@@ -182,10 +182,10 @@ async def test_the_ic_writes_the_spec_its_sub_teams_inherit(service: DirectorSer
         service,
         ic(service),
         WriteSpecTool,
-        WriteSpecAction(content="# Checkout\n\nAll prices are integer cents."),
+        WriteSpecAction(text="# Checkout\n\nAll prices are integer cents."),
     )
     refused = await use(
-        service, await woken(service), WriteSpecTool, WriteSpecAction(content="# Mine")
+        service, await woken(service), WriteSpecTool, WriteSpecAction(text="# Mine")
     )
 
     assert not written.is_error and refused.is_error
@@ -828,12 +828,12 @@ async def test_a_sub_team_is_told_the_contracts_and_not_the_spec_of_the_team_abo
         service,
         ic(service),
         WriteSpecTool,
-        WriteSpecAction(content="# Checkout\n\nInternal notes of the root team."),
+        WriteSpecAction(text="# Checkout\n\nInternal notes of the root team."),
     )
     await split_root(service)
     api_ic = ic(service, "services.api")
     await use(
-        service, api_ic, WriteSpecTool, WriteSpecAction(content="# API\n\nUses Flask.")
+        service, api_ic, WriteSpecTool, WriteSpecAction(text="# API\n\nUses Flask.")
     )
 
     starts = {str(start.conversation_id): start for start in launcher.derived}
