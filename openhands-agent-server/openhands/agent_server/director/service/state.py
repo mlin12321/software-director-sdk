@@ -1,0 +1,1208 @@
+"""What every part of the director's service works on: the org tree, the
+team memory, the settings, the queue of steps and the agents' shells."""
+
+import asyncio
+import json
+import logging
+import os
+import re
+import secrets
+import shutil
+import threading
+from collections import deque
+from collections.abc import Awaitable, Callable, Sequence
+from datetime import UTC, datetime
+from functools import lru_cache
+from pathlib import Path
+from typing import Any, Self
+from uuid import UUID, uuid4
+
+from openhands.agent_server.config import Config
+from openhands.agent_server.conversation_service import ToolParams
+from openhands.agent_server.director import bugbot
+from openhands.agent_server.director.acp import (
+    agent_token,
+    as_org_agent,
+    conversation_of,
+    tools_server,
+)
+from openhands.agent_server.director.fixture import build_fixture_nodes
+from openhands.agent_server.director.git import (
+    GitError,
+    enclosing_repository,
+    git,
+    head_of,
+    is_git_repository,
+)
+from openhands.agent_server.director.git_index import (
+    excludes_file,
+    git_script,
+    rcfile,
+)
+from openhands.agent_server.director.git_store import (
+    SPEC_FILE,
+    GitStore,
+)
+from openhands.agent_server.director.headline import provisional_summary
+from openhands.agent_server.director.models import (
+    ROLE_NAMES,
+    AgentKind,
+    AgentRef,
+    AgentRole,
+    DirectorSettings,
+    DirectorSettingsState,
+    DirectorSettingsUpdate,
+    FormerTeam,
+    HandOverMode,
+    OrgNode,
+    OrgNodeInput,
+    OrgStateEvent,
+    OrgSummary,
+    PauseReason,
+    RecoveryItem,
+    SplitChild,
+    TeamEnforcement,
+    TeamMatch,
+)
+from openhands.agent_server.director.org_persistence import (
+    create_org_board,
+    load_org,
+    save_org,
+)
+from openhands.agent_server.director.org_store import (
+    OrgStore,
+)
+from openhands.agent_server.director.pods import PodLauncher
+from openhands.agent_server.director.recovery import (
+    fingerprint,
+)
+from openhands.agent_server.director.run_state import (
+    PROGRESS,
+    RUNNING,
+    TEAM,
+    Intent,
+    RunState,
+    RunStateError,
+)
+from openhands.agent_server.director.sandbox import (
+    command_script,
+    find_bwrap,
+    shell_script,
+    write_shell,
+)
+from openhands.agent_server.director.split import (
+    child_boundary,
+    clean_path,
+)
+from openhands.sdk.agent import ACPAgent
+from openhands.sdk.agent.base import AgentBase
+from openhands.sdk.conversation.state import ConversationExecutionStatus
+from openhands.sdk.errors import (
+    DomainError,
+    NotFound,
+    Unavailable,
+    Unprocessable,
+)
+from openhands.sdk.tool.spec import Tool
+from openhands.sdk.utils.files import atomic_write_text
+
+
+logger = logging.getLogger(__name__)
+
+ROOT_ID = "root"
+_TOOLS_OF_BOTH = (
+    "read_node_context",
+    "raise_escalation",
+    "resolve_escalation",
+    "report",
+)
+# The director's tools an agent is offered, by its role; they register in
+# ``director.tools``. `pod_actions` refuses the rest whatever is offered.
+TOOLS_OF: dict[AgentRole, tuple[str, ...]] = {
+    "ic": (
+        *_TOOLS_OF_BOTH,
+        "write_spec",
+        "msg_manager",
+        "msg_team",
+        "hand_over",
+        "stop_team",
+        "submit_review",
+        "review_team",
+    ),
+    "manager": (
+        *_TOOLS_OF_BOTH,
+        "msg_ic",
+        "approve_teams",
+        "decline_teams",
+        "prune_team",
+    ),
+}
+HAND_OVER_TOOLS = ("read_node_context", "hand_over", "write_spec")
+DIRECTOR_TOOL_NAMES = tuple(dict.fromkeys((*TOOLS_OF["ic"], *TOOLS_OF["manager"])))
+# How a team that was set up and given no task reads to the IC above.
+NOT_STARTED = "not started"
+# What follows a team's purpose in its task once something started it.
+_STARTED_WITH = "\n\nWhat your team is started with:\n"
+# How many of the latest events of its sub-teams an agent reads at once.
+HISTORY_TOLD = 30
+# How long tree changes are gathered before they are saved as one commit.
+SAVE_DELAY_SECONDS = 2.0
+# How long to wait before starting an agent again when the server is full.
+RUN_LIMIT_RETRY_SECONDS = 5.0
+# How often the director looks for teams that show no progress.
+STALL_POLL_SECONDS = 60.0
+# How many commits must have changed two proposed directories together
+# before a Manager is told: a first commit of everything says nothing.
+TOGETHER_WORTH_SAYING = 3
+# How many earlier declines for the same directories a proposal is shown with.
+DECLINED_TOLD = 3
+# How long a model may take to name a team before the team keeps the name
+# it has; the root's agents are not briefed until then.
+SUMMARY_TIMEOUT_SECONDS = 20.0
+# How long a model may take over a team's diff, or over an agent's reports.
+MODEL_CALL_TIMEOUT_SECONDS = 120.0
+# A team whose work is sent back this many times is stopped.
+# Where, in the org's repository, the uncommitted work a prune discarded is
+# kept.
+PRUNED_REFS = "refs/agents/pruned"
+# Where what an IC left uncommitted in the directory of a sub-team with a
+# checkout of its own is kept: under `left`, what went to the team as it
+# started; under `aside`, what was in the way of the team's accepted work.
+LEFT_REFS = "refs/agents/left"
+ASIDE_REFS = "refs/agents/aside"
+# An agent whose conversation is gone, or could not be started.
+# An agent that was running when its org was paused, and runs again when it
+# is resumed.
+AGENT_PAUSED = "paused"
+# What an agent is told when the server ended in the middle of its step.
+RESTART_NOTE = (
+    "The server was restarted while you were working. The command or edit "
+    "you were in the middle of may not have finished: check what is there "
+    "before you carry on with your task."
+)
+# What a team's IC is told when a pull found other commits for its branch.
+OTHER_WORK_NOTE = (
+    "A pull brought other commits for your team's branch {branch} from "
+    "{remote}. They are at {ref} and are not in your checkout. Merge them "
+    "into your branch (`git merge {ref}`), settle what clashes, and carry on."
+)
+# How often a merge is made again because the org was saved meanwhile.
+_MERGE_ATTEMPTS = 4
+# Where, in the repository's git directory, the director keeps what it is in
+# the middle of.
+_RUN_STATE = "director/state.db"
+# Where, in the repository's git directory, the director keeps the shells
+# its agents' terminals start, and what those shells need.
+_SHELLS_DIR = "director-shells"
+# After a conversation id: the script an ACP agent's process is started by.
+_ACP_LAUNCHER = ".acp.sh"
+_REMEMBERED_FILE = "director.json"
+# The lane of what concerns the org as a whole, such as saving its tree.
+ORG_LANE = "org"
+# The lane reports are rewritten shorter in.
+MODELS_LANE = "models"
+# The lane agents are paused in, so that nothing waits for their last step.
+PAUSE_LANE = "pause"
+STALL_LANE = "stalls"
+# The steps the director takes for a team's review, in its own lane.
+_REVIEW_STEPS = ("request_review", "accept")
+# How many of the director's own model calls run at once.
+MODEL_CALLS_AT_ONCE = 2
+
+_AGENT_STATUS: dict[ConversationExecutionStatus, str] = {
+    ConversationExecutionStatus.RUNNING: "working",
+    ConversationExecutionStatus.ERROR: "blocked",
+    ConversationExecutionStatus.STUCK: "blocked",
+}
+
+# How long a message waits for an IC that submitted to end its turn.
+_REST_CHECKS = 600
+_REST_CHECK_SECONDS = 0.05
+
+type Effect = Callable[[], Awaitable[None]]
+
+
+class _Held(Exception):
+    """The org was paused before a step could be finished."""
+
+
+def agent_conversation(node: OrgNode, role: AgentRole) -> str | None:
+    """The conversation of the node's agent in ``role``, if it has one."""
+    for agent in node.agents:
+        if agent.role == role:
+            return agent.conversation_id
+    return None
+
+
+def hand_over_of(node: OrgNode) -> HandOverMode | None:
+    """The hand-over mode of the node's IC, if it is or was in it."""
+    for agent in node.agents:
+        if agent.role == "ic":
+            return agent.hand_over
+    return None
+
+
+def _agent_title(team: str, role: AgentRole) -> str:
+    return f"{team} ({ROLE_NAMES[role]})"
+
+
+def _summary_of(text: str) -> str:
+    first_line = text.strip().splitlines()[0] if text.strip() else ""
+    return first_line[:200]
+
+
+@lru_cache(maxsize=4096)
+def _checkout_root(workspace: str) -> Path:
+    """The top of the git checkout ``workspace`` is in, symlinks resolved."""
+    try:
+        top = git(Path(workspace), ["rev-parse", "--show-toplevel"]).strip()
+    except (GitError, OSError):
+        top = workspace
+    return Path(os.path.realpath(top))
+
+
+def _is_in(path: Path, directory: Path) -> bool:
+    return path == directory or directory in path.parents
+
+
+class ServiceState:
+    """The state of the director for one server, and what guards and saves it."""
+
+    def __init__(
+        self,
+        repo_dir: Path,
+        *,
+        fixture: bool = False,
+        save_delay: float = SAVE_DELAY_SECONDS,
+        run_limit_retry: float = RUN_LIMIT_RETRY_SECONDS,
+        worktree_root: Path | None = None,
+        find_sandbox: Callable[[], str | None] = lambda: None,
+        summary_timeout: float = SUMMARY_TIMEOUT_SECONDS,
+        remembered: Path | None = None,
+        find_review_instructions: Callable[[], str | None] = lambda: None,
+        model_call_timeout: float = MODEL_CALL_TIMEOUT_SECONDS,
+        max_concurrent_runs: int | None = None,
+        server_url: str | None = None,
+        clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+        stall_poll: float = STALL_POLL_SECONDS,
+    ) -> None:
+        """
+        Args:
+            clock: The time, for telling how long a team has shown no
+                progress.
+            stall_poll: How many seconds lie between two looks for teams
+                that show no progress.
+            server_url: Where this server answers, for agents that reach the
+                director's tools from a process of their own; None to take
+                it from the requests the director gets.
+            max_concurrent_runs: How many conversations the server runs at
+                once, to tell the human; None when not known.
+            find_review_instructions: Returns what a model is told when it
+                reads a team's diff before the IC above reviews it, or None
+                to leave that pass out.
+            remembered: A file to keep the org's repository in, so that an
+                org started outside ``repo_dir`` is found again after a
+                restart.
+            worktree_root: Where the server makes the git worktrees of
+                conversations, so that no team writes into another's.
+            find_sandbox: Returns the bubblewrap binary to confine the
+                agents' shells with, or None to leave them unconfined.
+        """
+        self._directory = repo_dir
+        # Where the org is; moves up when the store is loaded from above.
+        self._repo_dir = repo_dir
+        self._fixture = fixture
+        self._worktree_root = worktree_root
+        self._find_sandbox = find_sandbox
+        self._summary_timeout = summary_timeout
+        self._remembered = remembered
+        self._find_review_instructions = find_review_instructions
+        self._model_call_timeout = model_call_timeout
+        self._run: RunState | None = None
+        self._run_of: Path | None = None
+        self._paused: PauseReason | None = None
+        self._state_listeners: list[Callable[[OrgStateEvent], None]] = []
+        # The intents and messages being carried out right now, so that
+        # resuming does not carry one out a second time.
+        self._in_flight: set[int] = set()
+        self._delivering: set[int] = set()
+        # Messages that do not wait for their agent's turn to end: what the
+        # human said, and what waited for a turn that has now ended.
+        self._at_once: set[int] = set()
+        # The conversations last recorded as running.
+        self._running: set[str] = set()
+        # The teams each step waits for the agents of to stop, by the id of
+        # its intent, and the lane the step is carried out in.
+        self._settling: dict[int, tuple[set[str], str]] = {}
+        # The conversations a resume is about to run again.
+        self._resuming: set[str] = set()
+        self._save_asked = False
+        # Teams that waited for a run when the org was paused, in the order
+        # they waited: each tries to start only when it is the first.
+        self._line: deque[str] = deque()
+        self._line_moved = asyncio.Event()
+        # The records of removed teams by the node they were below, as read
+        # at one state of team memory.
+        self._former_read: tuple[str | None, dict[str, list[FormerTeam]]] | None = None
+        self._bwrap: str | None = None
+        self._stop_guard: Callable[[], None] | None = None
+        self._save_delay = save_delay
+        self._run_limit_retry = run_limit_retry
+        self._lock = threading.Lock()
+        # Held from looking a need up in the record to keeping it, so that
+        # an agent that tries the same file again is counted once.
+        self._keeping_needs = threading.Lock()
+        self._saving = threading.Lock()
+        self._adding_manager = threading.Lock()
+        self._counting = threading.Lock()
+        self._clock = clock
+        self._stall_poll = stall_poll
+        self._stall_watch: asyncio.Task[None] | None = None
+        self._remember_lock = threading.Lock()
+        self._store: OrgStore | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._launcher: PodLauncher | None = None
+        self._max_concurrent_runs = max_concurrent_runs
+        self._settings: DirectorSettings | None = None
+        self._configured_url = server_url
+        self._server_url = server_url
+        self._tool_key: bytes | None = None
+        # What each lane still has to carry out; a lane exists while it works.
+        self._lanes: dict[str, deque[Effect]] = {}
+        self._workers: set[asyncio.Task[None]] = set()
+        # Effects asked for and not carried out yet.
+        self._unsettled = 0
+        self._quiet = asyncio.Event()
+        self._quiet.set()
+        self._model_calls = asyncio.Semaphore(MODEL_CALLS_AT_ONCE)
+        # Set when a conversation stopped running, so a start may fit now.
+        self._room = asyncio.Event()
+        # Held by the start that waits for room, so that starts are served
+        # in the order they began to wait.
+        self._start_gate = asyncio.Lock()
+        self._save_timer: asyncio.TimerHandle | None = None
+        self._stop_status: Callable[[], None] | None = None
+        self._create_lock = asyncio.Lock()
+        self._first_message_lock = asyncio.Lock()
+        # Held by a pull, a push or a step of a merge, one at a time.
+        self._sync_lock = asyncio.Lock()
+
+    @classmethod
+    def from_config(cls, config: Config) -> Self:
+        return cls(
+            config.director_repo_path or config.workspace_path,
+            fixture=config.director_fixture,
+            worktree_root=config.conversation_worktree_root,
+            find_sandbox=find_bwrap,
+            remembered=config.conversations_path.parent / _REMEMBERED_FILE,
+            find_review_instructions=bugbot.review_instructions,
+            max_concurrent_runs=config.max_concurrent_runs,
+            server_url=config.director_server_url,
+        )
+
+    @property
+    def store(self) -> OrgStore:
+        """The org tree, loaded on first use."""
+        with self._lock:
+            if self._store is None:
+                self._store = self._load_store()
+            return self._store
+
+    @property
+    def team_memory(self) -> GitStore:
+        """The team memory of the director's repository.
+
+        Raises:
+            Unavailable: The director's directory is not a git repository.
+        """
+        _ = self.store  # settles which repository the org is in
+        if not is_git_repository(self._repo_dir):
+            raise Unavailable(
+                f"The director has no team memory: {self._repo_dir} is not a git "
+                "repository. Point OH_DIRECTOR_REPO_PATH at one."
+            )
+        return self._memory()
+
+    def _memory(self) -> GitStore:
+        return GitStore(self._repo_dir)
+
+    def state(self) -> OrgStateEvent:
+        """Whether the org is paused or in the middle of a merge."""
+        run = self._runs()
+        return OrgStateEvent(paused=self._paused, merging=run.get("merge") is not None)
+
+    def watch_state(
+        self, listener: Callable[[OrgStateEvent], None]
+    ) -> Callable[[], None]:
+        """Call ``listener`` whenever the org is paused, resumed, or begins
+        or ends a merge. It may be called from any thread.
+
+        Returns:
+            A function that stops the calls.
+        """
+        with self._lock:
+            self._state_listeners.append(listener)
+
+        def unwatch() -> None:
+            with self._lock:
+                if listener in self._state_listeners:
+                    self._state_listeners.remove(listener)
+
+        return unwatch
+
+    def _announce_state(self) -> None:
+        with self._lock:
+            listeners = list(self._state_listeners)
+        if not listeners:
+            return
+        state = self.state()
+        for listener in listeners:
+            listener(state)
+
+    def _set_merge(self, state: dict[str, Any] | None) -> None:
+        self._runs().put("merge", json.dumps(state) if state is not None else None)
+        self._announce_state()
+
+    def summary(self) -> OrgSummary:
+        store = self.store
+        return OrgSummary(
+            root_id=store.root_id,
+            node_count=len(store),
+            repo_path=str(self._repo_dir),
+            directory=self._home(),
+            is_git_repository=is_git_repository(self._repo_dir),
+            fixture=self._fixture,
+            boundary_enforcement="sandbox" if self._bwrap else "checks",
+            paused=self._paused if self._runs() else None,
+            merging=self._runs().get("merge") is not None,
+        )
+
+    @property
+    def settings(self) -> DirectorSettings:
+        """The limits on new teams, as last saved."""
+        with self._lock:
+            if self._settings is None:
+                saved = self._read_remembered().get("settings")
+                try:
+                    self._settings = DirectorSettings.model_validate(saved or {})
+                except ValueError:
+                    logger.warning("Ignoring the saved director settings: %r", saved)
+                    self._settings = DirectorSettings()
+            return self._settings
+
+    def settings_state(self) -> DirectorSettingsState:
+        """The settings, with how large the org is now."""
+        levels: dict[str, int] = {}
+        for node in self.store.all():
+            levels[node.id] = levels.get(node.parent_id or "", 0) + 1
+        return DirectorSettingsState(
+            **self.settings.model_dump(),
+            teams=len(levels),
+            depth=max(levels.values(), default=0),
+            max_concurrent_runs=self._max_concurrent_runs,
+        )
+
+    def update_settings(self, update: DirectorSettingsUpdate) -> DirectorSettingsState:
+        """Change the limits on new teams. Existing teams are left alone."""
+        values = update.model_dump(exclude_none=True)
+        changed = self.settings.model_copy(update=values)
+        with self._lock:
+            self._settings = changed
+        self._remember(settings=changed.model_dump())
+        return self.settings_state()
+
+    def reached_at(self, url: str) -> None:
+        """Note the address a request reached this server at.
+
+        An agent that runs its own tools calls the director's from its own
+        process and is given this address to do so.
+        """
+        if self._configured_url is not None or url == self._url():
+            return
+        self._server_url = url
+        self._remember(server_url=url)
+
+    def agent_of(self, token: str) -> UUID:
+        """The conversation of the agent a tool call comes from.
+
+        Raises:
+            NotFound: The token was not given out by this director.
+        """
+        conversation_id = conversation_of(self._key(), token)
+        if conversation_id is None:
+            raise NotFound("That is not the token of an agent of this org")
+        return UUID(conversation_id)
+
+    def _url(self) -> str | None:
+        if self._server_url is None:
+            kept = self._read_remembered().get("server_url")
+            self._server_url = kept if isinstance(kept, str) else None
+        return self._server_url
+
+    def _key(self) -> bytes:
+        """What the tokens of the org's agents are signed with. It is kept
+        beside the server's conversations, never in the repository."""
+        with self._lock:
+            if self._tool_key is None:
+                kept = self._read_remembered().get("tool_key")
+                if not isinstance(kept, str):
+                    kept = secrets.token_hex(32)
+                    self._remember(tool_key=kept)
+                self._tool_key = kept.encode()
+            return self._tool_key
+
+    def _adapter(
+        self, conversation_id: str, offered: Sequence[str]
+    ) -> Callable[[AgentBase], AgentBase]:
+        """What is changed on an agent as its conversation starts.
+
+        An agent that runs its own tools gets the director's through an MCP
+        server and is started by the script that holds its process to its
+        team's directory. Any other agent keeps the tools it has and, of
+        the director's, gets the ones in ``offered``: an agent derived from
+        another carries that agent's, which are another role's for a
+        Manager.
+        """
+        launchers = self._shells()
+        launcher = launchers / f"{conversation_id}{_ACP_LAUNCHER}"
+
+        def adapt(agent: AgentBase) -> AgentBase:
+            if not isinstance(agent, ACPAgent):
+                kept = [
+                    tool
+                    for tool in agent.tools
+                    if tool.name not in DIRECTOR_TOOL_NAMES or tool.name in offered
+                ]
+                has = {tool.name for tool in kept}
+                added = [Tool(name=name) for name in offered if name not in has]
+                return agent.model_copy(update={"tools": [*kept, *added]})
+            url = self._url()
+            if url is None:
+                raise Unavailable(
+                    "The director does not know the address of its own "
+                    "server, which an ACP agent needs to reach its tools"
+                )
+            return as_org_agent(
+                agent,
+                tools=tools_server(url, agent_token(self._key(), conversation_id)),
+                launcher=launcher if launcher.exists() else None,
+                launchers=launchers,
+            )
+
+        return adapt
+
+    def _shells(self) -> Path:
+        git_dir = git(
+            self._repo_dir, ["rev-parse", "--path-format=absolute", "--git-common-dir"]
+        ).strip()
+        return Path(git_dir) / _SHELLS_DIR
+
+    def _enforcement(self, kind: AgentKind) -> TeamEnforcement:
+        if self._bwrap is not None:
+            return "sandbox"
+        return "merge" if kind == "acp" else "checks"
+
+    def search(self, query: str, limit: int) -> list[TeamMatch]:
+        """Teams whose title or directory has every word of ``query``."""
+        words = query.lower().split()
+        found: list[TeamMatch] = []
+        if not words:
+            return found
+        for node in self.store.all():
+            text = f"{node.title}\n{node.boundary.path}".lower()
+            if all(word in text for word in words):
+                found.append(
+                    TeamMatch(id=node.id, title=node.title, path=node.boundary.path)
+                )
+                if len(found) == limit:
+                    break
+        return found
+
+    async def settled(self) -> None:
+        """Wait until everything asked for so far has been carried out."""
+        # Let what other threads asked for reach the queue first.
+        await asyncio.sleep(0)
+        # What is carried out may ask for more.
+        while self._unsettled:
+            await self._quiet.wait()
+            await asyncio.sleep(0)
+
+    def _conversations_below(self, team: OrgNode) -> list[str]:
+        """The conversations of a team and of every team below it."""
+        store = self.store
+        teams = [team]
+        for found in teams:
+            teams.extend(store.children(found.id))
+        return [
+            conversation_id
+            for found in teams
+            for agent in found.agents
+            for conversation_id in (
+                agent.conversation_id,
+                agent.hand_over.conversation_id if agent.hand_over else None,
+            )
+            if conversation_id is not None
+        ]
+
+    def _is_stopped(self, conversation_id: str) -> bool:
+        """Whether the agent's team, or a team above it, is stopped."""
+        store = self.store
+        found = store.find_by_conversation(conversation_id)
+        if found is None:
+            return False
+        node = found[0]
+        return node.stopped is not None or any(
+            above.stopped is not None for above in store.ancestors(node.id)
+        )
+
+    def _restart_clocks(self, run: RunState) -> None:
+        """Count the time teams show no progress from now: the time an org
+        was paused, or its server was not running, is nobody's."""
+        now = self._clock().isoformat()
+        for node_id, kept in run.marked(PROGRESS).items():
+            seen = _progress_of(kept)
+            # A team without a task was told of once, and stays told.
+            told = {"told": now} if "told" in seen else {}
+            again = {"at": now, "head": seen.get("head")}
+            run.mark(PROGRESS, node_id, json.dumps(again | told))
+
+    def _repository(self) -> Path:
+        """The repository the org is in, or would be in.
+
+        Raises:
+            Unavailable: The director's directory is not in a git repository.
+        """
+        if self.store.root_id is not None:
+            return self._repo_dir
+        if not is_git_repository(self._directory):
+            raise Unavailable(
+                f"An org needs a git repository; {self._directory} is not one"
+            )
+        return _checkout_root(str(self._directory))
+
+    def _merging(self) -> dict[str, Any] | None:
+        kept = self._runs().get("merge")
+        return json.loads(kept) if kept else None
+
+    def _runs(self) -> RunState:
+        """What the director is in the middle of, in the org's repository."""
+        _ = self.store  # settles which repository the org is in
+        with self._lock:
+            if self._run is None or self._run_of != self._repo_dir:
+                if self._run is not None:
+                    self._run.close()
+                self._run = self._open_run_state()
+                self._run_of = self._repo_dir
+                kept = self._run.get("paused")
+                self._paused = kept if kept in ("human", "shutdown", "crash") else None
+                self._running = set(self._run.marked(RUNNING))
+                self._restart_clocks(self._run)
+            return self._run
+
+    def _open_run_state(self) -> RunState:
+        if self._fixture or not is_git_repository(self._repo_dir):
+            return RunState(None)
+        try:
+            return RunState(self._shells().parent / _RUN_STATE)
+        except (GitError, OSError, RunStateError):
+            logger.exception("Run state of %s is kept in memory only", self._repo_dir)
+            return RunState(None)
+
+    def _hold(self, reason: PauseReason) -> None:
+        self._runs().put("paused", reason)
+        self._paused = reason
+        self._announce_state()
+
+    def _release(self) -> None:
+        run = self._runs()
+        run.put("paused", None)
+        run.put("dropped", None)
+        self._paused = None
+        self._restart_clocks(run)
+        self._announce_state()
+
+    def _dropped(self) -> list[RecoveryItem]:
+        kept = self._runs().get("dropped")
+        return [RecoveryItem.model_validate(item) for item in json.loads(kept or "[]")]
+
+    def _instance(self) -> str:
+        """Names this server, to tell its run state from another's."""
+        if self._remembered is None:
+            return ""
+        kept = self._read_remembered().get("instance")
+        if not isinstance(kept, str):
+            kept = uuid4().hex
+            self._remember(instance=kept)
+        return kept
+
+    def _working(self) -> None:
+        """Record that the org is run by this server and has not been
+        stopped."""
+        run = self._runs()
+        run.put("instance", self._instance())
+        run.put("clean", "0")
+
+    def _checkouts(self) -> list[Path]:
+        """Where the org's checkouts are: the repository and the worktrees."""
+        roots = [
+            self._repo_dir,
+            *([self._worktree_root] if self._worktree_root else []),
+        ]
+        return [Path(os.path.realpath(root)) for root in roots]
+
+    def _home(self) -> str:
+        """The directory the server was started for, relative to the org's
+        repository; '' when it is not below its root."""
+        home = Path(os.path.realpath(self._directory))
+        top = _checkout_root(str(self._repo_dir))
+        return home.relative_to(top).as_posix() if top in home.parents else ""
+
+    def _repo_relative(self, path: str) -> str:
+        """``path`` as a clean path relative to the repository.
+
+        Raises:
+            Unprocessable: It is not inside the director's directory.
+        """
+        if not Path(path).is_absolute():
+            try:
+                return clean_path(path)
+            except DomainError as error:
+                raise Unprocessable(str(error)) from error
+        target = Path(os.path.realpath(path))
+        top = _checkout_root(str(self._repo_dir))
+        if not _is_in(target, top):
+            raise Unprocessable(f"{path} is outside the org's repository {top}")
+        relative = target.relative_to(top).as_posix()
+        return "" if relative == "." else relative
+
+    def _confine(
+        self, node_id: str, role: AgentRole, hand_over: str | None = None
+    ) -> ToolParams | None:
+        """Write the shell an agent's terminal starts.
+
+        Where the server can, the shell holds the agent to its team's
+        boundary. An IC's shell also finds a ``git`` that keeps the agent's
+        index apart from those of the agents it shares a checkout with.
+
+        Returns:
+            What to start the agent's terminal with, or None when it needs
+            no shell of its own.
+        """
+        node = self.store.get(node_id)
+        conversation_id = hand_over or (
+            agent_conversation(node, role) if node else None
+        )
+        if node is None or conversation_id is None:
+            return None
+        # An IC writes in its boundary from its main conversation alone.
+        writes = role == "ic" and hand_over is None
+        bash, real_git = shutil.which("bash"), shutil.which("git")
+        own_git = writes and os.name != "nt" and bash and real_git
+        if self._bwrap is None and not own_git:
+            return None
+        shells = self._shells()
+        git_dir = str(shells.parent)
+        children = self.store.children(node_id)
+        sub_teams = [child.boundary.path for child in children]
+        # Its git commits nothing in a sub-team's directory; it may still
+        # write in that of a team that has not started.
+        closed = [child.boundary.path for child in children if child.agents]
+        rc: Path | None = None
+        bin_dir: Path | None = None
+        if own_git and real_git:
+            directory = node.boundary.path
+            rc = shells / f"{conversation_id}.rc"
+            bin_dir = shells / f"{conversation_id}.bin"
+            excludes = shells / f"{conversation_id}.exclude"
+            write_shell(
+                bin_dir / "git",
+                git_script(
+                    real_git,
+                    common_dir=git_dir,
+                    conversation_id=conversation_id,
+                    directory=directory,
+                    sub_team_directories=sub_teams,
+                    excludes=excludes,
+                    flock=shutil.which("flock"),
+                ),
+            )
+            atomic_write_text(
+                excludes, excludes_file(self._repo_dir, directory, sub_teams)
+            )
+            atomic_write_text(rc, rcfile(bin_dir))
+        script = shells / f"{conversation_id}.sh"
+        write_shell(
+            script,
+            shell_script(
+                self._bwrap,
+                bash or "/bin/sh",
+                checkouts=self._checkouts(),
+                private=shells,
+                directory=node.boundary.path if writes else None,
+                sub_team_directories=closed,
+                rcfile=rc,
+            ),
+        )
+        # An agent that runs its own tools has no terminal of the server's;
+        # its whole process is started by this instead.
+        write_shell(
+            shells / f"{conversation_id}{_ACP_LAUNCHER}",
+            command_script(
+                self._bwrap,
+                checkouts=self._checkouts(),
+                private=shells,
+                directory=node.boundary.path if writes else None,
+                sub_team_directories=closed,
+                first_on_path=bin_dir,
+            ),
+        )
+        # Only the subprocess terminal starts the shell it is given.
+        return {"terminal": {"terminal_type": "subprocess", "shell_path": str(script)}}
+
+    def _confine_all(self) -> None:
+        for node in self.store.all():
+            for agent in node.agents:
+                try:
+                    self._confine(node.id, agent.role)
+                except (GitError, OSError):
+                    logger.exception("Could not write the shell of node %s", node.id)
+
+    def _require_launcher(self) -> PodLauncher:
+        if self._launcher is None:
+            raise Unavailable("The director is not running agents on this server")
+        return self._launcher
+
+    def _load_store(self) -> OrgStore:
+        store = OrgStore()
+        if self._fixture:
+            store.replace_all(build_fixture_nodes())
+            logger.info("Director serving the fixture tree (%d nodes)", len(store))
+            return store
+        remembered = self._remembered_repo()
+        if remembered is None or not self._load_from(remembered, store):
+            self._load_from(self._directory, store)
+        store.on_change(self._schedule_save)
+        if self._loop is not None:
+            self._enqueue(self._came_back)
+        return store
+
+    def _load_from(self, directory: Path, store: OrgStore) -> bool:
+        """Load the org saved in the repository of ``directory``, or failing
+        that in the nearest repository above that has it as a submodule.
+
+        Returns:
+            Whether one was found. The director then works in its repository.
+        """
+        repository: Path | None = directory
+        while repository is not None and is_git_repository(repository):
+            if load_org(create_org_board(repository), store):
+                self._repo_dir = _checkout_root(str(repository))
+                logger.info("Director loaded %d nodes from %s", len(store), repository)
+                return True
+            repository = enclosing_repository(repository)
+        return False
+
+    def _join(self, workspace: Path) -> bool:
+        """Take up the org saved at or above ``workspace``, if there is one."""
+        if not self._load_from(workspace, self.store):
+            return False
+        self._remember(repo_path=str(self._repo_dir))
+        return True
+
+    def _read_remembered(self) -> dict[str, object]:
+        """What the director keeps between starts of the server."""
+        if self._remembered is None:
+            return {}
+        try:
+            kept = json.loads(self._remembered.read_text())
+        except (OSError, ValueError):
+            return {}
+        return kept if isinstance(kept, dict) else {}
+
+    def _remembered_repo(self) -> Path | None:
+        repo_path = self._read_remembered().get("repo_path")
+        return Path(repo_path) if isinstance(repo_path, str) else None
+
+    def _remember(self, **changes: object) -> None:
+        """Keep ``changes`` for the next start of the server."""
+        if self._remembered is None:
+            return
+        with self._remember_lock:
+            try:
+                self._remembered.parent.mkdir(parents=True, exist_ok=True)
+                atomic_write_text(
+                    self._remembered,
+                    json.dumps({**self._read_remembered(), **changes}) + "\n",
+                )
+            except OSError:
+                logger.exception("Could not write %s", self._remembered)
+
+    def _enqueue(self, effect: Effect, lane: str = ORG_LANE) -> None:
+        loop = self._loop
+        if loop is None:
+            raise Unavailable("The director is not running agents on this server")
+        loop.call_soon_threadsafe(self._put, effect, lane)
+
+    def _put(self, effect: Effect, lane: str) -> None:
+        self._unsettled += 1
+        self._quiet.clear()
+        waiting = self._lanes.get(lane)
+        if waiting is not None:
+            waiting.append(effect)
+            return
+        self._lanes[lane] = deque([effect])
+        worker = asyncio.create_task(self._work(lane), name=f"director-{lane}")
+        self._workers.add(worker)
+        worker.add_done_callback(self._workers.discard)
+
+    async def _work(self, lane: str) -> None:
+        waiting = self._lanes[lane]
+        try:
+            while waiting:
+                effect = waiting.popleft()
+                try:
+                    await effect()
+                except Exception:
+                    logger.exception("A director action failed")
+                finally:
+                    self._unsettled -= 1
+                    if not self._unsettled:
+                        self._quiet.set()
+        finally:
+            del self._lanes[lane]
+
+    def _begin(self, kind: str, node_id: str, **payload: object) -> None:
+        """Record something of several steps the director does for a team,
+        then do it. Safe from any thread.
+
+        It is finished after a restart or a pause from the steps that were
+        done, so each step must be safe to take twice.
+        """
+        if self._loop is None:
+            raise Unavailable("The director is not running agents on this server")
+        intent = self._runs().begin(kind, node_id, payload)
+        self._save_soon()
+        self._enqueue(lambda: self._carry_out(intent.id), _lane_for(intent))
+
+    async def _carry_out(self, intent_id: int) -> None:
+        run = self._runs()
+        if self._paused is not None or intent_id in self._in_flight:
+            return
+        intent = next(
+            (open_ for open_ in run.open_intents() if open_.id == intent_id), None
+        )
+        if intent is None:
+            return
+        step = self._steps().get(intent.kind)
+        if step is None:
+            run.finish(intent.id)
+            self._leave_line(intent.node_id)
+            return
+        self._in_flight.add(intent.id)
+        try:
+            await step(intent)
+        except _Held:
+            return
+        except Exception:
+            logger.exception("A director action failed")
+            run.finish(intent.id)
+        else:
+            if intent.kind in _SAVED_BEFORE_FORGOTTEN:
+                # What it changed in the tree is saved before it is
+                # forgotten: a server that ends in between does the step
+                # again, never loses it.
+                await self._save()
+            run.finish(intent.id)
+        finally:
+            self._in_flight.discard(intent.id)
+            self._leave_line(intent.node_id)
+
+    def _leave_line(self, node_id: str) -> None:
+        if node_id in self._line:
+            self._line.remove(node_id)
+            moved, self._line_moved = self._line_moved, asyncio.Event()
+            moved.set()
+
+    def _schedule_save(self) -> None:
+        loop = self._loop
+        if loop is not None:
+            loop.call_soon_threadsafe(self._arm_save)
+
+    def _arm_save(self) -> None:
+        loop = self._loop
+        if loop is None or self._save_timer is not None:
+            return
+        self._save_timer = loop.call_later(
+            self._save_delay, lambda: self._enqueue(self._save_due)
+        )
+
+    async def _save_due(self) -> None:
+        self._save_timer = None
+        await self._save()
+
+    def _save_soon(self) -> None:
+        """Save the tree without waiting to gather more changes: what was
+        just recorded as begun refers to it."""
+        if not self._save_asked:
+            self._save_asked = True
+            self._enqueue(self._save_asked_for)
+
+    async def _save_asked_for(self) -> None:
+        self._save_asked = False
+        await self._save()
+
+    async def _save(self) -> None:
+        store = self._store
+        if store is None or self._fixture:
+            return
+        try:
+            await asyncio.to_thread(self._save_tree, store)
+        except GitError:
+            logger.exception("Could not save the org tree to %s", self._repo_dir)
+
+    def _save_tree(self, store: OrgStore) -> None:
+        with self._saving:
+            board = create_org_board(self._repo_dir)
+            save_org(board, store)
+            run = self._runs()
+            run.replace_marks(
+                TEAM, {node.id: fingerprint(node) for node in store.all()}
+            )
+            run.put("org_commit", board.head())
+
+    def _wait_for_save(self) -> None:
+        with self._saving:
+            pass
+
+    def _shown(self, conversation_id: str, status: ConversationExecutionStatus) -> str:
+        """An agent's status as the org shows it. One that was running when
+        the org was paused is paused, whatever stopping did to it."""
+        held = self._paused is not None and conversation_id in self._running
+        if held or conversation_id in self._resuming:
+            if status != ConversationExecutionStatus.RUNNING:
+                return AGENT_PAUSED
+        return _AGENT_STATUS.get(status, "idle")
+
+    def _forget_shells(self, team: OrgNode) -> None:
+        """Remove what the shells of a team's agents were made of."""
+        try:
+            common, own = (
+                Path(
+                    git(
+                        directory, ["rev-parse", "--path-format=absolute", kind]
+                    ).strip()
+                )
+                for directory, kind in (
+                    (self._repo_dir, "--git-common-dir"),
+                    (Path(team.worktree_path), "--git-dir"),
+                )
+            )
+        except (GitError, OSError):
+            return
+        for agent in team.agents:
+            name = agent.conversation_id
+            if name is None:
+                continue
+            for left in (
+                *(common / _SHELLS_DIR).glob(f"{name}.*"),
+                *own.glob(f"agent-index-{name}*"),
+            ):
+                if left.is_dir():
+                    shutil.rmtree(left, ignore_errors=True)
+                else:
+                    left.unlink(missing_ok=True)
+
+    def _steps(self) -> dict[str, Callable[[Intent], Awaitable[None]]]:
+        """What carries out each kind of intent. The service names its own."""
+        return {}
+
+    async def _came_back(self) -> None:
+        """Take up what the org had begun before the server stopped."""
+
+
+def _spec_file(directory: str) -> str:
+    return f"{directory}/{SPEC_FILE}" if directory else SPEC_FILE
+
+
+def _child_node(taken: set[str], parent: OrgNode, child: SplitChild) -> OrgNodeInput:
+    """The team a split makes of ``child``, under an id that is not in
+    ``taken`` and is added to it."""
+    base = ".".join(
+        re.sub(r"[^A-Za-z0-9_-]+", "-", segment) for segment in child.path.split("/")
+    )
+    node_id, attempt = base, 1
+    while node_id in taken:
+        attempt += 1
+        node_id = f"{base}-{attempt}"
+    taken.add(node_id)
+    return OrgNodeInput(
+        id=node_id,
+        parent_id=parent.id,
+        title=child.title,
+        boundary=child_boundary(child),
+        isolation=child.isolation,
+        agent_profile=child.agent_profile,
+        worktree_path=parent.worktree_path,
+        branch=parent.branch,
+        agents=[],
+        status="idle",
+        headline=provisional_summary(child.task).headline,
+        spec_summary=_summary_of(child.task),
+    )
+
+
+def _shared_root(nodes: list[dict[str, Any]]) -> str | None:
+    """Where the repository is on the machine that saved ``nodes``, when
+    their root team works in the repository's own checkout."""
+    root = next((node for node in nodes if node["parent_id"] is None), None)
+    if root is None or root["isolation"] != "shared":
+        return None
+    return root["worktree_path"]
+
+
+# Steps whose outcome is in the tree alone. The steps that start agents are
+# not among them: their outcome is the conversation.
+_SAVED_BEFORE_FORGOTTEN = frozenset({"accept", "finish_split", "request_review"})
+
+
+def _lane_for(intent: Intent) -> str:
+    if intent.kind in _REVIEW_STEPS:
+        return f"review:{intent.node_id}"
+    return intent.node_id
+
+
+def _new_pod(ic_id: UUID) -> list[AgentRef]:
+    """The agents a team starts with. Its Manager joins when something is
+    first sent to it (see :meth:`DirectorService.tell_manager`)."""
+    return [AgentRef(role="ic", conversation_id=str(ic_id), status="idle")]
+
+
+def _progress_of(kept: str | None) -> dict[str, Any]:
+    """What is known of a team's progress: when it last got anywhere
+    (``at``), the last commit in its directory then (``head``), and when
+    the IC above was last told that it shows none (``told``)."""
+    try:
+        seen = json.loads(kept) if kept else {}
+    except ValueError:
+        return {}
+    return seen if isinstance(seen, dict) else {}
+
+
+def _base_of(workspace: str) -> str:
+    return head_of(Path(workspace)) or ""
+
+
+def _now() -> str:
+    return datetime.now(UTC).isoformat(timespec="seconds")
+
+
+def _instant() -> str:
+    """Now, fine enough to put what two agents record in order."""
+    return datetime.now(UTC).isoformat()
+
+
+def _branch_of(workspace: str) -> str:
+    try:
+        return git(Path(workspace), ["rev-parse", "--abbrev-ref", "HEAD"]).strip()
+    except (GitError, OSError):
+        return ""

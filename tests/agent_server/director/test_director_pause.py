@@ -347,6 +347,8 @@ async def test_a_review_request_cut_off_by_a_crash_reaches_the_reviewer_once(
     await cut_off(
         launcher, ended, use(first, ic(first, "services.api"), SubmitReviewTool, DONE)
     )
+    # A save the ended server had begun is not one the next start reads half of.
+    await asyncio.to_thread(first._wait_for_save)
 
     second = await again(repo, launcher)
     assert ("services.api", "continue") in kinds(await second.recovery())

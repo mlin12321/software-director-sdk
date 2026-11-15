@@ -15,7 +15,7 @@ import httpx
 import pytest
 
 from openhands.agent_server.api import create_app
-from openhands.agent_server.director import mcp_shim, service as service_module
+from openhands.agent_server.director import mcp_shim
 from openhands.agent_server.director.acp import (
     MCP_SERVER_NAME,
     agent_token,
@@ -38,6 +38,7 @@ from openhands.agent_server.director.sandbox import (
 from openhands.agent_server.director.service import (
     DirectorService,
     agent_conversation,
+    reviews as reviews_module,
 )
 from openhands.agent_server.director.tools import (
     ApproveTeamsTool,
@@ -634,7 +635,7 @@ async def test_a_notice_does_not_wait_for_an_agent_whose_tools_the_server_runs(
 async def test_an_acp_ic_that_ends_its_turn_after_submitting_is_left_alone(
     repo: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    monkeypatch.setattr(service_module, "_REST_CHECK_SECONDS", 0.01)
+    monkeypatch.setattr(reviews_module, "_REST_CHECK_SECONDS", 0.01)
     launcher = FakeLauncher(root_kind="acp")
     service = await started(repo, launcher)
     root_ic = ic(service)
@@ -656,8 +657,8 @@ async def test_an_acp_ic_that_ends_its_turn_after_submitting_is_left_alone(
 async def test_an_acp_ic_that_carries_on_after_submitting_is_cut_short(
     repo: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    monkeypatch.setattr(service_module, "_REST_CHECKS", 3)
-    monkeypatch.setattr(service_module, "_REST_CHECK_SECONDS", 0.01)
+    monkeypatch.setattr(reviews_module, "_REST_CHECKS", 3)
+    monkeypatch.setattr(reviews_module, "_REST_CHECK_SECONDS", 0.01)
     launcher = FakeLauncher(root_kind="acp")
     service = await started(repo, launcher)
     root_ic = ic(service)

@@ -20,9 +20,9 @@ from openhands.agent_server.director.models import (
     SplitChild,
 )
 from openhands.agent_server.director.org_persistence import ORG_REF
+from openhands.agent_server.director.org_store import AGENT_LOST
 from openhands.agent_server.director.prompts import MANAGER_ROLE, POD_PROTOCOL
 from openhands.agent_server.director.service import (
-    AGENT_LOST,
     DIRECTOR_TOOL_NAMES,
     HAND_OVER_TOOLS,
     TOOLS_OF,

@@ -15,7 +15,8 @@ from openhands.agent_server.director.models import (
 )
 from openhands.agent_server.director.org_merge import by_id, merge_orgs, rehomed
 from openhands.agent_server.director.org_persistence import create_org_board
-from openhands.agent_server.director.service import AGENT_LOST, DirectorService
+from openhands.agent_server.director.org_store import AGENT_LOST
+from openhands.agent_server.director.service import DirectorService
 from openhands.sdk.errors import Conflict, Unprocessable
 from tests.agent_server.director.conftest import (
     FakeLauncher,
