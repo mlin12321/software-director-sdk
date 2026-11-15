@@ -741,10 +741,16 @@ async def start_team_again(
     return await service.start_again(node_id, request)
 
 
-@director_tools_router.get("", dependencies=[Depends(_calling_agent)])
-def list_agent_tools() -> list[RemoteTool]:
-    """The director's tools, for an agent that runs its own tools."""
-    return list_tools()
+@director_tools_router.get("")
+def list_agent_tools(
+    request: Request, conversation_id: UUID = Depends(_calling_agent)
+) -> list[RemoteTool]:
+    """The director's tools the calling agent is offered: its role's."""
+    service: DirectorService = request.app.state.director_service
+    try:
+        return list_tools(service, conversation_id)
+    except NotFound as error:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(error)) from error
 
 
 @director_tools_router.post(

@@ -35,7 +35,10 @@ from openhands.agent_server.director.sandbox import (
     find_bwrap,
     write_shell,
 )
-from openhands.agent_server.director.service import DirectorService
+from openhands.agent_server.director.service import (
+    DirectorService,
+    agent_conversation,
+)
 from openhands.agent_server.director.tools import (
     ApproveTeamsTool,
     MsgManagerTool,
@@ -329,13 +332,46 @@ async def test_an_agent_calls_the_directors_tools_with_its_token_alone(
 
     assert listed.status_code == 200
     tools = {tool["name"]: tool for tool in listed.json()}
-    assert {"msg_manager", "msg_ic", "review_team"} <= set(tools)
+    assert {"msg_manager", "review_team"} <= set(tools)
+    # A Manager's tools are not offered to an IC.
+    assert not {"msg_ic", "approve_teams", "prune_team"} & set(tools)
     assert "text" in tools["msg_manager"]["inputSchema"]["properties"]
     assert spec.json()["is_error"] is False
     assert service.team_memory.applies_to("", None)[0][0].spec == "# Spec"
     assert refused.status_code == 200 and refused.json()["is_error"] is True
     assert "Manager" in refused.json()["text"]
     assert malformed.json()["is_error"] is True
+
+
+async def test_a_manager_is_listed_its_own_tools_and_a_stranger_none(
+    running, repo: Path
+):
+    client, service = running
+    await service.create_org(
+        CreateOrgRequest(
+            title="Checkout", task="Build", conversation=root_conversation(repo)
+        )
+    )
+    await service.settled()
+    service.tell_manager("root", "Look in on your team.")
+    await service.settled()
+    manager = agent_conversation(node(service, "root"), "manager")
+    assert manager is not None
+
+    listed = await client.get(
+        "/api/director/tools",
+        headers={mcp_shim.TOKEN_HEADER: agent_token(service._key(), manager)},
+    )
+    # Its token is right, and it is no agent of the org.
+    stranger = await client.get(
+        "/api/director/tools",
+        headers={mcp_shim.TOKEN_HEADER: agent_token(service._key(), str(uuid4()))},
+    )
+
+    names = {tool["name"] for tool in listed.json()}
+    assert {"approve_teams", "decline_teams", "prune_team", "msg_ic"} <= names
+    assert not {"submit_review", "write_spec", "msg_team"} & names
+    assert stranger.status_code == 404
 
 
 async def test_the_tool_routes_refuse_whoever_has_no_agents_token(running, repo: Path):

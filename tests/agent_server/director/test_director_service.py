@@ -24,15 +24,19 @@ from openhands.agent_server.director.prompts import MANAGER_ROLE, POD_PROTOCOL
 from openhands.agent_server.director.service import (
     AGENT_LOST,
     DIRECTOR_TOOL_NAMES,
+    HAND_OVER_TOOLS,
+    TOOLS_OF,
     DirectorService,
     agent_conversation,
 )
 from openhands.agent_server.director.tools.definition import DIRECTOR_TOOLS
+from openhands.sdk import LLM, Agent
 from openhands.sdk.conversation.request import AgentLaunchAdditions
 from openhands.sdk.conversation.state import ConversationExecutionStatus
 from openhands.sdk.errors import Conflict, NotFound, Unavailable, Unprocessable
 from openhands.sdk.event import ActionEvent
 from openhands.sdk.tool.registry import list_registered_tools
+from openhands.sdk.tool.spec import Tool
 from openhands.sdk.tool.tool import Action
 from openhands.tools.apply_patch.definition import ApplyPatchAction
 from openhands.tools.file_editor.definition import FileEditorAction
@@ -82,7 +86,7 @@ async def test_starting_an_org_runs_a_root_team_briefed_with_the_task(
 
     assert launcher.root is not None
     assert str(launcher.root.conversation_id) == ic
-    assert launcher.root_tools == list(DIRECTOR_TOOL_NAMES)
+    assert launcher.root_tools == list(TOOLS_OF["ic"])
     assert (launcher.root_title, launcher.root.autotitle) == ("Checkout (IC)", False)
     [briefing] = launcher.messages_to(ic)
     assert "IC" in briefing and "Build the checkout flow\nwith tests" in briefing
@@ -119,10 +123,44 @@ async def test_the_org_protocol_is_added_to_what_the_caller_appends(
     assert suffix == f"Prefer small commits.\n\n{POD_PROTOCOL}"
 
 
-def test_agents_are_given_every_director_tool():
+def test_every_director_tool_is_offered_to_the_role_that_may_use_it():
     assert set(DIRECTOR_TOOL_NAMES) == set(DIRECTOR_TOOLS)
+    assert "approve_teams" not in TOOLS_OF["ic"]
+    assert "submit_review" not in TOOLS_OF["manager"]
+    assert set(HAND_OVER_TOOLS) <= set(TOOLS_OF["ic"])
     # A tool an agent is given and the server cannot find stops its first turn.
     assert set(DIRECTOR_TOOL_NAMES) <= set(list_registered_tools())
+
+
+async def test_a_manager_derived_from_its_ic_gets_its_own_tools_in_their_place(
+    service: DirectorService, launcher: FakeLauncher, repo: Path
+):
+    await service.create_org(org_request(repo))
+    await service.settled()
+    await woken_manager(service)
+    [manager_start] = launcher.derived
+    assert manager_start.adapt_agent is not None
+    ic_agent = Agent(
+        llm=LLM(model="gpt-4o", usage_id="test-llm"),
+        tools=[
+            Tool(name="terminal", params={"shell": "/bin/sh"}),
+            *(Tool(name=name) for name in TOOLS_OF["ic"]),
+        ],
+    )
+
+    adapted = manager_start.adapt_agent(ic_agent)
+
+    names = [tool.name for tool in adapted.tools]
+    assert names == ["terminal", *TOOLS_OF["manager"]]
+    assert adapted.tools[0].params == {"shell": "/bin/sh"}
+
+
+def test_an_ic_is_not_told_what_only_a_manager_does():
+    assert "approve_teams" not in POD_PROTOCOL and "prune_team" not in POD_PROTOCOL
+    assert "approve_teams" in MANAGER_ROLE and "prune_team" in MANAGER_ROLE
+    # What an IC needs before its first event is still there.
+    for tool in ("write_spec", "submit_review", "msg_manager", "raise_escalation"):
+        assert tool in POD_PROTOCOL
 
 
 async def test_a_team_started_again_is_briefed_with_what_it_reported(
