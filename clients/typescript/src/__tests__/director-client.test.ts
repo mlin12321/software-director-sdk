@@ -182,9 +182,11 @@ describe('DirectorClient', () => {
 
   it('reads and changes the limits on new teams, and searches teams', async () => {
     const state = {
+      max_teams: 32,
       max_agents: 64,
       max_depth: 8,
       allowed_profiles: ['codex'],
+      teams: 3,
       agents: 6,
       depth: 2,
       max_concurrent_runs: 10,

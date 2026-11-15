@@ -3513,7 +3513,8 @@ def _scripted_org_llm(
     web_ic: list[tuple[str, dict]] | None = None,
 ) -> None:
     """Agents of an org that split the root once: the IC proposes when it is
-    briefed, its Manager approves when it is told, everyone else just replies.
+    briefed, its Manager approves when it is told, the IC then gives each
+    team its task, and everyone else just replies.
 
     The top IC accepts every team it is asked to review, and tells its Manager
     of what the API team escalates; the Manager then removes that team.
@@ -3568,6 +3569,16 @@ def _scripted_org_llm(
                 done = sum(message.role == "tool" for message in messages)
                 if done < len(calls):
                     return tool_call(*calls[done])
+        if any("Your Manager approved your sub-teams" in text_of(m) for m in messages):
+            # Approved teams wait for their task; one call a turn.
+            tasked = sum(
+                call.name == "msg_team"
+                for message in messages
+                for call in message.tool_calls or []
+            )
+            if tasked < 2:
+                team = ("services.api", "apps.web")[tasked]
+                return tool_call("msg_team", {"team": team, "text": "Begin."})
         asked = [at for at, m in enumerate(messages) if "Review mode." in text_of(m)]
         if asked:
             # One call a turn: the teams of the request, in its order.
@@ -3672,7 +3683,9 @@ def test_director_runs_an_org_whose_root_splits_into_sub_teams(
         deadline = time.time() + 30
         detail = client.get("/api/director/org/nodes/root").json()
         while time.time() < deadline and (
-            len(detail["children"]) < 2 or detail["node"]["pending_split"]
+            len(detail["children"]) < 2
+            or detail["node"]["pending_split"]
+            or not all(child["agents"] for child in detail["children"])
         ):
             time.sleep(0.2)
             detail = client.get("/api/director/org/nodes/root").json()
@@ -3683,7 +3696,10 @@ def test_director_runs_an_org_whose_root_splits_into_sub_teams(
             "apps.web",
         ]
         assert detail["node"]["pending_split"] is None
-        [thread] = client.get("/api/director/org/nodes/root/messages").json()
+        threads = client.get("/api/director/org/nodes/root/messages").json()
+        # The IC gave each team its task in a thread with that team.
+        assert sum(thread["ic_to_ic"] for thread in threads) == 2
+        [thread] = [thread for thread in threads if not thread["ic_to_ic"]]
         assert (thread["manager_node_id"], thread["ic_node_id"]) == ("root", "root")
         [proposal] = thread["messages"]
         assert proposal["sender"] == "ic" and "```teams" in proposal["text"]

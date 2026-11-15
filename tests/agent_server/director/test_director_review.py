@@ -31,6 +31,7 @@ from tests.agent_server.director.conftest import (
     FakeLauncher,
     root_conversation,
     run_git,
+    tasked,
 )
 from tests.agent_server.director.test_director_tools import (
     APPROVE,
@@ -419,6 +420,7 @@ async def split_api(service: DirectorService) -> None:
         ),
     )
     await use(service, manager(service, "services.api"), ApproveTeamsTool, APPROVE)
+    await tasked(service)
 
 
 @pytest.mark.parametrize("needed_above", ["", "Web builds its forms from the schema."])

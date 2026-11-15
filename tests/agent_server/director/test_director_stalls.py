@@ -26,7 +26,7 @@ from openhands.agent_server.director.tools.definition import (
     StopTeamAction,
 )
 from openhands.sdk.conversation.state import ConversationExecutionStatus
-from tests.agent_server.director.conftest import FakeLauncher
+from tests.agent_server.director.conftest import FakeLauncher, tasked
 from tests.agent_server.director.test_director_acp import started
 from tests.agent_server.director.test_director_review import (
     DONE,
@@ -293,6 +293,7 @@ async def test_a_stopped_team_rests_with_all_below_it_and_is_sent_nothing(
     db = [SplitChild(title="DB", path="services/api/db", task="Own the schema")]
     await use(service, ic(service, API), MsgManagerTool, proposing(db))
     await use(service, manager(service, API), ApproveTeamsTool, APPROVE)
+    await tasked(service)
     api_ic, db_ic = str(ic(service, API)), str(ic(service, "services.api.db"))
     launcher.report(api_ic, ConversationExecutionStatus.RUNNING)
     launcher.report(db_ic, ConversationExecutionStatus.RUNNING)
@@ -364,6 +365,7 @@ async def test_teams_that_take_a_stopped_teams_place_replace_it(
 
     await use(service, ic(service), MsgManagerTool, proposing(services, keep=["Web"]))
     await use(service, manager(service), ApproveTeamsTool, APPROVE)
+    await tasked(service)
     await service.settled()
 
     assert service.store.get(API) is None

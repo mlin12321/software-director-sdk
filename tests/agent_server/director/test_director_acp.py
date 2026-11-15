@@ -47,7 +47,7 @@ from openhands.agent_server.director.tools.definition import (
 )
 from openhands.sdk.agent import ACPAgent
 from openhands.sdk.conversation.state import ConversationExecutionStatus
-from tests.agent_server.director.conftest import FakeLauncher, root_conversation
+from tests.agent_server.director.conftest import FakeLauncher, root_conversation, tasked
 from tests.agent_server.director.test_director_router import server_config
 from tests.agent_server.director.test_director_tools import (
     APPROVE,
@@ -89,6 +89,7 @@ def split(*children: SplitChild) -> MsgManagerAction:
 async def carry_out(service: DirectorService, *children: SplitChild) -> None:
     await use(service, ic(service), MsgManagerTool, split(*children))
     await use(service, manager(service), ApproveTeamsTool, APPROVE)
+    await tasked(service)
 
 
 def test_a_token_names_its_agent_only_with_the_key_it_was_made_with():
@@ -496,8 +497,8 @@ async def test_the_profiles_a_sub_team_may_run_on_are_kept_and_told_to_the_ic(
     assert kept["settings"]["allowed_profiles"] == ["codex"]
     # Limits that are not named stay.
     assert service.update_settings(DirectorSettingsUpdate(max_depth=3)).model_dump(
-        include={"allowed_profiles", "max_depth", "max_agents"}
-    ) == {"allowed_profiles": ["codex"], "max_depth": 3, "max_agents": 64}
+        include={"allowed_profiles", "max_depth", "max_teams"}
+    ) == {"allowed_profiles": ["codex"], "max_depth": 3, "max_teams": 32}
     await service.aclose()
 
 

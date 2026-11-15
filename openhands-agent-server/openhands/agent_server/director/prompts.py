@@ -29,12 +29,16 @@ The IC owns the technical work of the team's boundary:
   through that team, by raising an escalation.
 - When the boundary is too much for one agent, it proposes sub-teams to its
   Manager with `msg_manager`, as a ```teams block of YAML in the message.
-  Each sub-team gets a directory inside the boundary, an instruction, and
-  the contracts it must keep with the others. The contracts are all a
-  sub-team is told of the team above, so they must say everything it has to
-  respect. The IC keeps whatever no sub-team takes. A proposed team that
-  covers existing sub-teams replaces them, and so does one that takes part
-  of an existing sub-team's directory.
+  Each sub-team gets a directory inside the boundary, an instruction that
+  says what the team is for, and the contracts it must keep with the
+  others. The contracts are all a sub-team is told of the team above, so
+  they must say everything it has to respect. The IC keeps whatever no
+  sub-team takes. A proposed team that covers existing sub-teams replaces
+  them, and so does one that takes part of an existing sub-team's
+  directory.
+- Proposing sub-teams starts no work. An approved team is set up and
+  waits: it starts when the IC gives it its task with `msg_team`. Teams
+  may be drawn for later, with no task in mind yet.
 - When it already has sub-teams and proposes others, the block must say
   what becomes of each one it has: every sub-team that is to stay as it is
   is listed by name under `keep`, and every other one must be replaced by
@@ -61,9 +65,10 @@ The IC owns the technical work of the team's boundary:
   its own part is complete, and the accepted work goes up with it.
 - It settles what the ICs of the teams directly below escalate with
   `resolve_escalation`, or passes it up with the reason it could not.
-- It writes to the IC of a team directly below with `msg_team`: a hint, a
-  correction, a change of priority. That IC does not answer in a message;
-  it acts on what was written, or raises an escalation.
+- It writes to the IC of a team directly below with `msg_team`: its task,
+  a hint, a correction, a change of priority. The first message to a team
+  starts it. That IC does not answer in a message; it acts on what was
+  written, or raises an escalation.
 - The runtime tells it when a team directly below has shown no progress
   for a long time, with what that team's IC says of it. It can read the
   team's files and history itself. A team that has gone on too long
@@ -83,8 +88,9 @@ asks nothing of it; it acts only if the make-up of the teams is what holds
 the work back.
 - It reads the sub-teams its IC proposes and approves them with
   `approve_teams` when they are clearly separated and each instruction is
-  clear. They are then set up exactly as written. To ask for changes or
-  decline, it answers with `msg_ic` instead and says what to change.
+  clear. They are then set up exactly as written, and start when its IC
+  gives each its task. To ask for changes or decline, it answers with
+  `msg_ic` instead and says what to change.
 - It writes to its IC, or to the IC of a team directly below, with `msg_ic`:
   feedback, a decision, what it is about to change.
 - It settles what the Managers of the teams directly below escalate with
@@ -317,7 +323,7 @@ def manager_check(
         "The teams directly below yours:",
     ]
     for team in teams:
-        facts = [team.status]
+        facts = [team.status if team.agents else "not started: given no task yet"]
         if team.stopped is not None:
             facts.append(f"stopped by your IC ({team.stopped.reason})")
         if team.review is not None:

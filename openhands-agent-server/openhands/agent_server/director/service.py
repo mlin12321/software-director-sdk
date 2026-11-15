@@ -63,6 +63,7 @@ from openhands.agent_server.director.git_store import (
 from openhands.agent_server.director.headline import provisional_summary
 from openhands.agent_server.director.merge_back import merge_back
 from openhands.agent_server.director.models import (
+    AGENTS_PER_TEAM,
     AgentKind,
     AgentRef,
     AgentRole,
@@ -159,7 +160,6 @@ from openhands.agent_server.director.sandbox import (
     write_shell,
 )
 from openhands.agent_server.director.split import (
-    AGENTS_PER_TEAM,
     check_limits,
     child_boundary,
     clean_path,
@@ -563,14 +563,20 @@ class DirectorService:
             levels[node.id] = levels.get(node.parent_id or "", 0) + 1
         return DirectorSettingsState(
             **self.settings.model_dump(),
+            teams=len(levels),
             agents=len(levels) * AGENTS_PER_TEAM,
+            max_agents=self.settings.max_teams * AGENTS_PER_TEAM,
             depth=max(levels.values(), default=0),
             max_concurrent_runs=self._max_concurrent_runs,
         )
 
     def update_settings(self, update: DirectorSettingsUpdate) -> DirectorSettingsState:
         """Change the limits on new teams. Existing teams are left alone."""
-        changed = self.settings.model_copy(update=update.model_dump(exclude_none=True))
+        values = update.model_dump(exclude_none=True)
+        agents = values.pop("max_agents", None)
+        if agents is not None:
+            values.setdefault("max_teams", max(1, agents // AGENTS_PER_TEAM))
+        changed = self.settings.model_copy(update=values)
         with self._lock:
             self._settings = changed
         self._remember(settings=changed.model_dump())
@@ -892,8 +898,7 @@ class DirectorService:
                 node = await self.start_again(
                     gone.id, StartAgainRequest(conversation=request.conversation)
                 )
-        conversation_id = agent_conversation(node, "ic") if node else None
-        if node is None or conversation_id is None:
+        if node is None:
             raise Conflict(
                 "No team of the org can take a message about "
                 f"{path or 'the repository'!r}"
@@ -901,7 +906,7 @@ class DirectorService:
         text = request.text
         if path != node.boundary.path:
             text = f"{text}\n\n(The human sent this from {path}.)"
-        self._post(conversation_id, text, at_once=True)
+        conversation_id = self.tell_ic(node.id, text, human=True) or ""
         return RoutedMessage(
             node_id=node.id, conversation_id=conversation_id, started_org=False
         )
@@ -1037,7 +1042,7 @@ class DirectorService:
             if manager_node_id == ic_node_id
             else f"The Manager of the team above ({manager_node.title}) writes:"
         )
-        self.notify(agent_conversation(ic_node, "ic"), f"{heading}\n{text}{note}")
+        self.tell_ic(ic_node_id, f"{heading}\n{text}{note}")
 
     def tell_manager(self, node_id: str, text: str) -> None:
         """Send a team's Manager a message from the director. A team has no
@@ -1056,6 +1061,42 @@ class DirectorService:
                 task = self._runs().marked(TASK).get(node_id) or node.spec_summary
                 self._begin("launch_manager", node_id, task=task)
         self.notify(agent_conversation(node, "manager"), text)
+
+    def tell_ic(self, node_id: str, text: str, *, human: bool = False) -> str | None:
+        """Send a team's IC a message. A team that was only set up has no IC
+        until something is sent to it: the first message starts one and is
+        part of its briefing. Safe from any thread.
+
+        Args:
+            human: The human's own words, which reach an agent at once and
+                are not marked as the director's.
+
+        Returns:
+            The IC's conversation; None when the team is gone.
+        """
+        store = self.store
+        with self._adding_manager:
+            node = store.get(node_id)
+            if node is None:
+                return None
+            conversation_id = agent_conversation(node, "ic")
+            if conversation_id is None:
+                [ic] = _new_pod(uuid4())
+                store.update_node(node_id, agents=[ic, *node.agents])
+                purpose = self._runs().marked(TASK).get(node_id) or node.spec_summary
+                self._begin(
+                    "start_team",
+                    node_id,
+                    task=f"{purpose}\n\nWhat your team is started with:\n{text}",
+                    purpose=purpose,
+                    parent=node.parent_id,
+                )
+                return ic.conversation_id
+        if human:
+            self._post(conversation_id, text, at_once=True)
+        else:
+            self.notify(conversation_id, text)
+        return conversation_id
 
     def message_team(self, node_id: str, team_id: str, text: str) -> bool:
         """Keep and deliver what a team's IC writes to the IC of a team
@@ -1080,8 +1121,8 @@ class DirectorService:
             store.set_stopped(team_id, None)
             self._enqueue(lambda: self._go_on(team_id, stopped.running), team_id)
         self.progressed(team_id)
-        self.notify(
-            agent_conversation(team, "ic"),
+        self.tell_ic(
+            team_id,
             f"The IC of the team above ({node.title}) writes:\n{text}"
             + (
                 "\n\nIt had stopped your team; with this message your team goes on."
@@ -1368,8 +1409,8 @@ class DirectorService:
             account = await self._ask_agent(ic, STALL_QUESTION)
         # Its reviewer is woken now anyway, and no longer waits for it.
         self._release_reviews(above.id, now=True)
-        self.notify(
-            agent_conversation(above, "ic"),
+        self.tell_ic(
+            above.id,
             stall_notice(team, minutes, in_a_turn=in_a_turn, account=account),
         )
 
@@ -1618,6 +1659,7 @@ class DirectorService:
         }
         settled = all(
             team.status == "blocked"
+            or agent_conversation(team, "ic") is None
             or (
                 team.review is not None
                 and team.review.state in ("pending", "accepted")
@@ -1632,7 +1674,7 @@ class DirectorService:
             run.unmark(HELD, team.id)
             if team.review is not None:
                 requests.append(review_request(team, team.review))
-        self.notify(reviewer, "\n\n---\n\n".join(requests))
+        self.tell_ic(node.id, "\n\n---\n\n".join(requests))
 
     def accept_review(self, node_id: str, needed_above: str) -> None:
         """Take a team's reviewed work into the team above. Safe from any
@@ -2611,15 +2653,6 @@ class DirectorService:
         finally:
             self._in_flight.discard(intent.id)
             self._leave_line(intent.node_id)
-        if intent.kind == "start_team":
-            above = intent.payload["parent"]
-            others = [
-                other
-                for other in run.open_intents()
-                if other.kind == "start_team" and other.payload["parent"] == above
-            ]
-            if not others:
-                self._begin("finish_split", above)
 
     def _post(self, conversation_id: str, text: str, *, at_once: bool = False) -> None:
         """Record a message to an agent, then deliver it. Safe from any
@@ -3120,12 +3153,23 @@ class DirectorService:
         self._runs().mark(TOLD, conversation_id, told)
         return started
 
+    async def _started_ic(self, node: OrgNode | None) -> str | None:
+        """The IC of ``node`` or, while that team has not started, of the
+        nearest team above that has: the conversation a new agent is
+        derived from."""
+        store, launcher = self.store, self._require_launcher()
+        while node is not None:
+            ic = agent_conversation(node, "ic")
+            if ic is not None and await launcher.started(UUID(ic)) is not None:
+                return ic
+            node = store.get(node.parent_id) if node.parent_id else None
+        return None
+
     async def _launch_manager(self, node_id: str, task: str) -> None:
         node = self.store.get(node_id)
         if node is not None:
-            await self._start_agent(
-                node_id, "manager", agent_conversation(node, "ic"), task
-            )
+            derived_from = await self._started_ic(node)
+            await self._start_agent(node_id, "manager", derived_from, task)
 
     async def _do_brief(self, intent: Intent) -> None:
         if intent.payload["role"] == "ic":
@@ -3140,7 +3184,7 @@ class DirectorService:
     async def _do_start_team(self, intent: Intent) -> None:
         node_id, task = intent.node_id, intent.payload["task"]
         above = self.store.get(intent.payload["parent"])
-        parent_ic = agent_conversation(above, "ic") if above else None
+        parent_ic = await self._started_ic(above)
         checkout = intent.payload.get("checkout")
         self._runs().mark(TASK, node_id, task)
         self.progressed(node_id)
@@ -3148,16 +3192,9 @@ class DirectorService:
         if started is not None:
             # A team of the same name before it left nothing to count on.
             self._work_accepted(started)
-        if await self._start_agent(node_id, "ic", parent_ic, task, checkout):
-            node = self.store.get(node_id)
-            # Sub-teams it took over from a team it replaced.
-            for below in self.store.children(node_id):
-                if node and below.review and below.review.state == "pending":
-                    self.notify(
-                        agent_conversation(node, "ic"),
-                        review_request(below, below.review),
-                    )
-        self._enqueue(lambda: self._summarize(node_id, task, first=True), node_id)
+        await self._start_agent(node_id, "ic", parent_ic, task, checkout)
+        purpose = intent.payload.get("purpose", task)
+        self._enqueue(lambda: self._summarize(node_id, purpose, first=True), node_id)
 
     async def _do_finish_split(self, intent: Intent) -> None:
         await self._finish_split(intent.node_id)
@@ -3298,27 +3335,22 @@ class DirectorService:
         self._let_go(intent)
         await self._save()
         if "handed_over" not in intent.steps:
+            # A new team starts nothing by being set up. What it is for is
+            # kept for the day something is sent to it.
+            for team, child in zip(teams, proposal.children, strict=True):
+                run.mark(TASK, team.id, child.task)
+                made = store.get(team.id)
+                if made is not None:
+                    self._work_accepted(made)
             # What a sub-team that stayed had waiting for review is now for
-            # the IC of the team it reports to; a new team's IC is told
-            # when it starts.
-            for below in store.children(node_id):
-                if (
-                    below.id in moves
-                    and below.review
-                    and below.review.state == "pending"
-                ):
-                    self.notify(
-                        agent_conversation(node, "ic"),
-                        review_request(below, below.review),
-                    )
+            # the IC of the team it reports to, which this starts if it is
+            # a new team.
+            for below_id, home in moves.items():
+                below = store.get(below_id)
+                if below and below.review and below.review.state == "pending":
+                    self.tell_ic(home, review_request(below, below.review))
             intent = run.step_done(intent, "handed_over")
-        # The sub-teams start side by side, each in its own lane; the split
-        # is over when the last of them has.
-        for team, child in zip(teams, proposal.children, strict=True):
-            step = f"start:{team.id}"
-            if step not in intent.steps:
-                self._begin("start_team", team.id, task=child.task, parent=node_id)
-                intent = run.step_done(intent, step)
+            self._begin("finish_split", node_id)
 
     async def _finish_split(self, node_id: str) -> None:
         store = self.store
@@ -3335,7 +3367,9 @@ class DirectorService:
             agent_conversation(node, "ic"),
             "Your Manager approved your sub-teams and they now own their "
             f"directories: {', '.join(started)}. You can no longer write "
-            "there; carry on with what remains in your boundary."
+            "there; carry on with what remains in your boundary. None of "
+            "them has started: a team starts when you give it its task "
+            "with msg_team."
             + (
                 " The teams they replaced are gone; what those had committed "
                 "is in your checkout."
@@ -3645,8 +3679,13 @@ class DirectorService:
         node = store.get(node_id)
         if node is None or not node.child_ids:
             return
-        teams = store.children(node_id)
-        if any(
+        # A team that was set up and never given work owes none.
+        teams = [
+            team
+            for team in store.children(node_id)
+            if team.review is not None or agent_conversation(team, "ic") is not None
+        ]
+        if not teams or any(
             team.review is None or team.review.state != "accepted" for team in teams
         ):
             return
@@ -3886,7 +3925,7 @@ def _child_node(taken: set[str], parent: OrgNode, child: SplitChild) -> OrgNodeI
         agent_profile=child.agent_profile,
         worktree_path=parent.worktree_path,
         branch=parent.branch,
-        agents=_new_pod(uuid4()),
+        agents=[],
         status="idle",
         headline=provisional_summary(child.task).headline,
         spec_summary=_summary_of(child.task),

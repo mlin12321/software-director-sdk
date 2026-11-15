@@ -731,13 +731,13 @@ def test_sharing_the_team_memory_reports_what_is_missing(saved_tree: Path):
 def test_the_limits_on_new_teams_are_read_changed_and_kept(saved_tree: Path):
     with make_client(saved_tree, max_concurrent_runs=7) as client:
         before = client.get("/api/director/settings").json()
-        changed = client.patch("/api/director/settings", json={"max_agents": 200})
+        changed = client.patch("/api/director/settings", json={"max_teams": 100})
         refused = client.patch("/api/director/settings", json={"max_depth": 0})
     with make_client(saved_tree) as client:
         after = client.get("/api/director/settings").json()
 
     assert before == {
-        "max_agents": 64,
+        "max_teams": 32,
         "max_depth": 8,
         "allowed_profiles": [],
         "resume_on_start": False,
@@ -745,13 +745,15 @@ def test_the_limits_on_new_teams_are_read_changed_and_kept(saved_tree: Path):
         "stall_check_minutes": 120,
         "manager_check_accepted_reviews": 5,
         "manager_check_ic_escalations": 3,
+        "teams": 5,
         "agents": 10,
+        "max_agents": 64,
         "depth": 3,
         "max_concurrent_runs": 7,
     }
-    assert changed.status_code == 200 and changed.json()["max_agents"] == 200
+    assert changed.status_code == 200 and changed.json()["max_teams"] == 100
     assert refused.status_code == 422
-    assert (after["max_agents"], after["max_depth"]) == (200, 8)
+    assert (after["max_teams"], after["max_depth"]) == (100, 8)
 
 
 def test_teams_are_searched_by_title_and_directory(client: TestClient):

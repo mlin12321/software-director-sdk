@@ -5,18 +5,22 @@ from uuid import UUID
 
 import pytest
 
-from openhands.agent_server.director.models import SplitChild
+from openhands.agent_server.director.models import RouteMessageRequest, SplitChild
 from openhands.agent_server.director.service import DirectorService
 from openhands.agent_server.director.tools import (
     ApproveTeamsTool,
     MsgIcTool,
     MsgManagerTool,
+    MsgTeamTool,
     PruneTeamTool,
     SubmitReviewTool,
 )
-from openhands.agent_server.director.tools.definition import MsgIcAction
+from openhands.agent_server.director.tools.definition import (
+    MsgIcAction,
+    MsgTeamAction,
+)
 from openhands.sdk.conversation.state import ConversationExecutionStatus
-from tests.agent_server.director.conftest import FakeLauncher, run_git
+from tests.agent_server.director.conftest import FakeLauncher, run_git, tasked
 from tests.agent_server.director.test_director_limits import started
 from tests.agent_server.director.test_director_pause import (
     again,
@@ -31,6 +35,7 @@ from tests.agent_server.director.test_director_review import (
 from tests.agent_server.director.test_director_tools import (
     APPROVE,
     PRUNE_API,
+    SPLIT,
     ic,
     manager,
     node,
@@ -75,6 +80,7 @@ async def propose_and_approve(
     proposal = proposing(list(children), keep=keep)
     await use(service, ic(service, node_id), MsgManagerTool, proposal)
     await use(service, manager(service, node_id), ApproveTeamsTool, APPROVE)
+    await tasked(service)
 
 
 def below(service: DirectorService, node_id: str) -> list[str]:
@@ -94,6 +100,7 @@ async def test_a_team_over_existing_ones_replaces_them_and_keeps_their_sub_teams
     assert proposal is not None
     assert (proposal.replaces, proposal.keeps) == ([API], ["apps.web"])
     await use(service, manager(service), ApproveTeamsTool, APPROVE)
+    await tasked(service)
 
     assert not proposed.is_error
     assert below(service, "root") == ["apps.web", "services"]
@@ -201,6 +208,7 @@ async def test_teams_are_replaced_only_once_their_agents_are_at_rest(
     await use(service, ic(service), MsgManagerTool, SERVICES)
 
     answer = await use(service, manager(service), ApproveTeamsTool, APPROVE)
+    await tasked(service)
     await use(
         service, manager(service), MsgIcTool, MsgIcAction(text="Hold on.", team=API)
     )
@@ -254,7 +262,8 @@ async def test_work_a_kept_sub_team_had_in_review_goes_to_the_ic_it_now_reports_
     await use(service, ic(service), MsgManagerTool, SERVICES)
     await use(service, manager(service), ApproveTeamsTool, APPROVE)
 
-    request = launcher.messages_to(ic(service, "services"))[-1]
+    # The request is the first thing sent to the new team, so it starts it.
+    [request] = [s.task for s in launcher.derived if s.title == "Services (IC)"]
     assert "Review mode" in request and DB in request
     await service.aclose()
 
@@ -273,6 +282,7 @@ async def test_a_replacement_cut_off_by_a_crash_is_finished_once(
     # The approval is saved while the replaced team is still in a turn.
     launcher.report(api_ic, ConversationExecutionStatus.RUNNING)
     await use(first, manager(first), ApproveTeamsTool, APPROVE)
+    await tasked(first)
     # The server ends as it deletes the second agent of the replaced team.
     ended = end_server_at(launcher, "delete", nth=2)
     launcher.report(api_ic, ConversationExecutionStatus.FINISHED)
@@ -282,6 +292,7 @@ async def test_a_replacement_cut_off_by_a_crash_is_finished_once(
     second = await again(repo, launcher)
     await second.resume()
     await second.settled()
+    await tasked(second)
 
     assert below(second, "root") == ["apps.web", "services"]
     assert below(second, "services") == [DB]
@@ -318,6 +329,7 @@ async def test_an_approval_the_saved_tree_does_not_have_is_dropped_and_given_aga
     assert waiting is not None and waiting.status == "proposed"
 
     await use(second, manager(second), ApproveTeamsTool, APPROVE)
+    await tasked(second)
 
     assert below(second, "root") == ["apps.web", "services"]
     await second.aclose()
@@ -363,3 +375,96 @@ async def test_a_sub_team_is_kept_by_its_name_or_its_node_id(
     proposal = node(service, "root").pending_split
     assert not taken.is_error and proposal is not None
     assert (proposal.replaces, proposal.keeps) == ([], [API, "apps.web"])
+
+
+@pytest.fixture
+async def fresh(repo: Path, launcher: FakeLauncher):
+    """An org of one team."""
+    service = await started(repo, launcher)
+    yield service
+    await service.aclose()
+
+
+async def test_approved_teams_are_set_up_and_start_nothing(
+    fresh: DirectorService, launcher: FakeLauncher
+):
+    service = fresh
+    await use(service, ic(service), MsgManagerTool, SPLIT)
+    answer = await use(service, manager(service), ApproveTeamsTool, APPROVE)
+
+    teams = service.store.children("root")
+    assert [(team.id, team.agents, team.status) for team in teams] == [
+        (API, [], "idle"),
+        ("apps.web", [], "idle"),
+    ]
+    assert node(service, "root").pending_split is None
+    assert len(launcher.derived) == 1
+    assert "None of them starts until your IC gives it its task" in answer.text
+    [told] = [
+        text
+        for text in launcher.messages_to(ic(service))
+        if "Your Manager approved" in text
+    ]
+    assert "a team starts when you give it its task with msg_team" in told
+
+
+async def test_a_team_starts_with_the_first_message_from_the_ic_above(
+    fresh: DirectorService, launcher: FakeLauncher
+):
+    service = fresh
+    await use(service, ic(service), MsgManagerTool, SPLIT)
+    await use(service, manager(service), ApproveTeamsTool, APPROVE)
+
+    first = await use(
+        service,
+        ic(service),
+        MsgTeamTool,
+        MsgTeamAction(team=API, text="Build POST /checkout first."),
+    )
+    second = await use(
+        service, ic(service), MsgTeamTool, MsgTeamAction(team=API, text="And GET.")
+    )
+
+    assert "starts with what you wrote as its task" in first.text
+    assert "starts with" not in second.text
+    [start] = launcher.derived[1:]
+    assert start.title == "API (IC)"
+    # What the team is for, then what it was started with.
+    assert start.task.index("Serve the checkout API") < start.task.index(
+        "Build POST /checkout first."
+    )
+    assert launcher.messages_to(ic(service, API))[-1].endswith("And GET.")
+    assert node(service, "apps.web").agents == []
+
+
+async def test_a_team_starts_with_the_first_message_from_the_human(
+    fresh: DirectorService, launcher: FakeLauncher
+):
+    service = fresh
+    await use(service, ic(service), MsgManagerTool, SPLIT)
+    await use(service, manager(service), ApproveTeamsTool, APPROVE)
+
+    await service.route_message(
+        RouteMessageRequest(text="Start with the cart page.", path="apps/web")
+    )
+    await service.settled()
+
+    [start] = launcher.derived[1:]
+    assert start.title == "Web (IC)" and "Start with the cart page." in start.task
+
+
+async def test_a_team_given_no_task_owes_nothing(
+    repo: Path, fresh: DirectorService, launcher: FakeLauncher
+):
+    service = fresh
+    await use(service, ic(service), MsgManagerTool, SPLIT)
+    await use(service, manager(service), ApproveTeamsTool, APPROVE)
+    await use(service, ic(service), MsgTeamTool, MsgTeamAction(team=API, text="Begin."))
+    commit(repo, "services/api/app.py", "order_id = '1'\n")
+
+    await use(service, ic(service, API), SubmitReviewTool, DONE)
+
+    # The review of the team that works does not wait for the one that was
+    # never started.
+    assert any("Review mode" in text for text in launcher.messages_to(ic(service)))
+    assert node(service, "apps.web").agents == []

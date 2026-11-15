@@ -54,6 +54,7 @@ from tests.agent_server.director.conftest import (
     FakeLauncher,
     root_conversation,
     run_git,
+    tasked,
     teams_block,
 )
 
@@ -145,6 +146,7 @@ APPROVE = ApproveTeamsAction()
 async def split_root(service: DirectorService) -> None:
     await use(service, ic(service), MsgManagerTool, SPLIT)
     await use(service, manager(service), ApproveTeamsTool, APPROVE)
+    await tasked(service)
 
 
 async def test_an_agent_reads_who_it_is_and_what_its_team_reported(
@@ -296,6 +298,7 @@ async def test_an_answer_from_the_manager_puts_the_proposal_aside(
     )
     assert "were not approved" in told
     too_late = await use(service, manager(service), ApproveTeamsTool, APPROVE)
+    await tasked(service)
     assert too_late.is_error
     again = await use(service, ic(service), MsgManagerTool, SPLIT)
     assert not again.is_error and node(service, "root").pending_split is not None
@@ -313,6 +316,7 @@ async def test_a_later_proposal_takes_the_place_of_the_one_that_waits(
         proposing([SplitChild(title="Docs", path="docs", task="Write the docs")]),
     )
     await use(service, manager(service), ApproveTeamsTool, APPROVE)
+    await tasked(service)
 
     assert [team.title for team in service.store.children("root")] == ["Docs"]
 
@@ -366,6 +370,7 @@ async def test_a_manager_writes_to_its_own_ic_and_to_the_ics_directly_below(
         proposing([SplitChild(title="DB", path="services/api/db", task="Schema")]),
     )
     await use(service, manager(service, api), ApproveTeamsTool, APPROVE)
+    await tasked(service)
 
     below = await use(
         service,
@@ -468,6 +473,7 @@ async def test_a_sub_team_that_cannot_start_is_shown_as_blocked(
     del launcher.known[UUID(root_ic)]
 
     await use(service, manager(service), ApproveTeamsTool, APPROVE)
+    await tasked(service)
 
     api, web = service.store.children("root")
     assert (api.status, web.status) == ("blocked", "blocked")
@@ -682,6 +688,7 @@ async def test_a_pruned_team_takes_the_teams_below_it_along(
         ),
     )
     await use(service, manager(service, api), ApproveTeamsTool, APPROVE)
+    await tasked(service)
     below = ic(service, "services.api.db")
 
     await use(service, manager(service), PruneTeamTool, PRUNE_API)

@@ -41,6 +41,7 @@ from tests.agent_server.director.conftest import (
     make_node,
     root_conversation,
     run_git,
+    tasked,
     teams_block,
 )
 
@@ -406,6 +407,7 @@ async def split_root(service: DirectorService, *children: SplitChild) -> None:
     pod_actions.msg_manager(service, caller("ic"), teams_block(list(children)))
     pod_actions.approve_teams(service, caller("manager"))
     await service.settled()
+    await tasked(service)
 
 
 API = SplitChild(title="API", path="services/api", task="Serve the checkout API")

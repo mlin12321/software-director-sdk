@@ -151,7 +151,7 @@ def msg_manager(service: DirectorService, caller: Caller, text: str) -> str:
         return "Sent to your Manager."
     return (
         "Sent to your Manager with the sub-teams you proposed. Nothing "
-        "starts until it approves; you will hear either way."
+        "is set up until it approves; you will hear either way."
     )
 
 
@@ -216,7 +216,10 @@ def approve_teams(service: DirectorService, caller: Caller) -> str:
         if split.replaces
         else ""
     )
-    return f"Approved. {len(proposal.children)} sub-teams are being set up.{waits}"
+    return (
+        f"Approved. {len(proposal.children)} sub-teams are being set up.{waits} "
+        "None of them starts until your IC gives it its task."
+    )
 
 
 def _role_name(role: AgentRole) -> str:
@@ -344,7 +347,7 @@ def _hand_to(
     if escalation.raised_by == "manager":
         service.tell_manager(holder_id, text)
     else:
-        service.notify(agent_conversation(holder, "ic"), text)
+        service.tell_ic(holder_id, text)
 
 
 def submit_review(service: DirectorService, caller: Caller, summary: str) -> str:
@@ -441,9 +444,16 @@ def msg_team(service: DirectorService, caller: Caller, team: str, text: str) -> 
     if not text:
         raise Invalid("A message cannot be empty")
     target = _team_below(service, caller, team)
+    new = agent_conversation(target, "ic") is None
     if service.message_team(caller.node.id, target.id, text):
         return (
             f"Sent to the IC of {target.title!r}. Its team was stopped and goes on now."
+        )
+    if new:
+        return (
+            f"{target.title!r} starts with what you wrote as its task. Its IC "
+            "does not answer in a message: it submits its work for your "
+            "review, or raises an escalation."
         )
     return (
         f"Sent to the IC of {target.title!r}. It does not answer in a "
