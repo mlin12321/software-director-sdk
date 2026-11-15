@@ -147,6 +147,16 @@ def _named(proposal: SplitProposal, replaced: list[str]) -> str:
     return teams + (f"; in place of {', '.join(replaced)}" if replaced else "")
 
 
+def _paths(proposal: SplitProposal) -> list[str]:
+    return [child.path for child in proposal.children]
+
+
+def _waiting(node: OrgNode) -> SplitProposal | None:
+    """The sub-teams a team's IC proposed that still wait on its Manager."""
+    proposal = node.pending_split
+    return proposal if proposal and proposal.status == "proposed" else None
+
+
 def msg_manager(service: DirectorService, caller: Caller, text: str) -> str:
     """Send the caller's Manager a message, and put before it the sub-teams
     the message proposes, if any."""
@@ -181,13 +191,16 @@ def msg_manager(service: DirectorService, caller: Caller, text: str) -> str:
                 else ""
             )
             + (f" Kept as they are: {', '.join(kept)}." if kept else "")
-            + " approve_teams sets them up exactly as written; to ask for "
-            "changes or decline, answer with msg_ic."
+            + " approve_teams sets them up exactly as written; decline_teams "
+            "declines them, with your reason. They wait on you until you call "
+            "one of the two; msg_ic asks your IC something first."
         )
         facts = service.facts_of_proposal(node, proposal)
         if facts:
             note += f"\n\n{facts}"
-        service.record_event(node.id, "proposed", None, _named(proposal, replaced))
+        service.record_event(
+            node.id, "proposed", None, _named(proposal, replaced), _paths(proposal)
+        )
     service.message(node.id, node.id, "ic", text, note)
     if proposed is None:
         return "Sent to your Manager."
@@ -211,28 +224,28 @@ def msg_ic(service: DirectorService, caller: Caller, text: str, team: str) -> st
         if found is None or found.parent_id != node.id:
             raise Invalid(f"{team.strip()} is not your team or one directly below it")
         target = found
-    note = ""
-    if (
-        target.id == node.id
-        and node.pending_split
-        and node.pending_split.status == "proposed"
-    ):
-        # An answer other than approval puts the proposal aside.
-        service.store.update_node(node.id, pending_split=None)
-        note = (
-            "\n\n[director] The sub-teams you proposed were not approved. "
-            "Propose again in a new message if you still want them."
-        )
+    # A message is no decision: what the IC proposed goes on waiting.
+    waiting = target.id == node.id and _waiting(node) is not None
+    note = (
+        "\n\n[director] The sub-teams you proposed still wait on your "
+        "Manager. A new proposal takes their place."
+        if waiting
+        else ""
+    )
     service.message(node.id, target.id, "manager", text, note)
-    return f"Sent to the IC of {target.title!r}."
+    return f"Sent to the IC of {target.title!r}." + (
+        " The sub-teams it proposed still wait on you: approve_teams or decline_teams."
+        if waiting
+        else ""
+    )
 
 
 def approve_teams(service: DirectorService, caller: Caller) -> str:
     """Set up the sub-teams the caller's IC proposed, as written."""
     _only(caller, "manager", "approve sub-teams")
     node = caller.node
-    proposal = node.pending_split
-    if proposal is None or proposal.status != "proposed":
+    proposal = _waiting(node)
+    if proposal is None:
         raise Conflict("Your IC has no proposed sub-teams waiting for you")
     # The org may have changed since they were proposed.
     split = normalize_split(service.store, node, proposal.children)
@@ -256,6 +269,7 @@ def approve_teams(service: DirectorService, caller: Caller) -> str:
         "approved",
         None,
         _named(proposal, [team.title for team in split.replaces]),
+        _paths(proposal),
     )
     service.carry_out_split(node.id)
     waits = (
@@ -271,6 +285,36 @@ def approve_teams(service: DirectorService, caller: Caller) -> str:
         + (" and to pass on what the replaced teams left" if split.replaces else "")
         + "; write to it with msg_ic if the change needs explaining."
     )
+
+
+def decline_teams(service: DirectorService, caller: Caller, reason: str) -> str:
+    """Decline the sub-teams the caller's IC proposed, and keep why."""
+    _only(caller, "manager", "decline sub-teams")
+    node = caller.node
+    reason = reason.strip()
+    if not reason:
+        raise Invalid("Say why: your IC is told, and the reason is kept")
+    proposal = _waiting(node)
+    if proposal is None:
+        raise Conflict("Your IC has no proposed sub-teams waiting for you")
+    store = service.store
+    replaced = [team.title for team in map(store.get, proposal.replaces) if team]
+    named = _named(proposal, replaced)
+    store.update_node(node.id, pending_split=None)
+    service.record_event(
+        node.id, "declined", None, f"{named}. Reason: {reason}", _paths(proposal)
+    )
+    service.message(
+        node.id,
+        node.id,
+        "manager",
+        reason,
+        f"\n\n[director] Your Manager declined the sub-teams you proposed "
+        f"({named}); the above is its reason. Nothing was set up. Propose "
+        "others if the reason leaves room for it; the same ones only if "
+        "something has changed.",
+    )
+    return "Declined. Your IC is told your reason, and it is kept in the record."
 
 
 def _role_name(role: AgentRole) -> str:

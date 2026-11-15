@@ -87,9 +87,10 @@ The IC owns the technical work of the team's boundary:
   sent back, teams that stalled, were stopped, replaced or pruned. A
   review request says how a team's earlier work went, and
   `read_node_context` returns the record, also of teams that are gone
-  and of what the IC proposed before and whether it was approved. The IC
-  weighs what it proposes and how it reviews by it, and does not propose
-  again a division that failed before unless something has changed.
+  and of what the IC proposed before, whether it was approved, and why
+  it was declined. The IC weighs what it proposes and how it reviews by
+  it, and does not propose again a division that failed or was declined
+  before unless something has changed.
 - When teams below it are replaced or pruned, the runtime puts the IC in
   hand-over mode: it starts a side conversation of the IC for the
   hand-over and gives it what they left:
@@ -126,10 +127,13 @@ not that every team is busy.
 - It reads the sub-teams its IC proposes and approves them with
   `approve_teams` when each is a concern of its own, they are clearly
   separated and each instruction is clear. The runtime adds what it knows
-  of the proposed directories and of teams that had them before. They are
-  then set up exactly as written, and start when its IC gives each its
-  task. To ask for changes or decline, it answers with `msg_ic` instead
-  and says what to change.
+  of the proposed directories, of teams that had them before and of what
+  was declined for them before. They are then set up exactly as written,
+  and start when its IC gives each its task. Otherwise it declines them
+  with `decline_teams` and says why, and what to change if another
+  division would do; the reason is kept in the record. What an IC
+  proposed waits on its Manager until one of the two is called; a message
+  with `msg_ic` decides nothing.
 - It writes to its IC, or to the IC of a team directly below, with `msg_ic`:
   feedback, a decision, what it is about to change. After it approves or
   prunes teams, its IC is told to pass on what removed teams left and to
@@ -693,6 +697,7 @@ _EVENT_WORDS: dict[TeamEventKind, str] = {
     "woken": "Manager woken",
     "proposed": "sub-teams proposed",
     "approved": "sub-teams approved",
+    "declined": "sub-teams declined",
 }
 # What is counted of a team, in the order it is told.
 _COUNTED: tuple[TeamEventKind, ...] = ("accepted", "sent_back", "stalled", "stopped")

@@ -504,7 +504,8 @@ export type DirectorTeamEventKind =
   | 'pruned'
   | 'woken'
   | 'proposed'
-  | 'approved';
+  | 'approved'
+  | 'declined';
 
 /** Something that became of a team directly below a team. */
 export interface DirectorTeamEvent {
@@ -517,6 +518,8 @@ export interface DirectorTeamEvent {
   team_id?: string;
   team?: string;
   detail?: string;
+  /** The directories a proposal was for, on `proposed`, `approved` and `declined`. */
+  paths?: string[];
 }
 
 /** A team that was removed from below a team. */

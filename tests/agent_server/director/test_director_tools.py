@@ -24,6 +24,7 @@ from openhands.agent_server.director.service import (
 )
 from openhands.agent_server.director.tools import (
     ApproveTeamsTool,
+    DeclineTeamsTool,
     MsgIcTool,
     MsgManagerTool,
     PruneTeamTool,
@@ -35,6 +36,7 @@ from openhands.agent_server.director.tools import (
 )
 from openhands.agent_server.director.tools.definition import (
     ApproveTeamsAction,
+    DeclineTeamsAction,
     MsgIcAction,
     MsgManagerAction,
     PruneTeamAction,
@@ -278,7 +280,7 @@ async def test_a_block_that_cannot_be_read_is_refused_with_what_is_wrong(
     assert "teams.0.instruction" in observation.text
 
 
-async def test_an_answer_from_the_manager_puts_the_proposal_aside(
+async def test_a_message_from_the_manager_leaves_the_proposal_waiting(
     service: DirectorService, launcher: FakeLauncher
 ):
     await use(service, ic(service), MsgManagerTool, SPLIT)
@@ -287,21 +289,80 @@ async def test_an_answer_from_the_manager_puts_the_proposal_aside(
         service,
         manager(service),
         MsgIcTool,
-        MsgIcAction(text="Web and API share a schema; keep them together."),
+        MsgIcAction(text="Do Web and API share a schema?"),
     )
 
     assert not answer.is_error
+    assert "still wait on you: approve_teams or decline_teams" in answer.text
+    told = launcher.messages_to(ic(service))[-1]
+    assert told.startswith("[director] Your Manager writes:\nDo Web and API share")
+    assert "still wait on your Manager" in told
+    approved = await use(service, manager(service), ApproveTeamsTool, APPROVE)
+    assert not approved.is_error
+    assert node(service, "root").child_ids == ["services.api", "apps.web"]
+
+
+DECLINE = DeclineTeamsAction(reason="Web and API share a schema; keep them together.")
+
+
+async def test_a_manager_declines_proposed_teams_and_the_reason_is_kept(
+    service: DirectorService, launcher: FakeLauncher
+):
+    await use(service, ic(service), MsgManagerTool, SPLIT)
+
+    declined = await use(service, manager(service), DeclineTeamsTool, DECLINE)
+
+    assert not declined.is_error
     assert node(service, "root").pending_split is None
+    assert node(service, "root").child_ids == []
     told = launcher.messages_to(ic(service))[-1]
     assert told.startswith(
         "[director] Your Manager writes:\nWeb and API share a schema"
     )
-    assert "were not approved" in told
+    assert "Your Manager declined the sub-teams you proposed (API (services/api)" in (
+        told
+    )
+    last = service.team_memory.history("root")[-1]
+    assert (last.kind, last.paths) == ("declined", ["services/api", "apps/web"])
+    assert last.detail.endswith(
+        "Reason: Web and API share a schema; keep them together."
+    )
     too_late = await use(service, manager(service), ApproveTeamsTool, APPROVE)
-    await tasked(service)
     assert too_late.is_error
-    again = await use(service, ic(service), MsgManagerTool, SPLIT)
-    assert not again.is_error and node(service, "root").pending_split is not None
+
+
+async def test_a_proposal_for_a_directory_says_what_was_declined_for_it_before(
+    service: DirectorService, launcher: FakeLauncher
+):
+    await use(service, ic(service), MsgManagerTool, SPLIT)
+    await use(service, manager(service), DeclineTeamsTool, DECLINE)
+
+    await use(service, ic(service), MsgManagerTool, SPLIT)
+
+    told = launcher.messages_to(manager(service))[-1]
+    assert (
+        "- Sub-teams for apps/web, services/api were proposed before and "
+        "declined: API (services/api), Web (apps/web). Reason: Web and API "
+        "share a schema; keep them together."
+    ) in told
+    assert "decline_teams declines them" in told
+
+
+async def test_only_a_manager_with_a_waiting_proposal_declines_and_says_why(
+    service: DirectorService,
+):
+    await use(service, ic(service), MsgManagerTool, SPLIT)
+    by_ic = await use(service, ic(service), DeclineTeamsTool, DECLINE)
+    no_reason = await use(
+        service, manager(service), DeclineTeamsTool, DeclineTeamsAction(reason=" ")
+    )
+
+    assert by_ic.is_error and "Only the Manager" in by_ic.text
+    assert no_reason.is_error and "Say why" in no_reason.text
+    assert node(service, "root").pending_split is not None
+    await use(service, manager(service), DeclineTeamsTool, DECLINE)
+    nothing = await use(service, manager(service), DeclineTeamsTool, DECLINE)
+    assert nothing.is_error and "no proposed sub-teams" in nothing.text
 
 
 async def test_a_later_proposal_takes_the_place_of_the_one_that_waits(
