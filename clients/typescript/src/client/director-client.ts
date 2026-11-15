@@ -5,6 +5,7 @@ import type {
   DirectorFileEdit,
   DirectorFileSides,
   DirectorNodeMemory,
+  DirectorOrgHistory,
   DirectorNodeOwnership,
   DirectorNodeId,
   DirectorOrgEvent,
@@ -199,6 +200,17 @@ export class DirectorClient {
   /** A node with its ancestors and its direct reports. */
   async getNode(nodeId: DirectorNodeId): Promise<DirectorOrgNodeDetail> {
     const response = await this.client.get<DirectorOrgNodeDetail>(nodePath(nodeId));
+    return response.data;
+  }
+
+  /**
+   * What became of the teams of the whole org, newest first. Pass the time
+   * of the last event received as `before` to read the ones before it.
+   */
+  async getOrgHistory(limit = 100, before?: string): Promise<DirectorOrgHistory> {
+    const response = await this.client.get<DirectorOrgHistory>(`${DIRECTOR_PATH}/org/history`, {
+      params: before ? { limit, before } : { limit },
+    });
     return response.data;
   }
 

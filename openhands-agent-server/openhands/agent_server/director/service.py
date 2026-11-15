@@ -81,10 +81,12 @@ from openhands.agent_server.director.models import (
     FileEdit,
     FormerTeam,
     HandOverMode,
+    HistoryEvent,
     InheritedSpec,
     MemorySync,
     OldSpec,
     OrgConflict,
+    OrgHistory,
     OrgMerge,
     OrgNode,
     OrgNodeInput,
@@ -1913,6 +1915,25 @@ class DirectorService:
             team_memory.write(
                 team.boundary.path, CONTRACTS_FILE, f"{contracts.strip()}\n"
             )
+
+    def org_history(self, limit: int, before: str | None = None) -> OrgHistory:
+        """What became of every team of the org, newest first.
+
+        Teams needing each other's files are left out: they are counted
+        for an IC and are no event of the org.
+
+        Args:
+            before: Only events before this time (ISO 8601).
+        """
+        team_memory = self.team_memory
+        events = [
+            HistoryEvent(**event.model_dump(), above_id=node.id, above=node.title)
+            for node in self.store.all()
+            for event in team_memory.history(node.id)
+            if event.kind != "needed" and (before is None or event.at < before)
+        ]
+        events.sort(key=lambda event: event.at, reverse=True)
+        return OrgHistory(events=events[:limit], earlier=len(events) > limit)
 
     def reports_of(self, node: OrgNode) -> list[Report]:
         """What the two agents of a team recorded, oldest first. Reports

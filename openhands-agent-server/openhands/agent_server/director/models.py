@@ -623,6 +623,20 @@ class NodeMemory(BaseModel):
     )
 
 
+class HistoryEvent(TeamEvent):
+    """One event of an org's history, with the team whose record holds it."""
+
+    above_id: str = Field(description="The team directly above the event's team.")
+    above: str = Field(description="The title of that team.")
+
+
+class OrgHistory(BaseModel):
+    """What became of the teams of an org, newest first."""
+
+    events: list[HistoryEvent]
+    earlier: bool = Field(description="Whether there are events before these.")
+
+
 class BoundaryOwner(BaseModel):
     """A direct report, as the owner of a directory."""
 

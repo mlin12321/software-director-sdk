@@ -97,6 +97,21 @@ describe('DirectorClient', () => {
     expect(node.escalations).toEqual([]);
   });
 
+  it('reads the history of the org, and what came before a time', async () => {
+    const history = { events: [], earlier: false };
+    const fetchMock = mockFetch(() => jsonResponse(history));
+    const client = new DirectorClient({ host: 'http://example.com' });
+
+    const latest = await client.getOrgHistory();
+    await client.getOrgHistory(20, '2026-11-01T10:00:00+00:00');
+
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      'http://example.com/api/director/org/history?limit=100',
+      'http://example.com/api/director/org/history?limit=20&before=2026-11-01T10%3A00%3A00%2B00%3A00',
+    ]);
+    expect(latest).toEqual(history);
+  });
+
   it('reports a refused answer as an HTTP error', async () => {
     mockFetch(() => jsonResponse({ detail: 'still with team root' }, 409));
     const client = new DirectorClient({ host: 'http://example.com' });

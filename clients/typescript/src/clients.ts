@@ -76,6 +76,8 @@ export type {
   DirectorInheritedSpec,
   DirectorIsolationMode,
   DirectorNodeMemory,
+  DirectorOrgHistory,
+  DirectorHistoryEvent,
   DirectorNodeOwnership,
   DirectorBoundaryOwner,
   DirectorOwnedFile,
