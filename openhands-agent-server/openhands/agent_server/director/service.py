@@ -1450,7 +1450,7 @@ class DirectorService:
         team's IC, and wake the team's Manager when that team has raised as
         many, on the work it has in hand, as the org set. Safe from any
         thread."""
-        limit = self.settings.manager_check_ic_escalations
+        limit = self.settings.manager_check_ic_setbacks
         team = self.store.get(team_id)
         if not limit or team is None:
             return
@@ -1542,7 +1542,7 @@ class DirectorService:
                 counted["escalations"],
                 self.team_memory.history(node_id),
                 after_successes=after_successes,
-                escalation_limit=self.settings.manager_check_ic_escalations,
+                escalation_limit=self.settings.manager_check_ic_setbacks,
             ),
         )
 
@@ -2077,7 +2077,7 @@ class DirectorService:
             for path in finding.path.split(", "):
                 if path.strip():
                     self.record_need(node, path.strip(), NEED_FINDING)
-        limit = self.settings.manager_check_ic_escalations
+        limit = self.settings.manager_check_ic_setbacks
         if limit and node.parent_id is not None and review.round % limit == 0:
             with self._counting:
                 counted = self._counted(node.parent_id)
