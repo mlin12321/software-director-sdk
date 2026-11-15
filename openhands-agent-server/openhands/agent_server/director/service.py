@@ -126,6 +126,7 @@ from openhands.agent_server.director.prompts import (
     brief,
     changes_requested,
     from_director,
+    manager_check,
     review_request,
     stall_notice,
 )
@@ -138,6 +139,7 @@ from openhands.agent_server.director.recovery import (
     restore_worktrees,
 )
 from openhands.agent_server.director.run_state import (
+    CHECKS,
     HELD,
     PROGRESS,
     RUNNING,
@@ -413,6 +415,7 @@ class DirectorService:
         self._lock = threading.Lock()
         self._saving = threading.Lock()
         self._adding_manager = threading.Lock()
+        self._counting = threading.Lock()
         self._clock = clock
         self._stall_poll = stall_poll
         self._stall_watch: asyncio.Task[None] | None = None
@@ -1124,6 +1127,98 @@ class DirectorService:
                 "with prune_team, or have your IC propose teams that take "
                 "its place.",
             )
+
+    def count_accepted_review(self, node_id: str) -> None:
+        """Count a review a team's IC accepted, and wake the team's Manager
+        to look at its teams when that makes as many as the org set. Safe
+        from any thread."""
+        limit = self.settings.manager_check_accepted_reviews
+        if not limit:
+            return
+        with self._counting:
+            counted = self._counted(node_id)
+            counted["accepted"] += 1
+            due = counted["accepted"] >= limit
+            if due:
+                counted["accepted"] = 0
+            self._runs().mark(CHECKS, node_id, json.dumps(counted))
+        if due:
+            self._wake_manager(
+                node_id,
+                f"your IC has accepted {limit} reviews since the last look "
+                "of this kind.",
+                counted,
+            )
+
+    def count_ic_escalation(self, node_id: str, team_id: str) -> None:
+        """Count an escalation the IC of a team directly below raised to a
+        team's IC, and wake the team's Manager when that team has raised as
+        many, on the work it has in hand, as the org set. Safe from any
+        thread."""
+        limit = self.settings.manager_check_ic_escalations
+        team = self.store.get(team_id)
+        if not limit or team is None:
+            return
+        with self._counting:
+            counted = self._counted(node_id)
+            raised = counted["escalations"].get(team_id, 0) + 1
+            due = raised >= limit
+            told = dict(counted["escalations"], **{team_id: raised})
+            counted["escalations"][team_id] = 0 if due else raised
+            self._runs().mark(CHECKS, node_id, json.dumps(counted))
+        if due:
+            self._wake_manager(
+                node_id,
+                f"the IC of {team.title!r} has escalated {limit} times to "
+                "your IC on the work it has in hand.",
+                {**counted, "escalations": told},
+            )
+
+    def _work_accepted(self, team: OrgNode) -> None:
+        """A team's work was accepted: what its IC escalated on it is
+        counted no further, since what it does next is other work."""
+        if team.parent_id is None:
+            return
+        with self._counting:
+            counted = self._counted(team.parent_id)
+            if counted["escalations"].pop(team.id, None) is not None:
+                self._runs().mark(CHECKS, team.parent_id, json.dumps(counted))
+
+    def _counted(self, node_id: str) -> dict[str, Any]:
+        """What a Manager's checks have counted: the reviews its IC
+        accepted, and the escalations of each team below on its work."""
+        try:
+            kept = json.loads(self._runs().marked(CHECKS).get(node_id) or "{}")
+        except ValueError:
+            kept = {}
+        if not isinstance(kept, dict):
+            kept = {}
+        node = self.store.get(node_id)
+        below = node.child_ids if node else []
+        return {
+            "accepted": int(kept.get("accepted", 0)),
+            "escalations": {
+                team_id: int(count)
+                for team_id, count in dict(kept.get("escalations") or {}).items()
+                if team_id in below
+            },
+        }
+
+    def _wake_manager(self, node_id: str, reason: str, counted: dict[str, Any]) -> None:
+        store = self.store
+        now = self._clock()
+        quiet = {}
+        for team_id, kept in self._runs().marked(PROGRESS).items():
+            at = _progress_of(kept).get("at")
+            if at:
+                since = now - datetime.fromisoformat(at)
+                quiet[team_id] = int(since.total_seconds() // 60)
+        self.tell_manager(
+            node_id,
+            manager_check(
+                reason, store.children(node_id), quiet, counted["escalations"]
+            ),
+        )
 
     def _conversations_below(self, team: OrgNode) -> list[str]:
         """The conversations of a team and of every team below it."""
@@ -3460,6 +3555,8 @@ class DirectorService:
             base_commit=tip or node.base_commit,
         )
         self.progressed(above.id)
+        self._work_accepted(node)
+        self.count_accepted_review(above.id)
         self.notify(
             agent_conversation(node, "ic"),
             f"The IC of {above.title!r} accepted your team's work"
@@ -3591,6 +3688,7 @@ class DirectorService:
             ),
             base_commit=tip or node.base_commit,
         )
+        self._work_accepted(node)
         if acted:
             self.notify(
                 ic,

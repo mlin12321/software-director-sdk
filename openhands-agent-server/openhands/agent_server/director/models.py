@@ -632,6 +632,24 @@ class DirectorSettings(BaseModel):
             "team above is told. 0 turns the check off."
         ),
     )
+    manager_check_accepted_reviews: int = Field(
+        default=5,
+        ge=0,
+        description=(
+            "After how many reviews its IC accepted a Manager is woken to "
+            "look at its teams, without a message from its IC. 0 turns the "
+            "check off."
+        ),
+    )
+    manager_check_ic_escalations: int = Field(
+        default=3,
+        ge=0,
+        description=(
+            "After how many escalations the IC of one team directly below "
+            "raised, on the work it has in hand, a Manager is woken to look "
+            "at its teams. 0 turns the check off."
+        ),
+    )
 
 
 class DirectorSettingsUpdate(BaseModel):
@@ -643,6 +661,8 @@ class DirectorSettingsUpdate(BaseModel):
     resume_on_start: bool | None = None
     report_compaction_chars: int | None = Field(default=None, ge=1_000)
     stall_check_minutes: int | None = Field(default=None, ge=0)
+    manager_check_accepted_reviews: int | None = Field(default=None, ge=0)
+    manager_check_ic_escalations: int | None = Field(default=None, ge=0)
 
 
 class DirectorSettingsState(DirectorSettings):
