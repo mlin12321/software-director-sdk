@@ -213,6 +213,8 @@ DIRECTOR_TOOL_NAMES = (
     "prune_team",
     "hand_over",
 )
+# What follows a team's purpose in its task once something started it.
+_STARTED_WITH = "\n\nWhat your team is started with:\n"
 # How long tree changes are gathered before they are saved as one commit.
 SAVE_DELAY_SECONDS = 2.0
 # How long to wait before starting an agent again when the server is full.
@@ -1098,11 +1100,11 @@ class DirectorService:
             if conversation_id is None:
                 [ic] = _new_pod(uuid4())
                 store.update_node(node_id, agents=[ic, *node.agents])
-                purpose = self._runs().marked(TASK).get(node_id) or node.spec_summary
+                purpose = self._purpose(node)
                 self._begin(
                     "start_team",
                     node_id,
-                    task=f"{purpose}\n\nWhat your team is started with:\n{text}",
+                    task=f"{purpose}{_STARTED_WITH}{text}",
                     purpose=purpose,
                     parent=node.parent_id,
                 )
@@ -1112,6 +1114,11 @@ class DirectorService:
         else:
             self.notify(conversation_id, text)
         return conversation_id
+
+    def _purpose(self, node: OrgNode) -> str:
+        """What a team is for, without the message it was started with."""
+        task = self._runs().marked(TASK).get(node.id) or node.spec_summary
+        return task.split(_STARTED_WITH)[0]
 
     def message_team(self, node_id: str, team_id: str, text: str) -> bool:
         """Keep and deliver what a team's IC writes to the IC of a team
@@ -4037,7 +4044,7 @@ class DirectorService:
                     title=team.title,
                     above=team.parent_id or "",
                     path=team.boundary.path,
-                    purpose=self._runs().marked(TASK).get(team.id) or team.spec_summary,
+                    purpose=self._purpose(team),
                     ended=ended,
                     at=at,
                     review=team.review.state if team.review else None,

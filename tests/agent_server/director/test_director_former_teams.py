@@ -109,7 +109,8 @@ async def test_a_team_put_in_another_teams_directory_gets_none_of_its_memory(
         "replaced",
         "services/api",
     )
-    assert former.purpose.startswith("Serve the checkout API")
+    # What it was for, without the message that started it.
+    assert former.purpose == "Serve the checkout API"
     assert [report.text for report in former.reports] == [
         "Chose SQLite.",
         "Dropped the cache.",
