@@ -244,6 +244,7 @@ def raise_escalation(
         detail=detail.strip(),
         raised_by=caller.role,
     )
+    service.progressed(node.id)
     if escalation.held_by is None:
         return (
             f"Raised as {escalation.id}. Nobody is above your team: it waits "
@@ -290,6 +291,7 @@ def resolve_escalation(
         )
     if action == "settle":
         store.settle_escalation(node_id, escalation_id)
+        service.progressed(node_id)
         service.notify(
             agent_conversation(raiser, escalation.raised_by),
             f"The {_role_name(caller.role)} of {caller.node.title!r} settled "
@@ -367,6 +369,7 @@ def submit_review(service: DirectorService, caller: Caller, summary: str) -> str
             at=datetime.now(UTC).isoformat(timespec="seconds"),
         ),
     )
+    service.progressed(node.id)
     service.rest(node.id)
     service.request_review(node.id)
     service.refresh_headline(node.id, f"it submitted its work. {summary}")
@@ -413,6 +416,45 @@ def report(service: DirectorService, caller: Caller, text: str) -> str:
     """Record something for the two agents of the caller's team."""
     service.report(caller.node, caller.role, text)
     return "Recorded for you and the other agent of your team."
+
+
+def _team_below(service: DirectorService, caller: Caller, node_id: str) -> OrgNode:
+    team = service.store.get(node_id.strip())
+    if team is None or team.parent_id != caller.node.id:
+        raise Invalid(f"{node_id.strip()} is not a team directly below yours")
+    return team
+
+
+def msg_team(service: DirectorService, caller: Caller, team: str, text: str) -> str:
+    """Send a message to the IC of a team directly below the caller's."""
+    _only(caller, "ic", "message the IC of a team below")
+    text = text.strip()
+    if not text:
+        raise Invalid("A message cannot be empty")
+    target = _team_below(service, caller, team)
+    if service.message_team(caller.node.id, target.id, text):
+        return (
+            f"Sent to the IC of {target.title!r}. Its team was stopped and goes on now."
+        )
+    return (
+        f"Sent to the IC of {target.title!r}. It does not answer in a "
+        "message: it acts on what you wrote, or raises an escalation."
+    )
+
+
+def stop_team(service: DirectorService, caller: Caller, team: str, reason: str) -> str:
+    """Stop a team directly below the caller's."""
+    _only(caller, "ic", "stop a team")
+    if not reason.strip():
+        raise Invalid("Say why the team is stopped; your Manager is told")
+    target = _team_below(service, caller, team)
+    service.stop_team(target.id, reason.strip())
+    return (
+        f"Stopped {target.title!r} and every team below it: their agents "
+        "end the step they are in and are sent nothing. Your Manager is "
+        "told. The team goes on when you write to it with msg_team; only "
+        "your Manager can remove it."
+    )
 
 
 def prune_team(

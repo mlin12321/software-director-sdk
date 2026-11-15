@@ -35,6 +35,8 @@ CONTRACTS_FILE = "contracts.md"
 REPORTS_DIR = ".reports"
 # One file for each Manager and IC that have written to each other.
 THREADS_DIR = ".threads"
+# One file for each IC and IC directly below that the first has written to.
+IC_THREADS_DIR = ".threads-ic"
 # What team memory was called before; a repository that still has it is moved.
 _FORMER_MEMORY_REF = "refs/agents/blackboard"
 
@@ -114,8 +116,9 @@ def _parse_messages(raw: str | None) -> list[ThreadMessage]:
     return _MESSAGES.validate_json(raw) if raw else []
 
 
-def _thread_file(manager_node_id: str, ic_node_id: str) -> str:
-    return f"{THREADS_DIR}/{manager_node_id}/{ic_node_id}.json"
+def _thread_file(writer_node_id: str, ic_node_id: str, ic_to_ic: bool) -> str:
+    directory = IC_THREADS_DIR if ic_to_ic else THREADS_DIR
+    return f"{directory}/{writer_node_id}/{ic_node_id}.json"
 
 
 def _serialize(value: object) -> str:
@@ -139,7 +142,7 @@ def _settle(path: str, ours: str | None, theirs: str | None) -> tuple[str | None
             reports = _union(_parse_reports(ours), _parse_reports(theirs))
             reports.sort(key=lambda report: report.at)
             return _serialize(_REPORTS.dump_python(reports)), False
-        if path.startswith(f"{THREADS_DIR}/"):
+        if path.startswith((f"{THREADS_DIR}/", f"{IC_THREADS_DIR}/")):
             messages = _union(_parse_messages(ours), _parse_messages(theirs))
             messages.sort(key=lambda message: message.at)
             return _serialize(_MESSAGES.dump_python(messages)), False
@@ -235,15 +238,26 @@ class GitStore:
         self.commit(mutate, f"memory: report {path}")
         return reports
 
-    def thread(self, manager_node_id: str, ic_node_id: str) -> list[ThreadMessage]:
-        """What a Manager and an IC have said to each other, oldest first."""
-        return _parse_messages(self.read(_thread_file(manager_node_id, ic_node_id)))
+    def thread(
+        self, writer_node_id: str, ic_node_id: str, *, ic_to_ic: bool = False
+    ) -> list[ThreadMessage]:
+        """What a Manager and an IC have said to each other, oldest first;
+        with ``ic_to_ic``, what the IC of the team above wrote to an IC."""
+        return _parse_messages(
+            self.read(_thread_file(writer_node_id, ic_node_id, ic_to_ic))
+        )
 
     def append_message(
-        self, manager_node_id: str, ic_node_id: str, message: ThreadMessage
+        self,
+        writer_node_id: str,
+        ic_node_id: str,
+        message: ThreadMessage,
+        *,
+        ic_to_ic: bool = False,
     ) -> None:
-        """Add to what a Manager and an IC have said to each other."""
-        path = _thread_file(manager_node_id, ic_node_id)
+        """Add to what a Manager and an IC have said to each other, or to
+        what the IC of the team above wrote to an IC."""
+        path = _thread_file(writer_node_id, ic_node_id, ic_to_ic)
 
         def mutate(read: StoreReader) -> list[StoreChange]:
             messages = [*_parse_messages(read(path)), message]

@@ -11,7 +11,7 @@ import threading
 from collections import deque
 from collections.abc import Awaitable, Callable, Collection
 from contextlib import suppress
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -45,6 +45,7 @@ from openhands.agent_server.director.git import (
     git,
     head_of,
     is_git_repository,
+    last_commit_in,
     pathspec,
     save_and_discard,
     uncommitted,
@@ -91,6 +92,7 @@ from openhands.agent_server.director.models import (
     Side,
     SplitChild,
     StartAgainRequest,
+    Stopped,
     SyncResult,
     TeamEnforcement,
     TeamMatch,
@@ -120,10 +122,12 @@ from openhands.agent_server.director.pods import PodLauncher, StartedAgent
 from openhands.agent_server.director.prompts import (
     MANAGER_ROLE,
     POD_PROTOCOL,
+    STALL_QUESTION,
     brief,
     changes_requested,
     from_director,
     review_request,
+    stall_notice,
 )
 from openhands.agent_server.director.recovery import (
     STARTING,
@@ -135,6 +139,7 @@ from openhands.agent_server.director.recovery import (
 )
 from openhands.agent_server.director.run_state import (
     HELD,
+    PROGRESS,
     RUNNING,
     TASK,
     TEAM,
@@ -186,6 +191,8 @@ DIRECTOR_TOOL_NAMES = (
     "write_spec",
     "msg_manager",
     "msg_ic",
+    "msg_team",
+    "stop_team",
     "approve_teams",
     "raise_escalation",
     "resolve_escalation",
@@ -198,6 +205,8 @@ DIRECTOR_TOOL_NAMES = (
 SAVE_DELAY_SECONDS = 2.0
 # How long to wait before starting an agent again when the server is full.
 RUN_LIMIT_RETRY_SECONDS = 5.0
+# How often the director looks for teams that show no progress.
+STALL_POLL_SECONDS = 60.0
 # How long a model may take to name a team before the team keeps the name
 # it has; the root's agents are not briefed until then.
 SUMMARY_TIMEOUT_SECONDS = 20.0
@@ -240,6 +249,7 @@ ORG_LANE = "org"
 MODELS_LANE = "models"
 # The lane agents are paused in, so that nothing waits for their last step.
 PAUSE_LANE = "pause"
+STALL_LANE = "stalls"
 # The steps the director takes for a team's review, in its own lane.
 _REVIEW_STEPS = ("request_review", "accept")
 # How many of the director's own model calls run at once.
@@ -329,9 +339,15 @@ class DirectorService:
         model_call_timeout: float = MODEL_CALL_TIMEOUT_SECONDS,
         max_concurrent_runs: int | None = None,
         server_url: str | None = None,
+        clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+        stall_poll: float = STALL_POLL_SECONDS,
     ) -> None:
         """
         Args:
+            clock: The time, for telling how long a team has shown no
+                progress.
+            stall_poll: How many seconds lie between two looks for teams
+                that show no progress.
             server_url: Where this server answers, for agents that reach the
                 director's tools from a process of their own; None to take
                 it from the requests the director gets.
@@ -399,6 +415,9 @@ class DirectorService:
         self._lock = threading.Lock()
         self._saving = threading.Lock()
         self._adding_manager = threading.Lock()
+        self._clock = clock
+        self._stall_poll = stall_poll
+        self._stall_watch: asyncio.Task[None] | None = None
         self._remember_lock = threading.Lock()
         self._store: OrgStore | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -662,6 +681,9 @@ class DirectorService:
         if self._bwrap is None:
             logger.info("Director cannot confine shells here; it checks file tools")
         bind_director(self)
+        self._stall_watch = asyncio.create_task(
+            self._watch_for_stalls(), name="director-stall-watch"
+        )
         if self._store is not None:
             self._enqueue(self._came_back)
         elif await asyncio.to_thread(self._remembered_repo) is not None:
@@ -689,6 +711,9 @@ class DirectorService:
             self._stop_guard()
             self._stop_guard = None
         workers = list(self._workers)
+        if self._stall_watch is not None:
+            workers.append(self._stall_watch)
+            self._stall_watch = None
         for worker in workers:
             worker.cancel()
         await asyncio.gather(*workers, return_exceptions=True)
@@ -1029,19 +1054,261 @@ class DirectorService:
                 self._begin("launch_manager", node_id, task=task)
         self.notify(agent_conversation(node, "manager"), text)
 
+    def message_team(self, node_id: str, team_id: str, text: str) -> bool:
+        """Keep and deliver what a team's IC writes to the IC of a team
+        directly below. A team that was stopped goes on with it. Safe from
+        any thread.
+
+        Returns:
+            Whether the team was stopped.
+        """
+        store = self.store
+        node, team = store.get(node_id), store.get(team_id)
+        if node is None or team is None:
+            raise NotFound("That team is no longer in the org")
+        self._memory().append_message(
+            node_id,
+            team_id,
+            ThreadMessage(at=_instant(), sender="ic", text=text),
+            ic_to_ic=True,
+        )
+        stopped = team.stopped
+        if stopped is not None:
+            store.set_stopped(team_id, None)
+            self._enqueue(lambda: self._go_on(team_id, stopped.running), team_id)
+        self.progressed(team_id)
+        self.notify(
+            agent_conversation(team, "ic"),
+            f"The IC of the team above ({node.title}) writes:\n{text}"
+            + (
+                "\n\nIt had stopped your team; with this message your team goes on."
+                if stopped is not None
+                else ""
+            ),
+        )
+        return stopped is not None
+
+    def stop_team(self, node_id: str, reason: str) -> None:
+        """Stop a team for the IC of the team above: its agents and those
+        of every team below it end the step they are in and are sent
+        nothing until that IC writes to the team. Safe from any thread.
+
+        Raises:
+            NotFound: The team does not exist.
+            Conflict: It is stopped already.
+        """
+        store = self.store
+        team = store.get(node_id)
+        if team is None:
+            raise NotFound(f"Node {node_id} does not exist")
+        if team.stopped is not None:
+            raise Conflict(f"Team {node_id} is stopped already")
+        running = [
+            conversation_id
+            for conversation_id in self._conversations_below(team)
+            if conversation_id in self._running
+        ]
+        store.set_stopped(
+            node_id, Stopped(at=_now(), reason=reason, running=sorted(running))
+        )
+        if self._loop is not None:
+            self._enqueue(lambda: self._stop(node_id), node_id)
+        self._save_soon()
+        # A stopped team is waited for no longer by the reviews beside it.
+        self.release_reviews(team.parent_id)
+        if team.parent_id is not None:
+            self.tell_manager(
+                team.parent_id,
+                f"Your IC stopped the team {team.title!r} (node {team.id}): "
+                f"{reason}\nIts agents are at rest and nothing is sent to "
+                "them. It goes on when your IC writes to it with msg_team. "
+                "What becomes of it otherwise is yours to decide: remove it "
+                "with prune_team, or have your IC propose teams that take "
+                "its place.",
+            )
+
+    def _conversations_below(self, team: OrgNode) -> list[str]:
+        """The conversations of a team and of every team below it."""
+        store = self.store
+        teams = [team]
+        for found in teams:
+            teams.extend(store.children(found.id))
+        return [
+            agent.conversation_id
+            for found in teams
+            for agent in found.agents
+            if agent.conversation_id is not None
+        ]
+
+    async def _stop(self, node_id: str) -> None:
+        team = self.store.get(node_id)
+        if team is None or team.stopped is None or self._paused is not None:
+            return
+        launcher = self._require_launcher()
+        for conversation_id in self._conversations_below(team):
+            if conversation_id in self._running:
+                with suppress(NotFound):
+                    await launcher.pause(UUID(conversation_id))
+
+    async def _go_on(self, node_id: str, running: list[str]) -> None:
+        """Set a team that was stopped going again: what waited for its
+        agents is delivered, and those cut off in a turn run again."""
+        team = self.store.get(node_id)
+        if team is None or team.stopped is not None or self._paused is not None:
+            return
+        own = agent_conversation(team, "ic")
+        conversations = self._conversations_below(team)
+        # In the order it was sent, and before the message that set the
+        # team going, which waits behind this in the team's lane.
+        for held in self._runs().held():
+            if held.conversation_id in conversations:
+                self._at_once.add(held.seq)
+                await self._deliver(held.seq, held.conversation_id, held.text)
+        for conversation_id in conversations:
+            # The team's own IC is run by the message that set it going.
+            if conversation_id in running and conversation_id != own:
+                await self._run_again(conversation_id, None)
+
+    def _is_stopped(self, conversation_id: str) -> bool:
+        """Whether the agent's team, or a team above it, is stopped."""
+        store = self.store
+        found = store.find_by_conversation(conversation_id)
+        if found is None:
+            return False
+        node = found[0]
+        return node.stopped is not None or any(
+            above.stopped is not None for above in store.ancestors(node.id)
+        )
+
+    def progressed(self, node_id: str | None) -> None:
+        """Note that a team got somewhere just now: the time it may show no
+        progress starts again. Safe from any thread."""
+        if node_id is None or self._fixture:
+            return
+        run = self._runs()
+        seen = _progress_of(run.marked(PROGRESS).get(node_id))
+        run.mark(
+            PROGRESS,
+            node_id,
+            json.dumps({"at": self._clock().isoformat(), "head": seen.get("head")}),
+        )
+
+    async def _watch_for_stalls(self) -> None:
+        while True:
+            await asyncio.sleep(self._stall_poll)
+            if self._loop is not None:
+                self._enqueue(self._check_stalls, STALL_LANE)
+
+    def _may_stall(self, team: OrgNode) -> bool:
+        """Whether a team owes work nobody waits to give it: it has not
+        submitted, or its work was sent back, and nothing holds it."""
+        return (
+            team.parent_id is not None
+            and team.status != "blocked"
+            and not team.waiting_to_start
+            and (team.review is None or team.review.state == "changes_requested")
+            and agent_conversation(team, "ic") is not None
+            and not any(above.stopped for above in self.store.ancestors(team.id))
+        )
+
+    async def _check_stalls(self) -> None:
+        """Tell the IC above of each team that has shown no progress for
+        longer than the org allows, once for every such stretch of time."""
+        limit = self.settings.stall_check_minutes
+        store = self._store
+        if not limit or store is None or self._paused is not None or self._fixture:
+            return
+        run = self._runs()
+        marks = run.marked(PROGRESS)
+        teams = {team.id: team for team in store.all()}
+        for gone in marks.keys() - teams.keys():
+            run.unmark(PROGRESS, gone)
+        for team in teams.values():
+            if team.parent_id is None:
+                continue
+            now = self._clock()
+            seen = _progress_of(marks.get(team.id))
+            head = await asyncio.to_thread(
+                last_commit_in, Path(team.worktree_path), team.boundary.path
+            )
+            if "at" not in seen or head != seen.get("head"):
+                # Seen for the first time, or it has committed since.
+                run.mark(
+                    PROGRESS, team.id, json.dumps({"at": now.isoformat(), "head": head})
+                )
+                continue
+            if not self._may_stall(team):
+                continue
+            since = datetime.fromisoformat(seen["at"])
+            told = seen.get("told")
+            if now - datetime.fromisoformat(told or seen["at"]) < timedelta(
+                minutes=limit
+            ):
+                continue
+            run.mark(PROGRESS, team.id, json.dumps({**seen, "told": now.isoformat()}))
+            if told is None:
+                # The IC above has this much time to act before it shows
+                # no progress itself.
+                self.progressed(team.parent_id)
+            minutes = int((now - since).total_seconds() // 60)
+            self._enqueue(
+                lambda team_id=team.id, minutes=minutes: self._tell_of_stall(
+                    team_id, minutes
+                ),
+                f"review:{team.id}",
+            )
+
+    async def _tell_of_stall(self, node_id: str, minutes: int) -> None:
+        store = self.store
+        team = store.get(node_id)
+        above = store.get(team.parent_id) if team and team.parent_id else None
+        if team is None or above is None or self._paused is not None:
+            return
+        if not self._may_stall(team):
+            return
+        ic = agent_conversation(team, "ic")
+        in_a_turn = ic in self._running
+        account = None
+        if ic is not None and not in_a_turn:
+            account = await self._ask_agent(ic, STALL_QUESTION)
+        # Its reviewer is woken now anyway, and no longer waits for it.
+        self._release_reviews(above.id, now=True)
+        self.notify(
+            agent_conversation(above, "ic"),
+            stall_notice(team, minutes, in_a_turn=in_a_turn, account=account),
+        )
+
+    def _restart_clocks(self, run: RunState) -> None:
+        """Count the time teams show no progress from now: the time an org
+        was paused, or its server was not running, is nobody's."""
+        now = self._clock().isoformat()
+        for node_id, kept in run.marked(PROGRESS).items():
+            seen = _progress_of(kept)
+            run.mark(
+                PROGRESS, node_id, json.dumps({"at": now, "head": seen.get("head")})
+            )
+
     def threads_of(self, node: OrgNode) -> list[Thread]:
         """What the agents of a team have said to Managers and ICs: its own
-        two to each other, its Manager to the ICs directly below, and the
-        Manager above to its IC. Threads nobody wrote in are left out."""
+        two to each other, its Manager and its IC to the ICs directly
+        below, and the Manager and the IC above to its IC. Threads nobody
+        wrote in are left out."""
         team_memory = self._memory()
-        pairs = [(node.id, node.id)]
-        pairs += [(node.id, child_id) for child_id in node.child_ids]
-        if node.parent_id is not None:
-            pairs.append((node.parent_id, node.id))
+        down = [(node.id, child_id) for child_id in node.child_ids]
+        up = [(node.parent_id, node.id)] if node.parent_id is not None else []
         return [
-            Thread(manager_node_id=manager, ic_node_id=ic, messages=messages)
-            for manager, ic in pairs
-            if (messages := team_memory.thread(manager, ic))
+            Thread(
+                manager_node_id=writer,
+                ic_node_id=ic,
+                ic_to_ic=ic_to_ic,
+                messages=messages,
+            )
+            for ic_to_ic, pairs in (
+                (False, [(node.id, node.id), *down, *up]),
+                (True, [*down, *up]),
+            )
+            for writer, ic in pairs
+            if (messages := team_memory.thread(writer, ic, ic_to_ic=ic_to_ic))
         ]
 
     def context_of(self, node: OrgNode, role: AgentRole) -> dict[str, Any]:
@@ -1100,6 +1367,7 @@ class DirectorService:
                     "headline": child.headline,
                     "summary": child.spec_summary,
                     "review": child.review.state if child.review else None,
+                    "stopped": child.stopped.reason if child.stopped else None,
                 }
                 for child in store.children(node.id)
             ],
@@ -1205,6 +1473,7 @@ class DirectorService:
         )
         above = store.get(node.parent_id) if node.parent_id else None
         store.set_review(node_id, review)
+        self.progressed(node_id)
         self.notify(
             agent_conversation(node, "ic"), changes_requested(above or node, findings)
         )
@@ -1868,6 +2137,7 @@ class DirectorService:
                 kept = self._run.get("paused")
                 self._paused = kept if kept in ("human", "shutdown", "crash") else None
                 self._running = set(self._run.marked(RUNNING))
+                self._restart_clocks(self._run)
             return self._run
 
     def _open_run_state(self) -> RunState:
@@ -1889,6 +2159,7 @@ class DirectorService:
         run.put("paused", None)
         run.put("dropped", None)
         self._paused = None
+        self._restart_clocks(run)
         self._announce_state()
 
     def _dropped(self) -> list[RecoveryItem]:
@@ -1975,6 +2246,9 @@ class DirectorService:
 
     async def _run_again(self, conversation_id: str, note: str | None) -> None:
         self._resuming.discard(conversation_id)
+        if self._is_stopped(conversation_id):
+            # Its team was stopped meanwhile and goes on when it is told to.
+            return
         with suppress(NotFound):
             await self._require_launcher().resume(UUID(conversation_id), note)
 
@@ -2279,6 +2553,9 @@ class DirectorService:
         if self._paused is not None or seq in self._delivering:
             return
         if not run.is_held(seq):
+            return
+        if self._is_stopped(conversation_id):
+            # It waits until the IC above sets the team going again.
             return
         if seq not in self._at_once and (
             self._in_a_turn_of_its_own(conversation_id)
@@ -2758,6 +3035,7 @@ class DirectorService:
         parent_ic = agent_conversation(above, "ic") if above else None
         checkout = intent.payload.get("checkout")
         self._runs().mark(TASK, node_id, task)
+        self.progressed(node_id)
         if await self._start_agent(node_id, "ic", parent_ic, task, checkout):
             node = self.store.get(node_id)
             # Sub-teams it took over from a team it replaced.
@@ -3183,6 +3461,7 @@ class DirectorService:
             node.review.model_copy(update={"state": "accepted", "at": _now()}),
             base_commit=tip or node.base_commit,
         )
+        self.progressed(above.id)
         self.notify(
             agent_conversation(node, "ic"),
             f"The IC of {above.title!r} accepted your team's work"
@@ -3523,6 +3802,17 @@ def _new_pod(ic_id: UUID) -> list[AgentRef]:
     """The agents a team starts with. Its Manager joins when something is
     first sent to it (see :meth:`DirectorService.tell_manager`)."""
     return [AgentRef(role="ic", conversation_id=str(ic_id), status="idle")]
+
+
+def _progress_of(kept: str | None) -> dict[str, Any]:
+    """What is known of a team's progress: when it last got anywhere
+    (``at``), the last commit in its directory then (``head``), and when
+    the IC above was last told that it shows none (``told``)."""
+    try:
+        seen = json.loads(kept) if kept else {}
+    except ValueError:
+        return {}
+    return seen if isinstance(seen, dict) else {}
 
 
 def _base_of(workspace: str) -> str:

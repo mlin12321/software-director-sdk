@@ -61,6 +61,17 @@ The IC owns the technical work of the team's boundary:
   its own part is complete, and the accepted work goes up with it.
 - It settles what the ICs of the teams directly below escalate with
   `resolve_escalation`, or passes it up with the reason it could not.
+- It writes to the IC of a team directly below with `msg_team`: a hint, a
+  correction, a change of priority. That IC does not answer in a message;
+  it acts on what was written, or raises an escalation.
+- The runtime tells it when a team directly below has shown no progress
+  for a long time, with what that team's IC says of it. It can read the
+  team's files and history itself. A team that has gone on too long
+  without progress, and that a message did not help, it stops with
+  `stop_team`, saying why. This is a last resort, to be used very
+  sparingly: a stopped team and every team below it do nothing until the
+  IC writes to it again with `msg_team`, and the Manager is told and may
+  remove it.
 
 The Manager owns the make-up of the teams below and makes them work well
 together. It does not edit files; the runtime refuses it every write in the
@@ -77,7 +88,8 @@ below escalates, and not otherwise.
 - A team directly below that has no way forward, or keeps trying what does
   not work, it removes with `prune_team`, saying why. The team's directory
   goes back to the IC. Teams are removed or replaced only once their agents
-  have finished what they are doing.
+  have finished what they are doing. A team its IC stopped can be removed
+  like any other.
 
 Both record what matters with `report`: a design decision and its reason,
 a setback, an approach that failed and why, a reflection on how the work
@@ -210,6 +222,71 @@ def review_request(team: OrgNode, review: Review) -> str:
         f"`review_team` for node {team.id}: `accept`, or `reject` with what "
         "must change. Set `needed_above` only if a team above yours waits on "
         "this work.",
+    ]
+    return "\n".join(lines)
+
+
+STALL_QUESTION = (
+    "The IC of the team above is about to be told that your team has shown "
+    "no progress for some time: nothing committed in your directory, "
+    "nothing submitted, no escalation. In a few sentences, for that IC: "
+    "what are you working on, what has kept you from committing or "
+    "submitting, and what do you need to go on? Answer in plain text and "
+    "do nothing else."
+)
+
+
+def _span(minutes: int) -> str:
+    hours, rest = divmod(minutes, 60)
+    if not hours:
+        return f"{minutes} min"
+    return f"{hours} h {rest} min" if rest else f"{hours} h"
+
+
+def stall_notice(
+    team: OrgNode, minutes: int, *, in_a_turn: bool, account: str | None
+) -> str:
+    """What the IC above is told of a team that shows no progress.
+
+    Args:
+        minutes: How long it has shown none.
+        in_a_turn: Whether the team's IC is in a turn, and so was not asked.
+        account: What the team's IC said when asked; None when it gave no
+            answer or was not asked.
+    """
+    directory = team.boundary.path or "."
+    sent_back = team.review is not None and team.review.state == "changes_requested"
+    lines = [
+        f"Team {team.title!r} (node {team.id}) has shown no progress for "
+        f"{_span(minutes)}: no commit in {directory}, nothing submitted, no "
+        "escalation."
+    ]
+    if sent_back and team.review is not None:
+        lines.append(
+            f"You sent its work back (review round {team.review.round}) and "
+            "it has not submitted it again."
+        )
+    lines.append("")
+    if in_a_turn:
+        lines.append(
+            "Its IC is in a turn right now, so it was not asked what it is doing."
+        )
+    elif account:
+        lines += ["Asked just now, its IC says:", account.strip()]
+    else:
+        lines.append("Asked just now what it is doing, its IC gave no answer.")
+    lines += [
+        "",
+        "Look for yourself: run these in " + team.worktree_path,
+        f"  git log --oneline -5 -- {directory}",
+        f"  git status --short -- {directory}",
+        "",
+        "Then decide. You can wait; write to its IC with `msg_team`; or "
+        "write to your Manager with `msg_manager` if the teams should be "
+        "made up differently. If it has gone on too long without progress "
+        f"and a message did not help, `stop_team` for node {team.id} stops "
+        "it. Use that very sparingly: a stopped team does nothing until "
+        "you write to it again or your Manager removes it.",
     ]
     return "\n".join(lines)
 

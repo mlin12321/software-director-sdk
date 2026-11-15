@@ -184,6 +184,20 @@ class SplitProposal(BaseModel):
     proposed_at: str = Field(description="ISO 8601 timestamp.")
 
 
+class Stopped(BaseModel):
+    """That the IC of the team above stopped a team, and why."""
+
+    at: str = Field(description="ISO 8601 timestamp.")
+    reason: str
+    running: list[str] = Field(
+        default_factory=list,
+        description=(
+            "The conversations of the team and of the teams below it that "
+            "were in a turn when it was stopped."
+        ),
+    )
+
+
 class ReviewFinding(BaseModel):
     """One thing a review found wrong in a team's work."""
 
@@ -292,6 +306,14 @@ class OrgNodeInput(BaseModel):
         default=None,
         description="The review of what the team last submitted.",
     )
+    stopped: Stopped | None = Field(
+        default=None,
+        description=(
+            "Set while the IC of the team above has stopped the team: its "
+            "agents and those of every team below it are at rest and "
+            "nothing is sent to them."
+        ),
+    )
     agent_profile: str | None = Field(
         default=None,
         description=(
@@ -350,13 +372,26 @@ class ThreadMessage(BaseModel):
 
 
 class Thread(BaseModel):
-    """Everything one Manager and one IC have said to each other."""
+    """Everything one Manager and one IC have said to each other, or
+    everything the IC of the team above has written to an IC."""
 
-    manager_node_id: str = Field(description="The team the Manager belongs to.")
+    manager_node_id: str = Field(
+        description=(
+            "The team the Manager belongs to; when ``ic_to_ic``, the team "
+            "of the IC that writes."
+        )
+    )
     ic_node_id: str = Field(
         description=(
             "The team the IC belongs to: the Manager's own, or one directly below it."
         )
+    )
+    ic_to_ic: bool = Field(
+        default=False,
+        description=(
+            "Whether these are the messages of the IC of the team above to "
+            "this IC, which go one way, and not a Manager's."
+        ),
     )
     messages: list[ThreadMessage] = Field(default_factory=list)
 
@@ -588,6 +623,15 @@ class DirectorSettings(BaseModel):
             "model rewrites them into one shorter report."
         ),
     )
+    stall_check_minutes: int = Field(
+        default=120,
+        ge=0,
+        description=(
+            "How many minutes a team may show no progress, with nothing "
+            "submitted or with its work sent back, before the IC of the "
+            "team above is told. 0 turns the check off."
+        ),
+    )
 
 
 class DirectorSettingsUpdate(BaseModel):
@@ -598,6 +642,7 @@ class DirectorSettingsUpdate(BaseModel):
     allowed_profiles: list[str] | None = None
     resume_on_start: bool | None = None
     report_compaction_chars: int | None = Field(default=None, ge=1_000)
+    stall_check_minutes: int | None = Field(default=None, ge=0)
 
 
 class DirectorSettingsState(DirectorSettings):

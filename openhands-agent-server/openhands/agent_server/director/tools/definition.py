@@ -149,6 +149,20 @@ class ReportAction(Action):
     text: str = Field(description="What to record, in plain English.")
 
 
+class MsgTeamAction(Action):
+    """Write to the IC of a team below yours."""
+
+    team: str = Field(description="The node id of a team directly below yours.")
+    text: str = Field(description="The message, in your own words.")
+
+
+class StopTeamAction(Action):
+    """Stop a team below yours that has gone on too long without progress."""
+
+    team: str = Field(description="The node id of a team directly below yours.")
+    reason: str = Field(description="Why the team is stopped; your Manager is told.")
+
+
 class PruneTeamAction(Action):
     """Remove a team below yours that is stuck."""
 
@@ -268,6 +282,46 @@ class MsgIcTool(_DirectorTool[MsgIcAction]):
     def act(cls):
         return lambda service, caller, action: pod_actions.msg_ic(
             service, caller, action.text, action.team
+        )
+
+
+class MsgTeamTool(_DirectorTool[MsgTeamAction]):
+    summary = (
+        "IC only. Write to the IC of a team directly below yours: a hint, a "
+        "correction, a change of priority. It does not answer in a message; "
+        "it acts on what you wrote or raises an escalation. Writing to a "
+        "team you stopped sets it going again."
+    )
+
+    @classmethod
+    def action(cls):
+        return MsgTeamAction
+
+    @classmethod
+    def act(cls):
+        return lambda service, caller, action: pod_actions.msg_team(
+            service, caller, action.team, action.text
+        )
+
+
+class StopTeamTool(_DirectorTool[StopTeamAction]):
+    summary = (
+        "IC only. A last resort, to be used very sparingly: stop a team "
+        "directly below yours that has gone on too long without progress "
+        "and that a message did not help. Its agents and those of every "
+        "team below it end the step they are in and are sent nothing until "
+        "you write to the team with msg_team. Your Manager is told and may "
+        "remove the team."
+    )
+
+    @classmethod
+    def action(cls):
+        return StopTeamAction
+
+    @classmethod
+    def act(cls):
+        return lambda service, caller, action: pod_actions.stop_team(
+            service, caller, action.team, action.reason
         )
 
 
@@ -420,6 +474,8 @@ register_tool(ReadNodeContextTool.name, ReadNodeContextTool)
 register_tool(WriteSpecTool.name, WriteSpecTool)
 register_tool(MsgManagerTool.name, MsgManagerTool)
 register_tool(MsgIcTool.name, MsgIcTool)
+register_tool(MsgTeamTool.name, MsgTeamTool)
+register_tool(StopTeamTool.name, StopTeamTool)
 register_tool(ApproveTeamsTool.name, ApproveTeamsTool)
 register_tool(RaiseEscalationTool.name, RaiseEscalationTool)
 register_tool(ResolveEscalationTool.name, ResolveEscalationTool)
@@ -436,6 +492,8 @@ DIRECTOR_TOOLS: dict[str, type[_DirectorTool]] = {
         WriteSpecTool,
         MsgManagerTool,
         MsgIcTool,
+        MsgTeamTool,
+        StopTeamTool,
         ApproveTeamsTool,
         RaiseEscalationTool,
         ResolveEscalationTool,

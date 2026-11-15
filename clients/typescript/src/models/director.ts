@@ -195,6 +195,11 @@ export interface DirectorOrgNode {
   /** The review of what the team last submitted. */
   review: DirectorReview | null;
   /**
+   * Set while the IC of the team above has stopped the team: its agents and
+   * those of every team below it are at rest and nothing is sent to them.
+   */
+  stopped?: DirectorStopped | null;
+  /**
    * An agent of the team could not be started yet because the server runs
    * as many conversations as it may; it starts when one of them ends.
    */
@@ -405,12 +410,24 @@ export interface DirectorThreadMessage {
 
 /**
  * What one Manager and one IC have said to each other, oldest first. The IC
- * is the Manager's own, or the IC of a team directly below it.
+ * is the Manager's own, or the IC of a team directly below it. With
+ * `ic_to_ic`, what the IC of the team above wrote to an IC instead: those go
+ * one way, and `manager_node_id` is then the team of the IC that writes.
  */
 export interface DirectorThread {
   manager_node_id: DirectorNodeId;
   ic_node_id: DirectorNodeId;
+  ic_to_ic?: boolean;
   messages: DirectorThreadMessage[];
+}
+
+/** That the IC of the team above stopped a team, and why. */
+export interface DirectorStopped {
+  /** ISO 8601 timestamp. */
+  at: string;
+  reason: string;
+  /** The conversations that were in a turn when the team was stopped. */
+  running: string[];
 }
 
 export interface DirectorInheritedSpec {
@@ -566,6 +583,12 @@ export interface DirectorSettings {
    * rewrites them into one shorter report. Absent on servers without reports.
    */
   report_compaction_chars?: number;
+  /**
+   * How many minutes a team may show no progress, with nothing submitted or
+   * with its work sent back, before the IC of the team above is told. 0
+   * turns the check off. Absent on servers without the check.
+   */
+  stall_check_minutes?: number;
 }
 
 /** The settings, beside what the org has now. */
