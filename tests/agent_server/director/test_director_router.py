@@ -743,6 +743,8 @@ def test_the_limits_on_new_teams_are_read_changed_and_kept(saved_tree: Path):
         "resume_on_start": False,
         "report_compaction_chars": 24_000,
         "stall_check_minutes": 120,
+        "manager_check_accepted_reviews": 5,
+        "manager_check_ic_escalations": 3,
         "agents": 10,
         "depth": 3,
         "max_concurrent_runs": 7,

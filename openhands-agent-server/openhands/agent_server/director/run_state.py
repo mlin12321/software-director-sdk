@@ -22,6 +22,7 @@ SCHEMA_VERSION = 1
 # Marks: one row per (kind, key), kept in the order they were first made.
 RUNNING = "running"  # conversation id -> node id
 WAITING = "waiting"  # node id, waiting for the server to have room
+CHECKS = "checks"  # node id -> what its Manager's checks have counted
 HELD = "held"  # node id, its review request waits for the teams beside it
 TEAM = "team"  # node id -> what the team was made of at the last save
 PROGRESS = "progress"  # node id -> when the team last got anywhere

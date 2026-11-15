@@ -250,7 +250,7 @@ def raise_escalation(
             f"Raised as {escalation.id}. Nobody is above your team: it waits "
             "on the human."
         )
-    _hand_to(service, escalation.held_by, node, escalation, [])
+    _hand_to(service, escalation.held_by, node, node, escalation, [])
     return (
         f"Raised as {escalation.id}. It is with the {_role_name(caller.role)} "
         "of the team above; you will be told the answer."
@@ -305,6 +305,7 @@ def resolve_escalation(
         service,
         passed.held_by,
         raiser,
+        caller.node,
         passed,
         [f"{handoff.node_id}: {handoff.reason}" for handoff in passed.handoffs],
     )
@@ -315,9 +316,16 @@ def _hand_to(
     service: DirectorService,
     holder_id: str,
     raiser: OrgNode,
+    through: OrgNode,
     escalation: Escalation,
     passed_up: list[str],
 ) -> None:
+    """Tell the agent that now holds an escalation.
+
+    Args:
+        through: The team directly below the holder that it comes from:
+            the one that raised it, or the one that passed it up.
+    """
     holder = service.store.get(holder_id)
     if holder is None:
         return
@@ -325,6 +333,7 @@ def _hand_to(
     if escalation.raised_by == "ic":
         # It is woken now anyway, so it gets what waits for its review too.
         service.release_reviews(holder_id, now=True)
+        service.count_ic_escalation(holder_id, through.id)
     text = (
         f"The {_role_name(escalation.raised_by)} of team {raiser.title!r} "
         f"(node {raiser.id}) escalates {escalation.title!r} (escalation "

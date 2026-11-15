@@ -589,6 +589,17 @@ export interface DirectorSettings {
    * turns the check off. Absent on servers without the check.
    */
   stall_check_minutes?: number;
+  /**
+   * After how many reviews its IC accepted a Manager is woken to look at its
+   * teams, without a message from its IC. 0 turns the check off.
+   */
+  manager_check_accepted_reviews?: number;
+  /**
+   * After how many escalations the IC of one team directly below raised, on
+   * the work it has in hand, a Manager is woken to look at its teams. 0 turns
+   * the check off.
+   */
+  manager_check_ic_escalations?: number;
 }
 
 /** The settings, beside what the org has now. */

@@ -76,7 +76,11 @@ The IC owns the technical work of the team's boundary:
 The Manager owns the make-up of the teams below and makes them work well
 together. It does not edit files; the runtime refuses it every write in the
 repository. It acts when its IC writes to it or the Manager of a team
-below escalates, and not otherwise.
+below escalates. The runtime also wakes it now and then to look at its
+teams: after its IC has accepted a number of reviews, and when the IC of
+one team below has escalated several times on the same work. Such a look
+asks nothing of it; it acts only if the make-up of the teams is what holds
+the work back.
 - It reads the sub-teams its IC proposes and approves them with
   `approve_teams` when they are clearly separated and each instruction is
   clear. They are then set up exactly as written. To ask for changes or
@@ -287,6 +291,59 @@ def stall_notice(
         f"and a message did not help, `stop_team` for node {team.id} stops "
         "it. Use that very sparingly: a stopped team does nothing until "
         "you write to it again or your Manager removes it.",
+    ]
+    return "\n".join(lines)
+
+
+def manager_check(
+    reason: str,
+    teams: list[OrgNode],
+    quiet: dict[str, int],
+    escalations: dict[str, int],
+) -> str:
+    """What a Manager is told when the director wakes it to look at its
+    teams.
+
+    Args:
+        reason: What was counted, as the Manager is to read it.
+        quiet: For how many minutes each team has shown no progress, by
+            node id, where that is known.
+        escalations: How many escalations each team's IC has raised on the
+            work it has in hand, by node id.
+    """
+    lines = [
+        f"A look at your teams that your IC did not ask for: {reason}",
+        "",
+        "The teams directly below yours:",
+    ]
+    for team in teams:
+        facts = [team.status]
+        if team.stopped is not None:
+            facts.append(f"stopped by your IC ({team.stopped.reason})")
+        if team.review is not None:
+            facts.append(
+                f"review {team.review.state.replace('_', ' ')}, round "
+                f"{team.review.round}"
+            )
+        else:
+            facts.append("nothing submitted yet")
+        raised = escalations.get(team.id, 0)
+        if raised:
+            facts.append(f"{raised} escalated to your IC on this work")
+        waiting = len(team.escalations)
+        if waiting:
+            facts.append(f"{waiting} unsettled")
+        if team.id in quiet:
+            facts.append(f"no progress for {_span(quiet[team.id])}")
+        lines.append(
+            f"- {team.title!r} (node {team.id}, {team.boundary.path or '.'}): "
+            + "; ".join(facts)
+        )
+    lines += [
+        "",
+        "Nothing is asked of you. Act only if the make-up of the teams is "
+        "what holds the work back: write to an IC with `msg_ic`, or remove a "
+        "team with `prune_team`. Otherwise end your turn.",
     ]
     return "\n".join(lines)
 
