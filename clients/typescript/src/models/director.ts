@@ -124,6 +124,8 @@ export interface DirectorSplitProposal {
    * Their own sub-teams stay.
    */
   replaces?: DirectorNodeId[];
+  /** The sub-teams the node has now that the IC said are to stay as they are. */
+  keeps?: DirectorNodeId[];
   /** ISO 8601 timestamp. */
   proposed_at: string;
 }

@@ -43,6 +43,7 @@ I would split the service in two.
 ```teams
 contracts: |
   API serves /orders.
+keep: [Billing]
 teams:
   - name: API
     path: services/api
@@ -65,6 +66,7 @@ def test_a_message_proposes_the_teams_in_its_block():
 
     assert proposed is not None
     assert proposed.contracts == "API serves /orders.\n"
+    assert proposed.keep == ["Billing"]
     assert proposed.children == [
         SplitChild(
             title="API",
@@ -250,3 +252,21 @@ def test_the_sub_teams_of_a_replaced_team_report_to_the_team_that_holds_them(
     assert home_of(a1, "root", {"svc/a/one": "new.one", "docs": "docs"}) == "new.one"
     assert home_of(a1, "root", {"svc": "services"}) == "services"
     assert home_of(a2, "root", {"svc/a/one": "new.one"}) == "root"
+
+
+def test_what_a_proposal_keeps_is_asked_for_only_when_it_is_first_checked(
+    store: OrgStore,
+):
+    root = store.get("root")
+    assert root is not None
+    new = [child("C", "svc/c")]
+
+    kept = normalize_split(store, root, new, ["a", "b"])
+    again = normalize_split(store, root, new)
+
+    assert [team.id for team in kept.keeps] == ["a", "b"]
+    assert (replaced(kept), again.keeps) == ([], [])
+    with pytest.raises(OrgStoreError, match="neither replaced by a proposed team"):
+        normalize_split(store, root, new, ["a"])
+    with pytest.raises(OrgStoreError, match="neither replaced by a proposed team"):
+        normalize_split(store, root, new, [])

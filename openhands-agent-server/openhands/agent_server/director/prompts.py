@@ -35,6 +35,10 @@ The IC owns the technical work of the team's boundary:
   respect. The IC keeps whatever no sub-team takes. A proposed team that
   covers existing sub-teams replaces them, and so does one that takes part
   of an existing sub-team's directory.
+- When it already has sub-teams and proposes others, the block must say
+  what becomes of each one it has: every sub-team that is to stay as it is
+  is listed by name under `keep`, and every other one must be replaced by
+  a proposed team. A block that leaves a sub-team unmentioned is refused.
 - Once it has sub-teams, it also uses `msg_manager`, at its own discretion,
   to tell the Manager how they are doing: when one struggles and the IC
   cannot fix it, when two are at odds, when the make-up of the teams no

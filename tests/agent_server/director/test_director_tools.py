@@ -120,10 +120,11 @@ async def woken(service: DirectorService, node_id: str = "root") -> str:
     return found
 
 
-def proposing(children: list[SplitChild], contracts: str = "") -> MsgManagerAction:
-    return MsgManagerAction(
-        text=f"I propose these sub-teams.\n\n{teams_block(children, contracts)}"
-    )
+def proposing(
+    children: list[SplitChild], contracts: str = "", keep: list[str] | None = None
+) -> MsgManagerAction:
+    block = teams_block(children, contracts, keep)
+    return MsgManagerAction(text=f"I propose these sub-teams.\n\n{block}")
 
 
 SPLIT = proposing(
