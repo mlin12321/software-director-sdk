@@ -1932,7 +1932,13 @@ class DirectorService:
             for event in team_memory.history(node.id)
             if event.kind != "needed" and (before is None or event.at < before)
         ]
+        # Times are kept to the second: of events in one second the later
+        # recorded comes first, and a page never ends inside a second, so
+        # that reading on from its last time misses none.
+        events.reverse()
         events.sort(key=lambda event: event.at, reverse=True)
+        while limit < len(events) and events[limit].at == events[limit - 1].at:
+            limit += 1
         return OrgHistory(events=events[:limit], earlier=len(events) > limit)
 
     def reports_of(self, node: OrgNode) -> list[Report]:

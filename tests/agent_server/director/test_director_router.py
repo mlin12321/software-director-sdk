@@ -710,6 +710,7 @@ def test_the_history_of_the_org_is_one_list_newest_first(saved_tree: Path):
     happened("root", "2026-11-01T10:00:00+00:00", "set_up", "a")
     happened("a", "2026-11-01T11:00:00+00:00", "accepted", "a1")
     happened("root", "2026-11-01T12:00:00+00:00", "sent_back", "b")
+    happened("root", "2026-11-01T12:00:00+00:00", "accepted", "b")
     # Counted for an IC, and no event of the org.
     happened("root", "2026-11-01T13:00:00+00:00", "needed", "a")
     client = make_client(saved_tree)
@@ -722,11 +723,15 @@ def test_the_history_of_the_org_is_one_list_newest_first(saved_tree: Path):
     refused = client.get("/api/director/org/history", params={"limit": 0})
 
     assert [(e["kind"], e["team"], e["above_id"]) for e in latest["events"]] == [
+        # Of two in one second, the one recorded later comes first.
+        ("accepted", "B", "root"),
         ("sent_back", "B", "root"),
-        ("accepted", "A1", "a"),
     ]
     assert latest["earlier"] is True
-    assert [e["kind"] for e in earlier["events"]] == ["set_up"]
+    assert [e["kind"] for e in earlier["events"]] == ["accepted", "set_up"]
+    # A page does not end inside a second: reading on would miss the rest.
+    one = client.get("/api/director/org/history", params={"limit": 1}).json()
+    assert [e["kind"] for e in one["events"]] == ["accepted", "sent_back"]
     assert earlier["earlier"] is False
     assert refused.status_code == 422
 
