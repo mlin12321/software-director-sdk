@@ -147,6 +147,26 @@ def uncommitted(checkout: Path, path: str) -> list[str]:
     return [line[3:] for line in listed.splitlines() if line]
 
 
+def bring_over(source: Path, target: Path, path: str, ref: str) -> list[str]:
+    """Move what is uncommitted under ``path`` from one checkout to another
+    that is on the same commit, where it is uncommitted again.
+
+    What was moved is also kept as a commit at ``ref``. Nothing is moved
+    between checkouts on different commits.
+
+    Returns:
+        The files that were moved.
+    """
+    files = uncommitted(source, path)
+    if not files or head_of(source) != head_of(target):
+        return []
+    commit = save_and_discard(source, path, ref)
+    if commit is None:
+        return []
+    git(target, ["restore", f"--source={commit}", "--worktree", "--", pathspec(path)])
+    return files
+
+
 def save_and_discard(checkout: Path, path: str, ref: str) -> str | None:
     """Discard what is uncommitted under ``path`` of a checkout, keeping it
     as a commit at ``ref``.

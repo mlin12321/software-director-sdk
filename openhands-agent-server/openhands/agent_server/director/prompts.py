@@ -218,10 +218,79 @@ def left_behind(
 def _approved(children: list[SplitChild]) -> str:
     teams = ", ".join(f"{child.title} ({child.path})" for child in children)
     return (
-        "Your Manager approved your sub-teams and they now own their "
-        f"directories: {teams}. You can no longer write there; carry on with "
-        "what remains in your boundary. None of them has started: a team "
-        "starts when you give it its task with msg_team."
+        "Your team was split: your Manager approved your sub-teams and they "
+        f"now own their directories: {teams}. None of them has started: a "
+        "team starts when you give it its task with msg_team."
+    )
+
+
+def _named(files: list[str], most: int = 10) -> str:
+    more = f" and {len(files) - most} more" if len(files) > most else ""
+    return ", ".join(files[:most]) + more
+
+
+def _split_effects(children: list[SplitChild], unfinished: dict[str, list[str]]) -> str:
+    """How a split changes what the IC that proposed it may do.
+
+    Args:
+        unfinished: By directory of a new team, the files the IC has
+            changed there and not committed.
+    """
+    lines = [
+        "How the split changes your own work:",
+        "- What remains in your boundary outside those directories is yours as before.",
+        "- What you committed in those directories is where each team "
+        "starts. Your `git` no longer shows or commits anything there.",
+    ]
+    left = [child for child in children if unfinished.get(child.path)]
+    if left:
+        lines.append("- You have changes there that are not committed:")
+        lines += [
+            f"  - {child.title} ({child.path}): {_named(unfinished[child.path])}"
+            for child in left
+        ]
+        lines.append(
+            "  They passed to those teams with the directories. You may finish "
+            "them: you can write in a team's directory until you give the team "
+            "its task. The team then finds them as uncommitted work of its "
+            "own, so say in its task what they are for. It checks them, "
+            "commits them and submits them, and you review that. You cannot "
+            "commit or submit them yourself."
+        )
+    else:
+        lines.append(
+            "- You left nothing uncommitted there. Until you give a team its "
+            "task you can still write in its directory, but what you write "
+            "there is the team's: it commits it and submits it, and you "
+            "review that."
+        )
+    lines.append(
+        "- Once a team has its task, a write of yours in its directory is "
+        "refused. Tell the team what you need with msg_team."
+    )
+    return "\n".join(lines)
+
+
+def put_aside_notice(team: OrgNode, files: list[str], ref: str) -> str:
+    """What an IC is told when changes it made in a started sub-team's
+    directory were taken out of its checkout."""
+    return (
+        f"Your checkout held uncommitted changes in {team.boundary.path}, "
+        f"which is the directory of your sub-team {team.title!r}: "
+        f"{_named(files)}. They were in the way of the work you accepted "
+        f"and were taken out; they are kept at {ref}. If they are still "
+        "needed, tell the team with msg_team."
+    )
+
+
+def left_for_team(files: list[str]) -> str:
+    """What a team is told, with its task, of the changes the IC above left
+    uncommitted in its directory."""
+    return (
+        "The IC of the team above changed these files in your directory "
+        f"before your team started and did not commit them: {_named(files)}. "
+        "They are yours now. Check them, change what is wrong, and commit "
+        "them with your work before you submit it."
     )
 
 
@@ -273,16 +342,19 @@ def approved_notice(
     former: list[FormerTeam],
     *,
     contracts_replaced: bool,
+    unfinished: dict[str, list[str]],
 ) -> str:
     """What an IC is told once the sub-teams it proposed are set up.
 
     Args:
+        unfinished: By directory of a new team, the files the IC has
+            changed there and not committed.
         former: The teams they replaced. What those left is passed on in
             hand-over mode and is not given here.
         contracts_replaced: Whether the proposal's contracts took the place
             of the ones the node had.
     """
-    lines = [_approved(children)]
+    lines = [_approved(children), "", _split_effects(children, unfinished)]
     todo = []
     if former:
         gone = ", ".join(f"{team.title} ({team.path or '.'})" for team in former)
@@ -605,7 +677,7 @@ def unstarted_notice(team: OrgNode, minutes: int) -> str:
     return (
         f"Team {team.title!r} (node {team.id}, {team.boundary.path or '.'}) "
         f"was set up {_span(minutes)} ago and has been given no task. Nobody "
-        "works in its directory, and you cannot write there. Give it its "
+        "works in its directory, and nothing there is committed. Give it its "
         "task with `msg_team`. If it is not needed, write to your Manager to "
         "have it pruned, or propose your teams again without it. If it waits "
         "on purpose, do nothing: you are not told of it again."
