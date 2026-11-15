@@ -161,6 +161,8 @@ def describe(
             if agent.conversation_id == conversation_id
         ]
         name = ROLE_NAMES[roles[0]] if roles else ROLE_NAMES["ic"]
+        if store.find_hand_over(conversation_id) is not None:
+            name = f"{ROLE_NAMES['ic']} in hand-over mode"
         status = statuses.get(UUID(conversation_id))
         if status is None:
             items.append(

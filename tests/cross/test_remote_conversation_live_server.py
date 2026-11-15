@@ -3717,6 +3717,10 @@ def test_director_runs_an_org_whose_root_splits_into_sub_teams(
         for child in detail["children"]:
             [child_ic] = (agent["conversation_id"] for agent in child["agents"])
             ic = client.get(f"/api/conversations/{child_ic}")
+            # A team's IC is on the node a moment before its conversation is.
+            while ic.status_code == 404 and time.time() < deadline:
+                time.sleep(0.2)
+                ic = client.get(f"/api/conversations/{child_ic}")
             assert ic.status_code == 200, child
             assert ic.json()["parent_conversation_id"] == root_ic
         specs = client.get("/api/director/org/nodes/services.api/memory").json()
@@ -3985,7 +3989,8 @@ def test_director_starts_an_org_from_a_message_and_holds_teams_to_their_director
 
         def api_ic_events() -> list[dict]:
             api = client.get("/api/director/org/nodes/services.api")
-            if api.status_code != 200:
+            # A team has no agent until its IC above gives it its task.
+            if api.status_code != 200 or not api.json()["node"]["agents"]:
                 return []
             api_ic = api.json()["node"]["agents"][0]["conversation_id"]
             page = client.get(

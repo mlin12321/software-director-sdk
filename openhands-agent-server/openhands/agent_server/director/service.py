@@ -2126,10 +2126,15 @@ class DirectorService:
         statuses = (
             await launcher.statuses(
                 [
-                    UUID(agent.conversation_id)
+                    UUID(conversation_id)
                     for node in store.all()
                     for agent in node.agents
-                    if agent.conversation_id is not None
+                    for conversation_id in (
+                        agent.conversation_id,
+                        # A hand-over is paused and run again as an agent is.
+                        agent.hand_over.conversation_id if agent.hand_over else None,
+                    )
+                    if conversation_id is not None
                 ]
             )
             if launcher is not None

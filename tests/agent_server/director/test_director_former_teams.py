@@ -787,6 +787,11 @@ async def test_a_paused_org_pauses_a_hand_over_and_it_goes_on_when_resumed(
 
     assert UUID(side) in launcher.paused
     assert ended_notices(service, launcher) == []
+    # What resuming does names the hand-over, whose conversation is there.
+    told = await service.recovery()
+    assert [(item.kind, item.detail) for item in told.items] == [
+        ("run_again", "Its IC in hand-over mode runs again.")
+    ]
 
     await service.resume()
     await service.settled()
