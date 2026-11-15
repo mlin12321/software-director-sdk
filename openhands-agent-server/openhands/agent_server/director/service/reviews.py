@@ -34,6 +34,7 @@ from openhands.agent_server.director.run_state import (
     HELD,
     Intent,
 )
+from openhands.agent_server.director.service.requests import Requests
 from openhands.agent_server.director.service.state import (
     _REST_CHECK_SECONDS,
     _REST_CHECKS,
@@ -42,7 +43,6 @@ from openhands.agent_server.director.service.state import (
     _now,
     agent_conversation,
 )
-from openhands.agent_server.director.service.teams import Teams
 from openhands.sdk.errors import (
     Conflict,
     NotFound,
@@ -52,7 +52,7 @@ from openhands.sdk.errors import (
 logger = logging.getLogger(__name__)
 
 
-class Reviews(Teams):
+class Reviews(Requests):
     """Carries a team's work through its review."""
 
     def request_review(self, node_id: str) -> None:
@@ -197,7 +197,11 @@ class Reviews(Teams):
         for team in waiting:
             run.unmark(HELD, team.id)
             if team.review is not None:
-                requests.append(review_request(team, team.review, self._so_far(team)))
+                requests.append(
+                    review_request(
+                        team, team.review, self._so_far(team), self.asked_of(team)
+                    )
+                )
         self.tell_ic(node.id, "\n\n---\n\n".join(requests))
 
     def accept_review(self, node_id: str, needed_above: str) -> None:

@@ -60,6 +60,7 @@ from openhands.agent_server.director.models import (
     OrgSummary,
     PauseReason,
     RecoveryItem,
+    RoutedRequest,
     SplitChild,
     TeamEnforcement,
     TeamMatch,
@@ -144,6 +145,10 @@ NOT_STARTED = "not started"
 # What follows a team's purpose in its task once something started it.
 _STARTED_WITH = "\n\nWhat your team is started with:\n"
 # How many of the latest events of its sub-teams an agent reads at once.
+# How many of the human's direct requests to the teams below an IC is told.
+ASKED_TOLD = 10
+# How much of such a request is kept in the record of the team above.
+ASKED_KEPT = 1000
 HISTORY_TOLD = 30
 # How long tree changes are gathered before they are saved as one commit.
 SAVE_DELAY_SECONDS = 2.0
@@ -344,6 +349,7 @@ class ServiceState:
         # The records of removed teams by the node they were below, as read
         # at one state of team memory.
         self._former_read: tuple[str | None, dict[str, list[FormerTeam]]] | None = None
+        self._routed_read: tuple[str | None, list[RoutedRequest]] | None = None
         self._bwrap: str | None = None
         self._stop_guard: Callable[[], None] | None = None
         self._save_delay = save_delay

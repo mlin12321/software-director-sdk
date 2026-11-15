@@ -71,15 +71,29 @@ describe('DirectorClient', () => {
   });
 
   it('sends a message to the org from a directory', async () => {
-    const routed = { node_id: 'payments.api', conversation_id: 'c-1', started_org: false };
+    const routed = {
+      node_id: 'payments.api',
+      conversation_id: 'c-1',
+      started_org: false,
+      chosen_by: 'model',
+      reason: 'It is about refunds.',
+    };
     const fetchMock = mockFetch(() => jsonResponse(routed));
     const client = new DirectorClient({ host: 'http://example.com' });
 
-    const result = await client.routeMessage({ text: 'Add refunds', path: 'services/api' });
+    const result = await client.routeMessage({
+      text: 'Add refunds',
+      path: 'services/api',
+      auto: true,
+    });
 
     const [url, init] = fetchMock.mock.calls[0];
     expect(`${init.method} ${url}`).toBe('POST http://example.com/api/director/org/messages');
-    expect(JSON.parse(init.body)).toEqual({ text: 'Add refunds', path: 'services/api' });
+    expect(JSON.parse(init.body)).toEqual({
+      text: 'Add refunds',
+      path: 'services/api',
+      auto: true,
+    });
     expect(result).toEqual(routed);
   });
 

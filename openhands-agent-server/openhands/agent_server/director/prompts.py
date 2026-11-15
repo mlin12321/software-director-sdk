@@ -36,7 +36,9 @@ The IC owns the technical work of the team's boundary:
 - It writes the team's spec with `write_spec` and does the code work itself.
   The spec is the team's own; no other team reads it.
 - It writes only inside the team's boundary, and the org's runtime refuses
-  a write anywhere else in the repository. Files of another team change
+  a write anywhere else in the repository. What the human asks of the
+  team directly it does inside its boundary, though the task from the team
+  above did not ask for it. Files of another team change
   through that team, by raising an escalation.
 - When the team's work is complete it commits it and calls
   `submit_review`. Its turn ends there: the IC of the team above reviews
@@ -601,11 +603,15 @@ def _finding_lines(findings: list[ReviewFinding]) -> list[str]:
     return lines
 
 
-def review_request(team: OrgNode, review: Review, so_far: str = "") -> str:
+def review_request(
+    team: OrgNode, review: Review, so_far: str = "", asked: list[str] | None = None
+) -> str:
     """What the IC above is told when a team below submits its work.
 
     Args:
         so_far: What became of the team's work before, in words.
+        asked: What the human asked the team directly since its work was
+            last accepted.
     """
     directory = team.boundary.path or "."
     lines = [
@@ -615,6 +621,13 @@ def review_request(team: OrgNode, review: Review, so_far: str = "") -> str:
     ]
     if so_far:
         lines.append(f"Its work so far: {so_far}.")
+    if asked:
+        lines += [
+            "",
+            "The human asked this team directly, not through you; work on "
+            "that is asked for, though it is not in the task you gave:",
+            *(f"- {text}" for text in asked),
+        ]
     if review.summary:
         lines += ["", "What it says it delivered:", review.summary]
     if review.description:
@@ -653,6 +666,27 @@ def review_request(team: OrgNode, review: Review, so_far: str = "") -> str:
         "into your checkout by the runtime.",
     ]
     return "\n".join(lines)
+
+
+DIRECT_NOTE = (
+    "\n\n(The human sent this to your team directly. The ICs of the teams "
+    "above are told of it and have not acted on it. Do what is your team's "
+    "own. Raise an escalation for what needs another team's files or "
+    "changes a contract. If none of it is your team's, raise an escalation "
+    "of the category `misrouted` and it goes to the team above.)"
+)
+
+
+def misrouted_notice(team: OrgNode, text: str, why: str) -> str:
+    """What the IC above is told when a team says a request the human's
+    words brought it directly is not its own."""
+    return (
+        f"The human asked what follows. The runtime sent it straight to "
+        f"team {team.title!r} (node {team.id}), whose IC says it is not that "
+        f"team's: {why or '(no reason given)'}\nIt is yours now: do it, or "
+        "give it to the team it belongs to with `msg_team`.\n\n"
+        f"The human wrote:\n{text}"
+    )
 
 
 STALL_QUESTION = (
@@ -745,6 +779,8 @@ _EVENT_WORDS: dict[TeamEventKind, str] = {
     "approved": "sub-teams approved",
     "declined": "sub-teams declined",
     "needed": "needed another team's directory",
+    "asked": "asked directly by the human",
+    "misrouted": "said a request was not its own",
 }
 # What is counted of a team, in the order it is told.
 _COUNTED: tuple[TeamEventKind, ...] = ("accepted", "sent_back", "stalled", "stopped")

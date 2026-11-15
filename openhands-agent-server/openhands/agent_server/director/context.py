@@ -26,6 +26,9 @@ IN_THE_BRIEFING = (
 _OWN = {"escalations_you_raised": None, "reports_of_your_team": "by"}
 # Lists with one entry for each team, told team by team.
 _BY_TEAM = ("sub_teams",)
+# Lists of which only the latest are kept: what is new in one is told, and
+# what dropped out of it is not.
+_LATEST = ("asked_directly_of_teams_below",)
 _PASSING = ("working", "idle")
 
 
@@ -65,6 +68,11 @@ def changed(
             continue
         if key in _BY_TEAM and was:
             found[key] = _teams_changed(was, value)
+            continue
+        if key in _LATEST:
+            new = [item for item in value if item not in was]
+            if new:
+                found[key] = {"added": new}
             continue
         if value[: len(was)] != was:
             found[key] = value

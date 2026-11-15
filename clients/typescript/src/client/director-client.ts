@@ -67,6 +67,12 @@ export interface RouteMessageRequest {
    */
   path?: string;
   /**
+   * Let the director choose a team below the one `path` gives, by the files
+   * the text names and by what a model makes of it. It moves down only when
+   * it is sure, and not at all while the org's `route_requests` is off.
+   */
+  auto?: boolean;
+  /**
    * How to start the root team's IC when there is no org yet. If the git
    * repository of its workspace already has a saved org, that org is taken
    * up and the message routed in it; otherwise the message starts an org
