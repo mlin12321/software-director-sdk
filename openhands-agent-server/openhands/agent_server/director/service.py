@@ -67,6 +67,7 @@ from openhands.agent_server.director.merge_back import merge_back
 from openhands.agent_server.director.models import (
     AGENT_ROLES,
     AGENTS_PER_TEAM,
+    ROLE_NAMES,
     AgentKind,
     AgentRef,
     AgentRole,
@@ -127,6 +128,7 @@ from openhands.agent_server.director.org_store import (
 )
 from openhands.agent_server.director.pods import PodLauncher, StartedAgent
 from openhands.agent_server.director.prompts import (
+    HAND_OVER_ROLE,
     MANAGER_ROLE,
     POD_PROTOCOL,
     STALL_QUESTION,
@@ -134,8 +136,12 @@ from openhands.agent_server.director.prompts import (
     brief,
     changes_requested,
     from_director,
+    hand_over_brief,
+    handed_over_notice,
     manager_check,
+    pruned_job,
     pruned_notice,
+    replaced_job,
     review_request,
     stall_notice,
 )
@@ -149,6 +155,7 @@ from openhands.agent_server.director.recovery import (
 )
 from openhands.agent_server.director.run_state import (
     CHECKS,
+    HANDING,
     HELD,
     PROGRESS,
     RUNNING,
@@ -297,7 +304,7 @@ def agent_conversation(node: OrgNode, role: AgentRole) -> str | None:
 
 
 def _agent_title(team: str, role: AgentRole) -> str:
-    return f"{team} ({'IC' if role == 'ic' else 'Manager'})"
+    return f"{team} ({ROLE_NAMES[role]})"
 
 
 def _summary_of(text: str) -> str:
@@ -419,6 +426,7 @@ class DirectorService:
             "split": self._carry_out_split,
             "start_team": self._do_start_team,
             "finish_split": self._do_finish_split,
+            "hand_over": self._do_hand_over,
             "request_review": self._do_request_review,
             "accept": self._do_accept,
             "prune": self._prune,
@@ -1488,6 +1496,8 @@ class DirectorService:
             in_full: Also what the teams removed from below an IC's team
                 left, which is otherwise only named.
         """
+        if role == "handover":
+            role = "ic"
         store = self.store
         team_memory = self.team_memory
         above = store.get(node.parent_id) if node.parent_id else None
@@ -2875,6 +2885,8 @@ class DirectorService:
         if found is None:
             return text, None
         node, role = found
+        if role == "handover":
+            return text, None
         try:
             now = steady(self.context_of(node, role))
         except (GitError, OSError):
@@ -3075,7 +3087,15 @@ class DirectorService:
                 agent, node.id, status == ConversationExecutionStatus.RUNNING
             )
         was = node.status
-        now = store.set_agent(node.id, role, status=self._shown(agent, status))
+        shown = self._shown(agent, status)
+        worked = any(
+            other.role == role and other.status == "working" for other in node.agents
+        )
+        now = store.set_agent(node.id, role, status=shown)
+        if role == "handover":
+            if worked and shown not in ("working", AGENT_PAUSED):
+                self._hand_over_ended(node.id)
+            return
         if self._paused is None and self._loop is not None:
             if now.status == "blocked" and was != "blocked":
                 # A blocked team is no longer waited for.
@@ -3162,15 +3182,18 @@ class DirectorService:
             node.boundary.path, above.boundary.path if above else None
         )
         context = self.context_of(node, role)
-        text = brief(
+        told = (
             node,
-            role,
             task,
             self.specs_of(node),
             contracts,
             self.reports_of(node),
             briefing_block(context),
         )
+        if role == "handover":
+            text = hand_over_brief(*told)
+        else:
+            text = brief(told[0], role, *told[1:])
         return text, json.dumps(steady(context))
 
     async def _brief(self, node_id: str, role: AgentRole, task: str) -> None:
@@ -3293,7 +3316,7 @@ class DirectorService:
                 title=title,
                 task=text,
                 isolation=isolation,
-                suffixes=[] if role == "ic" else [MANAGER_ROLE],
+                suffixes=_ROLE_SUFFIXES[role],
                 tool_params=tool_params,
                 adapt_agent=adapt,
                 checkout=checkout,
@@ -3591,14 +3614,26 @@ class DirectorService:
             for team_id in proposal.replaces
             if (records := await asyncio.to_thread(team_memory.former, team_id))
         ]
+        replaced = bool(proposal.contracts.strip())
         self.notify(
             agent_conversation(node, "ic"),
             approved_notice(
                 proposal.children,
                 former,
-                contracts_replaced=bool(proposal.contracts.strip()),
+                contracts_replaced=replaced,
+                aside=True,
             ),
         )
+        if former:
+            self._begin(
+                "hand_over",
+                node_id,
+                conversation=str(uuid4()),
+                ended="replaced",
+                former=[[team.id, team.at] for team in former],
+                children=[child.model_dump(mode="json") for child in proposal.children],
+                contracts_replaced=replaced,
+            )
 
     async def _prune(self, intent: Intent) -> None:
         store = self.store
@@ -3681,15 +3716,127 @@ class DirectorService:
             intent = run.step_done(intent, "removed")
         self._settling.pop(intent.id, None)
         records = await asyncio.to_thread(self._memory().former, node_id)
+        former = [record for record in records if record.at == plan["stamp"]]
         self.notify(
             parent_ic,
             pruned_notice(
-                plan["title"],
-                where,
-                plan["reason"],
-                saved,
-                [record for record in records if record.at == plan["stamp"]],
+                plan["title"], where, plan["reason"], saved, former, aside=True
             ),
+        )
+        if former and parent_ic is not None:
+            self._begin(
+                "hand_over",
+                plan["parent"],
+                conversation=str(uuid4()),
+                ended="pruned",
+                former=[[team.id, team.at] for team in former],
+                title=plan["title"],
+                where=where,
+                reason=plan["reason"],
+            )
+
+    async def _do_hand_over(self, intent: Intent) -> None:
+        """Start the side conversation in which a team's IC passes on what
+        removed teams left. Where it cannot be started, the IC is given all
+        of it in its main conversation."""
+        store, run, payload = self.store, self._runs(), intent.payload
+        node = store.get(intent.node_id)
+        if node is None:
+            return
+        conversation = payload["conversation"]
+        team_memory = self._memory()
+        wanted = {(team_id, at) for team_id, at in payload["former"]}
+        former = [
+            record
+            for team_id in dict.fromkeys(team_id for team_id, _ in payload["former"])
+            for record in await asyncio.to_thread(team_memory.former, team_id)
+            if (record.id, record.at) in wanted
+        ]
+        specs = {
+            team.path: await asyncio.to_thread(team_memory.read, _spec_file(team.path))
+            or ""
+            for team in former
+        }
+        children = [SplitChild(**child) for child in payload.get("children", [])]
+        if payload["ended"] == "replaced":
+            paths = {child.path for child in children}
+            job = replaced_job(
+                [
+                    team
+                    for team in store.children(node.id)
+                    if team.boundary.path in paths
+                ],
+                children,
+                former,
+                specs,
+                contracts_replaced=payload["contracts_replaced"],
+            )
+        else:
+            job = pruned_job(
+                payload["title"], payload["where"], payload["reason"], former, specs
+            )
+        before = agent_conversation(node, "handover")
+        if before != conversation:
+            aside = AgentRef(
+                role="handover", conversation_id=conversation, status="idle"
+            )
+            store.update_node(
+                node.id,
+                agents=[*(a for a in node.agents if a.role != "handover"), aside],
+            )
+            run.mark(
+                HANDING,
+                node.id,
+                json.dumps({"conversation": conversation, "given": [], "spec": False}),
+            )
+            if before is not None:
+                # One hand-over at a time: the one before it ends here.
+                with suppress(NotFound):
+                    await self._require_launcher().pause(UUID(before))
+        derived_from = await self._started_ic(node)
+        if await self._start_agent(node.id, "handover", derived_from, job):
+            return
+        # It could not be started, so the main conversation does the job.
+        run.unmark(HANDING, node.id)
+        left = store.get(node.id)
+        if left is not None:
+            store.update_node(
+                node.id, agents=[a for a in left.agents if a.role != "handover"]
+            )
+        self.notify(
+            agent_conversation(node, "ic"),
+            "The side conversation for the hand-over could not be started, so "
+            "it is yours to do here.\n\n" + job,
+        )
+
+    def note_hand_over(
+        self, node_id: str, *, team: str | None = None, spec: bool = False
+    ) -> None:
+        """Keep what a team's hand-over conversation did, for its IC to be
+        told when it ends. Safe from any thread."""
+        run = self._runs()
+        kept = run.marked(HANDING).get(node_id)
+        if kept is None:
+            return
+        done = json.loads(kept)
+        if team is not None and team not in done["given"]:
+            done["given"].append(team)
+        done["spec"] = done["spec"] or spec
+        run.mark(HANDING, node_id, json.dumps(done))
+
+    def _hand_over_ended(self, node_id: str) -> None:
+        """Tell a team's IC, in its main conversation, what its hand-over
+        conversation did. Safe from any thread."""
+        run = self._runs()
+        kept = run.marked(HANDING).get(node_id)
+        node = self.store.get(node_id)
+        if kept is None or node is None or self._loop is None:
+            return
+        run.unmark(HANDING, node_id)
+        done = json.loads(kept)
+        self.notify(
+            agent_conversation(node, "ic"),
+            handed_over_notice(done["given"], done["spec"]),
         )
 
     async def _own_account(
@@ -4253,6 +4400,14 @@ def _lane_for(intent: Intent) -> str:
     if intent.kind in _REVIEW_STEPS:
         return f"review:{intent.node_id}"
     return intent.node_id
+
+
+# What is added to the system prompt of an agent derived from an IC.
+_ROLE_SUFFIXES: dict[AgentRole, list[str]] = {
+    "ic": [],
+    "manager": [MANAGER_ROLE],
+    "handover": [HAND_OVER_ROLE],
+}
 
 
 def _new_pod(ic_id: UUID) -> list[AgentRef]:

@@ -10,8 +10,16 @@ from openhands.agent_server.models import StartConversationRequest
 # A pod has an IC and a Manager. The IC of a team leads it, is a report of
 # the team above, and does the code work in its boundary that no sub-team
 # has taken on.
-AgentRole = Literal["ic", "manager"]
+# "handover" is a side conversation of a team's IC: started by the director
+# for one hand-over, with a context of its own.
+AgentRole = Literal["ic", "manager", "handover"]
+# The two agents every team has, which keep reports.
 AGENT_ROLES: tuple[AgentRole, ...] = ("ic", "manager")
+ROLE_NAMES: dict[AgentRole, str] = {
+    "ic": "IC",
+    "manager": "Manager",
+    "handover": "IC, hand-over",
+}
 # An IC and a Manager.
 AGENTS_PER_TEAM = 2
 

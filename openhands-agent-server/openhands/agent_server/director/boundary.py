@@ -81,6 +81,11 @@ def write_refusal(
     Returns:
         The reason, worded for the agent, or None when it may.
     """
+    if role == "handover":
+        return (
+            f"A hand-over conversation does not edit files, so {path!r} was not "
+            "changed. Leave changes to your main conversation."
+        )
     if role == "manager":
         return (
             f"A Manager does not edit files, so {path!r} was not changed. Have "

@@ -48,7 +48,8 @@ def status_of(node: OrgNode | OrgNodeInput) -> NodeStatus:
     its work (until that is sent back), blocked when an agent has no
     conversation here, idle otherwise.
     """
-    agents = {agent.status for agent in node.agents}
+    # A hand-over beside the team's work says nothing of how that work stands.
+    agents = {agent.status for agent in node.agents if agent.role != "handover"}
     if node.stopped is not None:
         return "blocked"
     if AGENT_FAILED in agents or any(

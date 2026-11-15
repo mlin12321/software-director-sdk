@@ -28,6 +28,7 @@ TEAM = "team"  # node id -> what the team was made of at the last save
 PROGRESS = "progress"  # node id -> when the team last got anywhere
 TASK = "task"  # node id -> what the team was started to do
 TOLD = "told"  # conversation id -> the context its agent was last told
+HANDING = "handing"  # node id -> what its hand-over conversation has done
 
 _TABLES = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
