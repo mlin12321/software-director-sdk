@@ -43,6 +43,7 @@ teams:
   - name: API
     path: services/api
     instruction: What this team is to deliver.
+    reason: Why it is a team of its own.  # optional, for your Manager
     model: a-profile-name      # optional
     writable: [services/api/**]  # optional; all of path when left out
     readonly: [shared/**]        # optional
@@ -185,7 +186,7 @@ class StopTeamAction(Action):
 
 
 class PruneTeamAction(Action):
-    """Remove a team below yours that is stuck."""
+    """Remove a team below yours that is grossly inefficient."""
 
     node_id: str = Field(description="A team directly below yours.")
     reason: str = Field(description="Why the team is removed; its IC above is told.")
@@ -493,10 +494,12 @@ class ReportTool(_DirectorTool[ReportAction]):
 
 class PruneTeamTool(_DirectorTool[PruneTeamAction]):
     summary = (
-        "Manager only. Remove a team directly below yours that is stuck or "
-        "keeps failing, with every team below it. Its agents are deleted and "
-        "the uncommitted changes in its directory are discarded (git keeps a "
-        "copy). The directory goes back to your team's IC, who is told why."
+        "Manager only. Remove a team directly below yours that is grossly "
+        "inefficient, with every team below it. Rare, and never a "
+        "precaution: it is refused for a team with nothing against it on "
+        "record. Its agents are deleted and the uncommitted changes in its "
+        "directory are discarded (git keeps a copy). The directory goes back "
+        "to your team's IC, who is told why."
     )
 
     @classmethod

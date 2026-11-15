@@ -54,6 +54,7 @@ from tests.agent_server.director.conftest import (
     FakeLauncher,
     root_conversation,
     run_git,
+    struggled,
     tasked,
     teams_block,
 )
@@ -656,6 +657,7 @@ async def test_a_pruned_team_is_gone_with_its_agents_and_its_ic_above_is_told(
     (repo / "services" / "api" / "half.py").write_text("broken\n")
     (repo / "README.md").write_text("the root team's own edit\n")
 
+    struggled(service)
     answer = await use(service, await woken(service), PruneTeamTool, PRUNE_API)
 
     assert not answer.is_error
@@ -692,6 +694,7 @@ async def test_a_pruned_team_takes_the_teams_below_it_along(
     await tasked(service)
     below = ic(service, "services.api.db")
 
+    struggled(service)
     await use(service, manager(service), PruneTeamTool, PRUNE_API)
 
     assert service.store.get("services.api.db") is None

@@ -36,6 +36,7 @@ from tests.agent_server.director.conftest import (
     FakeLauncher,
     make_node,
     run_git,
+    struggled,
     tasked,
 )
 from tests.agent_server.director.test_director_limits import (
@@ -270,6 +271,7 @@ async def test_a_prune_cut_off_by_a_crash_is_finished_and_recorded_once(
     (repo / "services" / "api").mkdir(parents=True)
     (repo / "services" / "api" / "half.py").write_text("broken\n")
     ended = end_server_at(launcher, "delete", nth=2)
+    struggled(first)
     prune = asyncio.create_task(use(first, manager(first), PruneTeamTool, PRUNE_API))
     await ended.wait()
     prune.cancel()

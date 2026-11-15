@@ -79,6 +79,7 @@ class _Team(BaseModel):
     name: str = Field(min_length=1)
     path: str
     instruction: str = Field(min_length=1)
+    reason: str = ""
     model: str | None = None
     writable: list[str] = Field(default_factory=list)
     readonly: list[str] = Field(default_factory=list)
@@ -91,6 +92,7 @@ class _Teams(BaseModel):
     teams: list[_Team] = Field(min_length=1)
     keep: list[str] = Field(default_factory=list)
     contracts: str = ""
+    reason: str = ""
 
 
 class Proposed(NamedTuple):
@@ -101,6 +103,8 @@ class Proposed(NamedTuple):
     keep: list[str]
     """The sub-teams the proposer has now that it says are to stay, by name
     or node id."""
+    reason: str = ""
+    """Why the proposer wants this make-up of teams, when it says."""
 
 
 def proposed_teams(text: str) -> Proposed | None:
@@ -139,6 +143,7 @@ def proposed_teams(text: str) -> Proposed | None:
                 title=team.name,
                 path=team.path,
                 task=team.instruction,
+                reason=team.reason.strip(),
                 agent_profile=team.model,
                 writable=team.writable,
                 readonly=team.readonly,
@@ -148,6 +153,7 @@ def proposed_teams(text: str) -> Proposed | None:
         ],
         written.contracts,
         written.keep,
+        written.reason.strip(),
     )
 
 

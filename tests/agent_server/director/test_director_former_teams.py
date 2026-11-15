@@ -42,7 +42,7 @@ from openhands.agent_server.director.tools.definition import (
 )
 from openhands.agent_server.director_router import get_node_memory
 from openhands.sdk.conversation.state import ConversationExecutionStatus
-from tests.agent_server.director.conftest import FakeLauncher, tasked
+from tests.agent_server.director.conftest import FakeLauncher, struggled, tasked
 from tests.agent_server.director.test_director_limits import started
 from tests.agent_server.director.test_director_pause import (
     ServerEnded,
@@ -282,6 +282,7 @@ async def test_reports_that_no_model_shortens_are_kept_in_full(
 async def test_a_pruned_team_is_recorded_and_its_spec_is_old_for_the_team_above(
     service: DirectorService,
 ):
+    struggled(service)
     await use(service, manager(service), PruneTeamTool, PRUNE_API)
 
     assert service.store.get(API) is None
@@ -494,6 +495,7 @@ async def test_the_contracts_of_a_block_that_replaces_teams_take_the_place_of_th
 async def test_the_ic_above_is_given_what_a_pruned_team_left(
     service: DirectorService, launcher: FakeLauncher
 ):
+    struggled(service)
     pruned = await use(service, manager(service), PruneTeamTool, PRUNE_API)
 
     assert "Your Manager pruned the team 'API'" in launcher.messages_to(ic(service))[-1]
@@ -622,6 +624,7 @@ async def test_the_ic_is_told_what_its_hand_over_conversation_did_when_it_ends(
 async def test_a_hand_over_conversation_that_did_nothing_leaves_it_to_the_ic(
     service: DirectorService, launcher: FakeLauncher
 ):
+    struggled(service)
     await use(service, manager(service), PruneTeamTool, PRUNE_API)
     side = aside(service)
     assert side is not None
@@ -642,6 +645,7 @@ async def test_each_hand_over_gets_a_conversation_of_its_own(
     first = aside(service)
     assert first is not None
 
+    struggled(service)
     await use(service, manager(service), PruneTeamTool, PRUNE_API)
 
     second = aside(service)
@@ -735,6 +739,7 @@ async def test_a_hand_over_that_ended_while_the_server_was_down_is_told_at_its_s
 async def test_a_hand_over_conversation_gone_with_the_server_is_shown_as_lost(
     repo: Path, service: DirectorService, launcher: FakeLauncher
 ):
+    struggled(service)
     await use(service, manager(service), PruneTeamTool, PRUNE_API)
     side = aside(service)
     assert side is not None
@@ -806,6 +811,7 @@ async def api_in_hand_over(service: DirectorService, launcher: FakeLauncher) -> 
     """Have API's IC in hand-over mode, at work on a team its Manager pruned."""
     await use(service, ic(service, API), MsgManagerTool, proposing([DB, HTTP]))
     await use(service, manager(service, API), ApproveTeamsTool, APPROVE)
+    struggled(service, "services.api.db")
     await use(
         service,
         manager(service, API),
@@ -838,6 +844,7 @@ async def test_a_pruned_teams_hand_over_goes_with_it(
 ):
     side = await api_in_hand_over(service, launcher)
 
+    struggled(service)
     await use(service, manager(service), PruneTeamTool, PRUNE_API)
 
     assert node(service, "root").child_ids == [WEB]
