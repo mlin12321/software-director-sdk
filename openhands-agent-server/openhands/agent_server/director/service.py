@@ -193,6 +193,8 @@ DIRECTOR_TOOL_NAMES = (
     "write_spec",
     "msg_manager",
     "msg_ic",
+    "msg_team",
+    "stop_team",
     "approve_teams",
     "raise_escalation",
     "resolve_escalation",
