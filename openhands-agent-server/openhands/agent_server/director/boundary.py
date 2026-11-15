@@ -144,12 +144,10 @@ def nearest_team(nodes: Iterable[OrgNode], path: str, *, lost: str) -> OrgNode |
     while True:
         for node in by_directory.get(directory, ()):
             ic = next((agent for agent in node.agents if agent.role == "ic"), None)
-            if (
-                ic is not None
-                and ic.conversation_id is not None
-                and ic.status != lost
-                and _may_take(node, path)
-            ):
+            # A team that was set up and not started yet has no IC; what
+            # is sent to it starts one.
+            takes = ic is None or (ic.conversation_id is not None and ic.status != lost)
+            if takes and _may_take(node, path):
                 return node
         if not directory:
             return None

@@ -32,7 +32,12 @@ from openhands.agent_server.director.tools import (
     SubmitReviewTool,
 )
 from openhands.sdk.conversation.state import ConversationExecutionStatus
-from tests.agent_server.director.conftest import FakeLauncher, make_node, run_git
+from tests.agent_server.director.conftest import (
+    FakeLauncher,
+    make_node,
+    run_git,
+    tasked,
+)
 from tests.agent_server.director.test_director_limits import (
     eventually,
     split,
@@ -174,6 +179,8 @@ async def test_what_an_agent_decides_while_the_org_is_paused_is_done_after_resum
 
     await service.resume()
     await service.settled()
+    assert len(launcher.derived) == 1
+    await tasked(service)
 
     assert node(service, "root").child_ids == ["services.api", "apps.web"]
     assert node(service, "root").pending_split is None
@@ -188,13 +195,13 @@ async def test_a_server_stopped_while_teams_wait_starts_them_in_order_once_resum
     await woken(first)
     launcher.full_for = 1_000_000
     await use(first, ic(first), MsgManagerTool, split("a", 3))
-    approve = asyncio.create_task(use(first, manager(first), ApproveTeamsTool, APPROVE))
+    await use(first, manager(first), ApproveTeamsTool, APPROVE)
+    for team in first.store.children("root"):
+        first.tell_ic(team.id, "Begin.")
     await eventually(
         lambda: sum(team.waiting_to_start for team in first.store.children("root")) == 3
     )
     await first.aclose()
-    approve.cancel()
-    await asyncio.gather(approve, return_exceptions=True)
 
     launcher.full_for = 0
     second = await again(repo, launcher)
@@ -222,27 +229,26 @@ async def test_a_server_stopped_while_teams_wait_starts_them_in_order_once_resum
     await second.aclose()
 
 
-async def test_a_split_cut_off_by_a_crash_is_finished_without_a_second_of_anything(
+async def test_a_team_start_cut_off_by_a_crash_is_finished_without_a_second_of_anything(
     repo: Path, launcher: FakeLauncher
 ):
     first = await started(repo, launcher)
     await use(first, ic(first), MsgManagerTool, SPLIT)
-    await first.settled()
+    await use(first, manager(first), ApproveTeamsTool, APPROVE)
     # The server ends as the first sub-team's IC has just been started.
     ended = end_server_at(launcher, "derived")
-    approve = asyncio.create_task(use(first, manager(first), ApproveTeamsTool, APPROVE))
+    first.tell_ic("services.api", "Begin.")
     await ended.wait()
-    approve.cancel()
-    await asyncio.gather(approve, return_exceptions=True)
-    assert len(launcher.derived) <= 3
+    assert len(launcher.derived) <= 2
 
     second = await again(repo, launcher)
 
     assert second.summary().paused == "crash"
-    assert node(second, "root").pending_split is not None
+    assert ("services.api", "start") in kinds(await second.recovery())
 
     await second.resume()
     await second.settled()
+    await tasked(second)
 
     assert node(second, "root").child_ids == ["services.api", "apps.web"]
     assert node(second, "root").pending_split is None
@@ -321,7 +327,7 @@ async def test_the_end_of_a_split_cut_off_by_a_crash_is_told_once(
     await second.settled()
 
     assert node(second, "root").pending_split is None
-    assert len(launcher.derived) == 3
+    assert len(launcher.derived) == 1
     told = [text for text in launcher.messages_to(ic(second)) if "approved" in text]
     assert len(told) == 1
     await second.aclose()

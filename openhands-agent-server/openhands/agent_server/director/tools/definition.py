@@ -250,7 +250,7 @@ class MsgManagerTool(_DirectorTool[MsgManagerAction]):
         "sub-teams, say how the teams below are doing, say when one "
         "struggles and you cannot fix it, or when two of them are at odds. "
         "To propose sub-teams, put one ```teams block of YAML in the "
-        "message; it is checked at once and nothing starts until the "
+        "message; it is checked at once and nothing is set up until the "
         "Manager approves. A team without sub-teams uses this only to "
         "propose some."
     )
@@ -287,10 +287,12 @@ class MsgIcTool(_DirectorTool[MsgIcAction]):
 
 class MsgTeamTool(_DirectorTool[MsgTeamAction]):
     summary = (
-        "IC only. Write to the IC of a team directly below yours: a hint, a "
-        "correction, a change of priority. It does not answer in a message; "
-        "it acts on what you wrote or raises an escalation. Writing to a "
-        "team you stopped sets it going again."
+        "IC only. Write to the IC of a team directly below yours: its task, "
+        "a hint, a correction, a change of priority. A team that was set up "
+        "and not started yet starts with the first message, which is its "
+        "task. Its IC does not answer in a message; it acts on what you "
+        "wrote or raises an escalation. Writing to a team you stopped sets "
+        "it going again."
     )
 
     @classmethod

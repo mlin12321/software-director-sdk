@@ -27,6 +27,7 @@ from openhands.agent_server.director.models import (
     SplitChild,
 )
 from openhands.agent_server.director.pods import StartedAgent
+from openhands.agent_server.director.service import DirectorService
 from openhands.agent_server.event_service import (
     ActionGuard,
     ConversationRunLimitExceeded,
@@ -441,3 +442,11 @@ def root_conversation(workspace: Path) -> StartConversationRequest:
         agent=Agent(llm=LLM(model="gpt-4o", usage_id="test-llm"), tools=[]),
         workspace=LocalWorkspace(working_dir=str(workspace)),
     )
+
+
+async def tasked(service: DirectorService) -> None:
+    """Give every team that was only set up its first message, which starts it."""
+    for team in service.store.all():
+        if not team.agents:
+            service.tell_ic(team.id, "Begin.")
+    await service.settled()

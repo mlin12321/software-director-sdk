@@ -2,7 +2,7 @@
 
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from openhands.agent_server.models import StartConversationRequest
 
@@ -11,6 +11,8 @@ from openhands.agent_server.models import StartConversationRequest
 # the team above, and does the code work in its boundary that no sub-team
 # has taken on.
 AgentRole = Literal["ic", "manager"]
+# An IC and a Manager.
+AGENTS_PER_TEAM = 2
 
 NodeStatus = Literal["idle", "working", "done", "blocked"]
 
@@ -587,12 +589,13 @@ class DirectorSettings(BaseModel):
     removed for exceeding a limit that was lowered.
     """
 
-    max_agents: int = Field(
-        default=64,
-        ge=2,
+    max_teams: int = Field(
+        default=32,
+        ge=1,
         description=(
-            "The most agents a team may have together with every team "
-            "below it. Each team has two."
+            "The most teams a team may be together with every team below "
+            "it. Every team has an IC and a Manager; the Manager is "
+            "inactive while the team has no sub-teams."
         ),
     )
     max_depth: int = Field(
@@ -600,6 +603,17 @@ class DirectorSettings(BaseModel):
         ge=1,
         description="The most levels of teams; the root team is level 1.",
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _teams_from_agents(cls, data: object) -> object:
+        """Read the limit as it was kept before it counted teams."""
+        if isinstance(data, dict) and "max_teams" not in data:
+            agents = data.get("max_agents")
+            if isinstance(agents, int):
+                return {**data, "max_teams": max(1, agents // AGENTS_PER_TEAM)}
+        return data
+
     allowed_profiles: list[str] = Field(
         default_factory=list,
         description=(
@@ -655,7 +669,12 @@ class DirectorSettings(BaseModel):
 class DirectorSettingsUpdate(BaseModel):
     """New values for some of the settings; what is left out stays."""
 
-    max_agents: int | None = Field(default=None, ge=2)
+    max_teams: int | None = Field(default=None, ge=1)
+    max_agents: int | None = Field(
+        default=None,
+        ge=2,
+        description="Deprecated: use max_teams. Read as half as many teams.",
+    )
     max_depth: int | None = Field(default=None, ge=1)
     allowed_profiles: list[str] | None = None
     resume_on_start: bool | None = None
@@ -668,7 +687,11 @@ class DirectorSettingsUpdate(BaseModel):
 class DirectorSettingsState(DirectorSettings):
     """The settings, beside what the org has now."""
 
-    agents: int = Field(description="How many agents the org has.")
+    teams: int = Field(description="How many teams the org has.")
+    agents: int = Field(
+        description="Deprecated: use teams. Two for every team of the org."
+    )
+    max_agents: int = Field(description="Deprecated: use max_teams. Twice max_teams.")
     depth: int = Field(description="How many levels of teams the org has.")
     max_concurrent_runs: int | None = Field(
         description=(

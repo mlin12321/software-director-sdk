@@ -31,6 +31,7 @@ from tests.agent_server.director.conftest import (
     make_node,
     root_conversation,
     run_git,
+    tasked,
 )
 from tests.agent_server.director.test_director_tools import (
     APPROVE,
@@ -90,26 +91,27 @@ async def eventually(condition) -> None:
     raise AssertionError("It never happened")
 
 
-async def test_a_split_that_gives_a_team_too_many_agents_is_refused_and_says_what_fits(
+async def test_a_split_that_makes_too_many_teams_is_refused_and_says_what_fits(
     service: DirectorService,
 ):
-    service.update_settings(DirectorSettingsUpdate(max_agents=8))
+    service.update_settings(DirectorSettingsUpdate(max_teams=4))
 
     refused = await use(service, ic(service), MsgManagerTool, split("a", 4))
 
     assert refused.is_error and node(service, "root").pending_split is None
-    assert "at most 8 agents" in refused.text and "has 2" in refused.text
+    assert "at most 4 teams" in refused.text and "'Checkout' is 1" in refused.text
     assert "At most 3 more sub-teams fit" in refused.text
 
     fits = await use(service, ic(service), MsgManagerTool, split("a", 3))
     await use(service, manager(service), ApproveTeamsTool, APPROVE)
+    await tasked(service)
 
     assert not fits.is_error and len(node(service, "root").child_ids) == 3
 
 
-async def test_the_agents_of_the_teams_above_count_too(service: DirectorService):
+async def test_the_teams_above_count_too(service: DirectorService):
     await split_root(service)
-    service.update_settings(DirectorSettingsUpdate(max_agents=8))
+    service.update_settings(DirectorSettingsUpdate(max_teams=4))
 
     refused = await use(
         service,
@@ -118,7 +120,7 @@ async def test_the_agents_of_the_teams_above_count_too(service: DirectorService)
         split("services/api", 2),
     )
 
-    assert refused.is_error and "'Checkout' has 6" in refused.text
+    assert refused.is_error and "'Checkout' is 3" in refused.text
     assert "At most 1 more sub-teams fit" in refused.text
 
 
@@ -142,9 +144,9 @@ async def test_a_lowered_limit_removes_nothing_and_stops_the_next_split(
 ):
     await split_root(service)
 
-    state = service.update_settings(DirectorSettingsUpdate(max_agents=2, max_depth=1))
+    state = service.update_settings(DirectorSettingsUpdate(max_teams=1, max_depth=1))
 
-    assert (state.agents, state.depth) == (6, 2)
+    assert (state.teams, state.agents, state.depth) == (3, 6, 2)
     assert len(service.store) == 3
     refused = await use(service, ic(service), MsgManagerTool, split("a", 1))
     assert refused.is_error
@@ -154,14 +156,15 @@ async def test_sub_teams_approved_after_the_limits_were_lowered_go_back_to_the_i
     service: DirectorService, launcher: FakeLauncher
 ):
     await use(service, ic(service), MsgManagerTool, split("a", 3))
-    service.update_settings(DirectorSettingsUpdate(max_agents=4))
+    service.update_settings(DirectorSettingsUpdate(max_teams=2))
 
     told_the_manager = launcher.messages_to(manager(service))
 
     refused = await use(service, manager(service), ApproveTeamsTool, APPROVE)
+    await tasked(service)
 
     root = node(service, "root")
-    assert refused.is_error and "at most 4 agents" in refused.text
+    assert refused.is_error and "at most 2 teams" in refused.text
     assert root.child_ids == [] and root.pending_split is not None
     assert root.pending_split.status == "proposed"
     assert launcher.messages_to(manager(service)) == told_the_manager
@@ -178,7 +181,7 @@ async def test_settings_are_kept_for_the_next_start_beside_the_repository(
     again = DirectorService(repo, remembered=repo.parent / "state" / "director.json")
 
     assert kept["settings"] == {
-        "max_agents": 64,
+        "max_teams": 32,
         "max_depth": 3,
         "allowed_profiles": [],
         "resume_on_start": False,
@@ -189,6 +192,23 @@ async def test_settings_are_kept_for_the_next_start_beside_the_repository(
     }
     assert kept["repo_path"] == str(repo)
     assert again.settings.max_depth == 3 and again.store.root_id == "root"
+
+
+async def test_a_limit_kept_or_sent_as_agents_is_read_as_half_as_many_teams(
+    repo: Path, launcher: FakeLauncher
+):
+    remembered = repo.parent / "state" / "director.json"
+    remembered.parent.mkdir(parents=True, exist_ok=True)
+    remembered.write_text(json.dumps({"settings": {"max_agents": 10}}))
+    service = DirectorService(repo, remembered=remembered)
+
+    assert service.settings.max_teams == 5
+
+    state = service.update_settings(DirectorSettingsUpdate(max_agents=16))
+
+    assert (state.max_teams, state.max_agents) == (8, 16)
+    kept = json.loads(remembered.read_text())["settings"]
+    assert kept["max_teams"] == 8 and "max_agents" not in kept
 
 
 async def test_a_team_is_found_by_words_of_its_title_or_directory(
@@ -240,23 +260,22 @@ async def test_teams_wait_for_a_free_run_and_start_when_one_ends(
     await woken(service)
     launcher.full_for = 1_000_000
     await use(service, ic(service), MsgManagerTool, split("a", 2))
-    approve = asyncio.create_task(
-        use(service, manager(service), ApproveTeamsTool, APPROVE)
-    )
+    await use(service, manager(service), ApproveTeamsTool, APPROVE)
+    for team in service.store.children("root"):
+        service.tell_ic(team.id, "Begin.")
     await eventually(
         lambda: (
             [team.waiting_to_start for team in service.store.children("root")]
             == [True, True]
         )
     )
-    root = node(service, "root")
-    assert root.pending_split is not None and len(launcher.derived) == 1
+    assert len(launcher.derived) == 1
 
     launcher.full_for = 0
     root_ic = ic(service)
     assert root_ic is not None
     launcher.report(root_ic, ConversationExecutionStatus.IDLE)
-    await approve
+    await service.settled()
 
     teams = service.store.children("root")
     assert [team.waiting_to_start for team in teams] == [False, False]

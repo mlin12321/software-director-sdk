@@ -178,6 +178,7 @@ export interface DirectorOrgNode {
   isolation: DirectorIsolationMode;
   worktree_path: string;
   branch: string;
+  /** Empty while the team was set up and has been given no task yet. */
   agents: DirectorAgentRef[];
   status: DirectorNodeStatus;
   /**
@@ -563,8 +564,17 @@ export type DirectorOrgEvent =
  * splits; teams that exist are never removed for exceeding one.
  */
 export interface DirectorSettings {
-  /** The most agents a team may have together with every team below it. */
-  max_agents: number;
+  /**
+   * The most teams a team may be together with every team below it. Every
+   * team has an IC and a Manager; the Manager is inactive while the team has
+   * no sub-teams. Absent on a server from before limits counted teams.
+   */
+  max_teams?: number;
+  /**
+   * @deprecated Use `max_teams`. Twice `max_teams` when read; sent, it is
+   * read as half as many teams.
+   */
+  max_agents?: number;
   /** The most levels of teams; the root team is level 1. */
   max_depth: number;
   /**
@@ -604,6 +614,9 @@ export interface DirectorSettings {
 
 /** The settings, beside what the org has now. */
 export interface DirectorSettingsState extends DirectorSettings {
+  /** How many teams the org has. Absent on an older server. */
+  teams?: number;
+  /** @deprecated Use `teams`. Two for every team of the org. */
   agents: number;
   depth: number;
   /**

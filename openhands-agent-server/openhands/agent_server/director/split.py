@@ -32,8 +32,6 @@ TEAMS_FENCE = "teams"
 _TEAMS_BLOCK = re.compile(
     rf"^```{TEAMS_FENCE}[ \t]*\n(.*?)^```[ \t]*$", re.DOTALL | re.MULTILINE
 )
-# An IC and a Manager.
-AGENTS_PER_TEAM = 2
 
 
 def teams_below(node: OrgNode) -> int:
@@ -48,8 +46,8 @@ def check_limits(
     """Refuse ``added`` new sub-teams of ``node`` that the org has no room for.
 
     Raises:
-        OrgStoreError: They would be too deep, or give ``node`` or a team
-            above it more agents than a team may have with those below it.
+        OrgStoreError: They would be too deep, or make ``node`` or a team
+            above it more teams than a team may be with those below it.
     """
     above = store.ancestors(node.id)
     level = len(above) + 2
@@ -60,14 +58,13 @@ def check_limits(
             "work in your own team."
         )
     for team in (node, *reversed(above)):
-        agents = (1 + teams_below(team)) * AGENTS_PER_TEAM
-        room = (settings.max_agents - agents) // AGENTS_PER_TEAM
+        teams = 1 + teams_below(team)
+        room = settings.max_teams - teams
         if added > room:
             raise OrgStoreError(
-                f"A team may have at most {settings.max_agents} agents "
-                f"together with the teams below it. {team.title!r} has "
-                f"{agents}, and {added} more sub-teams would add "
-                f"{added * AGENTS_PER_TEAM}. "
+                f"A team may be at most {settings.max_teams} teams together "
+                f"with the teams below it. {team.title!r} is {teams}, and "
+                f"you propose {added} more. "
                 + (
                     f"At most {room} more sub-teams fit."
                     if room > 0
