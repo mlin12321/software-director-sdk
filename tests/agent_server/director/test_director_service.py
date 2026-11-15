@@ -27,6 +27,7 @@ from openhands.agent_server.director.service import (
     DirectorService,
     agent_conversation,
 )
+from openhands.agent_server.director.tools.definition import DIRECTOR_TOOLS
 from openhands.sdk.conversation.request import AgentLaunchAdditions
 from openhands.sdk.conversation.state import ConversationExecutionStatus
 from openhands.sdk.errors import Conflict, NotFound, Unavailable, Unprocessable
@@ -114,6 +115,10 @@ async def test_the_org_protocol_is_added_to_what_the_caller_appends(
     assert launcher.root is not None and launcher.root.agent_launch_additions
     suffix = launcher.root.agent_launch_additions.system_message_suffix_append
     assert suffix == f"Prefer small commits.\n\n{POD_PROTOCOL}"
+
+
+def test_agents_are_given_every_director_tool():
+    assert set(DIRECTOR_TOOL_NAMES) == set(DIRECTOR_TOOLS)
 
 
 async def test_a_team_started_again_is_briefed_with_what_it_reported(
