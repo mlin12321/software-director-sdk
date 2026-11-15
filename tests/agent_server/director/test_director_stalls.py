@@ -457,8 +457,8 @@ async def test_a_team_set_up_and_given_no_task_is_told_to_the_ic_above(
     ]
     assert "API" not in stalled
 
-    # Once for each such stretch, and no more once it has its task.
-    clock.passes(60)
+    # Said once: a team may be left without a task on purpose.
+    clock.passes(240)
     await looked(service)
     service.tell_ic(API, "Begin.")
     await service.settled()

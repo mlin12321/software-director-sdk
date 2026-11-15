@@ -607,7 +607,8 @@ def unstarted_notice(team: OrgNode, minutes: int) -> str:
         f"was set up {_span(minutes)} ago and has been given no task. Nobody "
         "works in its directory, and you cannot write there. Give it its "
         "task with `msg_team`. If it is not needed, write to your Manager to "
-        "have it pruned, or propose your teams again without it."
+        "have it pruned, or propose your teams again without it. If it waits "
+        "on purpose, do nothing: you are not told of it again."
     )
 
 

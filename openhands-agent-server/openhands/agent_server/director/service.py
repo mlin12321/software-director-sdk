@@ -1508,6 +1508,9 @@ class DirectorService:
                 continue
             since = datetime.fromisoformat(seen["at"])
             told = seen.get("told")
+            if unstarted and told is not None:
+                # Said once: a team may be left without a task on purpose.
+                continue
             if now - datetime.fromisoformat(told or seen["at"]) < timedelta(
                 minutes=limit
             ):
