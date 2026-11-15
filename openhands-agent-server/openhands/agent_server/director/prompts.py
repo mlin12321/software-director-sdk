@@ -34,15 +34,26 @@ The IC owns the technical work of the team's boundary:
 - It writes only inside the team's boundary, and the org's runtime refuses
   a write anywhere else in the repository. Files of another team change
   through that team, by raising an escalation.
-- When the boundary is too much for one agent, it proposes sub-teams to its
-  Manager with `msg_manager`, as a ```teams block of YAML in the message.
-  Each sub-team gets a directory inside the boundary, an instruction that
-  says what the team is for, and the contracts it must keep with the
-  others. The contracts are all a sub-team is told of the team above, so
-  they must say everything it has to respect. The IC keeps whatever no
-  sub-team takes. A proposed team that covers existing sub-teams replaces
-  them, and so does one that takes part of an existing sub-team's
-  directory.
+- When the boundary holds concerns that are better kept apart, it proposes
+  sub-teams to its Manager with `msg_manager`, as a ```teams block of YAML
+  in the message. Each sub-team gets a directory inside the boundary, an
+  instruction that says what the team is for, and the contracts it must
+  keep with the others. The contracts are all a sub-team is told of the
+  team above, so they must say everything it has to respect. The IC keeps
+  whatever no sub-team takes. A proposed team that covers existing
+  sub-teams replaces them, and so does one that takes part of an existing
+  sub-team's directory.
+- It divides by concern first: each team owns one thing that can be
+  understood, changed and reviewed by itself, behind a contract short
+  enough to state in a few lines. The aim is the work done well and soon,
+  with code that stays easy to work in. Teams that work at the same time
+  follow from a clean division; they are not a reason for one. It does
+  not split what shares files or needs constant agreement, or a part
+  smaller than writing its task and reviewing it would cost: every team
+  costs a briefing, a review and the messages between them. When two
+  teams keep being held up by each other, or a team has nothing left to
+  do, it proposes teams that merge or replace them. A team, and the
+  block, may carry a `reason`; it is optional and is for the Manager.
 - Proposing sub-teams starts no work. An approved team is set up and
   waits: it starts when the IC gives it its task with `msg_team`. Teams
   may be drawn for later, with no task in mind yet.
@@ -75,8 +86,10 @@ The IC owns the technical work of the team's boundary:
 - The runtime keeps what became of the teams below it: work accepted or
   sent back, teams that stalled, were stopped, replaced or pruned. A
   review request says how a team's earlier work went, and
-  `read_node_context` returns the record, also of teams that are gone.
-  The IC weighs what it proposes and how it reviews by it.
+  `read_node_context` returns the record, also of teams that are gone
+  and of what the IC proposed before and whether it was approved. The IC
+  weighs what it proposes and how it reviews by it, and does not propose
+  again a division that failed before unless something has changed.
 - When teams below it are replaced or pruned, the runtime puts the IC in
   hand-over mode: it starts a side conversation of the IC for the
   hand-over and gives it what they left:
@@ -108,29 +121,38 @@ below escalates. The runtime also wakes it now and then to look at its
 teams: after its IC has accepted a number of reviews, and when the IC of
 one team below has escalated several times on the same work. Such a look
 asks nothing of it; it acts only if the make-up of the teams is what holds
-the work back.
+the work back. Its concern is that the org as a whole works efficiently,
+not that every team is busy.
 - It reads the sub-teams its IC proposes and approves them with
-  `approve_teams` when they are clearly separated and each instruction is
-  clear. They are then set up exactly as written, and start when its IC
-  gives each its task. To ask for changes or decline, it answers with
-  `msg_ic` instead and says what to change.
+  `approve_teams` when each is a concern of its own, they are clearly
+  separated and each instruction is clear. The runtime adds what it knows
+  of the proposed directories and of teams that had them before. They are
+  then set up exactly as written, and start when its IC gives each its
+  task. To ask for changes or decline, it answers with `msg_ic` instead
+  and says what to change.
 - It writes to its IC, or to the IC of a team directly below, with `msg_ic`:
   feedback, a decision, what it is about to change. After it approves or
   prunes teams, its IC is told to pass on what removed teams left and to
   rewrite the team's spec; the Manager writes to it when the change needs
   explaining.
 - It is woken to look at its teams when its IC has accepted a number of
-  reviews, when one team keeps escalating, or when one team's work keeps
-  being sent back. Each look shows what became of every team so far, also
-  of teams that are gone, and `read_node_context` returns that record. The
-  Manager weighs what it approves and prunes by it.
+  reviews, and when one team keeps escalating on the same work. Each look
+  shows what became of every team so far, also of teams that are gone,
+  and each team's success rate: how many of its tasks were accepted
+  without its escalations reaching that number. `read_node_context`
+  returns that record, with what its IC proposed before. The Manager
+  weighs what it approves by it.
 - It settles what the Managers of the teams directly below escalate with
   `resolve_escalation`, or passes it up with the reason it could not.
-- A team directly below that has no way forward, or keeps trying what does
-  not work, it removes with `prune_team`, saying why. The team's directory
-  goes back to the IC. Teams are removed or replaced only once their agents
-  have finished what they are doing. A team its IC stopped can be removed
-  like any other.
+- A team directly below that is grossly inefficient, with no way forward
+  or trying again and again what does not work, it may remove with
+  `prune_team`, saying why. This is rare and never a precaution: nothing
+  obliges a Manager to prune, a look at its teams is not a call to, and a
+  team that is slow, or had one bad task, is first written to with
+  `msg_ic`. It waits until a team has had enough tasks to judge it by: a
+  success rate over one or two tasks says little. The team's directory
+  goes back to the IC. Teams are removed or replaced only once their
+  agents have finished what they are doing.
 
 Both record what matters with `report`: a design decision and its reason,
 a setback, an approach that failed and why, a reflection on how the work
@@ -660,12 +682,6 @@ def stall_notice(
     return "\n".join(lines)
 
 
-_NOTHING_COUNTED: dict[str, Any] = {
-    "accepted": 0,
-    "sent_back": 0,
-    "stalled": 0,
-    "stopped": 0,
-}
 _EVENT_WORDS: dict[TeamEventKind, str] = {
     "set_up": "set up",
     "accepted": "work accepted",
@@ -675,28 +691,57 @@ _EVENT_WORDS: dict[TeamEventKind, str] = {
     "replaced": "replaced",
     "pruned": "pruned",
     "woken": "Manager woken",
+    "proposed": "sub-teams proposed",
+    "approved": "sub-teams approved",
 }
 # What is counted of a team, in the order it is told.
 _COUNTED: tuple[TeamEventKind, ...] = ("accepted", "sent_back", "stalled", "stopped")
 
 
+def _fresh() -> dict[str, Any]:
+    """What is counted of a team from the time it is set up."""
+    return {kind: 0 for kind in _COUNTED} | {
+        "ended": None,
+        "tasks": 0,
+        "tasks_succeeded": 0,
+        "limit_reached": 0,
+        "limit_reached_on_the_work_in_hand": False,
+    }
+
+
 def track_records(events: list[TeamEvent]) -> list[dict[str, Any]]:
     """What became of each team the events are of, one entry a team, in the
-    order the teams first appear. A team that is gone says how it ended."""
+    order the teams first appear. A team that is gone says how it ended.
+
+    A task is a piece of work of the team that was accepted, or the one it
+    has in hand once its IC's escalations on it reached the limit that
+    wakes the Manager. `tasks_succeeded` are the accepted ones on which
+    that limit was never reached.
+    """
     records: dict[str, dict[str, Any]] = {}
     for event in events:
         if not event.team_id:
             continue
         record = records.setdefault(
             event.team_id,
-            {"node_id": event.team_id, "team": event.team}
-            | {kind: 0 for kind in _COUNTED}
-            | {"ended": None},
+            {"node_id": event.team_id, "team": event.team} | _fresh(),
         )
         if event.kind == "set_up":
             # A new team in the place of one that is gone starts its own.
-            record.update({kind: 0 for kind in _COUNTED})
-            record.update(team=event.team, ended=None)
+            record.update(_fresh())
+            record["team"] = event.team
+        elif event.kind == "woken":
+            if not record["limit_reached_on_the_work_in_hand"]:
+                record["tasks"] += 1
+            record["limit_reached"] += 1
+            record["limit_reached_on_the_work_in_hand"] = True
+        elif event.kind == "accepted":
+            record["accepted"] += 1
+            if record["limit_reached_on_the_work_in_hand"]:
+                record["limit_reached_on_the_work_in_hand"] = False
+            else:
+                record["tasks"] += 1
+                record["tasks_succeeded"] += 1
         elif event.kind in _COUNTED:
             record[event.kind] += 1
         elif event.kind in ("replaced", "pruned"):
@@ -709,9 +754,40 @@ def record_line(record: dict[str, Any]) -> str:
     parts = [
         f"{record[kind]} {_EVENT_WORDS[kind].removeprefix('work ')}"
         for kind in _COUNTED
-        if record[kind]
+        if record.get(kind)
     ]
     return ", ".join(parts)
+
+
+def success_rate(record: dict[str, Any]) -> str:
+    """A team's success rate, in words: how many of its tasks were accepted
+    without its escalations reaching the limit. Empty before it has had a
+    task."""
+    tasks = record.get("tasks", 0)
+    if not tasks:
+        return ""
+    succeeded = record.get("tasks_succeeded", 0)
+    return (
+        f"success rate {succeeded} of {tasks} task{'s' if tasks != 1 else ''} "
+        f"({round(100 * succeeded / tasks)}%)"
+    )
+
+
+def success_rate_meaning(escalation_limit: int) -> str:
+    """What a team's success rate counts, for the Manager that reads it.
+
+    Args:
+        escalation_limit: How many escalations of one team on the work it
+            has in hand wake the Manager; 0 when that is off.
+    """
+    if not escalation_limit:
+        return "A team's success rate is the share of its tasks that were accepted."
+    return (
+        "A team's success rate is the share of its tasks that were accepted "
+        f"without its IC escalating {escalation_limit} times on them, the "
+        "number that wakes you. A task on which that number was reached "
+        "counts against it, also while it is still in hand."
+    )
 
 
 def event_line(event: TeamEvent) -> str:
@@ -726,6 +802,9 @@ def manager_check(
     quiet: dict[str, int],
     escalations: dict[str, int],
     events: list[TeamEvent] | None = None,
+    *,
+    after_successes: bool = False,
+    escalation_limit: int = 0,
 ) -> str:
     """What a Manager is told when the director wakes it to look at its
     teams.
@@ -738,6 +817,11 @@ def manager_check(
             work it has in hand, by node id.
         events: What became of the teams below so far, also of the ones
             that are gone.
+        after_successes: The look comes after work that was accepted, not
+            after anything that went wrong.
+        escalation_limit: How many escalations of one team on the work it
+            has in hand wake the Manager, which is what a success rate is
+            counted against.
     """
     records = {record["node_id"]: record for record in track_records(events or [])}
     lines = [
@@ -764,9 +848,13 @@ def manager_check(
             facts.append(f"{waiting} unsettled")
         if team.id in quiet:
             facts.append(f"no progress for {_span(quiet[team.id])}")
-        so_far = record_line(records.get(team.id, {}) or _NOTHING_COUNTED)
+        record = records.get(team.id, {})
+        so_far = record_line(record)
         if so_far:
             facts.append(f"so far: {so_far}")
+        rate = success_rate(record)
+        if rate:
+            facts.append(rate)
         lines.append(
             f"- {team.title!r} (node {team.id}, {team.boundary.path or '.'}): "
             + "; ".join(facts)
@@ -780,13 +868,60 @@ def manager_check(
     ]
     if gone:
         lines += ["", "Teams that were here before and are gone:", *gone]
+    if any(record.get("tasks") for record in records.values()):
+        lines += ["", success_rate_meaning(escalation_limit)]
     lines += [
         "",
-        "Nothing is asked of you. Act only if the make-up of the teams is "
-        "what holds the work back: write to an IC with `msg_ic`, or remove a "
-        "team with `prune_team`. Otherwise end your turn.",
+        (
+            "Nothing went wrong: this look comes after work that was accepted. "
+            if after_successes
+            else ""
+        )
+        + "Nothing is asked of you, and nothing here is a call to prune. If "
+        "the make-up of the teams is what holds the work back, write to an "
+        "IC with `msg_ic`. `prune_team` is for a team that is grossly "
+        "inefficient, not for one that is slow or had one bad task, and a "
+        "success rate over one or two tasks says little: wait until a team "
+        "has had enough tasks to judge it by. Otherwise end your turn.",
     ]
     return "\n".join(lines)
+
+
+def proposal_facts(
+    sizes: list[tuple[SplitChild, int]],
+    together: list[tuple[str, str, int]],
+    before: list[str],
+    reason: str = "",
+) -> str:
+    """What the director adds, for the Manager, to the sub-teams its IC
+    proposes; empty when it knows nothing worth adding.
+
+    Args:
+        sizes: Each proposed team with how many files git tracks in its
+            directory.
+        together: Pairs of proposed directories with how many commits
+            changed both, where any did.
+        before: What is on record of teams that had these directories.
+        reason: Why the IC wants this make-up, when it said.
+    """
+    lines = []
+    if reason:
+        lines.append(f"The IC's reason for this make-up: {reason}")
+    for child, files in sizes:
+        why = f" The IC's reason: {child.reason}" if child.reason else ""
+        lines.append(
+            f"- {child.title!r} ({child.path}): {files} file"
+            f"{'s' if files != 1 else ''} there now.{why}"
+        )
+    lines += [
+        f"- {path} and {other} were changed in the same commit {count} time"
+        f"{'s' if count != 1 else ''}: weigh whether they are one concern."
+        for path, other, count in together
+    ]
+    lines += [f"- {line}" for line in before]
+    if not lines:
+        return ""
+    return "\n".join(["What the runtime knows of them:", *lines])
 
 
 def changes_requested(reviewer: OrgNode, findings: list[ReviewFinding]) -> str:

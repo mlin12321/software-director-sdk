@@ -42,6 +42,7 @@ from openhands.agent_server.director.context import (
 from openhands.agent_server.director.fixture import build_fixture_nodes
 from openhands.agent_server.director.git import (
     GitError,
+    changed_together,
     enclosing_repository,
     git,
     head_of,
@@ -49,6 +50,7 @@ from openhands.agent_server.director.git import (
     last_commit_in,
     pathspec,
     save_and_discard,
+    tracked_files,
     uncommitted,
 )
 from openhands.agent_server.director.git_index import (
@@ -101,6 +103,7 @@ from openhands.agent_server.director.models import (
     RouteMessageRequest,
     Side,
     SplitChild,
+    SplitProposal,
     StartAgainRequest,
     Stopped,
     SyncResult,
@@ -145,6 +148,7 @@ from openhands.agent_server.director.prompts import (
     hand_over_brief,
     handed_over_notice,
     manager_check,
+    proposal_facts,
     pruned_job,
     pruned_notice,
     record_line,
@@ -241,6 +245,9 @@ SAVE_DELAY_SECONDS = 2.0
 RUN_LIMIT_RETRY_SECONDS = 5.0
 # How often the director looks for teams that show no progress.
 STALL_POLL_SECONDS = 60.0
+# How many commits must have changed two proposed directories together
+# before a Manager is told: a first commit of everything says nothing.
+TOGETHER_WORTH_SAYING = 3
 # How long a model may take to name a team before the team keeps the name
 # it has; the root's agents are not briefed until then.
 SUMMARY_TIMEOUT_SECONDS = 20.0
@@ -1219,9 +1226,9 @@ class DirectorService:
                 f"Your IC stopped the team {team.title!r} (node {team.id}): "
                 f"{reason}\nIts agents are at rest and nothing is sent to "
                 "them. It goes on when your IC writes to it with msg_team. "
-                "What becomes of it otherwise is yours to decide: remove it "
-                "with prune_team, or have your IC propose teams that take "
-                "its place.",
+                "Nothing is asked of you. If it should not go on at all, you "
+                "may remove it with prune_team, or have your IC propose "
+                "teams that take its place.",
             )
 
     def record_event(
@@ -1260,19 +1267,45 @@ class DirectorService:
         records = track_records(self.team_memory.history(team.parent_id))
         return next((record_line(r) for r in records if r["node_id"] == team.id), "")
 
-    def _count_sent_back(self, team: OrgNode, times: int) -> None:
-        """Wake the Manager of the team above when the work a team has in
-        hand was sent back as often as the org set."""
-        limit = self.settings.manager_check_sent_back
-        if not limit or team.parent_id is None or times % limit:
-            return
-        with self._counting:
-            counted = self._counted(team.parent_id)
-        self._wake_manager(
-            team.parent_id,
-            f"your IC has sent back the work of {team.title!r} {times} times.",
-            counted,
-        )
+    def facts_of_proposal(self, node: OrgNode, proposal: SplitProposal) -> str:
+        """What the director knows of the sub-teams a team's IC proposes:
+        how much is in each directory, which were changed together, and
+        what became of teams that had them before."""
+        checkout = Path(node.worktree_path)
+        children = proposal.children
+        sizes = [(child, tracked_files(checkout, child.path)) for child in children]
+        together = [
+            (one.path, other.path, count)
+            for index, one in enumerate(children)
+            for other in children[index + 1 :]
+            if (count := changed_together(checkout, one.path, other.path))
+            >= TOGETHER_WORTH_SAYING
+        ]
+        history = self.team_memory.history(node.id)
+        why = {
+            (event.team_id, event.at): event.detail
+            for event in history
+            if event.kind == "pruned"
+        }
+        paths = {child.path for child in children}
+        before = []
+        for former in self.former_teams_of(node):
+            if former.path not in paths:
+                continue
+            reason = next(
+                (
+                    detail
+                    for (team_id, _), detail in reversed(list(why.items()))
+                    if team_id == former.id and detail
+                ),
+                "",
+            )
+            before.append(
+                f"A team {former.title!r} had {former.path} before and was "
+                f"{former.ended}"
+                + (f": {reason}" if former.ended == "pruned" and reason else ".")
+            )
+        return proposal_facts(sizes, together, before, proposal.reason)
 
     def count_accepted_review(self, node_id: str) -> None:
         """Count a review a team's IC accepted, and wake the team's Manager
@@ -1294,6 +1327,7 @@ class DirectorService:
                 f"your IC has accepted {limit} reviews since the last look "
                 "of this kind.",
                 counted,
+                after_successes=True,
             )
 
     def count_ic_escalation(self, node_id: str, team_id: str) -> None:
@@ -1318,6 +1352,7 @@ class DirectorService:
                 f"the IC of {team.title!r} has escalated {limit} times to "
                 "your IC on the work it has in hand.",
                 {**counted, "escalations": told},
+                team=team,
             )
 
     def _work_accepted(self, team: OrgNode) -> None:
@@ -1350,7 +1385,22 @@ class DirectorService:
             },
         }
 
-    def _wake_manager(self, node_id: str, reason: str, counted: dict[str, Any]) -> None:
+    def _wake_manager(
+        self,
+        node_id: str,
+        reason: str,
+        counted: dict[str, Any],
+        *,
+        team: OrgNode | None = None,
+        after_successes: bool = False,
+    ) -> None:
+        """Wake a team's Manager to look at its teams, and keep that it was.
+
+        Args:
+            team: The team whose escalations reached the limit, when that
+                is why; it is kept with the event, so that the record says
+                on which of a team's tasks the limit was reached.
+        """
         store = self.store
         now = self._clock()
         quiet = {}
@@ -1359,7 +1409,7 @@ class DirectorService:
             if at:
                 since = now - datetime.fromisoformat(at)
                 quiet[team_id] = int(since.total_seconds() // 60)
-        self.record_event(node_id, "woken", None, reason)
+        self.record_event(node_id, "woken", team, reason)
         self.tell_manager(
             node_id,
             manager_check(
@@ -1368,6 +1418,8 @@ class DirectorService:
                 quiet,
                 counted["escalations"],
                 self.team_memory.history(node_id),
+                after_successes=after_successes,
+                escalation_limit=self.settings.manager_check_ic_escalations,
             ),
         )
 
@@ -1888,7 +1940,6 @@ class DirectorService:
             node,
             f"round {review.round}, {len(findings)} to change",
         )
-        self._count_sent_back(node, review.round)
         self.notify(
             agent_conversation(node, "ic"), changes_requested(above or node, findings)
         )

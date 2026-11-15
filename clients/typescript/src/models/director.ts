@@ -118,6 +118,8 @@ export interface DirectorSplitChild {
   isolation: DirectorIsolationMode;
   /** What the sub-team is to deliver. */
   task: string;
+  /** Why the proposer wants this team, when it said. */
+  reason?: string;
   /**
    * Name of the agent profile the sub-team's agents run on; `null` for the
    * same agent as the proposing team's.
@@ -133,6 +135,8 @@ export interface DirectorSplitProposal {
   children: DirectorSplitChild[];
   /** The interfaces the sub-teams must keep between them. */
   contracts: string;
+  /** Why the proposer wants this make-up of teams, when it said. */
+  reason?: string;
   status: DirectorSplitStatus;
   /**
    * The sub-teams the node has now that the proposed ones take the place of.
@@ -498,13 +502,18 @@ export type DirectorTeamEventKind =
   | 'stopped'
   | 'replaced'
   | 'pruned'
-  | 'woken';
+  | 'woken'
+  | 'proposed'
+  | 'approved';
 
 /** Something that became of a team directly below a team. */
 export interface DirectorTeamEvent {
   at: string;
   kind: DirectorTeamEventKind;
-  /** Empty when the event is about no single team. */
+  /**
+   * Empty when the event is about no single team. A `woken` event names the
+   * team whose escalations reached the limit that wakes the Manager.
+   */
   team_id?: string;
   team?: string;
   detail?: string;
@@ -686,12 +695,6 @@ export interface DirectorSettings {
    * the check off.
    */
   manager_check_ic_escalations?: number;
-  /**
-   * After how many times its IC sent back the work one team directly below
-   * has in hand a Manager is woken to look at its teams. 0 turns the check
-   * off.
-   */
-  manager_check_sent_back?: number;
 }
 
 /** The settings, beside what the org has now. */

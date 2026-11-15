@@ -134,10 +134,17 @@ def _checked(
     return SplitProposal(
         children=split.children,
         contracts=proposed.contracts,
+        reason=proposed.reason,
         replaces=[team.id for team in split.replaces],
         keeps=[team.id for team in split.keeps],
         proposed_at=datetime.now(UTC).isoformat(timespec="seconds"),
     )
+
+
+def _named(proposal: SplitProposal, replaced: list[str]) -> str:
+    """The sub-teams of a proposal, as the record of proposals names them."""
+    teams = ", ".join(f"{child.title} ({child.path})" for child in proposal.children)
+    return teams + (f"; in place of {', '.join(replaced)}" if replaced else "")
 
 
 def msg_manager(service: DirectorService, caller: Caller, text: str) -> str:
@@ -177,6 +184,10 @@ def msg_manager(service: DirectorService, caller: Caller, text: str) -> str:
             + " approve_teams sets them up exactly as written; to ask for "
             "changes or decline, answer with msg_ic."
         )
+        facts = service.facts_of_proposal(node, proposal)
+        if facts:
+            note += f"\n\n{facts}"
+        service.record_event(node.id, "proposed", None, _named(proposal, replaced))
     service.message(node.id, node.id, "ic", text, note)
     if proposed is None:
         return "Sent to your Manager."
@@ -239,6 +250,12 @@ def approve_teams(service: DirectorService, caller: Caller) -> str:
                 "replaces": [team.id for team in split.replaces],
             }
         ),
+    )
+    service.record_event(
+        node.id,
+        "approved",
+        None,
+        _named(proposal, [team.title for team in split.replaces]),
     )
     service.carry_out_split(node.id)
     waits = (

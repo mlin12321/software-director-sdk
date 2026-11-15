@@ -115,6 +115,31 @@ def last_commit_in(checkout: Path, path: str) -> str | None:
     return found.strip() or None
 
 
+def tracked_files(checkout: Path, path: str) -> int:
+    """How many files git tracks under ``path``; 0 when it cannot be told."""
+    try:
+        listed = git(checkout, ["ls-files", "--", pathspec(path)])
+    except (GitError, OSError):
+        return 0
+    return len(listed.splitlines())
+
+
+def changed_together(checkout: Path, path: str, other: str, last: int = 200) -> int:
+    """How many commits changed something under both directories, among the
+    last ``last`` commits that changed each; 0 when it cannot be told."""
+    found: list[set[str]] = []
+    for directory in (path, other):
+        try:
+            log = git(
+                checkout,
+                ["log", f"-{last}", "--format=%H", "--", pathspec(directory)],
+            )
+        except (GitError, OSError):
+            return 0
+        found.append(set(log.split()))
+    return len(found[0] & found[1])
+
+
 def uncommitted(checkout: Path, path: str) -> list[str]:
     """The files under ``path`` that differ from the last commit or are new,
     ignored files aside."""

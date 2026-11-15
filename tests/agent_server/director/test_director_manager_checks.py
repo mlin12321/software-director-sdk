@@ -100,7 +100,7 @@ async def test_a_manager_looks_after_every_so_many_reviews_its_ic_accepted(
     assert "your IC has accepted 5 reviews" in look
     assert "'API' (node services.api, services/api): " in look
     assert "review accepted, round 1" in look
-    assert "Nothing is asked of you." in look
+    assert "Nothing is asked of you" in look
 
     await accepted(service, repo, API, times=4)
     assert len(looks(service, launcher)) == 1
@@ -311,25 +311,6 @@ async def sent_back(service: DirectorService, repo: Path, team: str, times: int 
     await service.settled()
 
 
-async def test_a_manager_looks_when_one_teams_work_keeps_being_sent_back(
-    service: DirectorService, launcher: FakeLauncher, repo: Path
-):
-    await sent_back(service, repo, API, times=2)
-    await sent_back(service, repo, WEB, times=2)
-    # Four in all, but no team's work was sent back three times.
-    assert looks(service, launcher) == []
-
-    await sent_back(service, repo, API)
-
-    [look] = looks(service, launcher)
-    assert "your IC has sent back the work of 'API' 3 times." in look
-    assert "so far: 3 sent back" in look and "so far: 2 sent back" in look
-
-    service.update_settings(DirectorSettingsUpdate(manager_check_sent_back=0))
-    await sent_back(service, repo, API, times=3)
-    assert len(looks(service, launcher)) == 1
-
-
 async def test_what_became_of_its_teams_is_kept_for_a_teams_two_agents(
     service: DirectorService, launcher: FakeLauncher, repo: Path
 ):
@@ -340,6 +321,7 @@ async def test_what_became_of_its_teams_is_kept_for_a_teams_two_agents(
     kinds = [
         (event.team, event.kind, event.detail)
         for event in service.team_memory.history("root")
+        if event.team
     ]
     assert [kind for _, kind, _ in kinds[:2]] == ["set_up", "set_up"]
     assert kinds[2:] == [
@@ -364,7 +346,7 @@ async def test_a_manager_is_shown_what_became_of_teams_that_are_gone(
     service: DirectorService, launcher: FakeLauncher, repo: Path
 ):
     service.update_settings(DirectorSettingsUpdate(manager_check_accepted_reviews=1))
-    await sent_back(service, repo, API, times=2)
+    await sent_back(service, repo, API, times=3)
     await use(
         service,
         manager(service),
@@ -377,7 +359,7 @@ async def test_a_manager_is_shown_what_became_of_teams_that_are_gone(
 
     look = looks(service, launcher)[-1]
     assert "Teams that were here before and are gone:" in look
-    assert "- 'API' (node services.api), pruned: 2 sent back" in look
+    assert "- 'API' (node services.api), pruned: 3 sent back" in look
     history = service.team_memory.history("root")
     assert [e.detail for e in history if e.kind == "woken"] == [
         "your IC has accepted 1 reviews since the last look of this kind."

@@ -166,6 +166,13 @@ class SplitChild(BaseModel):
     readonly: list[str] = Field(default_factory=list)
     isolation: IsolationMode = "shared"
     task: str = Field(min_length=1, description="What the sub-team is to deliver.")
+    reason: str = Field(
+        default="",
+        description=(
+            "Why the proposer wants this team: what makes it a concern of "
+            "its own, or anything else its Manager should weigh. Optional."
+        ),
+    )
     agent_profile: str | None = Field(
         default=None,
         description=(
@@ -184,6 +191,10 @@ class SplitProposal(BaseModel):
     contracts: str = Field(
         default="",
         description="The interfaces the sub-teams must keep between them.",
+    )
+    reason: str = Field(
+        default="",
+        description="Why the proposer wants this make-up of teams. Optional.",
     )
     status: SplitStatus = "proposed"
     replaces: list[str] = Field(
@@ -433,8 +444,10 @@ class Thread(BaseModel):
 
 
 # What is kept of a team for the team above it. `woken` is the Manager of
-# the team above being woken by a count the org set, and names no team when
-# the count is not of one team.
+# the team above being woken by a count the org set; it names the team whose
+# escalations reached the limit, and no team when the count is not of one
+# team. `proposed` and `approved` are of the team's own proposals of
+# sub-teams and name no team.
 TeamEventKind = Literal[
     "set_up",
     "accepted",
@@ -444,6 +457,8 @@ TeamEventKind = Literal[
     "replaced",
     "pruned",
     "woken",
+    "proposed",
+    "approved",
 ]
 
 
@@ -804,15 +819,6 @@ class DirectorSettings(BaseModel):
             "at its teams. 0 turns the check off."
         ),
     )
-    manager_check_sent_back: int = Field(
-        default=3,
-        ge=0,
-        description=(
-            "After how many times its IC sent back the work one team directly "
-            "below has in hand a Manager is woken to look at its teams. 0 "
-            "turns the check off."
-        ),
-    )
 
 
 class DirectorSettingsUpdate(BaseModel):
@@ -831,7 +837,6 @@ class DirectorSettingsUpdate(BaseModel):
     stall_check_minutes: int | None = Field(default=None, ge=0)
     manager_check_accepted_reviews: int | None = Field(default=None, ge=0)
     manager_check_ic_escalations: int | None = Field(default=None, ge=0)
-    manager_check_sent_back: int | None = Field(default=None, ge=0)
 
 
 class DirectorSettingsState(DirectorSettings):
