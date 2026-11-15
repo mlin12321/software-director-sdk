@@ -189,6 +189,7 @@ async def test_settings_are_kept_for_the_next_start_beside_the_repository(
         "stall_check_minutes": 120,
         "manager_check_accepted_reviews": 5,
         "manager_check_ic_escalations": 3,
+        "manager_check_sent_back": 3,
     }
     assert kept["repo_path"] == str(repo)
     assert again.settings.max_depth == 3 and again.store.root_id == "root"

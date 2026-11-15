@@ -27,6 +27,7 @@ from openhands.agent_server.director.models import (
     FormerThread,
     InheritedSpec,
     Report,
+    TeamEvent,
     ThreadMessage,
 )
 from openhands.sdk.errors import Invalid, NotSupported, OperationFailed
@@ -41,6 +42,7 @@ REPORTS_DIR = ".reports"
 # One record for each team that was replaced or pruned:
 # `<node id>/<time>.json`.
 FORMER_DIR = ".former"
+HISTORY_DIR = ".history"
 # One file for each Manager and IC that have written to each other.
 THREADS_DIR = ".threads"
 # One file for each IC and IC directly below that the first has written to.
@@ -52,6 +54,9 @@ _ZERO_OID = "0" * 40
 _MAX_COMMIT_ATTEMPTS = 8
 _MERGE_MIN_GIT = (2, 38)
 _REPORTS = TypeAdapter(list[Report])
+_EVENTS = TypeAdapter(list[TeamEvent])
+# How many events are kept of the teams below one team; the oldest go first.
+HISTORY_KEPT = 300
 _MESSAGES = TypeAdapter(list[ThreadMessage])
 
 
@@ -122,6 +127,10 @@ def _reports_file(node_id: str, role: AgentRole) -> str:
 
 def _former_file(node_id: str, at: str) -> str:
     return f"{FORMER_DIR}/{node_id}/{at}.json"
+
+
+def _history_file(node_id: str) -> str:
+    return f"{HISTORY_DIR}/{node_id}.json"
 
 
 def _parse_messages(raw: str | None) -> list[ThreadMessage]:
@@ -333,6 +342,8 @@ class GitStore:
                 contracts_file,
                 *threads,
                 *(_reports_file(team.id, role) for role in AGENT_ROLES),
+                # What became of its own sub-teams is not a later team's.
+                _history_file(team.id),
             ]
             return [
                 StoreChange(path, kept.model_dump_json(indent=2) + "\n"),
@@ -341,6 +352,23 @@ class GitStore:
 
         self.commit(mutate, f"memory: former team {path}")
         return kept
+
+    def history(self, node_id: str) -> list[TeamEvent]:
+        """What became of the teams directly below a team, oldest first."""
+        raw = self.read(_history_file(node_id))
+        return _EVENTS.validate_json(raw) if raw else []
+
+    def append_history(self, node_id: str, event: TeamEvent) -> None:
+        """Add to what became of the teams directly below a team."""
+        path = _history_file(node_id)
+
+        def mutate(read: StoreReader) -> list[StoreChange]:
+            raw = read(path)
+            events = [*(_EVENTS.validate_json(raw) if raw else []), event]
+            kept = events[-HISTORY_KEPT:]
+            return [StoreChange(path, _serialize(_EVENTS.dump_python(kept)))]
+
+        self.commit(mutate, f"memory: history {path}")
 
     def append_report(
         self, node_id: str, role: AgentRole, report: Report

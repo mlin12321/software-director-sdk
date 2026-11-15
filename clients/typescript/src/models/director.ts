@@ -650,6 +650,12 @@ export interface DirectorSettings {
    * the check off.
    */
   manager_check_ic_escalations?: number;
+  /**
+   * After how many times its IC sent back the work one team directly below
+   * has in hand a Manager is woken to look at its teams. 0 turns the check
+   * off.
+   */
+  manager_check_sent_back?: number;
 }
 
 /** The settings, beside what the org has now. */

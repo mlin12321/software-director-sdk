@@ -105,6 +105,8 @@ from openhands.agent_server.director.models import (
     Stopped,
     SyncResult,
     TeamEnforcement,
+    TeamEvent,
+    TeamEventKind,
     TeamMatch,
     Thread,
     ThreadMessage,
@@ -138,15 +140,18 @@ from openhands.agent_server.director.prompts import (
     approved_notice,
     brief,
     changes_requested,
+    event_line,
     from_director,
     hand_over_brief,
     handed_over_notice,
     manager_check,
     pruned_job,
     pruned_notice,
+    record_line,
     replaced_job,
     review_request,
     stall_notice,
+    track_records,
 )
 from openhands.agent_server.director.recovery import (
     STARTING,
@@ -227,6 +232,8 @@ DIRECTOR_TOOL_NAMES = (
 NOT_STARTED = "not started"
 # What follows a team's purpose in its task once something started it.
 _STARTED_WITH = "\n\nWhat your team is started with:\n"
+# How many of the latest events of its sub-teams an agent reads at once.
+HISTORY_TOLD = 30
 # How long tree changes are gathered before they are saved as one commit.
 SAVE_DELAY_SECONDS = 2.0
 # How long to wait before starting an agent again when the server is full.
@@ -1202,6 +1209,7 @@ class DirectorService:
         if self._loop is not None:
             self._enqueue(lambda: self._stop(node_id), node_id)
         self._save_soon()
+        self.record_event(team.parent_id, "stopped", team, reason)
         # A stopped team is waited for no longer by the reviews beside it.
         self.release_reviews(team.parent_id)
         if team.parent_id is not None:
@@ -1214,6 +1222,56 @@ class DirectorService:
                 "with prune_team, or have your IC propose teams that take "
                 "its place.",
             )
+
+    def record_event(
+        self,
+        above_id: str | None,
+        kind: TeamEventKind,
+        team: OrgNode | None = None,
+        detail: str = "",
+    ) -> None:
+        """Keep, for the IC and the Manager of a team, what became of a team
+        directly below it. Safe from any thread.
+
+        Args:
+            above_id: The team whose record it is; nothing is kept for None.
+            team: The team it is about, or None when it is about none.
+        """
+        if above_id is None:
+            return
+        event = TeamEvent(
+            at=_now(),
+            kind=kind,
+            team_id=team.id if team else "",
+            team=team.title if team else "",
+            detail=detail,
+        )
+        try:
+            self.team_memory.append_history(above_id, event)
+        except (GitError, OSError):
+            logger.warning("Could not record %s for node %s", kind, above_id)
+
+    def _so_far(self, team: OrgNode) -> str:
+        """What became of a team's work before, in words, as the team above
+        has it on record."""
+        if team.parent_id is None:
+            return ""
+        records = track_records(self.team_memory.history(team.parent_id))
+        return next((record_line(r) for r in records if r["node_id"] == team.id), "")
+
+    def _count_sent_back(self, team: OrgNode, times: int) -> None:
+        """Wake the Manager of the team above when the work a team has in
+        hand was sent back as often as the org set."""
+        limit = self.settings.manager_check_sent_back
+        if not limit or team.parent_id is None or times % limit:
+            return
+        with self._counting:
+            counted = self._counted(team.parent_id)
+        self._wake_manager(
+            team.parent_id,
+            f"your IC has sent back the work of {team.title!r} {times} times.",
+            counted,
+        )
 
     def count_accepted_review(self, node_id: str) -> None:
         """Count a review a team's IC accepted, and wake the team's Manager
@@ -1300,10 +1358,15 @@ class DirectorService:
             if at:
                 since = now - datetime.fromisoformat(at)
                 quiet[team_id] = int(since.total_seconds() // 60)
+        self.record_event(node_id, "woken", None, reason)
         self.tell_manager(
             node_id,
             manager_check(
-                reason, store.children(node_id), quiet, counted["escalations"]
+                reason,
+                store.children(node_id),
+                quiet,
+                counted["escalations"],
+                self.team_memory.history(node_id),
             ),
         )
 
@@ -1462,6 +1525,7 @@ class DirectorService:
         account = None
         if ic is not None and not in_a_turn:
             account = await self._ask_agent(ic, STALL_QUESTION)
+        self.record_event(above.id, "stalled", team, f"{minutes} minutes")
         # Its reviewer is woken now anyway, and no longer waits for it.
         self._release_reviews(above.id, now=True)
         self.tell_ic(
@@ -1616,6 +1680,14 @@ class DirectorService:
                     else {}
                 )
                 for former in self._former_below(team_memory, node.id)
+            ]
+        if in_full:
+            # What became of the teams below so far, also of the ones that
+            # are gone: for both agents to weigh what they do next by.
+            events = team_memory.history(node.id)
+            context["track_record_of_the_teams_below"] = track_records(events)
+            context["what_became_of_them_lately"] = [
+                event_line(event) for event in events[-HISTORY_TOLD:]
             ]
         return context
 
@@ -1784,6 +1856,13 @@ class DirectorService:
         above = store.get(node.parent_id) if node.parent_id else None
         store.set_review(node_id, review)
         self.progressed(node_id)
+        self.record_event(
+            node.parent_id,
+            "sent_back",
+            node,
+            f"round {review.round}, {len(findings)} to change",
+        )
+        self._count_sent_back(node, review.round)
         self.notify(
             agent_conversation(node, "ic"), changes_requested(above or node, findings)
         )
@@ -1847,7 +1926,7 @@ class DirectorService:
         for team in waiting:
             run.unmark(HELD, team.id)
             if team.review is not None:
-                requests.append(review_request(team, team.review))
+                requests.append(review_request(team, team.review, self._so_far(team)))
         self.tell_ic(node.id, "\n\n---\n\n".join(requests))
 
     def accept_review(self, node_id: str, needed_above: str) -> None:
@@ -3622,6 +3701,7 @@ class DirectorService:
                     store.move(below_id, node_id)
             for team in replaced:
                 await self._archive(team, "replaced", plan["stamp"])
+                self.record_event(node_id, "replaced", team)
                 store.remove(team.id)
         if proposal.contracts.strip():
             # Contracts that named teams which are gone do not stay beside
@@ -3650,13 +3730,17 @@ class DirectorService:
                 made = store.get(team.id)
                 if made is not None:
                     self._work_accepted(made)
+                    self.record_event(node_id, "set_up", made, child.task[:200])
             # What a sub-team that stayed had waiting for review is now for
             # the IC of the team it reports to, which this starts if it is
             # a new team.
             for below_id, home in moves.items():
                 below = store.get(below_id)
                 if below and below.review and below.review.state == "pending":
-                    self.tell_ic(home, review_request(below, below.review))
+                    self.tell_ic(
+                        home,
+                        review_request(below, below.review, self._so_far(below)),
+                    )
                 # Under a new team it starts from now: its time without
                 # progress, and what was held for it while a team above
                 # was stopped.
@@ -3799,6 +3883,9 @@ class DirectorService:
             for team in map(store.get, plan["teams"]):
                 if team is not None:
                     await self._archive(team, "pruned", plan["stamp"])
+            self.record_event(
+                plan["parent"], "pruned", store.get(node_id), plan["reason"]
+            )
             if pruned is not None and above is not None:
                 # The directory is the team above's again, with a spec that
                 # says how the pruned team worked.
@@ -4089,6 +4176,14 @@ class DirectorService:
         )
         self.progressed(above.id)
         self._work_accepted(node)
+        self.record_event(
+            above.id,
+            "accepted",
+            node,
+            "at the first review"
+            if node.review.round <= 1
+            else f"at review {node.review.round}",
+        )
         self.count_accepted_review(above.id)
         self.notify(
             agent_conversation(node, "ic"),

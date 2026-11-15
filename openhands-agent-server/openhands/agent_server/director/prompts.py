@@ -1,5 +1,7 @@
 """What the director tells the agents of an org."""
 
+from typing import Any
+
 from openhands.agent_server.director.models import (
     AgentRole,
     BoundaryContracts,
@@ -10,6 +12,8 @@ from openhands.agent_server.director.models import (
     Review,
     ReviewFinding,
     SplitChild,
+    TeamEvent,
+    TeamEventKind,
 )
 from openhands.agent_server.director.split import is_inside
 
@@ -68,6 +72,11 @@ The IC owns the technical work of the team's boundary:
   its own part is complete, and the accepted work goes up with it.
 - It settles what the ICs of the teams directly below escalate with
   `resolve_escalation`, or passes it up with the reason it could not.
+- The runtime keeps what became of the teams below it: work accepted or
+  sent back, teams that stalled, were stopped, replaced or pruned. A
+  review request says how a team's earlier work went, and
+  `read_node_context` returns the record, also of teams that are gone.
+  The IC weighs what it proposes and how it reviews by it.
 - When teams below it are replaced or pruned, the runtime puts the IC in
   hand-over mode: it starts a side conversation of the IC for the
   hand-over and gives it what they left:
@@ -110,6 +119,11 @@ the work back.
   prunes teams, its IC is told to pass on what removed teams left and to
   rewrite the team's spec; the Manager writes to it when the change needs
   explaining.
+- It is woken to look at its teams when its IC has accepted a number of
+  reviews, when one team keeps escalating, or when one team's work keeps
+  being sent back. Each look shows what became of every team so far, also
+  of teams that are gone, and `read_node_context` returns that record. The
+  Manager weighs what it approves and prunes by it.
 - It settles what the Managers of the teams directly below escalate with
   `resolve_escalation`, or passes it up with the reason it could not.
 - A team directly below that has no way forward, or keeps trying what does
@@ -516,14 +530,20 @@ def _finding_lines(findings: list[ReviewFinding]) -> list[str]:
     return lines
 
 
-def review_request(team: OrgNode, review: Review) -> str:
-    """What the IC above is told when a team below submits its work."""
+def review_request(team: OrgNode, review: Review, so_far: str = "") -> str:
+    """What the IC above is told when a team below submits its work.
+
+    Args:
+        so_far: What became of the team's work before, in words.
+    """
     directory = team.boundary.path or "."
     lines = [
         f"Review mode. Team {team.title!r} (node {team.id}) submits its work in "
         f"{directory}"
         + (f" (review round {review.round})." if review.round > 1 else "."),
     ]
+    if so_far:
+        lines.append(f"Its work so far: {so_far}.")
     if review.summary:
         lines += ["", "What it says it delivered:", review.summary]
     if review.description:
@@ -628,11 +648,72 @@ def stall_notice(
     return "\n".join(lines)
 
 
+_NOTHING_COUNTED: dict[str, Any] = {
+    "accepted": 0,
+    "sent_back": 0,
+    "stalled": 0,
+    "stopped": 0,
+}
+_EVENT_WORDS: dict[TeamEventKind, str] = {
+    "set_up": "set up",
+    "accepted": "work accepted",
+    "sent_back": "work sent back",
+    "stalled": "showed no progress",
+    "stopped": "stopped by the IC",
+    "replaced": "replaced",
+    "pruned": "pruned",
+    "woken": "Manager woken",
+}
+# What is counted of a team, in the order it is told.
+_COUNTED: tuple[TeamEventKind, ...] = ("accepted", "sent_back", "stalled", "stopped")
+
+
+def track_records(events: list[TeamEvent]) -> list[dict[str, Any]]:
+    """What became of each team the events are of, one entry a team, in the
+    order the teams first appear. A team that is gone says how it ended."""
+    records: dict[str, dict[str, Any]] = {}
+    for event in events:
+        if not event.team_id:
+            continue
+        record = records.setdefault(
+            event.team_id,
+            {"node_id": event.team_id, "team": event.team}
+            | {kind: 0 for kind in _COUNTED}
+            | {"ended": None},
+        )
+        if event.kind == "set_up":
+            # A new team in the place of one that is gone starts its own.
+            record.update({kind: 0 for kind in _COUNTED})
+            record.update(team=event.team, ended=None)
+        elif event.kind in _COUNTED:
+            record[event.kind] += 1
+        elif event.kind in ("replaced", "pruned"):
+            record["ended"] = event.kind
+    return list(records.values())
+
+
+def record_line(record: dict[str, Any]) -> str:
+    """One team's record, in words; empty when nothing is counted of it."""
+    parts = [
+        f"{record[kind]} {_EVENT_WORDS[kind].removeprefix('work ')}"
+        for kind in _COUNTED
+        if record[kind]
+    ]
+    return ", ".join(parts)
+
+
+def event_line(event: TeamEvent) -> str:
+    who = f"{event.team!r}: " if event.team else ""
+    detail = f" ({event.detail})" if event.detail else ""
+    return f"{event.at} {who}{_EVENT_WORDS[event.kind]}{detail}"
+
+
 def manager_check(
     reason: str,
     teams: list[OrgNode],
     quiet: dict[str, int],
     escalations: dict[str, int],
+    events: list[TeamEvent] | None = None,
 ) -> str:
     """What a Manager is told when the director wakes it to look at its
     teams.
@@ -643,7 +724,10 @@ def manager_check(
             node id, where that is known.
         escalations: How many escalations each team's IC has raised on the
             work it has in hand, by node id.
+        events: What became of the teams below so far, also of the ones
+            that are gone.
     """
+    records = {record["node_id"]: record for record in track_records(events or [])}
     lines = [
         f"A look at your teams that your IC did not ask for: {reason}",
         "",
@@ -668,10 +752,22 @@ def manager_check(
             facts.append(f"{waiting} unsettled")
         if team.id in quiet:
             facts.append(f"no progress for {_span(quiet[team.id])}")
+        so_far = record_line(records.get(team.id, {}) or _NOTHING_COUNTED)
+        if so_far:
+            facts.append(f"so far: {so_far}")
         lines.append(
             f"- {team.title!r} (node {team.id}, {team.boundary.path or '.'}): "
             + "; ".join(facts)
         )
+    here = {team.id for team in teams}
+    gone = [
+        f"- {record['team']!r} (node {record['node_id']}), {record['ended']}"
+        + (f": {so_far}" if (so_far := record_line(record)) else "")
+        for record in records.values()
+        if record["ended"] and record["node_id"] not in here
+    ]
+    if gone:
+        lines += ["", "Teams that were here before and are gone:", *gone]
     lines += [
         "",
         "Nothing is asked of you. Act only if the make-up of the teams is "

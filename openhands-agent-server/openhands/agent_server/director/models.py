@@ -432,6 +432,33 @@ class Thread(BaseModel):
     messages: list[ThreadMessage] = Field(default_factory=list)
 
 
+# What is kept of a team for the team above it. `woken` is the Manager of
+# the team above being woken by a count the org set, and names no team when
+# the count is not of one team.
+TeamEventKind = Literal[
+    "set_up",
+    "accepted",
+    "sent_back",
+    "stalled",
+    "stopped",
+    "replaced",
+    "pruned",
+    "woken",
+]
+
+
+class TeamEvent(BaseModel):
+    """Something that became of a team directly below a team, kept in team
+    memory so that its IC and its Manager can weigh what they do next by
+    what happened before, also of teams that are gone."""
+
+    at: str
+    kind: TeamEventKind
+    team_id: str = ""
+    team: str = ""
+    detail: str = ""
+
+
 class Report(BaseModel):
     """Something an agent recorded for itself and the other agent of its
     team: a design decision, a setback, a reflection."""
@@ -756,6 +783,15 @@ class DirectorSettings(BaseModel):
             "at its teams. 0 turns the check off."
         ),
     )
+    manager_check_sent_back: int = Field(
+        default=3,
+        ge=0,
+        description=(
+            "After how many times its IC sent back the work one team directly "
+            "below has in hand a Manager is woken to look at its teams. 0 "
+            "turns the check off."
+        ),
+    )
 
 
 class DirectorSettingsUpdate(BaseModel):
@@ -774,6 +810,7 @@ class DirectorSettingsUpdate(BaseModel):
     stall_check_minutes: int | None = Field(default=None, ge=0)
     manager_check_accepted_reviews: int | None = Field(default=None, ge=0)
     manager_check_ic_escalations: int | None = Field(default=None, ge=0)
+    manager_check_sent_back: int | None = Field(default=None, ge=0)
 
 
 class DirectorSettingsState(DirectorSettings):
