@@ -32,6 +32,7 @@ from openhands.sdk.conversation.request import AgentLaunchAdditions
 from openhands.sdk.conversation.state import ConversationExecutionStatus
 from openhands.sdk.errors import Conflict, NotFound, Unavailable, Unprocessable
 from openhands.sdk.event import ActionEvent
+from openhands.sdk.tool.registry import list_registered_tools
 from openhands.sdk.tool.tool import Action
 from openhands.tools.apply_patch.definition import ApplyPatchAction
 from openhands.tools.file_editor.definition import FileEditorAction
@@ -120,6 +121,8 @@ async def test_the_org_protocol_is_added_to_what_the_caller_appends(
 
 def test_agents_are_given_every_director_tool():
     assert set(DIRECTOR_TOOL_NAMES) == set(DIRECTOR_TOOLS)
+    # A tool an agent is given and the server cannot find stops its first turn.
+    assert set(DIRECTOR_TOOL_NAMES) <= set(list_registered_tools())
 
 
 async def test_a_team_started_again_is_briefed_with_what_it_reported(

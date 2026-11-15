@@ -6,6 +6,7 @@ against its director, so they exist only in the agent server.
 
 from openhands.agent_server.director.tools.definition import (
     ApproveTeamsTool,
+    HandOverTool,
     MsgIcTool,
     MsgManagerTool,
     MsgTeamTool,
@@ -23,6 +24,7 @@ from openhands.agent_server.director.tools.definition import (
 
 __all__ = [
     "ApproveTeamsTool",
+    "HandOverTool",
     "MsgIcTool",
     "MsgManagerTool",
     "MsgTeamTool",

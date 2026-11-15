@@ -64,7 +64,9 @@ def _only(caller: Caller, role: AgentRole, what: str) -> None:
 
 def node_context(service: DirectorService, caller: Caller) -> str:
     """Who the agent is and everything of the org that concerns its team."""
-    return json.dumps(service.context_of(caller.node, caller.role), indent=2)
+    return json.dumps(
+        service.context_of(caller.node, caller.role, in_full=True), indent=2
+    )
 
 
 def write_spec(service: DirectorService, caller: Caller, content: str) -> str:
@@ -219,7 +221,10 @@ def approve_teams(service: DirectorService, caller: Caller) -> str:
     )
     return (
         f"Approved. {len(proposal.children)} sub-teams are being set up.{waits} "
-        "None of them starts until your IC gives it its task."
+        "None of them starts until your IC gives it its task. Your IC is "
+        "told to rewrite the team's spec"
+        + (" and to pass on what the replaced teams left" if split.replaces else "")
+        + "; write to it with msg_ic if the change needs explaining."
     )
 
 
@@ -462,6 +467,31 @@ def msg_team(service: DirectorService, caller: Caller, team: str, text: str) -> 
     )
 
 
+def hand_over(
+    service: DirectorService, caller: Caller, team: str, notes: str, contracts: str
+) -> str:
+    """Pass on to a team directly below what the teams before it left."""
+    _only(caller, "ic", "hand over what removed teams left")
+    if not notes.strip() and not contracts.strip():
+        raise Invalid("Give notes, contracts, or both: there is nothing to hand over")
+    target = _team_below(service, caller, team)
+    service.hand_over(target, notes, contracts)
+    given = [
+        part
+        for part, text in (
+            ("your notes are with its reports, marked as handed over", notes),
+            ("the contracts between its sub-teams are written", contracts),
+        )
+        if text.strip()
+    ]
+    return f"Handed over to {target.title!r}: {' and '.join(given)}. " + (
+        "Its agents read it with the next message they get."
+        if target.agents
+        else "It has not started; it reads this in its briefing when you "
+        "give it its task with msg_team."
+    )
+
+
 def stop_team(service: DirectorService, caller: Caller, team: str, reason: str) -> str:
     """Stop a team directly below the caller's."""
     _only(caller, "ic", "stop a team")
@@ -493,5 +523,7 @@ def prune_team(
     service.prune(node_id, reason.strip())
     return (
         f"Pruning {team.title!r}. Its directory goes back to your team's IC "
-        "when it is gone."
+        "when it is gone. Your IC is given what the team left and told to "
+        "rewrite the team's spec; write to it with msg_ic if the change "
+        "needs explaining."
     )

@@ -280,6 +280,20 @@ class GitStore:
             if (raw := self._read_at(commit, file))
         ]
 
+    def former_below(self, above: str) -> list[FormerTeam]:
+        """The records of the teams that were removed from directly below
+        a node, oldest first."""
+        commit = self.head()
+        records = [
+            FormerTeam.model_validate_json(raw)
+            for file in self._files(FORMER_DIR)
+            if (raw := self._read_at(commit, file))
+        ]
+        return sorted(
+            (record for record in records if record.above == above),
+            key=lambda record: record.at,
+        )
+
     def record_former(self, team: FormerTeam) -> FormerTeam:
         """Keep what a removed team left as one record and take it out of
         where a later team of the same name or directory would find it:

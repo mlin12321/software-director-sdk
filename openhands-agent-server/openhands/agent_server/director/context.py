@@ -17,6 +17,7 @@ UPDATE_HEADING = "[director] context update"
 IN_THE_BRIEFING = (
     "boundary",
     "spec",
+    "specs_left_by_teams_before_you",
     "contracts_with_the_teams_beside_you",
     "contracts_between_your_sub_teams",
     "reports_of_your_team",

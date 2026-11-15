@@ -156,6 +156,27 @@ class MsgTeamAction(Action):
     text: str = Field(description="The message, in your own words.")
 
 
+class HandOverAction(Action):
+    """Pass on to a team below yours what the teams before it left."""
+
+    team: str = Field(description="The node id of a team directly below yours.")
+    notes: str = Field(
+        default="",
+        description=(
+            "What of the removed teams' reports this team should know, in "
+            "your own words or quoted. Kept with its reports."
+        ),
+    )
+    contracts: str = Field(
+        default="",
+        description=(
+            "The contracts this team's own sub-teams must keep between "
+            "them. Takes the place of the ones it has. Only for a team that "
+            "has, or took over, sub-teams."
+        ),
+    )
+
+
 class StopTeamAction(Action):
     """Stop a team below yours that has gone on too long without progress."""
 
@@ -303,6 +324,26 @@ class MsgTeamTool(_DirectorTool[MsgTeamAction]):
     def act(cls):
         return lambda service, caller, action: pod_actions.msg_team(
             service, caller, action.team, action.text
+        )
+
+
+class HandOverTool(_DirectorTool[HandOverAction]):
+    summary = (
+        "IC only. After teams below yours were replaced or pruned, pass on "
+        "to a team directly below what it should know of what they left: "
+        "notes from their reports, and the contracts its own sub-teams must "
+        "keep. Nothing of a removed team reaches another team unless you do "
+        "this. It starts nothing and can be done again."
+    )
+
+    @classmethod
+    def action(cls):
+        return HandOverAction
+
+    @classmethod
+    def act(cls):
+        return lambda service, caller, action: pod_actions.hand_over(
+            service, caller, action.team, action.notes, action.contracts
         )
 
 
@@ -485,6 +526,7 @@ register_tool(SubmitReviewTool.name, SubmitReviewTool)
 register_tool(PruneTeamTool.name, PruneTeamTool)
 register_tool(ReviewTeamTool.name, ReviewTeamTool)
 register_tool(ReportTool.name, ReportTool)
+register_tool(HandOverTool.name, HandOverTool)
 
 
 DIRECTOR_TOOLS: dict[str, type[_DirectorTool]] = {
@@ -503,5 +545,6 @@ DIRECTOR_TOOLS: dict[str, type[_DirectorTool]] = {
         ReviewTeamTool,
         ReportTool,
         PruneTeamTool,
+        HandOverTool,
     )
 }

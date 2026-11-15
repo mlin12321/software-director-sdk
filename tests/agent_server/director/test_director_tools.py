@@ -390,9 +390,10 @@ async def test_a_manager_writes_to_its_own_ic_and_to_the_ics_directly_below(
     by_ic = await use(service, ic(service), MsgIcTool, MsgIcAction(text="Hi", team=api))
 
     assert not below.is_error
-    assert launcher.messages_to(ic(service, api))[-1] == (
+    # With it comes that the team below it has started since.
+    assert launcher.messages_to(ic(service, api))[-1].startswith(
         "[director] The Manager of the team above (Checkout) writes:\n"
-        "Where does the schema stand?"
+        "Where does the schema stand?\n"
     )
     for refused in (too_deep, upward):
         assert refused.is_error and "directly below" in refused.text

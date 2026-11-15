@@ -429,6 +429,14 @@ class Report(BaseModel):
             "ones, once they had grown long."
         ),
     )
+    handed_over: bool = Field(
+        default=False,
+        description=(
+            "True for what the IC of the team above passed on of the teams "
+            "that were there before this one. The team's own agents did not "
+            "write it."
+        ),
+    )
 
 
 class InheritedSpec(BaseModel):
@@ -467,6 +475,9 @@ class FormerTeam(BaseModel):
 
     id: str
     title: str
+    above: str = Field(
+        default="", description="The node id of the team above it when it went."
+    )
     path: str = Field(description="The directory the team owned.")
     purpose: str = Field(description="What the team was for.")
     ended: Literal["replaced", "pruned"]
