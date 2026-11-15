@@ -459,6 +459,7 @@ TeamEventKind = Literal[
     "woken",
     "proposed",
     "approved",
+    "declined",
 ]
 
 
@@ -472,6 +473,13 @@ class TeamEvent(BaseModel):
     team_id: str = ""
     team: str = ""
     detail: str = ""
+    paths: list[str] = Field(
+        default_factory=list,
+        description=(
+            "The directories of the sub-teams a proposal was for, on "
+            "`proposed`, `approved` and `declined`."
+        ),
+    )
 
 
 class Report(BaseModel):

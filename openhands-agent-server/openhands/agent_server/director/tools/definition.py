@@ -91,6 +91,17 @@ class ApproveTeamsAction(Action):
     """Approve the sub-teams your IC proposed, as written."""
 
 
+class DeclineTeamsAction(Action):
+    """Decline the sub-teams your IC proposed."""
+
+    reason: str = Field(
+        description=(
+            "Why they are declined and what would change your mind; your IC "
+            "is told, and it is kept in the record."
+        )
+    )
+
+
 class RaiseEscalationAction(Action):
     """Raise something your team cannot settle itself."""
 
@@ -373,7 +384,7 @@ class ApproveTeamsTool(_DirectorTool[ApproveTeamsAction]):
     summary = (
         "Manager only. Approve the sub-teams your IC proposed. They are set "
         "up exactly as its message wrote them; you cannot change them here. "
-        "To ask for changes or decline, answer with msg_ic instead."
+        "To decline them use decline_teams."
     )
 
     @classmethod
@@ -384,6 +395,26 @@ class ApproveTeamsTool(_DirectorTool[ApproveTeamsAction]):
     def act(cls):
         return lambda service, caller, _action: pod_actions.approve_teams(
             service, caller
+        )
+
+
+class DeclineTeamsTool(_DirectorTool[DeclineTeamsAction]):
+    summary = (
+        "Manager only. Decline the sub-teams your IC proposed, saying why. "
+        "Nothing is set up, your IC is told the reason, and the reason is "
+        "kept in the record, where it is shown when the same directories "
+        "are proposed again. Also the way to ask for a different division: "
+        "say what to change, and your IC proposes again."
+    )
+
+    @classmethod
+    def action(cls):
+        return DeclineTeamsAction
+
+    @classmethod
+    def act(cls):
+        return lambda service, caller, action: pod_actions.decline_teams(
+            service, caller, action.reason
         )
 
 
@@ -523,6 +554,7 @@ register_tool(MsgIcTool.name, MsgIcTool)
 register_tool(MsgTeamTool.name, MsgTeamTool)
 register_tool(StopTeamTool.name, StopTeamTool)
 register_tool(ApproveTeamsTool.name, ApproveTeamsTool)
+register_tool(DeclineTeamsTool.name, DeclineTeamsTool)
 register_tool(RaiseEscalationTool.name, RaiseEscalationTool)
 register_tool(ResolveEscalationTool.name, ResolveEscalationTool)
 register_tool(SubmitReviewTool.name, SubmitReviewTool)
@@ -542,6 +574,7 @@ DIRECTOR_TOOLS: dict[str, type[_DirectorTool]] = {
         MsgTeamTool,
         StopTeamTool,
         ApproveTeamsTool,
+        DeclineTeamsTool,
         RaiseEscalationTool,
         ResolveEscalationTool,
         SubmitReviewTool,

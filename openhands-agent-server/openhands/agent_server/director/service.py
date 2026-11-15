@@ -9,7 +9,7 @@ import secrets
 import shutil
 import threading
 from collections import deque
-from collections.abc import Awaitable, Callable, Collection
+from collections.abc import Awaitable, Callable, Collection, Sequence
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
@@ -225,6 +225,7 @@ DIRECTOR_TOOL_NAMES = (
     "msg_team",
     "stop_team",
     "approve_teams",
+    "decline_teams",
     "raise_escalation",
     "resolve_escalation",
     "submit_review",
@@ -248,6 +249,8 @@ STALL_POLL_SECONDS = 60.0
 # How many commits must have changed two proposed directories together
 # before a Manager is told: a first commit of everything says nothing.
 TOGETHER_WORTH_SAYING = 3
+# How many earlier declines for the same directories a proposal is shown with.
+DECLINED_TOLD = 3
 # How long a model may take to name a team before the team keeps the name
 # it has; the root's agents are not briefed until then.
 SUMMARY_TIMEOUT_SECONDS = 20.0
@@ -1237,6 +1240,7 @@ class DirectorService:
         kind: TeamEventKind,
         team: OrgNode | None = None,
         detail: str = "",
+        paths: Sequence[str] = (),
     ) -> None:
         """Keep, for the IC and the Manager of a team, what became of a team
         directly below it. Safe from any thread.
@@ -1244,6 +1248,7 @@ class DirectorService:
         Args:
             above_id: The team whose record it is; nothing is kept for None.
             team: The team it is about, or None when it is about none.
+            paths: The directories a proposal was for.
         """
         if above_id is None:
             return
@@ -1253,6 +1258,7 @@ class DirectorService:
             team_id=team.id if team else "",
             team=team.title if team else "",
             detail=detail,
+            paths=list(paths),
         )
         try:
             self.team_memory.append_history(above_id, event)
@@ -1269,8 +1275,9 @@ class DirectorService:
 
     def facts_of_proposal(self, node: OrgNode, proposal: SplitProposal) -> str:
         """What the director knows of the sub-teams a team's IC proposes:
-        how much is in each directory, which were changed together, and
-        what became of teams that had them before."""
+        how much is in each directory, which were changed together, what
+        became of teams that had them before, and what was declined for
+        them before."""
         checkout = Path(node.worktree_path)
         children = proposal.children
         sizes = [(child, tracked_files(checkout, child.path)) for child in children]
@@ -1305,7 +1312,15 @@ class DirectorService:
                 f"{former.ended}"
                 + (f": {reason}" if former.ended == "pruned" and reason else ".")
             )
-        return proposal_facts(sizes, together, before, proposal.reason)
+        # Latest first, and no more than a Manager will weigh.
+        declined = [
+            f"Sub-teams for {', '.join(shared)} were proposed before and "
+            f"declined: {event.detail}"
+            for event in reversed(history)
+            if event.kind == "declined"
+            and (shared := sorted(paths.intersection(event.paths)))
+        ][:DECLINED_TOLD]
+        return proposal_facts(sizes, together, before + declined, proposal.reason)
 
     def count_accepted_review(self, node_id: str) -> None:
         """Count a review a team's IC accepted, and wake the team's Manager
