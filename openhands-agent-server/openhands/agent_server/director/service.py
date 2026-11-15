@@ -1544,7 +1544,7 @@ class DirectorService:
         account = None
         if ic is not None and not in_a_turn:
             account = await self._ask_agent(ic, STALL_QUESTION)
-        self.record_event(above.id, "stalled", team, f"{minutes} minutes")
+        self.record_event(above.id, "stalled", team, f"{minutes} min")
         # Its reviewer is woken now anyway, and no longer waits for it.
         self._release_reviews(above.id, now=True)
         self.tell_ic(
