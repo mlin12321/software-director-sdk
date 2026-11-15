@@ -224,6 +224,10 @@ class TestTeamMemory:
         board.append_message("root", "a", told)
         board.append_message("a", "a1", told)
         board.append_message("root", "b", told)
+        hint = ThreadMessage(
+            at="2026-11-03T00:00:00+00:00", sender="ic", text="Mind the schema."
+        )
+        board.append_message("root", "a", hint, ic_to_ic=True)
 
         client = make_client(repo)
         response = client.get("/api/director/org/nodes/a/messages")
@@ -233,17 +237,26 @@ class TestTeamMemory:
             {
                 "manager_node_id": "a",
                 "ic_node_id": "a",
+                "ic_to_ic": False,
                 "messages": [asked.model_dump()],
             },
             {
                 "manager_node_id": "a",
                 "ic_node_id": "a1",
+                "ic_to_ic": False,
                 "messages": [told.model_dump()],
             },
             {
                 "manager_node_id": "root",
                 "ic_node_id": "a",
+                "ic_to_ic": False,
                 "messages": [told.model_dump()],
+            },
+            {
+                "manager_node_id": "root",
+                "ic_node_id": "a",
+                "ic_to_ic": True,
+                "messages": [hint.model_dump()],
             },
         ]
         assert client.get("/api/director/org/nodes/a2/messages").json() == []
@@ -729,6 +742,7 @@ def test_the_limits_on_new_teams_are_read_changed_and_kept(saved_tree: Path):
         "allowed_profiles": [],
         "resume_on_start": False,
         "report_compaction_chars": 24_000,
+        "stall_check_minutes": 120,
         "agents": 10,
         "depth": 3,
         "max_concurrent_runs": 7,

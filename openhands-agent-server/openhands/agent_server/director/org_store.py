@@ -28,6 +28,7 @@ from openhands.agent_server.director.models import (
     Review,
     SnapshotEvent,
     StatusCounts,
+    Stopped,
 )
 from openhands.sdk.errors import Invalid, NotFound
 
@@ -41,12 +42,15 @@ AGENT_LOST = "lost"
 def status_of(node: OrgNode | OrgNodeInput) -> NodeStatus:
     """The status a team has by what is known of it; no team declares one.
 
-    Blocked while its IC waits on an escalation or an agent of it failed,
-    working while an agent of it is in a turn, done once it has submitted
+    Blocked while its IC waits on an escalation, an agent of it failed or
+    the IC above has stopped it, working while an agent of it is in a turn,
+    done once it has submitted
     its work (until that is sent back), blocked when an agent has no
     conversation here, idle otherwise.
     """
     agents = {agent.status for agent in node.agents}
+    if node.stopped is not None:
+        return "blocked"
     if AGENT_FAILED in agents or any(
         escalation.raised_by == "ic" for escalation in node.escalations
     ):
@@ -229,6 +233,18 @@ class OrgStore:
             node = self._require(node_id)
             status = status_of(node.model_copy(update={"review": review}))
             return self.update_node(node_id, review=review, status=status, **changes)
+
+    def set_stopped(self, node_id: str, stopped: Stopped | None) -> OrgNode:
+        """Record that a node was stopped, or that it goes on, and with it
+        the node's status.
+
+        Raises:
+            NotFound: The node does not exist.
+        """
+        with self._lock:
+            node = self._require(node_id)
+            status = status_of(node.model_copy(update={"stopped": stopped}))
+            return self.update_node(node_id, stopped=stopped, status=status)
 
     def upsert(self, node_input: OrgNodeInput) -> OrgNode:
         """Insert a node or update an existing one.

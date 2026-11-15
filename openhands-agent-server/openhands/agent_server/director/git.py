@@ -105,6 +105,16 @@ def head_of(checkout: Path) -> str | None:
         return None
 
 
+def last_commit_in(checkout: Path, path: str) -> str | None:
+    """The last commit of a checkout's branch that changed anything under
+    ``path``; None when there is none or it cannot be told."""
+    try:
+        found = git(checkout, ["log", "-1", "--format=%H", "--", pathspec(path)])
+    except (GitError, OSError):
+        return None
+    return found.strip() or None
+
+
 def uncommitted(checkout: Path, path: str) -> list[str]:
     """The files under ``path`` that differ from the last commit or are new,
     ignored files aside."""
