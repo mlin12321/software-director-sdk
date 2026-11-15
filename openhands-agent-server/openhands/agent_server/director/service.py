@@ -29,6 +29,7 @@ from openhands.agent_server.director.acp import (
 from openhands.agent_server.director.boundary import (
     hand_over_refusal,
     nearest_team,
+    owns,
     write_refusal,
     written_paths,
 )
@@ -138,6 +139,9 @@ from openhands.agent_server.director.prompts import (
     HAND_OVER_FAILED,
     HAND_OVER_ROLE,
     MANAGER_ROLE,
+    NEED_FINDING,
+    NEED_WRITE,
+    NEEDED_WORTH_SAYING,
     POD_PROTOCOL,
     STALL_QUESTION,
     approved_notice,
@@ -148,6 +152,8 @@ from openhands.agent_server.director.prompts import (
     hand_over_brief,
     handed_over_notice,
     manager_check,
+    need_words,
+    needs_between,
     proposal_facts,
     pruned_job,
     pruned_notice,
@@ -471,6 +477,9 @@ class DirectorService:
         self._save_delay = save_delay
         self._run_limit_retry = run_limit_retry
         self._lock = threading.Lock()
+        # What was kept of teams needing each other, so that an agent that
+        # tries the same file again is counted once.
+        self._needs_kept: set[tuple[str, str, str, str]] = set()
         self._saving = threading.Lock()
         self._adding_manager = threading.Lock()
         self._counting = threading.Lock()
@@ -1001,6 +1010,8 @@ class DirectorService:
                     node, role, sub_teams, "" if relative == "." else relative
                 )
                 if refusal is not None:
+                    if role == "ic":
+                        self.record_need(node, relative, NEED_WRITE)
                     return refusal
             elif any(_is_in(target, checkout) for checkout in self._checkouts()):
                 return (
@@ -1241,6 +1252,7 @@ class DirectorService:
         team: OrgNode | None = None,
         detail: str = "",
         paths: Sequence[str] = (),
+        other: OrgNode | None = None,
     ) -> None:
         """Keep, for the IC and the Manager of a team, what became of a team
         directly below it. Safe from any thread.
@@ -1249,6 +1261,7 @@ class DirectorService:
             above_id: The team whose record it is; nothing is kept for None.
             team: The team it is about, or None when it is about none.
             paths: The directories a proposal was for.
+            other: The team beside it whose directory it needed.
         """
         if above_id is None:
             return
@@ -1259,11 +1272,50 @@ class DirectorService:
             team=team.title if team else "",
             detail=detail,
             paths=list(paths),
+            other_id=other.id if other else "",
+            other=other.title if other else "",
         )
         try:
             self.team_memory.append_history(above_id, event)
         except (GitError, OSError):
             logger.warning("Could not record %s for node %s", kind, above_id)
+
+    def record_need(self, team: OrgNode, path: str, how: str) -> None:
+        """Keep that a team needed a file of a team beside it; nothing is
+        kept when ``path`` is no such team's. The same file needed the same
+        way is kept once. Safe from any thread.
+
+        Args:
+            path: Relative to the repository.
+            how: `NEED_WRITE` or `NEED_FINDING`.
+        """
+        if team.parent_id is None:
+            return
+        beside = next(
+            (
+                other
+                for other in self.store.children(team.parent_id)
+                if other.id != team.id and owns(other, path)
+            ),
+            None,
+        )
+        if beside is None:
+            return
+        key = (team.id, beside.id, path, how)
+        with self._lock:
+            if key in self._needs_kept:
+                return
+            self._needs_kept.add(key)
+        self.record_event(team.parent_id, "needed", team, how, [path], beside)
+
+    def needs_below(self, node_id: str) -> list[dict[str, Any]]:
+        """The pairs of teams directly below a node that needed each
+        other's directory often enough to say so."""
+        return [
+            pair
+            for pair in needs_between(self.team_memory.history(node_id))
+            if pair["writes_refused"] + pair["review_findings"] >= NEEDED_WORTH_SAYING
+        ]
 
     def _so_far(self, team: OrgNode) -> str:
         """What became of a team's work before, in words, as the team above
@@ -1271,7 +1323,13 @@ class DirectorService:
         if team.parent_id is None:
             return ""
         records = track_records(self.team_memory.history(team.parent_id))
-        return next((record_line(r) for r in records if r["node_id"] == team.id), "")
+        counted = next((record_line(r) for r in records if r["node_id"] == team.id), "")
+        needed = [
+            need_words(pair, team.id)
+            for pair in self.needs_below(team.parent_id)
+            if team.id in pair["node_ids"]
+        ]
+        return "; ".join(part for part in (counted, *needed) if part)
 
     def facts_of_proposal(self, node: OrgNode, proposal: SplitProposal) -> str:
         """What the director knows of the sub-teams a team's IC proposes:
@@ -1320,7 +1378,16 @@ class DirectorService:
             if event.kind == "declined"
             and (shared := sorted(paths.intersection(event.paths)))
         ][:DECLINED_TOLD]
-        return proposal_facts(sizes, together, before + declined, proposal.reason)
+        # Teams that one proposal replaces together are being merged or
+        # redrawn: any time they needed each other is worth the Manager's eye.
+        needed = [
+            f"{need_words(pair)}."
+            for pair in needs_between(history)
+            if set(pair["node_ids"]) <= set(proposal.replaces)
+        ]
+        return proposal_facts(
+            sizes, together, before + declined + needed, proposal.reason
+        )
 
     def count_accepted_review(self, node_id: str) -> None:
         """Count a review a team's IC accepted, and wake the team's Manager
@@ -1775,6 +1842,9 @@ class DirectorService:
             # are gone: for both agents to weigh what they do next by.
             events = team_memory.history(node.id)
             context["track_record_of_the_teams_below"] = track_records(events)
+            needed = [need_words(pair) for pair in self.needs_below(node.id)]
+            if needed:
+                context["teams_below_that_needed_each_other"] = needed
             context["what_became_of_them_lately"] = [
                 event_line(event) for event in events[-HISTORY_TOLD:]
             ]
@@ -1955,6 +2025,11 @@ class DirectorService:
             node,
             f"round {review.round}, {len(findings)} to change",
         )
+        for finding in findings:
+            # A finding of the runtime names several files in one.
+            for path in finding.path.split(", "):
+                if path.strip():
+                    self.record_need(node, path.strip(), NEED_FINDING)
         self.notify(
             agent_conversation(node, "ic"), changes_requested(above or node, findings)
         )

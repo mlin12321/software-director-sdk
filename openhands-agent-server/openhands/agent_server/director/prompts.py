@@ -91,6 +91,12 @@ The IC owns the technical work of the team's boundary:
   it was declined. The IC weighs what it proposes and how it reviews by
   it, and does not propose again a division that failed or was declined
   before unless something has changed.
+- The runtime counts how often two teams below it needed each other's
+  directory: a write of one that was refused because the file is the
+  other's, and a review finding on one's work that names a file of the
+  other. From three such times a review request for either team and
+  `read_node_context` say so. Teams that keep needing each other's files
+  are often one concern: the IC weighs proposing one team in their place.
 - When teams below it are replaced or pruned, the runtime puts the IC in
   hand-over mode: it starts a side conversation of the IC for the
   hand-over and gives it what they left:
@@ -127,8 +133,10 @@ not that every team is busy.
 - It reads the sub-teams its IC proposes and approves them with
   `approve_teams` when each is a concern of its own, they are clearly
   separated and each instruction is clear. The runtime adds what it knows
-  of the proposed directories, of teams that had them before and of what
-  was declined for them before. They are then set up exactly as written,
+  of the proposed directories, of teams that had them before, of what
+  was declined for them before, and how often teams that are to be
+  replaced together needed each other's directory. They are then set up
+  exactly as written,
   and start when its IC gives each its task. Otherwise it declines them
   with `decline_teams` and says why, and what to change if another
   division would do; the reason is kept in the record. What an IC
@@ -698,6 +706,7 @@ _EVENT_WORDS: dict[TeamEventKind, str] = {
     "proposed": "sub-teams proposed",
     "approved": "sub-teams approved",
     "declined": "sub-teams declined",
+    "needed": "needed another team's directory",
 }
 # What is counted of a team, in the order it is told.
 _COUNTED: tuple[TeamEventKind, ...] = ("accepted", "sent_back", "stalled", "stopped")
@@ -795,9 +804,78 @@ def success_rate_meaning(escalation_limit: int) -> str:
     )
 
 
+# From how many times two teams needed each other it is worth saying.
+NEEDED_WORTH_SAYING = 3
+# What is counted as one team needing another, by the event's detail.
+NEED_WRITE = "write refused"
+NEED_FINDING = "review finding"
+
+
+def needs_between(events: list[TeamEvent]) -> list[dict[str, Any]]:
+    """How often teams that are beside each other needed each other's
+    directory, a pair an entry, in the order the pairs first appear.
+
+    A write of one team's agent that was refused because the file is the
+    other's counts, and so does a review finding on one team's work that
+    names a file of the other. Only teams that are there are counted, and
+    each from the time it was set up.
+    """
+    pairs: dict[frozenset[str], dict[str, Any]] = {}
+    for event in events:
+        if event.kind in ("set_up", "replaced", "pruned"):
+            for key in [key for key in pairs if event.team_id in key]:
+                del pairs[key]
+        elif event.kind == "needed" and event.team_id and event.other_id:
+            pair = pairs.setdefault(
+                frozenset((event.team_id, event.other_id)),
+                {
+                    "node_ids": [event.team_id, event.other_id],
+                    "teams": [event.team, event.other],
+                    "writes_refused": 0,
+                    "review_findings": 0,
+                },
+            )
+            counted = (
+                "review_findings" if event.detail == NEED_FINDING else "writes_refused"
+            )
+            pair[counted] += 1
+    return list(pairs.values())
+
+
+def need_words(pair: dict[str, Any], seen_from: str = "") -> str:
+    """One pair of `needs_between`, in words.
+
+    Args:
+        seen_from: The node id of the team of the pair the words are said
+            about, when they are; the other is then named alone.
+    """
+    writes, findings = pair["writes_refused"], pair["review_findings"]
+    times = writes + findings
+    parts = [
+        f"{count} {many if count != 1 else single}"
+        for count, single, many in (
+            (writes, "write refused", "writes refused"),
+            (findings, "review finding", "review findings"),
+        )
+        if count
+    ]
+    one, other = pair["teams"]
+    if seen_from:
+        beside = other if pair["node_ids"][0] == seen_from else one
+        who = f"it and {beside!r} needed"
+    else:
+        who = f"{one!r} and {other!r} needed"
+    return (
+        f"{who} each other's directory {times} time{'s' if times != 1 else ''} "
+        f"({', '.join(parts)}): weigh whether the two are one concern"
+    )
+
+
 def event_line(event: TeamEvent) -> str:
     who = f"{event.team!r}: " if event.team else ""
     detail = f" ({event.detail})" if event.detail else ""
+    if event.kind == "needed":
+        detail = f" ({event.other!r}, {', '.join(event.paths)}: {event.detail})"
     return f"{event.at} {who}{_EVENT_WORDS[event.kind]}{detail}"
 
 
