@@ -17,7 +17,6 @@ from openhands.agent_server.director.git_store import (
     StoreChange,
     StoreScopeError,
     adopt_former_memory,
-    drop_former_files,
 )
 from openhands.agent_server.director.models import Report, ThreadMessage
 from openhands.sdk.errors import NotSupported
@@ -196,33 +195,6 @@ def test_memory_under_its_former_name_is_moved(repo: Path):
 
     assert GitStore(repo).head() == head
     assert former.head() is None
-
-
-def test_files_of_before_there_were_reports_are_removed_once(repo: Path):
-    store = GitStore(repo)
-    store.write("svc/a", "spec.md", "The spec.")
-    store.write("svc/a", "memory.json", "{}")
-    store.write("svc/a", "autopsies.json", "[]")
-    store.write("", "consolidated.json", "{}")
-    store.write("svc/a", ".reports/one.json", "[]")
-
-    removed = drop_former_files(repo)
-    head = store.head()
-
-    assert sorted(removed) == [
-        "consolidated.json",
-        "svc/a/autopsies.json",
-        "svc/a/memory.json",
-    ]
-    assert store.read("svc/a/memory.json") is None
-    assert store.read("svc/a/spec.md") == "The spec."
-    assert store.read("svc/a/.reports/one.json") == "[]"
-    assert drop_former_files(repo) == [] and store.head() == head
-
-
-def test_removing_former_files_leaves_a_repository_without_memory_alone(repo: Path):
-    assert drop_former_files(repo) == []
-    assert GitStore(repo).head() is None
 
 
 def test_a_change_with_no_content_deletes_the_file(board: GitStore):

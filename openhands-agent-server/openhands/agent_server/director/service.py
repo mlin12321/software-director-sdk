@@ -58,7 +58,6 @@ from openhands.agent_server.director.git_store import (
     CONTRACTS_FILE,
     GitStore,
     adopt_former_memory,
-    drop_former_files,
 )
 from openhands.agent_server.director.headline import provisional_summary
 from openhands.agent_server.director.merge_back import merge_back
@@ -137,6 +136,7 @@ from openhands.agent_server.director.recovery import (
 from openhands.agent_server.director.run_state import (
     HELD,
     RUNNING,
+    TASK,
     TEAM,
     TOLD,
     WAITING,
@@ -398,6 +398,7 @@ class DirectorService:
         self._run_limit_retry = run_limit_retry
         self._lock = threading.Lock()
         self._saving = threading.Lock()
+        self._adding_manager = threading.Lock()
         self._remember_lock = threading.Lock()
         self._store: OrgStore | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -466,7 +467,6 @@ class DirectorService:
     def _memory(self) -> GitStore:
         if self._memory_adopted_in != self._repo_dir:
             adopt_former_memory(self._repo_dir)
-            drop_former_files(self._repo_dir)
             self._memory_adopted_in = self._repo_dir
         return GitStore(self._repo_dir)
 
@@ -810,7 +810,6 @@ class DirectorService:
             ROOT_ID,
         )
         self._begin("brief", ROOT_ID, role="ic", task=request.task)
-        self._begin("launch_manager", ROOT_ID, task=request.task)
         return root
 
     async def route_message(self, request: RouteMessageRequest) -> RoutedMessage:
@@ -1003,16 +1002,32 @@ class DirectorService:
             ThreadMessage(at=_instant(), sender=sender, text=text),
         )
         if sender == "ic":
-            reader = agent_conversation(manager_node, "manager")
-            heading = "Your IC writes:"
-        else:
-            reader = agent_conversation(ic_node, "ic")
-            heading = (
-                "Your Manager writes:"
-                if manager_node_id == ic_node_id
-                else f"The Manager of the team above ({manager_node.title}) writes:"
-            )
-        self.notify(reader, f"{heading}\n{text}{note}")
+            self.tell_manager(manager_node_id, f"Your IC writes:\n{text}{note}")
+            return
+        heading = (
+            "Your Manager writes:"
+            if manager_node_id == ic_node_id
+            else f"The Manager of the team above ({manager_node.title}) writes:"
+        )
+        self.notify(agent_conversation(ic_node, "ic"), f"{heading}\n{text}{note}")
+
+    def tell_manager(self, node_id: str, text: str) -> None:
+        """Send a team's Manager a message from the director. A team has no
+        Manager until something is sent to it: the first message starts
+        one, and follows its briefing. Safe from any thread."""
+        store = self.store
+        with self._adding_manager:
+            node = store.get(node_id)
+            if node is None:
+                return
+            if agent_conversation(node, "manager") is None:
+                manager = AgentRef(
+                    role="manager", conversation_id=str(uuid4()), status="idle"
+                )
+                node = store.update_node(node_id, agents=[*node.agents, manager])
+                task = self._runs().marked(TASK).get(node_id) or node.spec_summary
+                self._begin("launch_manager", node_id, task=task)
+        self.notify(agent_conversation(node, "manager"), text)
 
     def threads_of(self, node: OrgNode) -> list[Thread]:
         """What the agents of a team have said to Managers and ICs: its own
@@ -1150,15 +1165,24 @@ class DirectorService:
         conversation_id = agent_conversation(node, "ic") if node else None
         if node is None or conversation_id is None or self._paused is not None:
             return
+        launcher = self._require_launcher()
         if any(agent.role == "ic" and agent.kind == "acp" for agent in node.agents):
-            # It runs its own turn; stopping it would end its process.
-            return
-        await self._require_launcher().pause(UUID(conversation_id))
+            # It runs its own turn, and the tool's answer tells it to end
+            # it. Only one that carries on regardless is cut short, which
+            # costs it the step it is in.
+            await self._until_at_rest(conversation_id)
+            if conversation_id in self._running:
+                await launcher.stop(UUID(conversation_id))
+        else:
+            await launcher.pause(UUID(conversation_id))
         # This runs in the lane of the team's messages: nothing is sent to
         # the agent before it has stopped, or it would lie there unread.
+        await self._until_at_rest(conversation_id)
+
+    async def _until_at_rest(self, conversation_id: str) -> None:
         for _ in range(_REST_CHECKS):
             if conversation_id not in self._running:
-                break
+                return
             await asyncio.sleep(_REST_CHECK_SECONDS)
 
     def request_changes(self, node_id: str, findings: list[ReviewFinding]) -> None:
@@ -1620,7 +1644,6 @@ class DirectorService:
             raise
         store.set_agent(node_id, "ic", kind=started.kind, acp_server=started.acp_server)
         self._begin("brief", node_id, role="ic", task=task)
-        self._begin("launch_manager", node_id, task=task)
         return store.get(node_id) or node
 
     def _task_of(self, node: OrgNode) -> str:
@@ -2720,6 +2743,8 @@ class DirectorService:
             )
 
     async def _do_brief(self, intent: Intent) -> None:
+        if intent.payload["role"] == "ic":
+            self._runs().mark(TASK, intent.node_id, intent.payload["task"])
         await self._brief(
             intent.node_id, intent.payload["role"], intent.payload["task"]
         )
@@ -2732,8 +2757,8 @@ class DirectorService:
         above = self.store.get(intent.payload["parent"])
         parent_ic = agent_conversation(above, "ic") if above else None
         checkout = intent.payload.get("checkout")
+        self._runs().mark(TASK, node_id, task)
         if await self._start_agent(node_id, "ic", parent_ic, task, checkout):
-            await self._launch_manager(node_id, task)
             node = self.store.get(node_id)
             # Sub-teams it took over from a team it replaced.
             for below in self.store.children(node_id):
@@ -3284,6 +3309,7 @@ class DirectorService:
                 state="accepted",
                 summary="The accepted work of its sub-teams, with no changes of "
                 "its own.",
+                passed_up=True,
                 at=_now(),
             ),
             base_commit=tip or node.base_commit,
@@ -3483,8 +3509,7 @@ def _shared_root(nodes: list[dict[str, Any]]) -> str | None:
 
 
 # Steps whose outcome is in the tree alone. The steps that start agents are
-# not among them: their outcome is the conversation, and nothing may come
-# between an IC's start and its Manager's.
+# not among them: their outcome is the conversation.
 _SAVED_BEFORE_FORGOTTEN = frozenset({"accept", "finish_split", "request_review"})
 
 
@@ -3495,10 +3520,9 @@ def _lane_for(intent: Intent) -> str:
 
 
 def _new_pod(ic_id: UUID) -> list[AgentRef]:
-    return [
-        AgentRef(role="ic", conversation_id=str(ic_id), status="idle"),
-        AgentRef(role="manager", conversation_id=str(uuid4()), status="idle"),
-    ]
+    """The agents a team starts with. Its Manager joins when something is
+    first sent to it (see :meth:`DirectorService.tell_manager`)."""
+    return [AgentRef(role="ic", conversation_id=str(ic_id), status="idle")]
 
 
 def _base_of(workspace: str) -> str:

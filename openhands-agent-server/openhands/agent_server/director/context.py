@@ -23,6 +23,8 @@ IN_THE_BRIEFING = (
 )
 # Lists an agent adds to itself; what it added is not told back to it.
 _OWN = {"escalations_you_raised": None, "reports_of_your_team": "by"}
+# Lists with one entry for each team, told team by team.
+_BY_TEAM = ("sub_teams",)
 _PASSING = ("working", "idle")
 
 
@@ -50,7 +52,8 @@ def changed(
     before: dict[str, Any], now: dict[str, Any], role: AgentRole
 ) -> dict[str, Any]:
     """The parts of a steady context that differ from what an agent was
-    last told. A list that only grew gives what was added to it."""
+    last told. A list that only grew gives what was added to it, and the
+    list of sub-teams gives the teams that changed or went."""
     found: dict[str, Any] = {}
     for key, value in now.items():
         was = before.get(key)
@@ -58,6 +61,9 @@ def changed(
             continue
         if not (isinstance(value, list) and isinstance(was, list)):
             found[key] = value
+            continue
+        if key in _BY_TEAM and was:
+            found[key] = _teams_changed(was, value)
             continue
         if value[: len(was)] != was:
             found[key] = value
@@ -68,6 +74,20 @@ def changed(
             added = [item for item in added if by is not None and item[by] != role]
         if added:
             found[key] = {"added": added}
+    return found
+
+
+def _teams_changed(
+    was: list[dict[str, Any]], now: list[dict[str, Any]]
+) -> dict[str, Any]:
+    known = {team["node_id"]: team for team in was}
+    left = {team["node_id"] for team in now}
+    found: dict[str, Any] = {
+        "changed": [team for team in now if known.get(team["node_id"]) != team]
+    }
+    removed = [node_id for node_id in known if node_id not in left]
+    if removed:
+        found["removed"] = removed
     return found
 
 

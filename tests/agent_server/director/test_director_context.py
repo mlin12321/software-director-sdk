@@ -38,6 +38,7 @@ from tests.agent_server.director.test_director_tools import (
     manager,
     split_root,
     use,
+    woken,
 )
 
 
@@ -82,7 +83,28 @@ def test_a_team_that_starts_or_ends_a_turn_has_not_changed():
     assert "headline" not in steady(idle)["sub_teams"][0]
     blocked = context(sub_teams=[{"node_id": "api", "status": "blocked"}])
     assert changed(steady(idle), steady(blocked), "ic") == {
-        "sub_teams": [{"node_id": "api", "status": "blocked"}]
+        "sub_teams": {"changed": [{"node_id": "api", "status": "blocked"}]}
+    }
+
+
+def test_of_the_sub_teams_only_those_that_changed_or_went_are_told():
+    api = {"node_id": "api", "status": "at work", "review": None}
+    web = {"node_id": "web", "status": "at work", "review": None}
+    db = {"node_id": "db", "status": "at work", "review": None}
+    before = context(sub_teams=[api, web])
+
+    submitted = context(sub_teams=[api, {**web, "status": "done"}])
+    replaced = context(sub_teams=[api, db])
+
+    assert changed(before, submitted, "ic") == {
+        "sub_teams": {"changed": [{**web, "status": "done"}]}
+    }
+    assert changed(before, replaced, "ic") == {
+        "sub_teams": {"changed": [db], "removed": ["web"]}
+    }
+    # The first sub-teams a team gets are told as they are.
+    assert changed(context(sub_teams=[]), before, "ic") == {
+        "sub_teams": {"added": [api, web]}
     }
 
 
@@ -150,7 +172,7 @@ async def test_a_change_sends_nothing_and_comes_with_the_next_message(
 
     await use(
         service,
-        manager(service, "apps.web"),
+        await woken(service, "apps.web"),
         ReportTool,
         ReportAction(text="The router is server-side."),
     )
@@ -212,7 +234,7 @@ async def test_reviews_and_escalations_below_come_with_what_wakes_the_ic(
     )
     [to_settle] = told["escalations_for_you_to_settle"]["added"]
     assert to_settle["title"] == "Which router?"
-    by_team = {team["node_id"]: team for team in told["sub_teams"]}
+    by_team = {team["node_id"]: team for team in told["sub_teams"]["changed"]}
     assert by_team["apps.web"]["status"] == "blocked"
     assert by_team["services.api"]["review"] == "pending"
     # The Web IC raised it itself and is not told so.
@@ -258,7 +280,7 @@ async def test_what_the_agents_of_a_removed_team_were_told_is_forgotten(
 ):
     service = await started(repo, launcher)
     await split_root(service)
-    gone = {ic(service, "services.api"), manager(service, "services.api")}
+    gone = {ic(service, "services.api"), await woken(service, "services.api")}
     assert gone <= set(service._runs().marked(TOLD))
 
     await use(

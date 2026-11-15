@@ -160,6 +160,9 @@ export interface DirectorReview {
   automated: DirectorReviewFinding[];
   /** What the reviewing IC wants changed, when it asked. */
   findings: DirectorReviewFinding[];
+  /** Whether the work went up without a review of its own: all of it was
+   * accepted work of the team's sub-teams. */
+  passed_up?: boolean;
   /** ISO 8601 timestamp of the last change. */
   at: string;
 }

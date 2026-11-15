@@ -110,6 +110,16 @@ def manager(service: DirectorService, node_id: str = "root") -> str | None:
     return agent_conversation(node(service, node_id), "manager")
 
 
+async def woken(service: DirectorService, node_id: str = "root") -> str:
+    """The Manager of a team, started as the first message to it does."""
+    if manager(service, node_id) is None:
+        service.tell_manager(node_id, "Look in on your team.")
+        await service.settled()
+    found = manager(service, node_id)
+    assert found is not None
+    return found
+
+
 def proposing(children: list[SplitChild], contracts: str = "") -> MsgManagerAction:
     return MsgManagerAction(
         text=f"I propose these sub-teams.\n\n{teams_block(children, contracts)}"
@@ -144,7 +154,7 @@ async def test_an_agent_reads_who_it_is_and_what_its_team_reported(
     )
 
     observation = await use(
-        service, manager(service), ReadNodeContextTool, ReadNodeContextAction()
+        service, await woken(service), ReadNodeContextTool, ReadNodeContextAction()
     )
 
     context = json.loads(observation.text)
@@ -170,7 +180,7 @@ async def test_the_ic_writes_the_spec_its_sub_teams_inherit(service: DirectorSer
         WriteSpecAction(content="# Checkout\n\nAll prices are integer cents."),
     )
     refused = await use(
-        service, manager(service), WriteSpecTool, WriteSpecAction(content="# Mine")
+        service, await woken(service), WriteSpecTool, WriteSpecAction(content="# Mine")
     )
 
     assert not written.is_error and refused.is_error
@@ -201,8 +211,8 @@ async def test_proposed_sub_teams_wait_for_the_manager(
 async def test_only_the_ic_proposes_and_only_the_manager_approves(
     service: DirectorService,
 ):
-    by_manager = await use(service, manager(service), MsgManagerTool, SPLIT)
-    nothing_yet = await use(service, manager(service), ApproveTeamsTool, APPROVE)
+    by_manager = await use(service, await woken(service), MsgManagerTool, SPLIT)
+    nothing_yet = await use(service, await woken(service), ApproveTeamsTool, APPROVE)
     await use(service, ic(service), MsgManagerTool, SPLIT)
     by_ic = await use(service, ic(service), ApproveTeamsTool, APPROVE)
 
@@ -424,11 +434,19 @@ async def test_an_approved_split_starts_a_pod_for_each_sub_team(
     assert (web.id, web.isolation) == ("apps.web", "worktree")
     starts = {str(start.conversation_id): start for start in launcher.derived}
     api_ic, web_ic = starts[str(ic(service, api.id))], starts[str(ic(service, web.id))]
-    # Each IC continues from the IC above; its Manager shares its directory.
+    # Each IC continues from the IC above.
     assert str(api_ic.parent_id) == str(web_ic.parent_id) == ic(service)
     assert (api_ic.isolation, web_ic.isolation) == ("shared", "worktree")
     assert api_ic.suffixes == [] and "Serve the checkout API" in api_ic.task
-    web_manager = starts[str(manager(service, web.id))]
+    # A team has no Manager until something is sent to it; the Manager then
+    # continues from the team's IC and shares its directory.
+    assert manager(service, web.id) is None and len(starts) == 3
+    woken_id = await woken(service, web.id)
+    [web_manager] = [
+        start for start in launcher.derived if str(start.conversation_id) == woken_id
+    ]
+    assert "Build the checkout pages" in web_manager.task
+    assert "Look in on your team." in launcher.messages_to(woken_id)[-1]
     assert str(web_manager.parent_id) == ic(service, web.id)
     assert (web_manager.isolation, web_manager.suffixes) == ("shared", [MANAGER_ROLE])
 
@@ -452,7 +470,7 @@ async def test_a_sub_team_that_cannot_start_is_shown_as_blocked(
 
     api, web = service.store.children("root")
     assert (api.status, web.status) == ("blocked", "blocked")
-    assert [agent.status for agent in api.agents] == ["lost", "idle"]
+    assert [agent.status for agent in api.agents] == ["lost"]
 
 
 READ = ReadNodeContextAction()
@@ -560,13 +578,13 @@ async def test_what_a_manager_escalates_goes_to_the_manager_above(
     api = "services.api"
     to_ic = len(launcher.messages_to(ic(service)))
 
-    raised = await use(service, manager(service, api), RaiseEscalationTool, CENTS)
+    raised = await use(service, await woken(service, api), RaiseEscalationTool, CENTS)
 
     [escalation] = node(service, api).escalations
     assert not raised.is_error and "Manager of the team above" in raised.text
     assert (escalation.held_by, escalation.raised_by) == ("root", "manager")
     assert node(service, api).status != "blocked"
-    told = launcher.messages_to(manager(service))[-1]
+    told = launcher.messages_to(await woken(service))[-1]
     assert "The Manager of team 'API'" in told and "For totals." in told
     assert len(launcher.messages_to(ic(service))) == to_ic
 
@@ -578,14 +596,14 @@ async def test_what_a_manager_escalates_goes_to_the_manager_above(
     )
     settled = await use(
         service,
-        manager(service),
+        await woken(service),
         ResolveEscalationTool,
         resolving(api, escalation.id, "settle", "Cents."),
     )
 
     assert by_the_ic.is_error and "raised by a Manager" in by_the_ic.text
     assert not settled.is_error and node(service, api).escalations == []
-    assert "Cents." in launcher.messages_to(manager(service, api))[-1]
+    assert "Cents." in launcher.messages_to(await woken(service, api))[-1]
     assert launcher.messages_to(ic(service, api)) == []
 
 
@@ -593,6 +611,7 @@ async def test_what_a_manager_escalates_goes_to_the_manager_above(
 async def test_what_the_top_team_escalates_waits_on_the_human(
     service: DirectorService, launcher: FakeLauncher, role: AgentRole
 ):
+    await woken(service)
     raiser = agent_conversation(node(service, "root"), role)
     other = agent_conversation(
         node(service, "root"), "manager" if role == "ic" else "ic"
@@ -624,12 +643,12 @@ async def test_a_pruned_team_is_gone_with_its_agents_and_its_ic_above_is_told(
     service: DirectorService, launcher: FakeLauncher, repo: Path
 ):
     await split_root(service)
-    agents = {ic(service, "services.api"), manager(service, "services.api")}
+    agents = {ic(service, "services.api"), await woken(service, "services.api")}
     (repo / "services" / "api").mkdir(parents=True)
     (repo / "services" / "api" / "half.py").write_text("broken\n")
     (repo / "README.md").write_text("the root team's own edit\n")
 
-    answer = await use(service, manager(service), PruneTeamTool, PRUNE_API)
+    answer = await use(service, await woken(service), PruneTeamTool, PRUNE_API)
 
     assert not answer.is_error
     assert service.store.get("services.api") is None
@@ -680,14 +699,18 @@ async def test_reports_are_for_the_two_agents_of_one_team(service: DirectorServi
         ReportTool,
         ReportAction(text="Amounts are integer cents."),
     )
-    blank = await use(service, manager(service), ReportTool, ReportAction(text="  "))
+    blank = await use(
+        service, await woken(service), ReportTool, ReportAction(text="  ")
+    )
 
     def read_by(conversation_id: str | None) -> list[str]:
         caller = pod_actions.caller_of(service, UUID(conversation_id or ""))
         context = json.loads(pod_actions.node_context(service, caller))
         return [report["text"] for report in context["reports_of_your_team"]]
 
-    assert read_by(manager(service, "services.api")) == ["Amounts are integer cents."]
+    assert read_by(await woken(service, "services.api")) == [
+        "Amounts are integer cents."
+    ]
     assert read_by(ic(service)) == []
     assert read_by(ic(service, "apps.web")) == []
     assert blank.is_error

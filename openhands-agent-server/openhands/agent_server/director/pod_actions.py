@@ -323,14 +323,17 @@ def _hand_to(
     if escalation.raised_by == "ic":
         # It is woken now anyway, so it gets what waits for its review too.
         service.release_reviews(holder_id, now=True)
-    service.notify(
-        agent_conversation(holder, escalation.raised_by),
+    text = (
         f"The {_role_name(escalation.raised_by)} of team {raiser.title!r} "
         f"(node {raiser.id}) escalates {escalation.title!r} (escalation "
         f"{escalation.id}):\n{escalation.detail or '(no detail)'}{history}\n"
         "Settle it with resolve_escalation if you can; pass it up only with "
-        "the reason you cannot.",
+        "the reason you cannot."
     )
+    if escalation.raised_by == "manager":
+        service.tell_manager(holder_id, text)
+    else:
+        service.notify(agent_conversation(holder, "ic"), text)
 
 
 def submit_review(service: DirectorService, caller: Caller, summary: str) -> str:

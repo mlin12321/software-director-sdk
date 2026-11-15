@@ -220,6 +220,11 @@ class Review(BaseModel):
         default_factory=list,
         description="What the reviewing IC wants changed, when it asked.",
     )
+    passed_up: bool = Field(
+        default=False,
+        description="Whether the work went up without a review of its own: "
+        "all of it was accepted work of the team's sub-teams.",
+    )
     at: str = Field(description="ISO 8601 timestamp of the last change.")
 
 

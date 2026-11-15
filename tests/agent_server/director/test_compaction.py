@@ -64,6 +64,10 @@ async def test_long_reports_are_rewritten_by_a_model_once(repo: Path):
         root = service.store.get("root")
         assert root is not None
         service.report(root, "ic", "a" * 600)
+        service.tell_manager("root", "Look in on your team.")
+        await service.settled()
+        root = service.store.get("root")
+        assert root is not None
         service.report(root, "manager", "m" * 600)
         await service.settled()
         asked_before = len(launcher.asked)

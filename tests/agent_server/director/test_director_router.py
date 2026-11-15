@@ -514,7 +514,7 @@ async def test_starting_an_org_returns_its_root_and_only_works_once(running, rep
     assert created.status_code == 201
     root = created.json()
     assert (root["id"], root["title"]) == ("root", "Checkout")
-    assert [agent["role"] for agent in root["agents"]] == ["ic", "manager"]
+    assert [agent["role"] for agent in root["agents"]] == ["ic"]
     assert launcher.root is not None
     assert again.status_code == 409
     summary = (await client.get("/api/director/org")).json()

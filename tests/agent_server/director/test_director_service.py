@@ -74,8 +74,8 @@ async def test_starting_an_org_runs_a_root_team_briefed_with_the_task(
     assert (root.id, root.parent_id, root.title) == ("root", None, "Checkout")
     assert root.boundary.path == ""
     assert root.spec_summary == "Build the checkout flow"
-    ic, manager = agent_conversation(root, "ic"), agent_conversation(root, "manager")
-    assert ic is not None and manager is not None and ic != manager
+    ic = agent_conversation(root, "ic")
+    assert ic is not None and [agent.role for agent in root.agents] == ["ic"]
 
     assert launcher.root is not None
     assert str(launcher.root.conversation_id) == ic
@@ -83,7 +83,10 @@ async def test_starting_an_org_runs_a_root_team_briefed_with_the_task(
     assert (launcher.root_title, launcher.root.autotitle) == ("Checkout (IC)", False)
     [briefing] = launcher.messages_to(ic)
     assert "IC" in briefing and "Build the checkout flow\nwith tests" in briefing
+    # A team has no Manager until something is sent to it.
+    assert launcher.derived == []
 
+    manager = await woken_manager(service)
     [manager_start] = launcher.derived
     assert (str(manager_start.parent_id), str(manager_start.conversation_id)) == (
         ic,
@@ -92,6 +95,8 @@ async def test_starting_an_org_runs_a_root_team_briefed_with_the_task(
     assert manager_start.isolation == "shared"
     assert manager_start.suffixes == [MANAGER_ROLE]
     assert "Manager" in manager_start.task
+    assert "Build the checkout flow\nwith tests" in manager_start.task
+    assert "Look in on your team." in launcher.messages_to(manager)[-1]
 
 
 async def test_the_org_protocol_is_added_to_what_the_caller_appends(
@@ -116,6 +121,8 @@ async def test_a_team_started_again_is_briefed_with_what_it_reported(
 ):
     root = await service.create_org(org_request(repo))
     await service.settled()
+    await woken_manager(service)
+    root = team(service, "root")
     service.report(root, "manager", "The API team needs a schema first.")
 
     briefing, _ = service._briefing(root, "ic", "Build")
@@ -284,11 +291,11 @@ async def test_a_node_works_while_an_agent_runs_and_is_blocked_by_a_failed_one(
         return node.status, [agent.status for agent in node.agents]
 
     launcher.report(ic, ConversationExecutionStatus.RUNNING)
-    assert state() == ("working", ["working", "idle"])
+    assert state() == ("working", ["working"])
     launcher.report(ic, ConversationExecutionStatus.FINISHED)
-    assert state() == ("idle", ["idle", "idle"])
+    assert state() == ("idle", ["idle"])
     launcher.report(ic, ConversationExecutionStatus.ERROR)
-    assert state() == ("blocked", ["blocked", "idle"])
+    assert state() == ("blocked", ["blocked"])
 
 
 async def test_the_manager_starts_once_the_server_has_room(
@@ -296,12 +303,11 @@ async def test_the_manager_starts_once_the_server_has_room(
 ):
     launcher.full_for = 2
 
-    root = await service.create_org(org_request(repo))
+    await service.create_org(org_request(repo))
     await service.settled()
+    manager = await woken_manager(service)
 
-    assert [str(start.conversation_id) for start in launcher.derived] == [
-        agent_conversation(root, "manager")
-    ]
+    assert [str(start.conversation_id) for start in launcher.derived] == [manager]
 
 
 async def test_the_org_is_saved_and_comes_back_with_its_conversations(
@@ -311,9 +317,10 @@ async def test_the_org_is_saved_and_comes_back_with_its_conversations(
     await first.start(launcher)
     root = await first.create_org(org_request(repo))
     await first.settled()
+    manager = await woken_manager(first)
     await first.aclose()
-    ic, manager = agent_conversation(root, "ic"), agent_conversation(root, "manager")
-    assert ic is not None and manager is not None
+    ic = agent_conversation(root, "ic")
+    assert ic is not None
     assert run_git(repo, "status", "--porcelain") == ""
     assert run_git(repo, "rev-parse", ORG_REF).strip()
 
@@ -371,12 +378,22 @@ async def test_an_escalation_a_team_still_holds_cannot_be_answered_by_the_human(
     assert api is not None and len(api.escalations) == 1
 
 
+async def woken_manager(service: DirectorService, node_id: str = "root") -> str:
+    """The Manager of a team, started as the first message to it does."""
+    service.tell_manager(node_id, "Look in on your team.")
+    await service.settled()
+    found = service.store.get(node_id)
+    manager = agent_conversation(found, "manager") if found else None
+    assert manager is not None
+    return manager
+
+
 async def split_root(service: DirectorService, *children: SplitChild) -> None:
     """Have the root IC propose ``children`` and its Manager approve them."""
-    root = service.store.get("root")
-    assert root is not None
 
     def caller(role: AgentRole) -> pod_actions.Caller:
+        root = service.store.get("root")
+        assert root is not None
         conversation_id = agent_conversation(root, role)
         assert conversation_id is not None
         return pod_actions.caller_of(service, UUID(conversation_id))
@@ -417,8 +434,8 @@ async def test_an_org_without_a_title_is_named_by_a_model_from_its_task(
         "Checkout Flow",
         "Builds the shop's checkout.",
     )
-    ic, manager = agent_conversation(root, "ic"), agent_conversation(root, "manager")
-    assert ic is not None and manager is not None
+    ic, manager = agent_conversation(root, "ic"), await woken_manager(service)
+    assert ic is not None
     assert launcher.summarized == [(UUID(ic), "Build the checkout flow\nwith tests")]
     assert launcher.titles[UUID(ic)] == "Checkout Flow (IC)"
     assert launcher.titles[UUID(manager)] == "Checkout Flow (Manager)"
@@ -605,7 +622,7 @@ async def test_an_ic_is_refused_what_it_handed_to_a_sub_team_and_a_manager_all(
         attempt(service, root_ic, "file_editor", inside_api) or ""
     )
     assert attempt(service, root_ic, "file_editor", create(repo / "README.md")) is None
-    manager = agent_conversation(root, "manager")
+    manager = agent_conversation(team(service, "root"), "manager")
     assert "Manager" in (
         attempt(service, manager, "file_editor", create(repo / "README.md")) or ""
     )
@@ -864,6 +881,7 @@ async def test_every_agent_starts_its_terminal_in_a_shell_held_to_its_boundary(
     await split_root(confining, API)
 
     root_shell = shell_of(launcher.root_tool_params)
+    await woken_manager(confining, "services.api")
     manager, api_ic, api_manager = launcher.derived
     assert 'own="$top"\n' in shell_of(launcher.root_tool_params)
     assert "own=" not in shell_of(manager.tool_params)
@@ -907,7 +925,7 @@ async def test_an_ic_commits_from_its_own_index_where_shells_are_not_confined(
     await service.create_org(org_request(repo))
     await service.settled()
     await split_root(service, API)
-    manager, api_ic, _ = launcher.derived
+    manager, api_ic = launcher.derived
     (repo / "README.md").write_text("root v2\n")
     (repo / "services" / "api").mkdir(parents=True)
     (repo / "services" / "api" / "app.py").write_text("api\n")

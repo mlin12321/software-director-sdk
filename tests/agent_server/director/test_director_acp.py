@@ -1,5 +1,6 @@
 """Agents that run their own tools (Claude Code, Codex) as agents of an org."""
 
+import asyncio
 import json
 import os
 import subprocess
@@ -14,7 +15,7 @@ import httpx
 import pytest
 
 from openhands.agent_server.api import create_app
-from openhands.agent_server.director import mcp_shim
+from openhands.agent_server.director import mcp_shim, service as service_module
 from openhands.agent_server.director.acp import (
     MCP_SERVER_NAME,
     agent_token,
@@ -38,9 +39,11 @@ from openhands.agent_server.director.service import DirectorService
 from openhands.agent_server.director.tools import (
     ApproveTeamsTool,
     MsgManagerTool,
+    SubmitReviewTool,
 )
 from openhands.agent_server.director.tools.definition import (
     MsgManagerAction,
+    SubmitReviewAction,
 )
 from openhands.sdk.agent import ACPAgent
 from openhands.sdk.conversation.state import ConversationExecutionStatus
@@ -53,6 +56,7 @@ from tests.agent_server.director.test_director_tools import (
     node,
     proposing,
     use,
+    woken,
 )
 
 
@@ -378,7 +382,11 @@ async def test_an_acp_agent_may_lead_an_org(repo: Path):
     root = node(service, "root")
     assert [(agent.role, agent.kind, agent.acp_server) for agent in root.agents] == [
         ("ic", "acp", "claude-code"),
-        ("manager", "acp", "claude-code"),
+    ]
+    await woken(service)
+    assert [(agent.role, agent.kind) for agent in node(service, "root").agents] == [
+        ("ic", "acp"),
+        ("manager", "acp"),
     ]
     # No sandbox here, and its tool calls never pass the server.
     assert root.boundary_enforcement == "merge"
@@ -414,6 +422,7 @@ async def test_an_acp_team_without_a_sandbox_gets_its_own_worktree(repo: Path):
     await carry_out(service, SplitChild(title="API", path="svc/api", task="Serve"))
 
     team = node(service, "svc.api")
+    await woken(service, "svc.api")
     starts = {start.title: start for start in launcher.derived}
     assert starts["API (IC)"].isolation == "worktree"
     assert team.isolation == "worktree" and team.boundary_enforcement == "merge"
@@ -452,6 +461,7 @@ async def test_a_sub_team_runs_on_another_agent_profile_when_the_org_allows_it(
     await carry_out(service, codex, SplitChild(title="Web", path="web", task="Pages"))
 
     assert refused.is_error and "leave `model` out" in refused.text
+    await woken(service, "svc.api")
     starts = {start.title: start for start in launcher.derived}
     assert starts["API (IC)"].profile == "codex"
     assert starts["API (IC)"].suffixes == [POD_PROTOCOL]
@@ -463,10 +473,7 @@ async def test_a_sub_team_runs_on_another_agent_profile_when_the_org_allows_it(
     team = node(service, "svc.api")
     assert team.agent_profile == "codex"
     assert [agent.kind for agent in team.agents] == ["acp", "acp"]
-    assert [agent.kind for agent in node(service, "web").agents] == [
-        "openhands",
-        "openhands",
-    ]
+    assert [agent.kind for agent in node(service, "web").agents] == ["openhands"]
     await service.aclose()
 
 
@@ -560,4 +567,44 @@ async def test_a_notice_does_not_wait_for_an_agent_whose_tools_the_server_runs(
     await service.settled()
 
     assert len(said_to(launcher, agent)) == 1
+    await service.aclose()
+
+
+async def test_an_acp_ic_that_ends_its_turn_after_submitting_is_left_alone(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(service_module, "_REST_CHECK_SECONDS", 0.01)
+    launcher = FakeLauncher(root_kind="acp")
+    service = await started(repo, launcher)
+    root_ic = ic(service)
+    assert root_ic is not None
+    launcher.report(root_ic, ConversationExecutionStatus.RUNNING)
+    asyncio.get_running_loop().call_later(
+        0.05, launcher.report, root_ic, ConversationExecutionStatus.FINISHED
+    )
+
+    await use(service, root_ic, SubmitReviewTool, SubmitReviewAction(summary="Done."))
+    await service.settled()
+
+    # Pausing it would end its process, and it stopped by itself.
+    assert launcher.paused == [] and launcher.stopped == []
+    assert node(service, "root").status == "done"
+    await service.aclose()
+
+
+async def test_an_acp_ic_that_carries_on_after_submitting_is_cut_short(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(service_module, "_REST_CHECKS", 3)
+    monkeypatch.setattr(service_module, "_REST_CHECK_SECONDS", 0.01)
+    launcher = FakeLauncher(root_kind="acp")
+    service = await started(repo, launcher)
+    root_ic = ic(service)
+    assert root_ic is not None
+    launcher.report(root_ic, ConversationExecutionStatus.RUNNING)
+
+    await use(service, root_ic, SubmitReviewTool, SubmitReviewAction(summary="Done."))
+    await service.settled()
+
+    assert launcher.paused == [] and launcher.stopped == [UUID(root_ic)]
     await service.aclose()
