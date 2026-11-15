@@ -12,7 +12,11 @@ from pydantic import BaseModel, Field, ValidationError
 
 from openhands.agent_server.director.git import GitError
 from openhands.agent_server.director.pod_actions import caller_of
-from openhands.agent_server.director.service import DirectorService
+from openhands.agent_server.director.service import (
+    HAND_OVER_TOOLS,
+    TOOLS_OF,
+    DirectorService,
+)
 from openhands.agent_server.director.tools.definition import DIRECTOR_TOOLS
 from openhands.sdk.errors import DomainError, NotFound
 
@@ -34,7 +38,14 @@ class ToolAnswer(BaseModel):
     )
 
 
-def list_tools() -> list[RemoteTool]:
+def list_tools(service: DirectorService, conversation_id: UUID) -> list[RemoteTool]:
+    """The director's tools the agent of ``conversation_id`` is offered.
+
+    Raises:
+        NotFound: The conversation is not an agent of the org.
+    """
+    caller = caller_of(service, conversation_id)
+    offered = HAND_OVER_TOOLS if caller.hand_over else TOOLS_OF[caller.role]
     return [
         RemoteTool(
             name=name,
@@ -42,6 +53,7 @@ def list_tools() -> list[RemoteTool]:
             input_schema=tool.action().to_mcp_schema(),
         )
         for name, tool in DIRECTOR_TOOLS.items()
+        if name in offered
     ]
 
 

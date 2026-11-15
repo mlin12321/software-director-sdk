@@ -222,24 +222,35 @@ from openhands.sdk.utils.files import atomic_write_text
 logger = logging.getLogger(__name__)
 
 ROOT_ID = "root"
-# The tools every agent of an org gets; they register in ``director.tools``.
-DIRECTOR_TOOL_NAMES = (
+_TOOLS_OF_BOTH = (
     "read_node_context",
-    "write_spec",
-    "msg_manager",
-    "msg_ic",
-    "msg_team",
-    "stop_team",
-    "approve_teams",
-    "decline_teams",
     "raise_escalation",
     "resolve_escalation",
-    "submit_review",
-    "review_team",
     "report",
-    "prune_team",
-    "hand_over",
 )
+# The director's tools an agent is offered, by its role; they register in
+# ``director.tools``. `pod_actions` refuses the rest whatever is offered.
+TOOLS_OF: dict[AgentRole, tuple[str, ...]] = {
+    "ic": (
+        *_TOOLS_OF_BOTH,
+        "write_spec",
+        "msg_manager",
+        "msg_team",
+        "hand_over",
+        "stop_team",
+        "submit_review",
+        "review_team",
+    ),
+    "manager": (
+        *_TOOLS_OF_BOTH,
+        "msg_ic",
+        "approve_teams",
+        "decline_teams",
+        "prune_team",
+    ),
+}
+HAND_OVER_TOOLS = ("read_node_context", "hand_over", "write_spec")
+DIRECTOR_TOOL_NAMES = tuple(dict.fromkeys((*TOOLS_OF["ic"], *TOOLS_OF["manager"])))
 # How a team that was set up and given no task reads to the IC above.
 NOT_STARTED = "not started"
 # What follows a team's purpose in its task once something started it.
@@ -687,19 +698,31 @@ class DirectorService:
                 self._tool_key = kept.encode()
             return self._tool_key
 
-    def _adapter(self, conversation_id: str) -> Callable[[AgentBase], AgentBase]:
+    def _adapter(
+        self, conversation_id: str, offered: Sequence[str]
+    ) -> Callable[[AgentBase], AgentBase]:
         """What is changed on an agent as its conversation starts.
 
         An agent that runs its own tools gets the director's through an MCP
         server and is started by the script that holds its process to its
-        team's directory. Any other agent is left as it is.
+        team's directory. Any other agent keeps the tools it has and, of
+        the director's, gets the ones in ``offered``: an agent derived from
+        another carries that agent's, which are another role's for a
+        Manager.
         """
         launchers = self._shells()
         launcher = launchers / f"{conversation_id}{_ACP_LAUNCHER}"
 
         def adapt(agent: AgentBase) -> AgentBase:
             if not isinstance(agent, ACPAgent):
-                return agent
+                kept = [
+                    tool
+                    for tool in agent.tools
+                    if tool.name not in DIRECTOR_TOOL_NAMES or tool.name in offered
+                ]
+                has = {tool.name for tool in kept}
+                added = [Tool(name=name) for name in offered if name not in has]
+                return agent.model_copy(update={"tools": [*kept, *added]})
             url = self._url()
             if url is None:
                 raise Unavailable(
@@ -879,10 +902,12 @@ class DirectorService:
                             ),
                         }
                     ),
-                    [Tool(name=name) for name in DIRECTOR_TOOL_NAMES],
+                    [Tool(name=name) for name in TOOLS_OF["ic"]],
                     title=_agent_title(title, "ic"),
                     tool_params=tool_params,
-                    adapt_agent=await asyncio.to_thread(self._adapter, str(ic_id)),
+                    adapt_agent=await asyncio.to_thread(
+                        self._adapter, str(ic_id), TOOLS_OF["ic"]
+                    ),
                 )
             except BaseException:
                 store.remove(ROOT_ID)
@@ -2465,10 +2490,12 @@ class DirectorService:
                         ),
                     }
                 ),
-                [Tool(name=name) for name in DIRECTOR_TOOL_NAMES],
+                [Tool(name=name) for name in TOOLS_OF["ic"]],
                 title=_agent_title(node.title, "ic"),
                 tool_params=await asyncio.to_thread(self._confine, node_id, "ic"),
-                adapt_agent=await asyncio.to_thread(self._adapter, str(ic_id)),
+                adapt_agent=await asyncio.to_thread(
+                    self._adapter, str(ic_id), TOOLS_OF["ic"]
+                ),
             )
         except BaseException:
             store.update_node(node_id, agents=node.agents, status=node.status)
@@ -3560,7 +3587,9 @@ class DirectorService:
             tool_params = await asyncio.to_thread(
                 self._confine, node.id, "ic", conversation_id
             )
-            adapt = await asyncio.to_thread(self._adapter, conversation_id)
+            adapt = await asyncio.to_thread(
+                self._adapter, conversation_id, HAND_OVER_TOOLS
+            )
 
             async def start() -> StartedAgent:
                 return await launcher.start_derived(
@@ -3681,7 +3710,7 @@ class DirectorService:
             # Nothing holds its process to the team's directory, so its
             # work is kept apart and checked when it is merged.
             isolation = "worktree"
-        adapt = await asyncio.to_thread(self._adapter, conversation_id)
+        adapt = await asyncio.to_thread(self._adapter, conversation_id, TOOLS_OF[role])
         title = _agent_title(node.title, role)
 
         async def start() -> StartedAgent:
@@ -3690,7 +3719,7 @@ class DirectorService:
                     profile,
                     parent_id,
                     UUID(conversation_id),
-                    [Tool(name=name) for name in DIRECTOR_TOOL_NAMES],
+                    [Tool(name=name) for name in TOOLS_OF[role]],
                     title=title,
                     task=text,
                     isolation=isolation,

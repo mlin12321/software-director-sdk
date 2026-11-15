@@ -406,6 +406,9 @@ async def test_approved_teams_are_set_up_and_start_nothing(
         if "Your Manager approved" in text
     ]
     assert "a team starts when you give it its task with msg_team" in told
+    # What only an IC with sub-teams must know comes with them.
+    assert "list under `keep`" in told
+    assert "goes on up without another review" in told
 
 
 async def test_a_team_starts_with_the_first_message_from_the_ic_above(

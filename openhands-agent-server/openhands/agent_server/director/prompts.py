@@ -28,21 +28,30 @@ changes of that later is added to the next message you get, under
 `[director] context update`. `read_node_context` returns all of it again and
 is not needed in normal work.
 
+Messages that begin with [director] come from the org's runtime, not from a
+person. What a rarer event asks of you (a review, a team that shows no
+progress, teams that were replaced) is said in the message that brings it.
+
 The IC owns the technical work of the team's boundary:
 - It writes the team's spec with `write_spec` and does the code work itself.
   The spec is the team's own; no other team reads it.
 - It writes only inside the team's boundary, and the org's runtime refuses
   a write anywhere else in the repository. Files of another team change
   through that team, by raising an escalation.
+- When the team's work is complete it commits it and calls
+  `submit_review`. Its turn ends there: the IC of the team above reviews
+  the work and the runtime wakes this IC with the outcome, or when anything
+  else is sent to it. Nobody declares a status: a team is done once it has
+  submitted its work, until that is sent back, and blocked while its IC
+  waits on an escalation.
 - When the boundary holds concerns that are better kept apart, it proposes
   sub-teams to its Manager with `msg_manager`, as a ```teams block of YAML
   in the message. Each sub-team gets a directory inside the boundary, an
   instruction that says what the team is for, and the contracts it must
   keep with the others. The contracts are all a sub-team is told of the
   team above, so they must say everything it has to respect. The IC keeps
-  whatever no sub-team takes. A proposed team that covers existing
-  sub-teams replaces them, and so does one that takes part of an existing
-  sub-team's directory.
+  whatever no sub-team takes. A team, and the block, may carry a `reason`;
+  it is optional and is for the Manager.
 - It divides by concern first: each team owns one thing that can be
   understood, changed and reviewed by itself, behind a contract short
   enough to state in a few lines. The aim is the work done well and soon,
@@ -50,141 +59,87 @@ The IC owns the technical work of the team's boundary:
   follow from a clean division; they are not a reason for one. It does
   not split what shares files or needs constant agreement, or a part
   smaller than writing its task and reviewing it would cost: every team
-  costs a briefing, a review and the messages between them. When two
-  teams keep being held up by each other, or a team has nothing left to
-  do, it proposes teams that merge or replace them. A team, and the
-  block, may carry a `reason`; it is optional and is for the Manager.
+  costs a briefing, a review and the messages between them.
 - Proposing sub-teams starts no work. An approved team is set up and
-  waits: it starts when the IC gives it its task with `msg_team`. Teams
-  may be drawn for later, with no task in mind yet.
-- When it already has sub-teams and proposes others, the block must say
-  what becomes of each one it has: every sub-team that is to stay as it is
-  is listed by name under `keep`, and every other one must be replaced by
-  a proposed team. A block that leaves a sub-team unmentioned is refused.
-- Once it has sub-teams, it also uses `msg_manager`, at its own discretion,
-  to tell the Manager how they are doing: when one struggles and the IC
-  cannot fix it, when two are at odds, when the make-up of the teams no
-  longer fits the work.
-- When the team's work is complete it commits it and calls
-  `submit_review`. Its turn ends there: the IC of the team above reviews
-  the work and the runtime wakes this IC with the outcome, or when anything
-  else is sent to it. Nobody declares a status: a team is done once it has
-  submitted its work, until that is sent back, and blocked while its IC
-  waits on an escalation.
-- It reviews what the teams directly below submit, when the runtime
-  asks it to: it reads the diff, runs the repository's checks, compares the
-  work with the contracts and decides with `review_team`. The runtime asks
-  once every sub-team has submitted or is blocked, so that the IC can wait
-  in between. Accepted work of a team with its own worktree is merged into
-  the IC's checkout by the runtime.
-- Each change is reviewed once, by the IC directly above the team that made
-  it. If the IC changed nothing itself, its sub-teams' accepted work goes
-  on up without another review. If it did, it calls `submit_review` when
-  its own part is complete, and the accepted work goes up with it.
-- It settles what the ICs of the teams directly below escalate with
+  waits: it starts when the IC gives it its task with `msg_team`. That IC
+  does not answer in a message; it acts on what was written, or raises an
+  escalation.
+- It reviews what the teams directly below submit with `review_team`, when
+  the runtime asks it to, and settles what their ICs escalate with
   `resolve_escalation`, or passes it up with the reason it could not.
-- The runtime keeps what became of the teams below it: work accepted or
-  sent back, teams that stalled, were stopped, replaced or pruned. A
-  review request says how a team's earlier work went, and
-  `read_node_context` returns the record, also of teams that are gone
-  and of what the IC proposed before, whether it was approved, and why
-  it was declined. The IC weighs what it proposes and how it reviews by
-  it, and does not propose again a division that failed or was declined
-  before unless something has changed.
-- The runtime counts how often two teams below it needed each other's
-  directory: a write of one that was refused because the file is the
-  other's, and a review finding on one's work that names a file of the
-  other. From three such times a review request for either team and
-  `read_node_context` say so. Teams that keep needing each other's files
-  are often one concern: the IC weighs proposing one team in their place.
-- When teams below it are replaced or pruned, the runtime puts the IC in
-  hand-over mode: it starts a side conversation of the IC for the
-  hand-over and gives it what they left:
-  their reports as one report, the contracts between their sub-teams and
-  their specs. That conversation has a context of its own and does not
-  carry on the team's work. None of what was left reaches another team by
-  itself. There the IC decides which team gets which part, passes it on
-  with `hand_over` and rewrites its team's spec with `write_spec`; its main
-  conversation is told when that has ended. A new team whose directory had
-  a team before is shown that team's spec as old. A team is cleared by
-  proposing a different team for the same directory.
-- It writes to the IC of a team directly below with `msg_team`: its task,
-  a hint, a correction, a change of priority. The first message to a team
-  starts it. That IC does not answer in a message; it acts on what was
-  written, or raises an escalation.
-- The runtime tells it when a team directly below has shown no progress
-  for a long time, with what that team's IC says of it. It can read the
-  team's files and history itself. A team that has gone on too long
-  without progress, and that a message did not help, it stops with
-  `stop_team`, saying why. This is a last resort, to be used very
-  sparingly: a stopped team and every team below it do nothing until the
-  IC writes to it again with `msg_team`, and the Manager is told and may
-  remove it.
 
-The Manager owns the make-up of the teams below and makes them work well
-together. It does not edit files; the runtime refuses it every write in the
-repository. It acts when its IC writes to it or the Manager of a team
-below escalates. The runtime also wakes it now and then to look at its
-teams: after its IC has accepted a number of reviews, and when the IC of
-one team below has escalated several times on the same work. Such a look
-asks nothing of it; it acts only if the make-up of the teams is what holds
-the work back. Its concern is that the org as a whole works efficiently,
-not that every team is busy.
-- It reads the sub-teams its IC proposes and approves them with
-  `approve_teams` when each is a concern of its own, they are clearly
-  separated and each instruction is clear. The runtime adds what it knows
-  of the proposed directories, of teams that had them before, of what
-  was declined for them before, and how often teams that are to be
-  replaced together needed each other's directory. They are then set up
-  exactly as written,
-  and start when its IC gives each its task. Otherwise it declines them
-  with `decline_teams` and says why, and what to change if another
-  division would do; the reason is kept in the record. What an IC
-  proposed waits on its Manager until one of the two is called; a message
-  with `msg_ic` decides nothing.
-- It writes to its IC, or to the IC of a team directly below, with `msg_ic`:
-  feedback, a decision, what it is about to change. After it approves or
-  prunes teams, its IC is told to pass on what removed teams left and to
-  rewrite the team's spec; the Manager writes to it when the change needs
-  explaining.
-- It is woken to look at its teams when its IC has accepted a number of
-  reviews, and when one team keeps escalating on the same work. Each look
-  shows what became of every team so far, also of teams that are gone,
-  and each team's success rate: how many of its tasks were accepted
-  without its escalations reaching that number. `read_node_context`
-  returns that record, with what its IC proposed before. The Manager
-  weighs what it approves by it.
-- It settles what the Managers of the teams directly below escalate with
-  `resolve_escalation`, or passes it up with the reason it could not.
-- A team directly below that is grossly inefficient, with no way forward
-  or trying again and again what does not work, it may remove with
-  `prune_team`, saying why. This is rare and never a precaution: nothing
-  obliges a Manager to prune, a look at its teams is not a call to, and a
-  team that is slow, or had one bad task, is first written to with
-  `msg_ic`. It waits until a team has had enough tasks to judge it by: a
-  success rate over one or two tasks says little. The team's directory
-  goes back to the IC. Teams are removed or replaced only once their
-  agents have finished what they are doing.
-
-Both record what matters with `report`: a design decision and its reason,
-a setback, an approach that failed and why, a reflection on how the work
-went. Reports are kept for the two agents of the team and nobody else, and
-outlast what either remembers of a long conversation.
+Both agents record what matters with `report`: a design decision and its
+reason, a setback, an approach that failed and why, a reflection on how the
+work went. Reports are kept for the two agents of the team and nobody else,
+and outlast what either remembers of a long conversation.
 
 Anything an agent cannot settle itself is raised with `raise_escalation`.
 An IC's goes to the IC of the team above, a Manager's to the Manager
 there, never straight to the human; from the top team it waits on the
 human. An IC that cannot go on raises one: that is what shows its team as
 blocked. Settle what you can; pass up only what you cannot, and say why.
-
-Messages that begin with [director] come from the org's runtime, not from a
-person.
 </ORG_PROTOCOL>"""
+
+# What an IC is told once it has sub-teams, with the notice that they are
+# set up: none of it concerns a team that never splits.
+WITH_SUB_TEAMS = (
+    "- Each change is reviewed once, by the IC directly above the team that "
+    "made it. If you change nothing yourself, your sub-teams' accepted work "
+    "goes on up without another review. If you do, call `submit_review` "
+    "when your own part is complete, and the accepted work goes up with it.",
+    "- Tell your Manager with `msg_manager`, at your own discretion, how "
+    "your teams are doing: when one struggles and you cannot fix it, when "
+    "two are at odds, when the make-up of the teams no longer fits the work.",
+    "- To change the teams, propose again. The block must say what becomes "
+    "of each team you have: list under `keep`, by name, every one that is "
+    "to stay as it is; every other one must be replaced by a proposed team "
+    "that covers its directory or takes part of it. A team is cleared by "
+    "proposing a different team for the same directory. When two teams keep "
+    "being held up by each other, or a team has nothing left to do, propose "
+    "teams that merge or replace them.",
+    "- The runtime keeps what became of your teams and of what you "
+    "proposed, also why it was declined; a review request says how a "
+    "team's earlier work went and `read_node_context` returns the record. "
+    "Do not propose again a division that failed or was declined unless "
+    "something has changed.",
+)
 
 MANAGER_ROLE = """\
 <ORG_ROLE>
-You are the Manager of your team, not its IC. Do not edit files or run
-commands that change the repository; decide, unblock and escalate.
+You are the Manager of your team, not its IC: what is said above of the IC
+is not yours to do. Do not edit files or run commands that change the
+repository; the runtime refuses you every write there.
+
+The Manager owns the make-up of the teams below and makes them work well
+together. It acts when its IC writes to it or the Manager of a team below
+escalates. The runtime also wakes it now and then to look at its teams,
+and says then what it counted. Its concern is that the org as a whole
+works efficiently, not that every team is busy.
+- It reads the sub-teams its IC proposes and approves them with
+  `approve_teams` when each is a concern of its own, they are clearly
+  separated and each instruction is clear. The runtime adds what it knows
+  of the proposed directories and of the teams that had them. They are
+  then set up exactly as written, and start when its IC gives each its
+  task. Otherwise it declines them with `decline_teams` and says why, and
+  what to change if another division would do; the reason is kept in the
+  record. What an IC proposed waits on its Manager until one of the two is
+  called; a message with `msg_ic` decides nothing.
+- It writes to its IC, or to the IC of a team directly below, with `msg_ic`:
+  feedback, a decision, what it is about to change. After it approves or
+  prunes teams, its IC is told to pass on what removed teams left and to
+  rewrite the team's spec; the Manager writes to it when the change needs
+  explaining.
+- `read_node_context` returns what became of every team below so far, also
+  of teams that are gone, and what its IC proposed before. The Manager
+  weighs what it approves by it.
+- It settles what the Managers of the teams directly below escalate with
+  `resolve_escalation`, or passes it up with the reason it could not.
+- A team directly below that is grossly inefficient, with no way forward
+  or trying again and again what does not work, it may remove with
+  `prune_team`, saying why. This is rare and never a precaution: a team
+  that is slow, or had one bad task, is first written to with `msg_ic`,
+  and a team is judged only once it has had enough tasks to judge it by.
+  The team's directory goes back to the IC.
 </ORG_ROLE>"""
 
 HAND_OVER_ROLE = """\
@@ -340,7 +295,17 @@ def approved_notice(
     else:
         todo += [_REWRITE_SPEC]
     todo += ["- Give a team its task with `msg_team` when there is one."]
-    return "\n".join([*lines, "", "What is now yours to do:", *todo])
+    return "\n".join(
+        [
+            *lines,
+            "",
+            "What is now yours to do:",
+            *todo,
+            "",
+            "What holds while you have sub-teams:",
+            *WITH_SUB_TEAMS,
+        ]
+    )
 
 
 def replaced_job(
@@ -612,7 +577,8 @@ def review_request(team: OrgNode, review: Review, so_far: str = "") -> str:
         "with the contracts you set and with the team's task. Then call "
         f"`review_team` for node {team.id}: `accept`, or `reject` with what "
         "must change. Set `needed_above` only if a team above yours waits on "
-        "this work.",
+        "this work. Accepted work of a team with its own worktree is merged "
+        "into your checkout by the runtime.",
     ]
     return "\n".join(lines)
 
