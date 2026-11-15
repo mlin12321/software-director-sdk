@@ -96,11 +96,16 @@ def put_aside_stale(
                 stale[node_id] = "the team is no longer in the org"
             elif fingerprint(node) != kept:
                 stale[node_id] = "the team was changed since"
+    # An IC's hand-over conversation is held and run again as its own is.
     agents = {
-        agent.conversation_id
+        conversation_id
         for node in nodes.values()
         for agent in node.agents
-        if agent.conversation_id is not None
+        for conversation_id in (
+            agent.conversation_id,
+            agent.hand_over.conversation_id if agent.hand_over else None,
+        )
+        if conversation_id is not None
     }
     dropped: list[RecoveryItem] = []
     for intent in run.open_intents():

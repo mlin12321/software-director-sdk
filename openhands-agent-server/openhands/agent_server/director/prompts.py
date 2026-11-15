@@ -369,7 +369,7 @@ def pruned_job(
 
 HAND_OVER_FAILED = (
     "Your hand-over mode could not be started: its side conversation did "
-    "not start. Nothing was handed over."
+    "not start, also when it was tried again. Nothing was handed over."
 )
 
 
@@ -598,6 +598,17 @@ def _span(minutes: int) -> str:
     if not hours:
         return f"{minutes} min"
     return f"{hours} h {rest} min" if rest else f"{hours} h"
+
+
+def unstarted_notice(team: OrgNode, minutes: int) -> str:
+    """What the IC above is told of a team it set up and gave no task."""
+    return (
+        f"Team {team.title!r} (node {team.id}, {team.boundary.path or '.'}) "
+        f"was set up {_span(minutes)} ago and has been given no task. Nobody "
+        "works in its directory, and you cannot write there. Give it its "
+        "task with `msg_team`. If it is not needed, write to your Manager to "
+        "have it pruned, or propose your teams again without it."
+    )
 
 
 def stall_notice(

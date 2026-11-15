@@ -38,6 +38,7 @@ from tests.agent_server.director.test_director_review import (
 from tests.agent_server.director.test_director_tools import (
     APPROVE,
     CENTS,
+    SPLIT,
     ic,
     manager,
     node,
@@ -426,3 +427,47 @@ async def test_a_stopped_team_is_still_stopped_after_a_restart(
     assert len(after) == 2 and "Something for later." in after[0]
     assert "Go on." in after[1]
     await second.aclose()
+
+
+async def test_a_team_set_up_and_given_no_task_is_told_to_the_ic_above(
+    repo: Path, launcher: FakeLauncher, clock: Clock
+):
+    service = await started(repo, launcher, clock=clock, stall_poll=3600)
+    await use(service, ic(service), MsgManagerTool, SPLIT)
+    await use(service, manager(service), ApproveTeamsTool, APPROVE)
+    service.tell_ic(WEB, "Begin.")
+    await service.settled()
+
+    await looked(service)
+    clock.passes(120)
+    await looked(service)
+
+    told = [
+        text
+        for text in launcher.messages_to(ic(service))
+        if "has been given no task" in text
+    ]
+    assert len(told) == 1
+    assert "Team 'API' (node services.api, services/api) was set up 2 h ago" in told[0]
+    assert "`msg_team`" in told[0] and "pruned" in told[0]
+    # Nobody is there to ask, and it is not counted as work that stalled.
+    assert not any("Team 'API'" in text for text in notices(service, launcher))
+    stalled = [
+        e.team for e in service.team_memory.history("root") if e.kind == "stalled"
+    ]
+    assert "API" not in stalled
+
+    # Once for each such stretch, and no more once it has its task.
+    clock.passes(60)
+    await looked(service)
+    service.tell_ic(API, "Begin.")
+    await service.settled()
+    clock.passes(120)
+    await looked(service)
+    again = [
+        text
+        for text in launcher.messages_to(ic(service))
+        if "has been given no task" in text
+    ]
+    assert len(again) == 1
+    await service.aclose()
