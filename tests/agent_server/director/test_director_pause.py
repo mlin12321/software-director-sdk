@@ -285,6 +285,7 @@ async def test_a_prune_cut_off_by_a_crash_is_finished_and_recorded_once(
     assert len(set(launcher.deleted)) == 2
     kept = run_git(repo, "for-each-ref", "--format=%(refname)", "refs/agents/pruned")
     assert len(kept.split()) == 1
+    assert len(second.team_memory.former("services.api")) == 1
     told = [text for text in launcher.messages_to(ic(second)) if "pruned" in text]
     assert len(told) == 1
     await second.aclose()

@@ -11,6 +11,7 @@ from openhands.agent_server.models import StartConversationRequest
 # the team above, and does the code work in its boundary that no sub-team
 # has taken on.
 AgentRole = Literal["ic", "manager"]
+AGENT_ROLES: tuple[AgentRole, ...] = ("ic", "manager")
 # An IC and a Manager.
 AGENTS_PER_TEAM = 2
 
@@ -186,6 +187,15 @@ class SplitProposal(BaseModel):
     proposed_at: str = Field(description="ISO 8601 timestamp.")
 
 
+class OldSpec(BaseModel):
+    """A spec a team before left in a directory a team now owns."""
+
+    path: str = Field(description="The directory of the spec; '' at the root.")
+    team: str | None = Field(
+        default=None, description="The title of the team that left it, when known."
+    )
+
+
 class Stopped(BaseModel):
     """That the IC of the team above stopped a team, and why."""
 
@@ -316,6 +326,13 @@ class OrgNodeInput(BaseModel):
             "nothing is sent to them."
         ),
     )
+    old_specs: list[OldSpec] = Field(
+        default_factory=list,
+        description=(
+            "Specs that teams before this one left in its directory. They "
+            "are old until the team's IC writes its own spec."
+        ),
+    )
     agent_profile: str | None = Field(
         default=None,
         description=(
@@ -424,6 +441,53 @@ class InheritedSpec(BaseModel):
             "False for the spec of the node's own boundary, which its IC writes."
         )
     )
+    old: bool = Field(
+        default=False,
+        description=(
+            "True for a spec a team before this one left. It describes how "
+            "that team worked and is to be rewritten."
+        ),
+    )
+    left_by: str | None = Field(
+        default=None,
+        description="The title of the team that left an old spec, when known.",
+    )
+
+
+class FormerThread(BaseModel):
+    """Messages a removed team took part in, as they were kept."""
+
+    file: str = Field(description="Where team memory kept them.")
+    messages: list[ThreadMessage]
+
+
+class FormerTeam(BaseModel):
+    """What a team that was replaced or pruned left, kept apart from the
+    teams that come after it."""
+
+    id: str
+    title: str
+    path: str = Field(description="The directory the team owned.")
+    purpose: str = Field(description="What the team was for.")
+    ended: Literal["replaced", "pruned"]
+    at: str = Field(description="When it was removed; the name of the record.")
+    review: ReviewState | None = Field(
+        default=None, description="How the review of its work stood."
+    )
+    reports: list[Report] = Field(
+        default_factory=list, description="What its two agents recorded, in full."
+    )
+    compacted_report: str = Field(
+        default="",
+        description=(
+            "Its reports as one report, rewritten shorter by a model when "
+            "there were several. '' when it recorded nothing."
+        ),
+    )
+    contracts: str = Field(
+        default="", description="The contracts between its own sub-teams."
+    )
+    threads: list[FormerThread] = Field(default_factory=list)
 
 
 class BoundaryContracts(BaseModel):

@@ -36,11 +36,11 @@ def note(store: GitStore, text: str) -> None:
         if text == "Theirs."
         else "2026-11-01T00:00:00+00:00"
     )
-    store.append_report("agent-1", Report(at=at, role="ic", text=text))
+    store.append_report("root", "ic", Report(at=at, role="ic", text=text))
 
 
 def noted(store: GitStore) -> list[str]:
-    return [report.text for report in store.reports("agent-1")]
+    return [report.text for report in store.reports("root", "ic")]
 
 
 @pytest.fixture

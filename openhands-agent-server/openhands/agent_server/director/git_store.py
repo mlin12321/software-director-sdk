@@ -20,7 +20,11 @@ from openhands.agent_server.director.git import (
     git_version,
 )
 from openhands.agent_server.director.models import (
+    AGENT_ROLES,
+    AgentRole,
     BoundaryContracts,
+    FormerTeam,
+    FormerThread,
     InheritedSpec,
     Report,
     ThreadMessage,
@@ -31,8 +35,12 @@ from openhands.sdk.errors import Invalid, NotSupported, OperationFailed
 MEMORY_REF = "refs/agents/memory"
 SPEC_FILE = "spec.md"
 CONTRACTS_FILE = "contracts.md"
-# One file of reports for each agent, named after its conversation.
+# One file of reports for each agent of a team: `<node id>/<role>.json`.
+# They were once named after the agent's conversation; see `adopt_reports`.
 REPORTS_DIR = ".reports"
+# One record for each team that was replaced or pruned:
+# `<node id>/<time>.json`.
+FORMER_DIR = ".former"
 # One file for each Manager and IC that have written to each other.
 THREADS_DIR = ".threads"
 # One file for each IC and IC directly below that the first has written to.
@@ -108,8 +116,12 @@ def _parse_reports(raw: str | None) -> list[Report]:
     return _REPORTS.validate_json(raw) if raw else []
 
 
-def _reports_file(conversation_id: str) -> str:
-    return f"{REPORTS_DIR}/{conversation_id}.json"
+def _reports_file(node_id: str, role: AgentRole) -> str:
+    return f"{REPORTS_DIR}/{node_id}/{role}.json"
+
+
+def _former_file(node_id: str, at: str) -> str:
+    return f"{FORMER_DIR}/{node_id}/{at}.json"
 
 
 def _parse_messages(raw: str | None) -> list[ThreadMessage]:
@@ -221,13 +233,106 @@ class GitStore:
             lambda _read: [StoreChange(path, content)], f"memory: write {path}"
         )
 
-    def reports(self, conversation_id: str) -> list[Report]:
-        """What the agent of one conversation recorded, oldest first."""
-        return _parse_reports(self.read(_reports_file(conversation_id)))
+    def reports(self, node_id: str, role: AgentRole) -> list[Report]:
+        """What one agent of a team recorded, oldest first. They belong to
+        the team's agent, whichever conversation it has."""
+        return _parse_reports(self.read(_reports_file(node_id, role)))
 
-    def append_report(self, conversation_id: str, report: Report) -> list[Report]:
+    def adopt_reports(self, owners: dict[str, tuple[str, AgentRole]]) -> int:
+        """Move reports kept under an agent's conversation, as they once
+        were, to the agent's team and role.
+
+        Args:
+            owners: The team and role of each conversation of the org.
+
+        Returns:
+            How many files were moved.
+        """
+        moved = 0
+
+        def mutate(read: StoreReader) -> list[StoreChange]:
+            nonlocal moved
+            changes: list[StoreChange] = []
+            for file in self._files(REPORTS_DIR):
+                owner = owners.get(Path(file).stem)
+                if file.count("/") != 1 or owner is None:
+                    continue
+                path = _reports_file(*owner)
+                reports = _union(_parse_reports(read(path)), _parse_reports(read(file)))
+                reports.sort(key=lambda report: report.at)
+                changes += [
+                    StoreChange(path, _serialize(_REPORTS.dump_python(reports))),
+                    StoreChange(file, None),
+                ]
+            moved = len(changes) // 2
+            return changes
+
+        self.commit(mutate, "memory: reports by team")
+        return moved
+
+    def former(self, node_id: str) -> list[FormerTeam]:
+        """The records of the teams that were removed from a node id,
+        oldest first."""
+        commit = self.head()
+        return [
+            FormerTeam.model_validate_json(raw)
+            for file in sorted(self._files(f"{FORMER_DIR}/{node_id}"))
+            if (raw := self._read_at(commit, file))
+        ]
+
+    def record_former(self, team: FormerTeam) -> FormerTeam:
+        """Keep what a removed team left as one record and take it out of
+        where a later team of the same name or directory would find it:
+        its reports, its messages and the contracts between its sub-teams.
+        Its spec stays where it is.
+
+        Recording the same removal again changes nothing.
+
+        Returns:
+            The record as kept.
+        """
+        path = _former_file(team.id, team.at)
+        kept = team
+
+        def mutate(read: StoreReader) -> list[StoreChange]:
+            nonlocal kept
+            if (raw := read(path)) is not None:
+                kept = FormerTeam.model_validate_json(raw)
+                return []
+            contracts_file = _join(normalize_store_path(team.path), CONTRACTS_FILE)
+            threads = [
+                file
+                for directory in (THREADS_DIR, IC_THREADS_DIR)
+                for file in self._files(directory)
+                if team.id in (Path(file).parent.name, Path(file).stem)
+            ]
+            kept = team.model_copy(
+                update={
+                    "contracts": read(contracts_file) or "",
+                    "threads": [
+                        FormerThread(file=file, messages=_parse_messages(read(file)))
+                        for file in threads
+                    ],
+                }
+            )
+            gone = [
+                contracts_file,
+                *threads,
+                *(_reports_file(team.id, role) for role in AGENT_ROLES),
+            ]
+            return [
+                StoreChange(path, kept.model_dump_json(indent=2) + "\n"),
+                *(StoreChange(file, None) for file in gone if read(file) is not None),
+            ]
+
+        self.commit(mutate, f"memory: former team {path}")
+        return kept
+
+    def append_report(
+        self, node_id: str, role: AgentRole, report: Report
+    ) -> list[Report]:
         """Add to what an agent recorded and return all of it."""
-        path = _reports_file(conversation_id)
+        path = _reports_file(node_id, role)
         reports: list[Report] = []
 
         def mutate(read: StoreReader) -> list[StoreChange]:
@@ -266,7 +371,11 @@ class GitStore:
         self.commit(mutate, f"memory: message {path}")
 
     def replace_reports(
-        self, conversation_id: str, read_as: list[Report], reports: list[Report]
+        self,
+        node_id: str,
+        role: AgentRole,
+        read_as: list[Report],
+        reports: list[Report],
     ) -> bool:
         """Put ``reports`` in place of an agent's, unless they changed since
         they were read as ``read_as``.
@@ -274,7 +383,7 @@ class GitStore:
         Returns:
             Whether they were replaced.
         """
-        path = _reports_file(conversation_id)
+        path = _reports_file(node_id, role)
         replaced = False
 
         def mutate(read: StoreReader) -> list[StoreChange]:
@@ -470,6 +579,20 @@ class GitStore:
             )
         except GitError:
             return None
+
+    def _files(self, directory: str) -> list[str]:
+        """Every file under ``directory`` at the ref head."""
+        commit = self.head()
+        if commit is None:
+            return []
+        try:
+            listed = git(
+                self.repo_dir,
+                ["ls-tree", "-r", "--name-only", "-z", commit, "--", directory],
+            )
+        except GitError:
+            return []
+        return [file for file in listed.split("\0") if file]
 
     def _build_tree(self, parent: str | None, changes: list[StoreChange]) -> str:
         with tempfile.TemporaryDirectory(prefix="director-store-") as scratch:

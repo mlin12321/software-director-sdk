@@ -156,7 +156,18 @@ def brief(
         lines.append(f"Read-only: {', '.join(node.boundary.readonly)}")
     lines += ["", "Task of the team:", task]
     for spec in specs:
-        lines += ["", "Your team's spec:", spec.spec]
+        if spec.old:
+            by = f" ({spec.left_by})" if spec.left_by else ""
+            lines += [
+                "",
+                f"A spec left by a team before you{by}, in "
+                f"{spec.path or 'the repository'}. It is old: it says how that "
+                "team worked. Take from it what still holds and write your "
+                "team's own with `write_spec`.",
+                spec.spec,
+            ]
+        else:
+            lines += ["", "Your team's spec:", spec.spec]
     for agreed in contracts:
         heading = (
             "Contracts between your sub-teams:"

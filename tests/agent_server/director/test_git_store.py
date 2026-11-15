@@ -50,7 +50,7 @@ def test_reads_nothing_before_the_first_write(board: GitStore):
     assert board.head() is None
     assert board.read("spec.md") is None
     assert board.applies_to("svc/a", "svc") == ([], [])
-    assert board.reports("agent-1") == []
+    assert board.reports("api", "ic") == []
 
 
 def test_writes_only_under_the_hidden_ref(repo: Path, board: GitStore):
@@ -142,21 +142,21 @@ def test_an_absolute_looking_file_stays_inside_the_scope(board: GitStore):
 def test_reports_are_added_in_order_and_kept_apart_by_agent(board: GitStore):
     first, second = a_report("Chose SQLite."), a_report("The ORM was too slow.")
 
-    board.append_report("agent-1", first)
-    kept = board.append_report("agent-1", second)
+    board.append_report("api", "ic", first)
+    kept = board.append_report("api", "ic", second)
 
-    assert kept == board.reports("agent-1") == [first, second]
-    assert board.reports("agent-2") == []
+    assert kept == board.reports("api", "ic") == [first, second]
+    assert board.reports("api", "manager") == []
 
 
 def test_reports_are_replaced_only_as_they_were_read(board: GitStore):
-    read = board.append_report("agent-1", a_report("Long."))
+    read = board.append_report("api", "ic", a_report("Long."))
     shorter = [a_report("Short.").model_copy(update={"compacted": True})]
-    board.append_report("agent-1", a_report("Added meanwhile."))
+    board.append_report("api", "ic", a_report("Added meanwhile."))
 
-    assert not board.replace_reports("agent-1", read, shorter)
-    assert board.replace_reports("agent-1", board.reports("agent-1"), shorter)
-    assert board.reports("agent-1") == shorter
+    assert not board.replace_reports("api", "ic", read, shorter)
+    assert board.replace_reports("api", "ic", board.reports("api", "ic"), shorter)
+    assert board.reports("api", "ic") == shorter
 
 
 def said(text: str, at: str = "2026-11-01T00:00:00+00:00") -> ThreadMessage:
@@ -179,9 +179,9 @@ def test_racing_writers_lose_no_update(board: GitStore):
     reports = [a_report(f"report {i}") for i in range(6)]
 
     with ThreadPoolExecutor(max_workers=len(reports)) as pool:
-        list(pool.map(lambda report: board.append_report("agent-1", report), reports))
+        list(pool.map(lambda report: board.append_report("api", "ic", report), reports))
 
-    assert sorted(report.text for report in board.reports("agent-1")) == [
+    assert sorted(report.text for report in board.reports("api", "ic")) == [
         report.text for report in reports
     ]
 
@@ -266,15 +266,15 @@ class TestMerge:
         shared = a_report("Shared.", "2026-11-01T00:00:00+00:00")
         ours = a_report("Ours.", "2026-11-03T00:00:00+00:00")
         their = a_report("Theirs.", "2026-11-02T00:00:00+00:00")
-        board.append_report("agent-1", shared)
-        board.append_report("agent-1", ours)
-        theirs.append_report("agent-1", shared)
-        theirs.append_report("agent-1", their)
+        board.append_report("api", "ic", shared)
+        board.append_report("api", "ic", ours)
+        theirs.append_report("api", "ic", shared)
+        theirs.append_report("api", "ic", their)
 
         merged = board.merge(theirs.ref)
 
         assert merged.kept_local == []
-        assert board.reports("agent-1") == [shared, their, ours]
+        assert board.reports("api", "ic") == [shared, their, ours]
 
     def test_messages_both_sides_added_are_all_kept_in_order(
         self, board: GitStore, theirs: GitStore, merge_supported: bool
