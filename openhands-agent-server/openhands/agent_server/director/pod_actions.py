@@ -75,7 +75,8 @@ def write_spec(service: DirectorService, caller: Caller, content: str) -> str:
     path = caller.node.boundary.path
     service.team_memory.write(path, SPEC_FILE, content)
     summary = content.strip().splitlines()[0].lstrip("# ").strip()[:200]
-    service.store.update_node(caller.node.id, spec_summary=summary)
+    # With a spec of its own, what teams before it left is no longer its guide.
+    service.store.update_node(caller.node.id, spec_summary=summary, old_specs=[])
     return f"Saved the spec of {path or 'the repository'}."
 
 

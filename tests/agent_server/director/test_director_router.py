@@ -187,15 +187,23 @@ class TestTeamMemory:
         earlier = Report(
             at="2026-11-01T00:00:00+00:00", role="manager", text="Two sub-teams."
         )
-        board.append_report("ic-of-a", later)
-        board.append_report("manager-of-a", earlier)
-        board.append_report("someone-else", later)
+        board.append_report("a", "ic", later)
+        board.append_report("a", "manager", earlier)
+        board.append_report("b", "ic", later)
 
         response = make_client(repo).get("/api/director/org/nodes/a/memory")
 
         assert response.status_code == 200
         assert response.json() == {
-            "specs": [{"path": "svc/a", "spec": "a spec", "readonly": False}],
+            "specs": [
+                {
+                    "path": "svc/a",
+                    "spec": "a spec",
+                    "readonly": False,
+                    "old": False,
+                    "left_by": None,
+                }
+            ],
             "contracts": [{"path": "", "contracts": "a serves b", "own": False}],
             "reports": [earlier.model_dump(), later.model_dump()],
         }

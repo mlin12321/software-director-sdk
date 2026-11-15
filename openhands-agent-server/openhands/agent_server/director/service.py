@@ -14,7 +14,7 @@ from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID, uuid4
 
 from openhands.agent_server.config import Config
@@ -57,12 +57,15 @@ from openhands.agent_server.director.git_index import (
 )
 from openhands.agent_server.director.git_store import (
     CONTRACTS_FILE,
+    SPEC_FILE,
     GitStore,
     adopt_former_memory,
+    normalize_store_path,
 )
 from openhands.agent_server.director.headline import provisional_summary
 from openhands.agent_server.director.merge_back import merge_back
 from openhands.agent_server.director.models import (
+    AGENT_ROLES,
     AGENTS_PER_TEAM,
     AgentKind,
     AgentRef,
@@ -73,7 +76,10 @@ from openhands.agent_server.director.models import (
     DirectorSettingsState,
     DirectorSettingsUpdate,
     FileEdit,
+    FormerTeam,
+    InheritedSpec,
     MemorySync,
+    OldSpec,
     OrgConflict,
     OrgMerge,
     OrgNode,
@@ -164,6 +170,7 @@ from openhands.agent_server.director.split import (
     child_boundary,
     clean_path,
     home_of,
+    is_inside,
     normalize_split,
 )
 from openhands.agent_server.event_service import ConversationRunLimitExceeded
@@ -410,6 +417,8 @@ class DirectorService:
             "prune": self._prune,
         }
         self._memory_adopted_in: Path | None = None
+        # The state of team memory whose reports were last taken over.
+        self._reports_adopted_at: str | None = None
         self._bwrap: str | None = None
         self._stop_guard: Callable[[], None] | None = None
         self._save_delay = save_delay
@@ -1286,13 +1295,20 @@ class DirectorService:
                 with suppress(NotFound):
                     await launcher.pause(UUID(conversation_id))
 
-    async def _go_on(self, node_id: str, running: list[str]) -> None:
+    async def _go_on(
+        self, node_id: str, running: list[str], *, own_too: bool = False
+    ) -> None:
         """Set a team that was stopped going again: what waited for its
-        agents is delivered, and those cut off in a turn run again."""
+        agents is delivered, and those cut off in a turn run again.
+
+        Args:
+            own_too: Run the team's own IC again as well, when no message
+                to it does.
+        """
         team = self.store.get(node_id)
         if team is None or team.stopped is not None or self._paused is not None:
             return
-        own = agent_conversation(team, "ic")
+        own = None if own_too else agent_conversation(team, "ic")
         conversations = self._conversations_below(team)
         # In the order it was sent, and before the message that set the
         # team going, which waits behind this in the team's lane.
@@ -1453,9 +1469,11 @@ class DirectorService:
         store = self.store
         team_memory = self.team_memory
         above = store.get(node.parent_id) if node.parent_id else None
-        specs, contracts = team_memory.applies_to(
+        _, contracts = team_memory.applies_to(
             node.boundary.path, above.boundary.path if above else None
         )
+        specs = self.specs_of(node)
+        own_spec = next((spec for spec in specs if not spec.old), None)
         to_settle = [
             {
                 "node_id": other.id,
@@ -1483,7 +1501,12 @@ class DirectorService:
                 "branch": node.branch,
                 "isolation": node.isolation,
             },
-            "spec": specs[0].spec if specs else None,
+            "spec": own_spec.spec if own_spec else None,
+            "specs_left_by_teams_before_you": [
+                {"directory": spec.path or ".", "team": spec.left_by, "spec": spec.spec}
+                for spec in specs
+                if spec.old
+            ],
             "contracts_with_the_teams_beside_you": [
                 agreed.contracts for agreed in contracts if not agreed.own
             ],
@@ -1526,15 +1549,65 @@ class DirectorService:
         return context
 
     def reports_of(self, node: OrgNode) -> list[Report]:
-        """What the two agents of a team recorded, oldest first."""
+        """What the two agents of a team recorded, oldest first. Reports
+        are the team's: an agent started again reads what it wrote before."""
         team_memory = self._memory()
+        self._adopt_reports(team_memory)
         reports = [
             report
-            for agent in node.agents
-            if agent.conversation_id is not None
-            for report in team_memory.reports(agent.conversation_id)
+            for role in AGENT_ROLES
+            for report in team_memory.reports(node.id, role)
         ]
         return sorted(reports, key=lambda report: report.at)
+
+    def _adopt_reports(self, team_memory: GitStore) -> None:
+        """Take over reports kept under conversations, as they were before
+        they were kept by team: once for each state of team memory, so that
+        what a pull brings in is taken over too."""
+        head = team_memory.head()
+        if head is None or head == self._reports_adopted_at:
+            return
+        store = self._store
+        if store is not None:
+            owners: dict[str, tuple[str, AgentRole]] = {
+                agent.conversation_id: (node.id, agent.role)
+                for node in store.all()
+                for agent in node.agents
+                if agent.conversation_id is not None
+            }
+            with suppress(GitError):
+                team_memory.adopt_reports(owners)
+        self._reports_adopted_at = team_memory.head()
+
+    def specs_of(self, node: OrgNode) -> list[InheritedSpec]:
+        """The spec of a team's own boundary and the ones teams before it
+        left in its directory, which are old."""
+        team_memory = self._memory()
+        specs, _ = team_memory.applies_to(node.boundary.path, None)
+        left = {old.path: old for old in node.old_specs}
+        found = [
+            spec.model_copy(
+                update={"old": spec.path in left, "left_by": left[spec.path].team}
+            )
+            if spec.path in left
+            else spec
+            for spec in specs
+        ]
+        for old in node.old_specs:
+            if old.path == normalize_store_path(node.boundary.path):
+                continue
+            text = team_memory.read(_spec_file(old.path))
+            if text:
+                found.append(
+                    InheritedSpec(
+                        path=old.path,
+                        spec=text,
+                        readonly=True,
+                        old=True,
+                        left_by=old.team,
+                    )
+                )
+        return found
 
     def report(self, node: OrgNode, role: AgentRole, text: str) -> None:
         """Record something for the two agents of a team. Safe from any
@@ -1544,14 +1617,14 @@ class DirectorService:
             Invalid: There is nothing to record.
         """
         text = text.strip()
-        conversation_id = agent_conversation(node, role)
-        if not text or conversation_id is None:
+        if not text:
             raise Invalid("A report cannot be empty")
+        node_id = node.id
         reports = self._memory().append_report(
-            conversation_id, Report(at=_instant(), role=role, text=text)
+            node_id, role, Report(at=_instant(), role=role, text=text)
         )
         if compaction.due(reports, self.settings.report_compaction_chars):
-            self._enqueue(lambda: self._compact(conversation_id), MODELS_LANE)
+            self._enqueue(lambda: self._compact(node_id, role), MODELS_LANE)
 
     def request_review(self, node_id: str) -> None:
         """Have the work a team submitted reviewed. Safe from any thread."""
@@ -3008,7 +3081,7 @@ class DirectorService:
         find later what changed."""
         team_memory = self._memory()
         above = self.store.get(node.parent_id) if node.parent_id else None
-        specs, contracts = team_memory.applies_to(
+        _, contracts = team_memory.applies_to(
             node.boundary.path, above.boundary.path if above else None
         )
         context = self.context_of(node, role)
@@ -3016,7 +3089,7 @@ class DirectorService:
             node,
             role,
             task,
-            specs,
+            self.specs_of(node),
             contracts,
             self.reports_of(node),
             briefing_block(context),
@@ -3269,6 +3342,16 @@ class DirectorService:
             gone = {team.id for team in split.replaces}
             taken = {team.id for team in store.all()} - gone
             teams = [_child_node(taken, node, child) for child in split.children]
+            teams = [
+                team.model_copy(
+                    update={
+                        "old_specs": await asyncio.to_thread(
+                            self._specs_left_in, team.boundary.path, split.replaces
+                        )
+                    }
+                )
+                for team in teams
+            ]
             by_path = {team.boundary.path: team.id for team in teams}
             # Fixed before anything changes, so that carrying the split out
             # again makes the same teams, removes the same and no others.
@@ -3288,6 +3371,17 @@ class DirectorService:
                     for agent in team.agents
                     if agent.conversation_id is not None
                 ],
+                # Agents a replaced team that was stopped had cut off: the
+                # sub-teams that stay go on.
+                cut_off=sorted(
+                    {
+                        conversation_id
+                        for team in split.replaces
+                        if team.stopped is not None
+                        for conversation_id in team.stopped.running
+                    }
+                ),
+                was_stopped=any(team.stopped is not None for team in split.replaces),
                 stamp=datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ"),
             )
         plan = intent.payload
@@ -3321,6 +3415,7 @@ class DirectorService:
                 if store.get(below_id) is not None:
                     store.move(below_id, node_id)
             for team in replaced:
+                await self._archive(team, "replaced", plan["stamp"])
                 store.remove(team.id)
         if proposal.contracts.strip():
             await asyncio.to_thread(self._record_contracts, node, proposal.contracts)
@@ -3349,8 +3444,51 @@ class DirectorService:
                 below = store.get(below_id)
                 if below and below.review and below.review.state == "pending":
                     self.tell_ic(home, review_request(below, below.review))
+                # Under a new team it starts from now: its time without
+                # progress, and what was held for it while a team above
+                # was stopped.
+                self.progressed(below_id)
+                if plan.get("was_stopped"):
+                    self._enqueue(
+                        lambda below_id=below_id: self._go_on(
+                            below_id, plan.get("cut_off", []), own_too=True
+                        ),
+                        below_id,
+                    )
             intent = run.step_done(intent, "handed_over")
             self._begin("finish_split", node_id)
+
+    def _specs_left_in(self, path: str, removed: list[OrgNode]) -> list[OldSpec]:
+        """The specs a team that is given ``path`` finds there: the one of
+        the directory itself and those of the ``removed`` teams whose
+        directories hold it or lie in it. None of them is its own."""
+        team_memory = self._memory()
+        own = normalize_store_path(path)
+        left: dict[str, str | None] = {}
+
+        def concerns(directory: str) -> bool:
+            return (
+                directory == own
+                or is_inside(own, directory)
+                or is_inside(directory, own)
+            )
+
+        for team in removed:
+            # What a removed team was left and never rewrote is passed on.
+            for old in team.old_specs:
+                if concerns(old.path):
+                    left.setdefault(old.path, old.team)
+            theirs = normalize_store_path(team.boundary.path)
+            if concerns(theirs):
+                left[theirs] = team.title
+        # A spec in the directory itself that no team here is known to have
+        # left: a team pruned long ago, or one written by hand.
+        left.setdefault(own, None)
+        return [
+            OldSpec(path=directory, team=team)
+            for directory, team in left.items()
+            if team_memory.read(_spec_file(directory))
+        ]
 
     async def _finish_split(self, node_id: str) -> None:
         store = self.store
@@ -3433,6 +3571,24 @@ class DirectorService:
         above = store.get(plan["parent"])
         parent_ic = agent_conversation(above, "ic") if above else None
         if "removed" not in intent.steps:
+            pruned = store.get(node_id)
+            for team in map(store.get, plan["teams"]):
+                if team is not None:
+                    await self._archive(team, "pruned", plan["stamp"])
+            if pruned is not None and above is not None:
+                # The directory is the team above's again, with a spec that
+                # says how the pruned team worked.
+                left = await asyncio.to_thread(
+                    self._specs_left_in, pruned.boundary.path, [pruned]
+                )
+                known = {old.path for old in above.old_specs}
+                store.update_node(
+                    above.id,
+                    old_specs=[
+                        *above.old_specs,
+                        *(old for old in left if old.path not in known),
+                    ],
+                )
             store.remove(node_id)
             # The shell the IC above starts next can write there again.
             with suppress(GitError, OSError):
@@ -3756,16 +3912,20 @@ class DirectorService:
         self._release_reviews(above.id)
         await self._pass_up(above.id, acted=False)
 
-    async def _compact(self, conversation_id: str) -> None:
-        """Have a model rewrite one agent's reports shorter, if they are
-        still too long."""
+    def _asker(self) -> str | None:
+        """The conversation the director's own model calls are made from."""
         store = self._store
         root = store.get(store.root_id) if store and store.root_id else None
-        asker = agent_conversation(root, "ic") if root else None
+        return agent_conversation(root, "ic") if root else None
+
+    async def _compact(self, node_id: str, role: AgentRole) -> None:
+        """Have a model rewrite one agent's reports shorter, if they are
+        still too long."""
+        asker = self._asker()
         if asker is None or self._paused is not None:
             return
         team_memory = self._memory()
-        reports = await asyncio.to_thread(team_memory.reports, conversation_id)
+        reports = await asyncio.to_thread(team_memory.reports, node_id, role)
         if not compaction.due(reports, self.settings.report_compaction_chars):
             return
         answer = await self._ask(
@@ -3773,11 +3933,56 @@ class DirectorService:
         )
         shorter = compaction.compacted(answer or "", reports, _instant())
         if shorter is None:
-            logger.warning("No usable rewrite of the reports of %s", conversation_id)
+            logger.warning("No usable rewrite of the reports of %s %s", node_id, role)
             return
         await asyncio.to_thread(
-            team_memory.replace_reports, conversation_id, reports, shorter
+            team_memory.replace_reports, node_id, role, reports, shorter
         )
+
+    async def _archive(
+        self, team: OrgNode, ended: Literal["replaced", "pruned"], at: str
+    ) -> FormerTeam:
+        """Keep what a team that is being removed leaves, apart from the
+        teams that come after it, and forget what was counted for it. A
+        team of the same name or directory then starts from nothing but
+        the old team's spec. Doing it again changes nothing."""
+        team_memory = self._memory()
+        kept = await asyncio.to_thread(team_memory.former, team.id)
+        record = next((former for former in kept if former.at == at), None)
+        if record is None:
+            reports = await asyncio.to_thread(self.reports_of, team)
+            record = await asyncio.to_thread(
+                team_memory.record_former,
+                FormerTeam(
+                    id=team.id,
+                    title=team.title,
+                    path=team.boundary.path,
+                    purpose=self._runs().marked(TASK).get(team.id) or team.spec_summary,
+                    ended=ended,
+                    at=at,
+                    review=team.review.state if team.review else None,
+                    reports=reports,
+                    compacted_report=await self._as_one_report(reports),
+                ),
+            )
+        run = self._runs()
+        for kind in (TASK, PROGRESS, CHECKS):
+            run.unmark(kind, team.id)
+        self._work_accepted(team)
+        return record
+
+    async def _as_one_report(self, reports: list[Report]) -> str:
+        """``reports`` as one report: rewritten shorter by a model when
+        there are several, and in full when it gives no usable answer."""
+        full = "\n\n".join(report.text for report in reports)
+        asker = self._asker()
+        if len(reports) < 2 or asker is None:
+            return full
+        answer = await self._ask(
+            asker, *compaction.prompt(reports), compaction.USAGE_ID
+        )
+        shorter = compaction.compacted(answer or "", reports, _instant())
+        return shorter[0].text if shorter else full
 
     def _discard_work(self, teams: list[OrgNode], stamp: str) -> str | None:
         """Discard the uncommitted work of ``teams``, the pruned team first.
@@ -3903,6 +4108,10 @@ class DirectorService:
             CONTRACTS_FILE,
             f"{earlier.rstrip()}\n\n{text}" if earlier and earlier.strip() else text,
         )
+
+
+def _spec_file(directory: str) -> str:
+    return f"{directory}/{SPEC_FILE}" if directory else SPEC_FILE
 
 
 def _child_node(taken: set[str], parent: OrgNode, child: SplitChild) -> OrgNodeInput:

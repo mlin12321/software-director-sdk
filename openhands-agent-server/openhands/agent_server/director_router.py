@@ -466,11 +466,13 @@ def get_node_memory(
     what its two agents reported."""
     node = _require_node(service, node_id)
     above = service.store.get(node.parent_id) if node.parent_id else None
-    specs, contracts = service.team_memory.applies_to(
+    _, contracts = service.team_memory.applies_to(
         node.boundary.path, above.boundary.path if above else None
     )
     return NodeMemory(
-        specs=specs, contracts=contracts, reports=service.reports_of(node)
+        specs=service.specs_of(node),
+        contracts=contracts,
+        reports=service.reports_of(node),
     )
 
 

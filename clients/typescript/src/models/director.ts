@@ -201,6 +201,11 @@ export interface DirectorOrgNode {
    */
   stopped?: DirectorStopped | null;
   /**
+   * Specs that teams before this one left in its directory. They are old
+   * until the team's IC writes its own spec. Absent on an older server.
+   */
+  old_specs?: DirectorOldSpec[];
+  /**
    * An agent of the team could not be started yet because the server runs
    * as many conversations as it may; it starts when one of them ends.
    */
@@ -436,6 +441,21 @@ export interface DirectorInheritedSpec {
   spec: string;
   /** False for the spec of the node's own boundary, which its IC writes. */
   readonly: boolean;
+  /**
+   * True for a spec a team before this one left: it says how that team
+   * worked and is to be rewritten. Absent on an older server.
+   */
+  old?: boolean;
+  /** The title of the team that left an old spec, when known. */
+  left_by?: string | null;
+}
+
+/** A spec a team before left in a directory a team now owns. */
+export interface DirectorOldSpec {
+  /** The directory of the spec; '' at the root. */
+  path: string;
+  /** The title of the team that left it, when known. */
+  team: string | null;
 }
 
 /** What the sub-teams of one boundary must keep between them. */
