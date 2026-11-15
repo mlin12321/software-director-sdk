@@ -529,6 +529,20 @@ export interface DirectorTeamEvent {
   other?: string;
 }
 
+/** One event of an org's history, with the team whose record holds it. */
+export interface DirectorHistoryEvent extends DirectorTeamEvent {
+  /** The team directly above the event's team. */
+  above_id: DirectorNodeId;
+  above: string;
+}
+
+/** What became of the teams of an org, newest first. */
+export interface DirectorOrgHistory {
+  events: DirectorHistoryEvent[];
+  /** Whether there are events before these. */
+  earlier: boolean;
+}
+
 /** A team that was removed from below a team. */
 export interface DirectorFormerTeam {
   id: DirectorNodeId;

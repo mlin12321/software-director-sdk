@@ -14,7 +14,12 @@ from openhands.agent_server.api import create_app
 from openhands.agent_server.config import Config
 from openhands.agent_server.director.git import git_version
 from openhands.agent_server.director.git_store import GitStore
-from openhands.agent_server.director.models import AgentRef, Report, ThreadMessage
+from openhands.agent_server.director.models import (
+    AgentRef,
+    Report,
+    TeamEvent,
+    ThreadMessage,
+)
 from openhands.agent_server.director.org_persistence import (
     create_org_board,
     save_org,
@@ -693,6 +698,42 @@ async def test_a_message_that_cannot_be_routed_is_refused(running, repo):
     assert outside.status_code == 422
     blank = await client.post("/api/director/org/messages", json={"text": ""})
     assert blank.status_code == 422
+
+
+def test_the_history_of_the_org_is_one_list_newest_first(saved_tree: Path):
+    memory = GitStore(saved_tree)
+
+    def happened(above: str, at: str, kind: str, team: str) -> None:
+        event = {"at": at, "kind": kind, "team_id": team, "team": team.upper()}
+        memory.append_history(above, TeamEvent.model_validate(event))
+
+    happened("root", "2026-11-01T10:00:00+00:00", "set_up", "a")
+    happened("a", "2026-11-01T11:00:00+00:00", "accepted", "a1")
+    happened("root", "2026-11-01T12:00:00+00:00", "sent_back", "b")
+    happened("root", "2026-11-01T12:00:00+00:00", "accepted", "b")
+    # Counted for an IC, and no event of the org.
+    happened("root", "2026-11-01T13:00:00+00:00", "needed", "a")
+    client = make_client(saved_tree)
+
+    latest = client.get("/api/director/org/history", params={"limit": 2}).json()
+    earlier = client.get(
+        "/api/director/org/history",
+        params={"before": latest["events"][-1]["at"]},
+    ).json()
+    refused = client.get("/api/director/org/history", params={"limit": 0})
+
+    assert [(e["kind"], e["team"], e["above_id"]) for e in latest["events"]] == [
+        # Of two in one second, the one recorded later comes first.
+        ("accepted", "B", "root"),
+        ("sent_back", "B", "root"),
+    ]
+    assert latest["earlier"] is True
+    assert [e["kind"] for e in earlier["events"]] == ["accepted", "set_up"]
+    # A page does not end inside a second: reading on would miss the rest.
+    one = client.get("/api/director/org/history", params={"limit": 1}).json()
+    assert [e["kind"] for e in one["events"]] == ["accepted", "sent_back"]
+    assert earlier["earlier"] is False
+    assert refused.status_code == 422
 
 
 def test_the_team_memory_is_pushed_to_and_pulled_from_a_remote(

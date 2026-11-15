@@ -31,6 +31,7 @@ from openhands.agent_server.director.models import (
     MemorySyncRequest,
     NodeMemory,
     NodeOwnership,
+    OrgHistory,
     OrgMerge,
     OrgNode,
     OrgNodeDetail,
@@ -452,6 +453,22 @@ def get_org_node(
         ancestors=service.store.ancestors(node_id),
         children=service.store.children(node_id),
     )
+
+
+@director_router.get(
+    "/org/history", response_model=OrgHistory, responses=error_responses(_NO_MEMORY)
+)
+def get_org_history(
+    limit: Annotated[int, Query(ge=1, le=500)] = 100,
+    before: Annotated[
+        str | None, Query(description="Only events before this ISO 8601 time.")
+    ] = None,
+    service: DirectorService = Depends(get_director_service),
+) -> OrgHistory:
+    """Get what became of the teams of the whole org, newest first: set up,
+    work accepted or sent back, stalled, stopped, replaced, pruned, and what
+    was proposed, approved and declined."""
+    return service.org_history(limit, before)
 
 
 @director_router.get(
