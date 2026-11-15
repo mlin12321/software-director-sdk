@@ -457,7 +457,12 @@ async def test_a_team_set_up_and_given_no_task_is_told_to_the_ic_above(
     ]
     assert "API" not in stalled
 
-    # Said once: a team may be left without a task on purpose.
+    # Said once: a team may be left without a task on purpose, and an org
+    # that was paused in between does not say it again.
+    clock.passes(240)
+    await looked(service)
+    await service.pause()
+    await service.resume()
     clock.passes(240)
     await looked(service)
     service.tell_ic(API, "Begin.")

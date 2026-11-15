@@ -832,8 +832,9 @@ class DirectorSettings(BaseModel):
         ge=0,
         description=(
             "After how many escalations the IC of one team directly below "
-            "raised, on the work it has in hand, a Manager is woken to look "
-            "at its teams. 0 turns the check off."
+            "raised on the work it has in hand, and after how many times "
+            "that work was sent back, a Manager is woken to look at its "
+            "teams. 0 turns the check off."
         ),
     )
 

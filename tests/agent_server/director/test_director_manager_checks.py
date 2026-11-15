@@ -120,6 +120,7 @@ async def test_a_manager_looks_when_one_team_keeps_escalating_on_its_work(
 
     [look] = looks(service, launcher)
     assert "the IC of 'API' has escalated 3 times to your IC" in look
+    assert "blocked: its IC has waited 0 min on an escalation it raised" in look
     assert "3 escalated to your IC on this work; 3 unsettled" in look
     assert "2 escalated to your IC on this work; 2 unsettled" in look
 
@@ -362,7 +363,8 @@ async def test_a_manager_is_shown_what_became_of_teams_that_are_gone(
     assert "- 'API' (node services.api), pruned: 3 sent back" in look
     history = service.team_memory.history("root")
     assert [e.detail for e in history if e.kind == "woken"] == [
-        "your IC has accepted 1 reviews since the last look of this kind."
+        "your IC has sent the work of 'API' back 3 times.",
+        "your IC has accepted 1 reviews since the last look of this kind.",
     ]
     assert [(e.team, e.detail) for e in history if e.kind == "pruned"] == [
         ("API", "It never got it right.")

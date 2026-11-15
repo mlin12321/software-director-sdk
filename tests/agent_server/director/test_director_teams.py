@@ -196,6 +196,14 @@ async def test_work_that_does_not_merge_leaves_every_team_as_it_was(
     told = launcher.messages_to(ic(service))[-1]
     assert "could not be set up" in told and "apps/web/page.tsx" in told
     assert "Nothing was changed" in told
+    # The Manager that approved them finds it in the record.
+    [kept] = [
+        event
+        for event in service.team_memory.history("root")
+        if event.kind == "declined"
+    ]
+    assert kept.detail.startswith("approved, and the runtime could not set them up")
+    assert kept.paths == ["apps"]
 
 
 async def test_teams_are_replaced_only_once_their_agents_are_at_rest(
