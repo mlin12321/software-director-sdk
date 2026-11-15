@@ -3687,7 +3687,11 @@ def test_director_runs_an_org_whose_root_splits_into_sub_teams(
         assert (thread["manager_node_id"], thread["ic_node_id"]) == ("root", "root")
         [proposal] = thread["messages"]
         assert proposal["sender"] == "ic" and "```teams" in proposal["text"]
-        root_ic, root_manager = (agent["conversation_id"] for agent in root["agents"])
+        # A team starts with its IC; its Manager came with the proposal.
+        assert [agent["role"] for agent in root["agents"]] == ["ic"]
+        root_ic, root_manager = (
+            agent["conversation_id"] for agent in detail["node"]["agents"]
+        )
         manager = client.get(f"/api/conversations/{root_manager}").json()
         assert manager["parent_conversation_id"] == root_ic
         assert [
@@ -3695,18 +3699,10 @@ def test_director_runs_an_org_whose_root_splits_into_sub_teams(
             manager["title"],
         ] == ["Checkout (IC)", "Checkout (Manager)"]
         for child in detail["children"]:
-            child_ic, child_manager = (
-                agent["conversation_id"] for agent in child["agents"]
-            )
+            [child_ic] = (agent["conversation_id"] for agent in child["agents"])
             ic = client.get(f"/api/conversations/{child_ic}")
             assert ic.status_code == 200, child
             assert ic.json()["parent_conversation_id"] == root_ic
-            assert (
-                client.get(f"/api/conversations/{child_manager}").json()[
-                    "parent_conversation_id"
-                ]
-                == child_ic
-            )
         specs = client.get("/api/director/org/nodes/services.api/memory").json()
         assert specs["specs"] == []
         assert "POST /checkout" in specs["contracts"][0]["contracts"]

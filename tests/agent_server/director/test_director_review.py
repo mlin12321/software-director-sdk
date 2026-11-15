@@ -40,6 +40,7 @@ from tests.agent_server.director.test_director_tools import (
     proposing,
     split_root,
     use,
+    woken,
 )
 
 
@@ -254,7 +255,7 @@ async def test_an_ic_submits_once_and_says_what_its_team_delivered(
         service, api, SubmitReviewTool, SubmitReviewAction(summary="  ")
     )
     by_manager = await use(
-        service, manager(service, "services.api"), SubmitReviewTool, DONE
+        service, await woken(service, "services.api"), SubmitReviewTool, DONE
     )
     await api_submits(service, repo)
     twice = await use(service, api, SubmitReviewTool, DONE)
@@ -567,7 +568,9 @@ async def test_accepted_work_goes_on_up_unreviewed_when_the_ic_changed_nothing(
 
     api = node(service, "services.api")
     assert api.review is not None and api.review.state == "accepted"
-    assert api.status == "done"
+    assert api.review.passed_up and api.status == "done"
+    schema = node(service, SCHEMA).review
+    assert schema is not None and not schema.passed_up
     assert api.base_commit == run_git(repo, "rev-parse", "HEAD").strip()
     assert "without another review" in launcher.messages_to(ic(service, api.id))[-1]
     assert requests(service, launcher) == []

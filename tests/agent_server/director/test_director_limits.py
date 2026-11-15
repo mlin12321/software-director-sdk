@@ -40,6 +40,7 @@ from tests.agent_server.director.test_director_tools import (
     proposing,
     split_root,
     use,
+    woken,
 )
 
 
@@ -233,6 +234,7 @@ async def test_teams_wait_for_a_free_run_and_start_when_one_ends(
     repo: Path, launcher: FakeLauncher
 ):
     service = await started(repo, launcher, run_limit_retry=3600)
+    await woken(service)
     launcher.full_for = 1_000_000
     await use(service, ic(service), MsgManagerTool, split("a", 2))
     approve = asyncio.create_task(
@@ -255,7 +257,7 @@ async def test_teams_wait_for_a_free_run_and_start_when_one_ends(
 
     teams = service.store.children("root")
     assert [team.waiting_to_start for team in teams] == [False, False]
-    assert len(launcher.derived) == 5 and node(service, "root").pending_split is None
+    assert len(launcher.derived) == 3 and node(service, "root").pending_split is None
     await service.aclose()
 
 

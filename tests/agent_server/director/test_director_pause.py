@@ -55,6 +55,7 @@ from tests.agent_server.director.test_director_tools import (
     node,
     split_root,
     use,
+    woken,
 )
 
 
@@ -148,7 +149,7 @@ async def test_pausing_stops_the_agents_that_run_and_resuming_runs_only_those(
 
     assert launcher.paused == [UUID(root_ic)]
     statuses = {agent.role: agent.status for agent in node(service, "root").agents}
-    assert statuses == {"ic": AGENT_PAUSED, "manager": "idle"}
+    assert statuses == {"ic": AGENT_PAUSED}
     assert ("root", "run_again") in kinds(await service.recovery())
 
     await service.resume()
@@ -176,7 +177,7 @@ async def test_what_an_agent_decides_while_the_org_is_paused_is_done_after_resum
 
     assert node(service, "root").child_ids == ["services.api", "apps.web"]
     assert node(service, "root").pending_split is None
-    assert len(launcher.derived) == 5
+    assert len(launcher.derived) == 3
     await service.aclose()
 
 
@@ -184,6 +185,7 @@ async def test_a_server_stopped_while_teams_wait_starts_them_in_order_once_resum
     repo: Path, launcher: FakeLauncher
 ):
     first = await started(repo, launcher, run_limit_retry=3600)
+    await woken(first)
     launcher.full_for = 1_000_000
     await use(first, ic(first), MsgManagerTool, split("a", 3))
     approve = asyncio.create_task(use(first, manager(first), ApproveTeamsTool, APPROVE))
@@ -214,7 +216,7 @@ async def test_a_server_stopped_while_teams_wait_starts_them_in_order_once_resum
     assert [team.id for team in teams] == ["a.t0", "a.t1", "a.t2"]
     assert node(second, "root").pending_split is None
     starts = [str(start.conversation_id) for start in launcher.derived[1:]]
-    assert len(set(starts)) == len(starts) == 6
+    assert len(set(starts)) == len(starts) == 3
     in_order = [ic(second, node_id) for node_id in waited]
     assert [start for start in starts if start in in_order] == in_order
     await second.aclose()
@@ -225,13 +227,14 @@ async def test_a_split_cut_off_by_a_crash_is_finished_without_a_second_of_anythi
 ):
     first = await started(repo, launcher)
     await use(first, ic(first), MsgManagerTool, SPLIT)
+    await first.settled()
     # The server ends as the first sub-team's IC has just been started.
     ended = end_server_at(launcher, "derived")
     approve = asyncio.create_task(use(first, manager(first), ApproveTeamsTool, APPROVE))
     await ended.wait()
     approve.cancel()
     await asyncio.gather(approve, return_exceptions=True)
-    assert len(launcher.derived) < 5
+    assert len(launcher.derived) <= 3
 
     second = await again(repo, launcher)
 
@@ -244,7 +247,7 @@ async def test_a_split_cut_off_by_a_crash_is_finished_without_a_second_of_anythi
     assert node(second, "root").child_ids == ["services.api", "apps.web"]
     assert node(second, "root").pending_split is None
     starts = [str(start.conversation_id) for start in launcher.derived]
-    assert len(set(starts)) == len(starts) == 5
+    assert len(set(starts)) == len(starts) == 3
     contracts = second.team_memory.read(CONTRACTS_FILE) or ""
     assert contracts.count("POST /checkout returns {order_id}") == 1
     told = [text for text in launcher.messages_to(ic(second)) if "approved" in text]
@@ -257,6 +260,7 @@ async def test_a_prune_cut_off_by_a_crash_is_finished_and_recorded_once(
 ):
     first = await started(repo, launcher)
     await split_root(first)
+    await woken(first, "services.api")
     (repo / "services" / "api").mkdir(parents=True)
     (repo / "services" / "api" / "half.py").write_text("broken\n")
     ended = end_server_at(launcher, "delete", nth=2)
@@ -317,7 +321,7 @@ async def test_the_end_of_a_split_cut_off_by_a_crash_is_told_once(
     await second.settled()
 
     assert node(second, "root").pending_split is None
-    assert len(launcher.derived) == 5
+    assert len(launcher.derived) == 3
     told = [text for text in launcher.messages_to(ic(second)) if "approved" in text]
     assert len(told) == 1
     await second.aclose()
