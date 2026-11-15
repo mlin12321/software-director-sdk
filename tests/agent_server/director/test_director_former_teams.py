@@ -10,8 +10,7 @@ from uuid import UUID
 import pytest
 
 from openhands.agent_server.director import compaction
-from openhands.agent_server.director.git_store import GitStore
-from openhands.agent_server.director.models import OldSpec, Report, SplitChild
+from openhands.agent_server.director.models import OldSpec, SplitChild
 from openhands.agent_server.director.pods import StartedAgent
 from openhands.agent_server.director.prompts import HAND_OVER_ROLE, left_behind
 from openhands.agent_server.director.run_state import TASK
@@ -296,30 +295,6 @@ async def test_a_pruned_team_is_recorded_and_its_spec_is_old_for_the_team_above(
         former.model_copy(update={"reports": [], "compacted_report": ""})
     )
     assert again == former
-
-
-async def test_an_agent_reads_its_teams_reports_whatever_conversation_wrote_them(
-    repo: Path, service: DirectorService
-):
-    api = node(service, API)
-    board = GitStore(repo)
-    kept = Report(at="2026-01-01T00:00:00+00:00", role="ic", text="Kept by name.")
-    # As reports were kept before: under the agent's conversation.
-    board.write(
-        "", f".reports/{ic(service, API)}.json", json.dumps([kept.model_dump()])
-    )
-    board.write("", ".reports/someone-else.json", json.dumps([kept.model_dump()]))
-
-    read = service.reports_of(api)
-
-    assert [report.text for report in read] == [
-        "Kept by name.",
-        "Chose SQLite.",
-        "Dropped the cache.",
-    ]
-    assert board.read(f".reports/{ic(service, API)}.json") is None
-    assert board.read(".reports/someone-else.json") is not None
-    assert len(board.reports(API, "ic")) == 3
 
 
 async def test_sub_teams_of_a_stopped_team_that_is_replaced_go_on(

@@ -16,7 +16,6 @@ from openhands.agent_server.director.git_store import (
     GitStore,
     StoreChange,
     StoreScopeError,
-    adopt_former_memory,
 )
 from openhands.agent_server.director.models import Report, ThreadMessage
 from openhands.sdk.errors import NotSupported
@@ -184,17 +183,6 @@ def test_racing_writers_lose_no_update(board: GitStore):
     assert sorted(report.text for report in board.reports("api", "ic")) == [
         report.text for report in reports
     ]
-
-
-def test_memory_under_its_former_name_is_moved(repo: Path):
-    former = GitStore(repo, "refs/agents/blackboard")
-    head = former.write("svc/a", "spec.md", "x")
-
-    adopt_former_memory(repo)
-    adopt_former_memory(repo)
-
-    assert GitStore(repo).head() == head
-    assert former.head() is None
 
 
 def test_a_change_with_no_content_deletes_the_file(board: GitStore):

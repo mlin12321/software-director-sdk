@@ -146,7 +146,7 @@ async def test_a_lowered_limit_removes_nothing_and_stops_the_next_split(
 
     state = service.update_settings(DirectorSettingsUpdate(max_teams=1, max_depth=1))
 
-    assert (state.teams, state.agents, state.depth) == (3, 6, 2)
+    assert (state.teams, state.depth) == (3, 2)
     assert len(service.store) == 3
     refused = await use(service, ic(service), MsgManagerTool, split("a", 1))
     assert refused.is_error
@@ -194,21 +194,16 @@ async def test_settings_are_kept_for_the_next_start_beside_the_repository(
     assert again.settings.max_depth == 3 and again.store.root_id == "root"
 
 
-async def test_a_limit_kept_or_sent_as_agents_is_read_as_half_as_many_teams(
+async def test_a_limit_kept_as_agents_is_no_longer_read(
     repo: Path, launcher: FakeLauncher
 ):
     remembered = repo.parent / "state" / "director.json"
     remembered.parent.mkdir(parents=True, exist_ok=True)
     remembered.write_text(json.dumps({"settings": {"max_agents": 10}}))
+
     service = DirectorService(repo, remembered=remembered)
 
-    assert service.settings.max_teams == 5
-
-    state = service.update_settings(DirectorSettingsUpdate(max_agents=16))
-
-    assert (state.max_teams, state.max_agents) == (8, 16)
-    kept = json.loads(remembered.read_text())["settings"]
-    assert kept["max_teams"] == 8 and "max_agents" not in kept
+    assert service.settings.max_teams == 32
 
 
 async def test_a_team_is_found_by_words_of_its_title_or_directory(

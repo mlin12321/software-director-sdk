@@ -94,6 +94,8 @@ def write_refusal(
             f"A Manager does not edit files, so {path!r} was not changed. Have "
             "your IC make the change."
         )
+    if path == ".git" or path.startswith(".git/"):
+        return f"{path!r} belongs to git, so it was not changed."
     directory = node.boundary.path or "the repository"
     if not owns(node, path):
         return (

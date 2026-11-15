@@ -756,8 +756,6 @@ def test_the_limits_on_new_teams_are_read_changed_and_kept(saved_tree: Path):
         "manager_check_accepted_reviews": 5,
         "manager_check_ic_escalations": 3,
         "teams": 5,
-        "agents": 10,
-        "max_agents": 64,
         "depth": 3,
         "max_concurrent_runs": 7,
     }

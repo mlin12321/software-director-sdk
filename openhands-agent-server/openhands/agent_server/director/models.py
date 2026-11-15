@@ -2,7 +2,7 @@
 
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field
 
 from openhands.agent_server.models import StartConversationRequest
 
@@ -13,8 +13,6 @@ from openhands.agent_server.models import StartConversationRequest
 AgentRole = Literal["ic", "manager"]
 AGENT_ROLES: tuple[AgentRole, ...] = ("ic", "manager")
 ROLE_NAMES: dict[AgentRole, str] = {"ic": "IC", "manager": "Manager"}
-# An IC and a Manager.
-AGENTS_PER_TEAM = 2
 
 NodeStatus = Literal["idle", "working", "done", "blocked"]
 
@@ -776,16 +774,6 @@ class DirectorSettings(BaseModel):
         description="The most levels of teams; the root team is level 1.",
     )
 
-    @model_validator(mode="before")
-    @classmethod
-    def _teams_from_agents(cls, data: object) -> object:
-        """Read the limit as it was kept before it counted teams."""
-        if isinstance(data, dict) and "max_teams" not in data:
-            agents = data.get("max_agents")
-            if isinstance(agents, int):
-                return {**data, "max_teams": max(1, agents // AGENTS_PER_TEAM)}
-        return data
-
     allowed_profiles: list[str] = Field(
         default_factory=list,
         description=(
@@ -843,11 +831,6 @@ class DirectorSettingsUpdate(BaseModel):
     """New values for some of the settings; what is left out stays."""
 
     max_teams: int | None = Field(default=None, ge=1)
-    max_agents: int | None = Field(
-        default=None,
-        ge=2,
-        description="Deprecated: use max_teams. Read as half as many teams.",
-    )
     max_depth: int | None = Field(default=None, ge=1)
     allowed_profiles: list[str] | None = None
     resume_on_start: bool | None = None
@@ -861,10 +844,6 @@ class DirectorSettingsState(DirectorSettings):
     """The settings, beside what the org has now."""
 
     teams: int = Field(description="How many teams the org has.")
-    agents: int = Field(
-        description="Deprecated: use teams. Two for every team of the org."
-    )
-    max_agents: int = Field(description="Deprecated: use max_teams. Twice max_teams.")
     depth: int = Field(description="How many levels of teams the org has.")
     max_concurrent_runs: int | None = Field(
         description=(
