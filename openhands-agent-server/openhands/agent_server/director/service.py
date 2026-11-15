@@ -213,6 +213,8 @@ DIRECTOR_TOOL_NAMES = (
     "prune_team",
     "hand_over",
 )
+# How a team that was set up and given no task reads to the IC above.
+NOT_STARTED = "not started"
 # What follows a team's purpose in its task once something started it.
 _STARTED_WITH = "\n\nWhat your team is started with:\n"
 # How long tree changes are gathered before they are saved as one commit.
@@ -1546,7 +1548,7 @@ class DirectorService:
                     "node_id": child.id,
                     "team": child.title,
                     "path": child.boundary.path,
-                    "status": child.status,
+                    "status": child.status if child.agents else NOT_STARTED,
                     "headline": child.headline,
                     "summary": child.spec_summary,
                     "review": child.review.state if child.review else None,

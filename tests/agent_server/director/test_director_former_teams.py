@@ -9,6 +9,7 @@ import pytest
 from openhands.agent_server.director import compaction
 from openhands.agent_server.director.git_store import GitStore
 from openhands.agent_server.director.models import OldSpec, Report, SplitChild
+from openhands.agent_server.director.prompts import left_behind
 from openhands.agent_server.director.run_state import TASK
 from openhands.agent_server.director.service import DirectorService
 from openhands.agent_server.director.tools import (
@@ -186,6 +187,55 @@ async def test_teams_that_split_or_merge_directories_are_shown_the_specs_left_th
     ]
     assert node(service, WEB).old_specs == [OldSpec(path="services/web", team="Web")]
     assert len(service.team_memory.former("services")) == 1
+
+
+async def test_the_ic_is_told_who_has_each_replaced_teams_directory_now(
+    service: DirectorService, launcher: FakeLauncher
+):
+    launcher.answers[compaction.USAGE_ID] = "Flask, SQLite"
+
+    # A split: two teams inside API's directory, and the rest of it to no team.
+    await replace(
+        service,
+        SplitChild(title="HTTP", path="services/api/http", task="Routes"),
+        SplitChild(title="Store", path="services/api/db", task="Orders"),
+        keep=["Web"],
+    )
+
+    told = launcher.messages_to(ic(service))[-1]
+    assert (
+        "Its directory is now divided: HTTP (services/api/http), Store "
+        "(services/api/db). What of services/api is in none of those is yours again."
+    ) in told
+    assert "Its reports, as one:\nFlask, SQLite" in told
+    assert "give each the part that concerns its directory" in told
+    # Like a merged team, each is set up and not started, and is shown the
+    # spec of the team it was cut from as old.
+    for team_id in ("services.api.http", "services.api.db"):
+        team = node(service, team_id)
+        assert team.agents == [] and service.reports_of(team) == []
+        assert team.old_specs == [OldSpec(path="services/api", team="API")]
+    below = service.context_of(node(service, "root"), "ic")["sub_teams"]
+    assert {team["team"]: team["status"] for team in below} == {
+        "Web": "idle",
+        "HTTP": "not started",
+        "Store": "not started",
+    }
+
+    # A merge: one team over the directories of all three.
+    await replace(
+        service, SplitChild(title="Services", path="services", task="Serve"), keep=[]
+    )
+
+    told = launcher.messages_to(ic(service))[-1]
+    assert (
+        told.count("Its directory is now in the boundary of Services (services).") == 3
+    )
+
+    # Teams that take none of a removed team's directory.
+    [api] = service.team_memory.former(API)[-1:]
+    elsewhere = left_behind([api], [SplitChild(title="Apps", path="apps", task="Apps")])
+    assert "No new team has its directory: services/api is yours again." in elsewhere
 
 
 async def test_reports_that_no_model_shortens_are_kept_in_full(

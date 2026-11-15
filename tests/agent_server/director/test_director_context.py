@@ -311,6 +311,15 @@ async def test_the_directors_own_notices_bring_what_changed_too(
         "services.api",
         "apps.web",
     ]
-    # Nothing changed between the two, so the second is the message alone.
-    assert written == "[director] Your Manager writes:\nCarry on."
+    # The teams were given their tasks between the two: the one change.
+    assert written.startswith("[director] Your Manager writes:\nCarry on.")
+    assert [team["status"] for team in told["sub_teams"]["added"]] == [
+        "not started",
+        "not started",
+    ]
+    changed = update_of(written)
+    assert changed is not None and list(changed) == ["sub_teams"]
+    assert [
+        (team["node_id"], team["status"]) for team in changed["sub_teams"]["changed"]
+    ] == [("services.api", "at work"), ("apps.web", "at work")]
     await service.aclose()

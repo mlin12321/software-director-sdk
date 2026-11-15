@@ -11,6 +11,7 @@ from openhands.agent_server.director.models import (
     ReviewFinding,
     SplitChild,
 )
+from openhands.agent_server.director.split import is_inside
 
 
 POD_PROTOCOL = """\
@@ -148,8 +149,32 @@ def report_line(report: Report) -> str:
     return f"{writer}, {report.at}: {report.text}"
 
 
-def left_behind(former: list[FormerTeam]) -> list[str]:
-    """What removed teams left, as the IC that is to pass it on reads it."""
+def _now_with(team: FormerTeam, children: list[SplitChild]) -> str:
+    """Who has a replaced team's directory under the new boundaries."""
+    where = team.path or "."
+    inside = [c for c in children if is_inside(c.path, team.path)]
+    over = [c for c in children if c.path == team.path or is_inside(team.path, c.path)]
+    if over:
+        [child] = over[:1]
+        return f"Its directory is now in the boundary of {child.title} ({child.path})."
+    if inside:
+        names = ", ".join(f"{child.title} ({child.path})" for child in inside)
+        return (
+            f"Its directory is now divided: {names}. What of {where} is in "
+            "none of those is yours again."
+        )
+    return f"No new team has its directory: {where} is yours again."
+
+
+def left_behind(
+    former: list[FormerTeam], children: list[SplitChild] | None = None
+) -> list[str]:
+    """What removed teams left, as the IC that is to pass it on reads it.
+
+    Args:
+        children: The teams that replaced them, to say who has each
+            directory now.
+    """
     lines: list[str] = []
     for team in former:
         lines += [
@@ -159,6 +184,8 @@ def left_behind(former: list[FormerTeam]) -> list[str]:
             "Its reports, as one:",
             team.compacted_report or "It recorded nothing.",
         ]
+        if children is not None:
+            lines.insert(-2, _now_with(team, children))
         if team.contracts.strip():
             lines += ["The contracts between its sub-teams:", team.contracts.strip()]
     return lines
@@ -188,12 +215,14 @@ def approved_notice(
             "The teams they replaced are gone; what those had committed is in "
             "your checkout. What each of them left is below. It is yours to "
             "pass on: nothing of it reaches a new team unless you hand it over.",
-            *left_behind(former),
+            *left_behind(former, children),
         ]
         todo += [
             "- Give each new team what it should know of this with "
             "`hand_over`: notes in your own words or quoted, and, for a team "
-            "that took over sub-teams, the contracts those must keep. It "
+            "that took over sub-teams, the contracts those must keep. Where "
+            "one team's directory is now divided among several, give each "
+            "the part that concerns its directory. It "
             "starts nothing and can be done again later; `read_node_context` "
             "returns what the removed teams left (`former_teams`).",
             "- A spec a removed team wrote stays in its directory. The team "
