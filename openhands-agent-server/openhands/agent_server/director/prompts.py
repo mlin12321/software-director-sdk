@@ -3,11 +3,13 @@
 from openhands.agent_server.director.models import (
     AgentRole,
     BoundaryContracts,
+    FormerTeam,
     InheritedSpec,
     OrgNode,
     Report,
     Review,
     ReviewFinding,
+    SplitChild,
 )
 
 
@@ -65,6 +67,13 @@ The IC owns the technical work of the team's boundary:
   its own part is complete, and the accepted work goes up with it.
 - It settles what the ICs of the teams directly below escalate with
   `resolve_escalation`, or passes it up with the reason it could not.
+- When teams below it are replaced or pruned, the runtime gives it what
+  they left: their reports as one report, and the contracts between their
+  sub-teams. None of it reaches another team by itself. The IC decides
+  which team gets which part and passes it on with `hand_over`; a new team
+  whose directory had a team before is shown that team's spec as old. A
+  team is cleared by proposing a different team for the same directory.
+  After any such change the IC rewrites its own spec with `write_spec`.
 - It writes to the IC of a team directly below with `msg_team`: its task,
   a hint, a correction, a change of priority. The first message to a team
   starts it. That IC does not answer in a message; it acts on what was
@@ -92,7 +101,10 @@ the work back.
   gives each its task. To ask for changes or decline, it answers with
   `msg_ic` instead and says what to change.
 - It writes to its IC, or to the IC of a team directly below, with `msg_ic`:
-  feedback, a decision, what it is about to change.
+  feedback, a decision, what it is about to change. After it approves or
+  prunes teams, its IC is told to pass on what removed teams left and to
+  rewrite the team's spec; the Manager writes to it when the change needs
+  explaining.
 - It settles what the Managers of the teams directly below escalate with
   `resolve_escalation`, or passes it up with the reason it could not.
 - A team directly below that has no way forward, or keeps trying what does
@@ -127,8 +139,107 @@ DIRECTOR_PREFIX = "[director]"
 
 def report_line(report: Report) -> str:
     """One report, with which agent of the team wrote it."""
+    if report.handed_over:
+        return (
+            "Handed over by the IC of the team above, from the teams that "
+            f"were here before yours, {report.at}: {report.text}"
+        )
     writer = "IC" if report.role == "ic" else "Manager"
     return f"{writer}, {report.at}: {report.text}"
+
+
+def left_behind(former: list[FormerTeam]) -> list[str]:
+    """What removed teams left, as the IC that is to pass it on reads it."""
+    lines: list[str] = []
+    for team in former:
+        lines += [
+            "",
+            f"Team {team.title!r} (node {team.id}, {team.path or '.'}), "
+            f"{team.ended}. It was for: {team.purpose or 'nothing that was kept'}",
+            "Its reports, as one:",
+            team.compacted_report or "It recorded nothing.",
+        ]
+        if team.contracts.strip():
+            lines += ["The contracts between its sub-teams:", team.contracts.strip()]
+    return lines
+
+
+def approved_notice(
+    children: list[SplitChild], former: list[FormerTeam], *, contracts_replaced: bool
+) -> str:
+    """What an IC is told once the sub-teams it proposed are set up.
+
+    Args:
+        former: What each team they replaced left.
+        contracts_replaced: Whether the proposal's contracts took the place
+            of the ones the node had.
+    """
+    teams = ", ".join(f"{child.title} ({child.path})" for child in children)
+    lines = [
+        "Your Manager approved your sub-teams and they now own their "
+        f"directories: {teams}. You can no longer write there; carry on with "
+        "what remains in your boundary. None of them has started: a team "
+        "starts when you give it its task with msg_team."
+    ]
+    todo = []
+    if former:
+        lines += [
+            "",
+            "The teams they replaced are gone; what those had committed is in "
+            "your checkout. What each of them left is below. It is yours to "
+            "pass on: nothing of it reaches a new team unless you hand it over.",
+            *left_behind(former),
+        ]
+        todo += [
+            "- Give each new team what it should know of this with "
+            "`hand_over`: notes in your own words or quoted, and, for a team "
+            "that took over sub-teams, the contracts those must keep. It "
+            "starts nothing and can be done again later; `read_node_context` "
+            "returns what the removed teams left (`former_teams`).",
+            "- A spec a removed team wrote stays in its directory. The team "
+            "that has the directory now is told it is old.",
+            "- The contracts between your sub-teams are now the ones of this "
+            "proposal alone."
+            if contracts_replaced
+            else "- The contracts between your sub-teams read as before. If "
+            "they name teams that are gone, restate them: the `contracts` of "
+            "a ```teams block that replaces teams take the place of the old "
+            "text.",
+        ]
+    todo += [
+        "- Rewrite your own spec with `write_spec` to say how your directory "
+        "is divided now.",
+        "- Give a team its task with `msg_team` when there is one.",
+    ]
+    return "\n".join([*lines, "", "What is now yours to do:", *todo])
+
+
+def pruned_notice(
+    title: str, where: str, reason: str, saved: str | None, former: list[FormerTeam]
+) -> str:
+    """What the IC above is told once its Manager's prune is carried out."""
+    lines = [
+        f"Your Manager pruned the team {title!r} ({where}): {reason} Its "
+        "uncommitted changes were discarded"
+        + (f" (kept in git as {saved})" if saved else "")
+        + f"; {where} is yours again."
+    ]
+    if former:
+        lines += [
+            "",
+            "What it left is below. It is yours to pass on or to use.",
+            *left_behind(former),
+        ]
+    lines += [
+        "",
+        "What is now yours to do:",
+        "- Rewrite your own spec with `write_spec` to say how your directory "
+        "is divided now. The spec the pruned team wrote stays in its "
+        "directory and is old.",
+        "- If a team you still have should know of what the pruned team "
+        "left, give it to that team with `hand_over`.",
+    ]
+    return "\n".join(lines)
 
 
 def brief(

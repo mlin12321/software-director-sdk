@@ -403,6 +403,11 @@ export interface DirectorReport {
   text: string;
   /** True for the one report a model wrote in place of earlier ones. */
   compacted?: boolean;
+  /**
+   * True for what the IC of the team above passed on of the teams that were
+   * there before this one. The team's own agents did not write it.
+   */
+  handed_over?: boolean;
 }
 
 /** One message between a Manager and an IC. */

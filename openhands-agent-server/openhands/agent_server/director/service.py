@@ -130,10 +130,12 @@ from openhands.agent_server.director.prompts import (
     MANAGER_ROLE,
     POD_PROTOCOL,
     STALL_QUESTION,
+    approved_notice,
     brief,
     changes_requested,
     from_director,
     manager_check,
+    pruned_notice,
     review_request,
     stall_notice,
 )
@@ -209,6 +211,7 @@ DIRECTOR_TOOL_NAMES = (
     "review_team",
     "report",
     "prune_team",
+    "hand_over",
 )
 # How long tree changes are gathered before they are saved as one commit.
 SAVE_DELAY_SECONDS = 2.0
@@ -417,6 +420,9 @@ class DirectorService:
             "prune": self._prune,
         }
         self._memory_adopted_in: Path | None = None
+        # The records of removed teams by the node they were below, as read
+        # at one state of team memory.
+        self._former_read: tuple[str | None, dict[str, list[FormerTeam]]] | None = None
         # The state of team memory whose reports were last taken over.
         self._reports_adopted_at: str | None = None
         self._bwrap: str | None = None
@@ -1463,9 +1469,16 @@ class DirectorService:
             if (messages := team_memory.thread(writer, ic, ic_to_ic=ic_to_ic))
         ]
 
-    def context_of(self, node: OrgNode, role: AgentRole) -> dict[str, Any]:
+    def context_of(
+        self, node: OrgNode, role: AgentRole, *, in_full: bool = False
+    ) -> dict[str, Any]:
         """Who an agent is and everything of the org that concerns its
-        team. Safe from any thread."""
+        team. Safe from any thread.
+
+        Args:
+            in_full: Also what the teams removed from below an IC's team
+                left, which is otherwise only named.
+        """
         store = self.store
         team_memory = self.team_memory
         above = store.get(node.parent_id) if node.parent_id else None
@@ -1514,7 +1527,11 @@ class DirectorService:
                 agreed.contracts for agreed in contracts if agreed.own
             ],
             "reports_of_your_team": [
-                {"by": report.role, "at": report.at, "text": report.text}
+                {
+                    "by": "ic_of_the_team_above" if report.handed_over else report.role,
+                    "at": report.at,
+                    "text": report.text,
+                }
                 for report in self.reports_of(node)
             ],
             "sub_teams": [
@@ -1546,7 +1563,58 @@ class DirectorService:
             ],
             "escalations_for_you_to_settle": to_settle,
         }
+        if role == "ic":
+            # The IC is the one that passes on what removed teams left.
+            context["former_teams"] = [
+                {
+                    "node_id": former.id,
+                    "team": former.title,
+                    "directory": former.path or ".",
+                    "ended": former.ended,
+                    "at": former.at,
+                }
+                | (
+                    {
+                        "was_for": former.purpose,
+                        "reports_as_one": former.compacted_report,
+                        "contracts_between_its_sub_teams": former.contracts,
+                    }
+                    if in_full
+                    else {}
+                )
+                for former in self._former_below(team_memory, node.id)
+            ]
         return context
+
+    def _former_below(self, team_memory: GitStore, node_id: str) -> list[FormerTeam]:
+        """The records of the teams removed from below a node. They are
+        read once for each state of team memory, since a context is built
+        for every message."""
+        head = team_memory.head()
+        with self._lock:
+            if self._former_read is None or self._former_read[0] != head:
+                self._former_read = (head, {})
+            read = self._former_read[1]
+        if node_id not in read:
+            read[node_id] = team_memory.former_below(node_id)
+        return read[node_id]
+
+    def hand_over(self, team: OrgNode, notes: str, contracts: str) -> None:
+        """Give a team what its IC above passes on of the teams that were
+        there before it: notes, kept with the team's reports, and the
+        contracts its own sub-teams must keep. Starts nothing. Safe from
+        any thread."""
+        team_memory = self._memory()
+        if notes.strip():
+            team_memory.append_report(
+                team.id,
+                "ic",
+                Report(at=_instant(), role="ic", text=notes.strip(), handed_over=True),
+            )
+        if contracts.strip():
+            team_memory.write(
+                team.boundary.path, CONTRACTS_FILE, f"{contracts.strip()}\n"
+            )
 
     def reports_of(self, node: OrgNode) -> list[Report]:
         """What the two agents of a team recorded, oldest first. Reports
@@ -3418,7 +3486,14 @@ class DirectorService:
                 await self._archive(team, "replaced", plan["stamp"])
                 store.remove(team.id)
         if proposal.contracts.strip():
-            await asyncio.to_thread(self._record_contracts, node, proposal.contracts)
+            # Contracts that named teams which are gone do not stay beside
+            # the new ones.
+            await asyncio.to_thread(
+                self._record_contracts,
+                node,
+                proposal.contracts,
+                bool(plan["replaces"]),
+            )
 
         teams = [OrgNodeInput.model_validate(team) for team in plan["teams"]]
         for team in teams:
@@ -3500,19 +3575,19 @@ class DirectorService:
         # The shell the IC starts next can no longer write what it gave away.
         with suppress(GitError, OSError):
             await asyncio.to_thread(self._confine, node_id, "ic")
-        started = [f"{child.title} ({child.path})" for child in proposal.children]
+        team_memory = self._memory()
+        # The record each replaced team left last: the one just made.
+        former = [
+            records[-1]
+            for team_id in proposal.replaces
+            if (records := await asyncio.to_thread(team_memory.former, team_id))
+        ]
         self.notify(
             agent_conversation(node, "ic"),
-            "Your Manager approved your sub-teams and they now own their "
-            f"directories: {', '.join(started)}. You can no longer write "
-            "there; carry on with what remains in your boundary. None of "
-            "them has started: a team starts when you give it its task "
-            "with msg_team."
-            + (
-                " The teams they replaced are gone; what those had committed "
-                "is in your checkout."
-                if proposal.replaces
-                else ""
+            approved_notice(
+                proposal.children,
+                former,
+                contracts_replaced=bool(proposal.contracts.strip()),
             ),
         )
 
@@ -3596,12 +3671,16 @@ class DirectorService:
             await self._save()
             intent = run.step_done(intent, "removed")
         self._settling.pop(intent.id, None)
+        records = await asyncio.to_thread(self._memory().former, node_id)
         self.notify(
             parent_ic,
-            f"Your Manager pruned the team {plan['title']!r} ({where}): "
-            f"{plan['reason']} Its uncommitted changes were discarded"
-            + (f" (kept in git as {saved})" if saved else "")
-            + f"; {where} is yours again.",
+            pruned_notice(
+                plan["title"],
+                where,
+                plan["reason"],
+                saved,
+                [record for record in records if record.at == plan["stamp"]],
+            ),
         )
 
     async def _own_account(
@@ -3956,6 +4035,7 @@ class DirectorService:
                 FormerTeam(
                     id=team.id,
                     title=team.title,
+                    above=team.parent_id or "",
                     path=team.boundary.path,
                     purpose=self._runs().marked(TASK).get(team.id) or team.spec_summary,
                     ended=ended,
@@ -4093,14 +4173,19 @@ class DirectorService:
                         _agent_title(summary.title, agent.role),
                     )
 
-    def _record_contracts(self, node: OrgNode, contracts: str) -> None:
-        """Add the contracts of a split to those of the node's boundary."""
+    def _record_contracts(self, node: OrgNode, contracts: str, replace: bool) -> None:
+        """Add the contracts of a split to those of the node's boundary,
+        or put them in their place when the split replaced teams."""
         team_memory = self._memory()
         path = node.boundary.path
         earlier = team_memory.read(
             f"{path}/{CONTRACTS_FILE}" if path else CONTRACTS_FILE
         )
         text = f"{contracts.strip()}\n"
+        if replace:
+            if earlier != text:
+                team_memory.write(path, CONTRACTS_FILE, text)
+            return
         if earlier and text.strip() in earlier:
             return
         team_memory.write(
