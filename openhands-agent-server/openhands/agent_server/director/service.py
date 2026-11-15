@@ -488,9 +488,9 @@ class DirectorService:
         self._save_delay = save_delay
         self._run_limit_retry = run_limit_retry
         self._lock = threading.Lock()
-        # What was kept of teams needing each other, so that an agent that
-        # tries the same file again is counted once.
-        self._needs_kept: set[tuple[str, str, str, str]] = set()
+        # Held from looking a need up in the record to keeping it, so that
+        # an agent that tries the same file again is counted once.
+        self._keeping_needs = threading.Lock()
         self._saving = threading.Lock()
         self._adding_manager = threading.Lock()
         self._counting = threading.Lock()
@@ -1326,12 +1326,21 @@ class DirectorService:
         )
         if beside is None:
             return
-        key = (team.id, beside.id, path, how)
-        with self._lock:
-            if key in self._needs_kept:
-                return
-            self._needs_kept.add(key)
-        self.record_event(team.parent_id, "needed", team, how, [path], beside)
+        with self._keeping_needs:
+            kept = False
+            for event in self.team_memory.history(team.parent_id):
+                if event.kind == "set_up" and event.team_id in (team.id, beside.id):
+                    # A new team in that place is counted from its start.
+                    kept = False
+                elif event.kind == "needed":
+                    kept = kept or (
+                        event.team_id,
+                        event.other_id,
+                        event.paths,
+                        event.detail,
+                    ) == (team.id, beside.id, [path], how)
+            if not kept:
+                self.record_event(team.parent_id, "needed", team, how, [path], beside)
 
     def needs_below(self, node_id: str) -> list[dict[str, Any]]:
         """The pairs of teams directly below a node that needed each
@@ -1516,13 +1525,21 @@ class DirectorService:
             if at:
                 since = now - datetime.fromisoformat(at)
                 quiet[team_id] = int(since.total_seconds() // 60)
+        teams = store.children(node_id)
+        waiting = {}
+        for below in teams:
+            raised = [e.raised_at for e in below.escalations if e.raised_by == "ic"]
+            if raised:
+                since = now - datetime.fromisoformat(min(raised))
+                waiting[below.id] = int(since.total_seconds() // 60)
         self.record_event(node_id, "woken", team, reason)
         self.tell_manager(
             node_id,
             manager_check(
                 reason,
-                store.children(node_id),
+                teams,
                 quiet,
+                waiting,
                 counted["escalations"],
                 self.team_memory.history(node_id),
                 after_successes=after_successes,
@@ -1720,9 +1737,10 @@ class DirectorService:
         now = self._clock().isoformat()
         for node_id, kept in run.marked(PROGRESS).items():
             seen = _progress_of(kept)
-            run.mark(
-                PROGRESS, node_id, json.dumps({"at": now, "head": seen.get("head")})
-            )
+            # A team without a task was told of once, and stays told.
+            told = {"told": now} if "told" in seen else {}
+            again = {"at": now, "head": seen.get("head")}
+            run.mark(PROGRESS, node_id, json.dumps(again | told))
 
     def threads_of(self, node: OrgNode) -> list[Thread]:
         """What the agents of a team have said to Managers and ICs: its own
@@ -2055,6 +2073,17 @@ class DirectorService:
             for path in finding.path.split(", "):
                 if path.strip():
                     self.record_need(node, path.strip(), NEED_FINDING)
+        limit = self.settings.manager_check_ic_escalations
+        if limit and node.parent_id is not None and review.round % limit == 0:
+            with self._counting:
+                counted = self._counted(node.parent_id)
+            self._wake_manager(
+                node.parent_id,
+                f"your IC has sent the work of {node.title!r} back "
+                f"{review.round} times.",
+                counted,
+                team=node,
+            )
         self.notify(
             agent_conversation(node, "ic"), changes_requested(above or node, findings)
         )
@@ -3797,8 +3826,17 @@ class DirectorService:
         await self._accept(intent.node_id, intent.payload["needed_above"])
 
     def _decline(self, node: OrgNode, reason: str) -> None:
-        """Put approved sub-teams aside and tell the IC that proposed them."""
+        """Put approved sub-teams aside, tell the IC that proposed them and
+        keep it in the record, where its Manager reads it."""
+        proposal = node.pending_split
         self.store.update_node(node.id, pending_split=None)
+        self.record_event(
+            node.id,
+            "declined",
+            None,
+            f"approved, and the runtime could not set them up: {reason}",
+            [child.path for child in proposal.children] if proposal else [],
+        )
         self.notify(
             agent_conversation(node, "ic"),
             f"The sub-teams your Manager approved could not be set up: {reason} "

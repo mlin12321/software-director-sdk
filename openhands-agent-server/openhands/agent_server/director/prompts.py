@@ -764,9 +764,10 @@ def success_rate_meaning(escalation_limit: int) -> str:
         return "A team's success rate is the share of its tasks that were accepted."
     return (
         "A team's success rate is the share of its tasks that were accepted "
-        f"without its IC escalating {escalation_limit} times on them, the "
-        "number that wakes you. A task on which that number was reached "
-        "counts against it, also while it is still in hand."
+        f"without its IC escalating {escalation_limit} times on them or "
+        f"its work being sent back {escalation_limit} times, the number "
+        "that wakes you. A task on which that number was reached counts "
+        "against it, also while it is still in hand."
     )
 
 
@@ -849,6 +850,7 @@ def manager_check(
     reason: str,
     teams: list[OrgNode],
     quiet: dict[str, int],
+    blocked: dict[str, int],
     escalations: dict[str, int],
     events: list[TeamEvent] | None = None,
     *,
@@ -862,6 +864,8 @@ def manager_check(
         reason: What was counted, as the Manager is to read it.
         quiet: For how many minutes each team has shown no progress, by
             node id, where that is known.
+        blocked: For how many minutes each blocked team's IC has waited on
+            an escalation it raised, by node id.
         escalations: How many escalations each team's IC has raised on the
             work it has in hand, by node id.
         events: What became of the teams below so far, also of the ones
@@ -880,6 +884,11 @@ def manager_check(
     ]
     for team in teams:
         facts = [team.status if team.agents else "not started: given no task yet"]
+        if team.id in blocked:
+            facts[0] += (
+                f": its IC has waited {_span(blocked[team.id])} on an "
+                "escalation it raised"
+            )
         if team.stopped is not None:
             facts.append(f"stopped by your IC ({team.stopped.reason})")
         if team.review is not None:
@@ -895,7 +904,7 @@ def manager_check(
         waiting = len(team.escalations)
         if waiting:
             facts.append(f"{waiting} unsettled")
-        if team.id in quiet:
+        if team.id in quiet and team.id not in blocked:
             facts.append(f"no progress for {_span(quiet[team.id])}")
         record = records.get(team.id, {})
         so_far = record_line(record)

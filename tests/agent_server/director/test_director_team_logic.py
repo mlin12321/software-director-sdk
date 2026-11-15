@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from openhands.agent_server.director.models import (
+    DirectorSettingsUpdate,
     ReviewFinding,
     SplitChild,
     TeamEvent,
@@ -34,11 +35,11 @@ from tests.agent_server.director.test_director_manager_checks import (
     accepted,
     escalates,
     looks,
+    sent_back,
 )
 from tests.agent_server.director.test_director_review import (
     DONE,
     commit,
-    reject,
     requests,
     run_git,
 )
@@ -143,22 +144,46 @@ async def test_a_look_after_accepted_work_says_that_nothing_went_wrong(
     assert "grossly inefficient" in look
 
 
-async def test_work_that_is_sent_back_is_kept_and_wakes_no_manager(
-    service: DirectorService, launcher: FakeLauncher, repo: Path
-):
-    for number in range(4):
-        commit(repo, f"services/api/try{number}.txt", "again\n")
-        await use(service, ic(service, API), SubmitReviewTool, DONE)
-        await use(service, ic(service), ReviewTeamTool, reject(API))
-    await service.settled()
-
-    assert looks(service, launcher) == []
+def record_of_api(service: DirectorService) -> dict:
     [api] = [
         record
         for record in track_records(service.team_memory.history("root"))
         if record["node_id"] == API
     ]
-    assert api["sent_back"] == 4
+    return api
+
+
+async def test_work_sent_back_less_often_than_the_limit_wakes_no_manager(
+    service: DirectorService, launcher: FakeLauncher, repo: Path
+):
+    await sent_back(service, repo, API, times=2)
+
+    assert looks(service, launcher) == []
+    assert record_of_api(service)["sent_back"] == 2
+
+
+async def test_work_sent_back_as_often_as_the_limit_wakes_the_manager_once(
+    service: DirectorService, launcher: FakeLauncher, repo: Path
+):
+    await sent_back(service, repo, API, times=4)
+
+    [look] = looks(service, launcher)
+    assert "your IC has sent the work of 'API' back 3 times." in look
+    assert "its work being sent back 3 times" in look
+    # The task counts against the team, also once it is accepted.
+    assert success_rate(record_of_api(service)) == "success rate 0 of 1 task (0%)"
+    await accepted(service, repo, API)
+    assert success_rate(record_of_api(service)) == "success rate 0 of 1 task (0%)"
+
+
+async def test_send_backs_wake_nobody_when_the_check_is_off(
+    service: DirectorService, launcher: FakeLauncher, repo: Path
+):
+    service.update_settings(DirectorSettingsUpdate(manager_check_ic_escalations=0))
+
+    await sent_back(service, repo, API, times=3)
+
+    assert looks(service, launcher) == []
 
 
 async def test_a_manager_may_prune_a_team_with_nothing_against_it(
@@ -321,6 +346,33 @@ async def test_a_refused_write_into_a_team_beside_is_kept_once_for_each_file(
     assert (kept.detail, kept.paths) == ("write refused", ["apps/web/page.js"])
     # Once is not worth saying.
     assert service.needs_below("root") == []
+
+
+async def test_a_need_is_kept_once_across_a_restart_of_the_server(
+    service: DirectorService, launcher: FakeLauncher, repo: Path
+):
+    refused_in_web(service, repo, "page.js")
+    await service.settled()
+    again = DirectorService(
+        repo,
+        save_delay=0,
+        remembered=repo.parent / "state" / "director.json",
+        server_url="http://127.0.0.1:8000",
+    )
+    await again.start(launcher)
+    try:
+        refused_in_web(again, repo, "page.js")
+        refused_in_web(again, repo, "other.js")
+        await again.settled()
+        needed_files = [
+            event.paths
+            for event in again.team_memory.history("root")
+            if event.kind == "needed"
+        ]
+    finally:
+        await again.aclose()
+
+    assert needed_files == [["apps/web/page.js"], ["apps/web/other.js"]]
 
 
 async def test_an_ic_is_told_of_teams_that_keep_needing_each_other(
