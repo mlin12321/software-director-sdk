@@ -320,7 +320,7 @@ async def test_an_agent_calls_the_directors_tools_with_its_token_alone(
 
     listed = await client.get("/api/director/tools", headers=headers)
     spec = await client.post(
-        "/api/director/tools/write_spec", headers=headers, json={"content": "# Spec"}
+        "/api/director/tools/write_spec", headers=headers, json={"text": "# Spec"}
     )
     # Only a Manager approves sub-teams, and this is the IC.
     refused = await client.post(

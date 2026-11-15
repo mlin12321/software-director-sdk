@@ -31,7 +31,7 @@ class ReadNodeContextAction(Action):
 class WriteSpecAction(Action):
     """Replace the spec of your team's boundary."""
 
-    content: str = Field(description="The whole spec, in Markdown.")
+    text: str = Field(description="The whole spec, in Markdown.")
 
 
 TEAMS_EXAMPLE = """\
@@ -273,7 +273,7 @@ class WriteSpecTool(_DirectorTool[WriteSpecAction]):
     @classmethod
     def act(cls):
         return lambda service, caller, action: pod_actions.write_spec(
-            service, caller, action.content
+            service, caller, action.text
         )
 
 
