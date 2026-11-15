@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from openhands.agent_server.director.git import save_and_discard
+from openhands.agent_server.director.git import bring_over, save_and_discard
 from tests.agent_server.director.conftest import run_git
 
 
@@ -64,3 +64,48 @@ def test_nothing_is_saved_when_everything_is_committed(repo: Path):
 
     assert run_git(repo, "for-each-ref", "refs/agents/pruned") == ""
     assert (repo / "README.md").read_text() == "outside the path\n"
+
+
+def with_a_second_checkout(repo: Path, tmp_path: Path) -> Path:
+    (repo / "svc").mkdir()
+    (repo / "svc" / "kept.py").write_text("committed\n")
+    run_git(repo, "add", ".")
+    run_git(repo, "commit", "--quiet", "-m", "svc")
+    other = tmp_path / "other"
+    run_git(repo, "worktree", "add", "--quiet", "-b", "team", str(other))
+    return other
+
+
+def test_uncommitted_work_is_brought_over_to_a_checkout_on_the_same_commit(
+    repo: Path, tmp_path: Path
+):
+    other = with_a_second_checkout(repo, tmp_path)
+    (repo / "svc" / "new.py").write_text("new\n")
+    (repo / "svc" / "kept.py").write_text("changed\n")
+    (repo / "README.md").write_text("not theirs\n")
+
+    moved = bring_over(repo, other, "svc", REF)
+
+    assert sorted(moved) == ["svc/kept.py", "svc/new.py"]
+    assert (other / "svc" / "new.py").read_text() == "new\n"
+    assert (other / "svc" / "kept.py").read_text() == "changed\n"
+    assert run_git(repo, "status", "--porcelain").split() == ["M", "README.md"]
+    assert sorted(run_git(other, "status", "--porcelain", "-uall").split()) == [
+        "??",
+        "M",
+        "svc/kept.py",
+        "svc/new.py",
+    ]
+
+
+def test_nothing_is_brought_over_to_a_checkout_on_another_commit(
+    repo: Path, tmp_path: Path
+):
+    other = with_a_second_checkout(repo, tmp_path)
+    (other / "svc" / "theirs.py").write_text("theirs\n")
+    run_git(other, "add", "-A")
+    run_git(other, "commit", "--quiet", "-m", "theirs")
+    (repo / "svc" / "kept.py").write_text("changed\n")
+
+    assert bring_over(repo, other, "svc", REF) == []
+    assert (repo / "svc" / "kept.py").read_text() == "changed\n"

@@ -304,7 +304,7 @@ async def test_the_directors_own_notices_bring_what_changed_too(
     await use(service, manager(service), MsgIcTool, MsgIcAction(text="Carry on."))
 
     approved, written = launcher.messages_to(ic(service))[-2:]
-    assert approved.startswith("[director] Your Manager approved your sub-teams")
+    assert approved.startswith("[director] Your team was split: your Manager approved")
     told = update_of(approved)
     assert told is not None
     assert [team["node_id"] for team in told["sub_teams"]["added"]] == [

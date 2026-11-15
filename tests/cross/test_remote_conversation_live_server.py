@@ -3569,7 +3569,7 @@ def _scripted_org_llm(
                 done = sum(message.role == "tool" for message in messages)
                 if done < len(calls):
                     return tool_call(*calls[done])
-        if any("Your Manager approved your sub-teams" in text_of(m) for m in messages):
+        if any("your Manager approved your sub-teams" in text_of(m) for m in messages):
             # Approved teams wait for their task; one call a turn.
             tasked = sum(
                 call.name == "msg_team"

@@ -43,6 +43,7 @@ from openhands.agent_server.director.context import (
 from openhands.agent_server.director.fixture import build_fixture_nodes
 from openhands.agent_server.director.git import (
     GitError,
+    bring_over,
     changed_together,
     enclosing_repository,
     git,
@@ -151,12 +152,14 @@ from openhands.agent_server.director.prompts import (
     from_director,
     hand_over_brief,
     handed_over_notice,
+    left_for_team,
     manager_check,
     need_words,
     needs_between,
     proposal_facts,
     pruned_job,
     pruned_notice,
+    put_aside_notice,
     record_line,
     replaced_job,
     review_request,
@@ -277,6 +280,11 @@ MODEL_CALL_TIMEOUT_SECONDS = 120.0
 # Where, in the org's repository, the uncommitted work a prune discarded is
 # kept.
 PRUNED_REFS = "refs/agents/pruned"
+# Where what an IC left uncommitted in the directory of a sub-team with a
+# checkout of its own is kept: under `left`, what went to the team as it
+# started; under `aside`, what was in the way of the team's accepted work.
+LEFT_REFS = "refs/agents/left"
+ASIDE_REFS = "refs/agents/aside"
 # An agent whose conversation is gone, or could not be started.
 # An agent that was running when its org was paused, and runs again when it
 # is resumed.
@@ -1014,7 +1022,9 @@ class DirectorService:
             in_hand_over = store.find_hand_over(str(conversation_id)) is not None
             return hand_over_refusal(paths[0]) if in_hand_over else None
         node, role = found
-        sub_teams = store.children(node.id)
+        # A team that has not started holds no one out of its directory:
+        # the IC above may finish what it has there.
+        sub_teams = [team for team in store.children(node.id) if team.agents]
         top = _checkout_root(node.worktree_path)
         for named in paths:
             target = Path(os.path.realpath(Path(node.worktree_path) / named))
@@ -2944,7 +2954,11 @@ class DirectorService:
             return None
         shells = self._shells()
         git_dir = str(shells.parent)
-        sub_teams = [child.boundary.path for child in self.store.children(node_id)]
+        children = self.store.children(node_id)
+        sub_teams = [child.boundary.path for child in children]
+        # Its git commits nothing in a sub-team's directory; it may still
+        # write in that of a team that has not started.
+        closed = [child.boundary.path for child in children if child.agents]
         rc: Path | None = None
         bin_dir: Path | None = None
         if own_git and real_git:
@@ -2977,7 +2991,7 @@ class DirectorService:
                 checkouts=self._checkouts(),
                 private=shells,
                 directory=node.boundary.path if writes else None,
-                sub_team_directories=sub_teams,
+                sub_team_directories=closed,
                 rcfile=rc,
             ),
         )
@@ -2990,7 +3004,7 @@ class DirectorService:
                 checkouts=self._checkouts(),
                 private=shells,
                 directory=node.boundary.path if writes else None,
-                sub_team_directories=sub_teams,
+                sub_team_directories=closed,
                 first_on_path=bin_dir,
             ),
         )
@@ -3803,12 +3817,46 @@ class DirectorService:
         self._runs().mark(TASK, node_id, task)
         self.progressed(node_id)
         started = self.store.get(node_id)
+        left: list[str] = []
         if started is not None:
             # A team of the same name before it left nothing to count on.
             self._work_accepted(started)
-        await self._start_agent(node_id, "ic", parent_ic, task, checkout)
+            if above is not None:
+                with suppress(GitError, OSError):
+                    left = await asyncio.to_thread(
+                        uncommitted,
+                        Path(above.worktree_path),
+                        started.boundary.path,
+                    )
+        await self._start_agent(
+            node_id,
+            "ic",
+            parent_ic,
+            f"{task}\n\n{left_for_team(left)}" if left else task,
+            checkout,
+        )
+        if above is not None:
+            await asyncio.to_thread(self._pass_down, above, node_id)
         purpose = intent.payload.get("purpose", task)
         self._enqueue(lambda: self._summarize(node_id, purpose, first=True), node_id)
+
+    def _pass_down(self, above: OrgNode, node_id: str) -> None:
+        """Close a started team's directory to the IC above, and bring what
+        that IC left uncommitted there into the team's own checkout."""
+        team = self.store.get(node_id)
+        if team is None or not team.worktree_path:
+            return
+        with suppress(GitError, OSError):
+            # The shell the IC above starts next cannot write there.
+            self._confine(above.id, "ic")
+        source, target = Path(above.worktree_path), Path(team.worktree_path)
+        if _checkout_root(str(source)) == _checkout_root(str(target)):
+            # In one checkout the team finds the files where they are.
+            return
+        try:
+            bring_over(source, target, team.boundary.path, f"{LEFT_REFS}/{team.id}")
+        except (GitError, OSError):
+            logger.exception("Could not pass what was left to node %s", team.id)
 
     async def _do_finish_split(self, intent: Intent) -> None:
         await self._finish_split(intent.node_id)
@@ -4070,12 +4118,19 @@ class DirectorService:
             if (records := await asyncio.to_thread(team_memory.former, team_id))
         ]
         replaced = bool(proposal.contracts.strip())
+        unfinished: dict[str, list[str]] = {}
+        for child in proposal.children:
+            with suppress(GitError, OSError):
+                unfinished[child.path] = await asyncio.to_thread(
+                    uncommitted, Path(node.worktree_path), child.path
+                )
         self.notify(
             agent_conversation(node, "ic"),
             approved_notice(
                 proposal.children,
                 former,
                 contracts_replaced=replaced,
+                unfinished=unfinished,
             ),
         )
         if former:
@@ -4401,6 +4456,7 @@ class DirectorService:
         team, checkout = Path(node.worktree_path), Path(above.worktree_path)
         merged = False
         if _checkout_root(str(team)) != _checkout_root(str(checkout)):
+            await asyncio.to_thread(self._put_aside, above, node)
             try:
                 result = await asyncio.to_thread(
                     merge_back, checkout, team, node.boundary.path, node.title
@@ -4675,6 +4731,24 @@ class DirectorService:
         )
         shorter = compaction.compacted(answer or "", reports, _instant())
         return shorter[0].text if shorter else full
+
+    def _put_aside(self, above: OrgNode, team: OrgNode) -> None:
+        """Take out of the checkout above what is uncommitted in the
+        directory of a team with a checkout of its own, where it would stop
+        the team's accepted work from coming in, and tell the IC above."""
+        checkout, path = Path(above.worktree_path), team.boundary.path
+        ref = f"{ASIDE_REFS}/{team.id}/{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}"
+        try:
+            files = uncommitted(checkout, path)
+            if not files or save_and_discard(checkout, path, ref) is None:
+                return
+        except (GitError, OSError):
+            logger.exception("Could not put aside what is in %s", path)
+            return
+        self.notify(
+            agent_conversation(above, "ic"),
+            put_aside_notice(team, files, ref),
+        )
 
     def _discard_work(self, teams: list[OrgNode], stamp: str) -> str | None:
         """Discard the uncommitted work of ``teams``, the pruned team first.

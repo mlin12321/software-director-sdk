@@ -32,6 +32,7 @@ from tests.agent_server.director.test_director_review import (
     commit,
     in_own_worktree,
 )
+from tests.agent_server.director.test_director_service import attempt, create
 from tests.agent_server.director.test_director_tools import (
     APPROVE,
     PRUNE_API,
@@ -411,12 +412,79 @@ async def test_approved_teams_are_set_up_and_start_nothing(
     [told] = [
         text
         for text in launcher.messages_to(ic(service))
-        if "Your Manager approved" in text
+        if "your Manager approved" in text
     ]
     assert "a team starts when you give it its task with msg_team" in told
     # What only an IC with sub-teams must know comes with them.
     assert "list under `keep`" in told
     assert "goes on up without another review" in told
+
+
+async def test_a_split_says_what_the_ic_left_and_lets_it_finish_until_the_team_starts(
+    fresh: DirectorService, launcher: FakeLauncher, repo: Path
+):
+    service = fresh
+    pay = repo / "services" / "api" / "pay.py"
+    pay.parent.mkdir(parents=True)
+    pay.write_text("draft\n")
+    await use(service, ic(service), MsgManagerTool, SPLIT)
+    await use(service, manager(service), ApproveTeamsTool, APPROVE)
+
+    [told] = [
+        text
+        for text in launcher.messages_to(ic(service))
+        if "your Manager approved" in text
+    ]
+    assert "How the split changes your own work:" in told
+    assert "  - API (services/api): services/api/pay.py" in told
+    assert "You may finish them" in told and "Web (apps/web):" not in told
+    # The team has not started, so the IC may finish what it has there.
+    assert attempt(service, ic(service), "file_editor", create(pay)) is None
+
+    given = await use(
+        service, ic(service), MsgTeamTool, MsgTeamAction(team=API, text="Take payments")
+    )
+    await service.settled()
+
+    assert "The 1 file(s) you left uncommitted in its directory" in given.text
+    assert "belongs to your sub-team 'API'" in (
+        attempt(service, ic(service), "file_editor", create(pay)) or ""
+    )
+    assert "did not commit them: services/api/pay.py. They are yours now." in (
+        launcher.derived[-1].task
+    )
+
+
+async def test_a_split_that_leaves_nothing_unfinished_says_so(
+    fresh: DirectorService, launcher: FakeLauncher
+):
+    service = fresh
+    await use(service, ic(service), MsgManagerTool, SPLIT)
+    await use(service, manager(service), ApproveTeamsTool, APPROVE)
+
+    [told] = [
+        text
+        for text in launcher.messages_to(ic(service))
+        if "your Manager approved" in text
+    ]
+    assert "You left nothing uncommitted there." in told
+    assert "You have changes there" not in told
+
+
+async def test_what_is_uncommitted_in_a_sub_teams_directory_is_not_the_ics_to_submit(
+    service: DirectorService, repo: Path
+):
+    schema = repo / "services" / "api" / "db" / "schema.sql"
+    schema.parent.mkdir(parents=True)
+    schema.write_text("create table orders (id int);\n")
+
+    refused = await use(service, ic(service, API), SubmitReviewTool, DONE)
+
+    assert refused.is_error
+    assert "services/api/db/schema.sql in the directory of your sub-team 'DB'" in (
+        refused.text
+    )
+    assert "Wait until it has submitted its work" in refused.text
 
 
 async def test_a_team_starts_with_the_first_message_from_the_ic_above(

@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Literal
 from uuid import UUID, uuid4
 
+from openhands.agent_server.director.boundary import owns
 from openhands.agent_server.director.git import uncommitted
 from openhands.agent_server.director.git_store import SPEC_FILE
 from openhands.agent_server.director.models import (
@@ -462,6 +463,22 @@ def submit_review(service: DirectorService, caller: Caller, summary: str) -> str
     parent = store.get(node.parent_id) if node.parent_id else None
     if parent is not None:
         left = uncommitted(Path(node.worktree_path), node.boundary.path)
+        for team in store.children(node.id):
+            theirs = [path for path in left if owns(team, path)]
+            if theirs:
+                raise Conflict(
+                    f"{', '.join(theirs[:10])}"
+                    + (f" and {len(theirs) - 10} more" if len(theirs) > 10 else "")
+                    + f" in the directory of your sub-team {team.title!r} "
+                    "is not committed, and is that team's to commit. "
+                    + (
+                        "Wait until it has submitted its work and you have accepted it."
+                        if team.agents
+                        else "Give the team its task with msg_team; it "
+                        "commits and submits what is there, and you review "
+                        "that."
+                    )
+                )
         if left:
             raise Conflict(
                 "Commit your team's work before you submit it. Not "
@@ -543,6 +560,11 @@ def msg_team(service: DirectorService, caller: Caller, team: str, text: str) -> 
         raise Invalid("A message cannot be empty")
     target = _team_below(service, caller, team)
     new = agent_conversation(target, "ic") is None
+    left = (
+        uncommitted(Path(caller.node.worktree_path), target.boundary.path)
+        if new
+        else []
+    )
     if service.message_team(caller.node.id, target.id, text):
         return (
             f"Sent to the IC of {target.title!r}. Its team was stopped and goes on now."
@@ -552,6 +574,13 @@ def msg_team(service: DirectorService, caller: Caller, team: str, text: str) -> 
             f"{target.title!r} starts with what you wrote as its task. Its IC "
             "does not answer in a message: it submits its work for your "
             "review, or raises an escalation."
+            + (
+                f" The {len(left)} file(s) you left uncommitted in its "
+                "directory are the team's now, and it is told of them. From "
+                "here on a write of yours there is refused."
+                if left
+                else ""
+            )
         )
     return (
         f"Sent to the IC of {target.title!r}. It does not answer in a "

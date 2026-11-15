@@ -517,7 +517,7 @@ async def test_work_that_cannot_be_taken_in_goes_back_to_the_team(
     assert "sent back" in launcher.messages_to(ic(service))[-1]
 
 
-async def test_a_merge_the_checkout_above_is_not_ready_for_waits_for_its_ic(
+async def test_what_the_ic_above_wrote_in_a_started_teams_directory_is_put_aside(
     service: DirectorService, launcher: FakeLauncher, repo: Path, tmp_path: Path
 ):
     await split_root(service)
@@ -530,9 +530,17 @@ async def test_a_merge_the_checkout_above_is_not_ready_for_waits_for_its_ic(
     await use(service, ic(service), ReviewTeamTool, accept("apps.web"))
 
     review = node(service, "apps.web").review
-    assert review is not None and review.state == "pending"
-    assert (repo / "apps" / "web" / "page.tsx").read_text() == "in the way\n"
-    assert "accept it again" in launcher.messages_to(ic(service))[-1]
+    assert review is not None and review.state == "accepted"
+    assert (repo / "apps" / "web" / "page.tsx").read_text() == "export {}\n"
+    [aside] = [
+        text for text in launcher.messages_to(ic(service)) if "were taken out" in text
+    ]
+    assert "your sub-team 'Web': apps/web/page.tsx." in aside
+    [kept] = run_git(
+        repo, "for-each-ref", "--format=%(refname)", "refs/agents/aside"
+    ).split()
+    assert kept in aside
+    assert run_git(repo, "show", f"{kept}:apps/web/page.tsx") == "in the way\n"
 
 
 async def test_the_top_team_is_done_once_it_submits_and_hears_its_own_findings(

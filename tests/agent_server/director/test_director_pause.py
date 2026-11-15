@@ -317,7 +317,7 @@ async def test_the_end_of_a_split_cut_off_by_a_crash_is_told_once(
 ):
     first = await started(repo, launcher)
     await use(first, ic(first), MsgManagerTool, SPLIT)
-    ended = end_server_at_message(launcher, "Your Manager approved your sub-teams")
+    ended = end_server_at_message(launcher, "Your team was split")
     await cut_off(
         launcher, ended, use(first, manager(first), ApproveTeamsTool, APPROVE)
     )

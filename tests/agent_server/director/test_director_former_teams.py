@@ -367,7 +367,7 @@ async def test_a_first_split_reminds_of_the_spec_and_hands_nothing_over(
     [told] = [
         text
         for text in launcher.messages_to(ic(service))
-        if "Your Manager approved" in text
+        if "your Manager approved" in text
     ]
 
     assert "Rewrite your own spec with `write_spec`" in told
