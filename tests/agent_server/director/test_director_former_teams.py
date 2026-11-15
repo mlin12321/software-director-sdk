@@ -7,14 +7,13 @@ from pathlib import Path
 import pytest
 
 from openhands.agent_server.director import compaction
-from openhands.agent_server.director.boundary import write_refusal
 from openhands.agent_server.director.git_store import GitStore
 from openhands.agent_server.director.models import OldSpec, Report, SplitChild
 from openhands.agent_server.director.prompts import HAND_OVER_ROLE, left_behind
 from openhands.agent_server.director.run_state import TASK
 from openhands.agent_server.director.service import (
     DirectorService,
-    agent_conversation,
+    hand_over_of,
 )
 from openhands.agent_server.director.tools import (
     ApproveTeamsTool,
@@ -39,6 +38,7 @@ from openhands.agent_server.director.tools.definition import (
 from openhands.sdk.conversation.state import ConversationExecutionStatus
 from tests.agent_server.director.conftest import FakeLauncher, tasked
 from tests.agent_server.director.test_director_limits import started
+from tests.agent_server.director.test_director_service import attempt, create
 from tests.agent_server.director.test_director_tools import (
     APPROVE,
     PRUNE_API,
@@ -97,8 +97,9 @@ ORDERS = SplitChild(title="Orders", path="services/api", task="Keep the orders")
 
 
 def aside(service: DirectorService, node_id: str = "root") -> str | None:
-    """The hand-over conversation of a team's IC."""
-    return agent_conversation(node(service, node_id), "handover")
+    """The conversation of a team's IC in hand-over mode."""
+    mode = hand_over_of(node(service, node_id))
+    return mode.conversation_id if mode else None
 
 
 def given_aside(service: DirectorService, launcher: FakeLauncher) -> str:
@@ -529,7 +530,9 @@ async def test_a_hand_over_is_a_side_conversation_of_the_ic_with_its_own_briefin
     # It is told who it is, what changed, what was left and what its team
     # works to; none of it depends on what the IC's own conversation holds.
     told = start.task
-    assert "You are the IC of the team" in told and "in a side conversation" in told
+    assert "You are the IC of the team" in told and "in hand-over mode" in told
+    # The team still has its two agents and no third.
+    assert [agent.role for agent in node(service, "root").agents] == ["ic", "manager"]
     assert "- Orders (node services.api, services/api): Keep the orders" in told
     assert "Its directory is now in the boundary of Orders (services/api)." in told
     assert "Its reports, as one:\nSQLite, no cache." in told
@@ -539,7 +542,7 @@ async def test_a_hand_over_is_a_side_conversation_of_the_ic_with_its_own_briefin
     assert '"sub_teams"' in told
     # The IC's own conversation is told of it and is given none of the material.
     main = launcher.messages_to(ic(service))[-1]
-    assert "side conversation of yours" in main
+    assert "in hand-over mode: a side conversation of yours" in main
     assert "API (services/api)" in main
     assert "SQLite, no cache." not in main and "`hand_over`: notes" not in main
 
@@ -569,8 +572,8 @@ async def test_a_hand_over_conversation_hands_over_and_writes_the_spec_and_no_mo
     for answer in refused:
         assert answer.is_error and "for the hand-over alone" in answer.text
     assert node(service, API).agents == []
-    refusal = write_refusal(node(service, "root"), "handover", [], "README.md")
-    assert refusal is not None and "does not edit files" in refusal
+    refusal = attempt(service, side, "file_editor", create("README.md"))
+    assert refusal is not None and "In hand-over mode you do not edit files" in refusal
 
 
 async def test_the_ic_is_told_what_its_hand_over_conversation_did_when_it_ends(
@@ -590,7 +593,7 @@ async def test_the_ic_is_told_what_its_hand_over_conversation_did_when_it_ends(
     await service.settled()
 
     told = launcher.messages_to(ic(service))[-1]
-    assert "The hand-over in your side conversation has ended." in told
+    assert "Your hand-over mode has ended." in told
     assert "It gave notes or contracts to: Orders." in told
     assert "It rewrote your team's spec." in told
     # Told once.
@@ -600,7 +603,7 @@ async def test_the_ic_is_told_what_its_hand_over_conversation_did_when_it_ends(
     ended = [
         text
         for text in launcher.messages_to(ic(service))
-        if "The hand-over in your side conversation has ended." in text
+        if "Your hand-over mode has ended." in text
     ]
     assert len(ended) == 1
 
@@ -632,7 +635,8 @@ async def test_each_hand_over_gets_a_conversation_of_its_own(
 
     second = aside(service)
     assert second is not None and second != first
-    assert [a.role for a in node(service, "root").agents].count("handover") == 1
+    mode = hand_over_of(node(service, "root"))
+    assert mode is not None and mode.status == "idle"
     # The first is no agent of the org any more.
     late = await use(
         service, first, HandOverTool, HandOverAction(team=WEB, notes="Too late.")
@@ -641,7 +645,7 @@ async def test_each_hand_over_gets_a_conversation_of_its_own(
     assert "your Manager pruned the team 'Orders'" in given_aside(service, launcher)
 
 
-async def test_the_ic_does_the_hand_over_itself_where_no_side_conversation_starts(
+async def test_an_ic_is_told_when_its_hand_over_mode_cannot_start(
     service: DirectorService, launcher: FakeLauncher, monkeypatch: pytest.MonkeyPatch
 ):
     async def fails(*args: object, **kwargs: object) -> None:
@@ -653,6 +657,6 @@ async def test_the_ic_does_the_hand_over_itself_where_no_side_conversation_start
 
     assert aside(service) is None
     told = launcher.messages_to(ic(service))[-1]
-    assert "could not be started, so it is yours to do here" in told
-    assert "Team 'API' (node services.api, services/api), replaced." in told
-    assert "`hand_over`" in told and "`write_spec`" in told
+    assert "Your hand-over mode could not be started" in told
+    # It is told so and no more: the job is not moved to its main conversation.
+    assert "Team 'API'" not in told and "`hand_over`" not in told

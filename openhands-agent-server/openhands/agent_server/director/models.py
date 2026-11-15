@@ -10,16 +10,9 @@ from openhands.agent_server.models import StartConversationRequest
 # A pod has an IC and a Manager. The IC of a team leads it, is a report of
 # the team above, and does the code work in its boundary that no sub-team
 # has taken on.
-# "handover" is a side conversation of a team's IC: started by the director
-# for one hand-over, with a context of its own.
-AgentRole = Literal["ic", "manager", "handover"]
-# The two agents every team has, which keep reports.
+AgentRole = Literal["ic", "manager"]
 AGENT_ROLES: tuple[AgentRole, ...] = ("ic", "manager")
-ROLE_NAMES: dict[AgentRole, str] = {
-    "ic": "IC",
-    "manager": "Manager",
-    "handover": "IC, hand-over",
-}
+ROLE_NAMES: dict[AgentRole, str] = {"ic": "IC", "manager": "Manager"}
 # An IC and a Manager.
 AGENTS_PER_TEAM = 2
 
@@ -77,10 +70,26 @@ class Boundary(BaseModel):
     )
 
 
+class HandOverMode(BaseModel):
+    """An IC in hand-over mode: beside its main conversation it has one the
+    director started to pass on what removed teams left. That conversation
+    has a context of its own and does none of the team's work."""
+
+    conversation_id: str
+    status: str
+
+
 class AgentRef(BaseModel):
     """One agent in a node's pod."""
 
     role: AgentRole
+    hand_over: HandOverMode | None = Field(
+        default=None,
+        description=(
+            "Set on an IC that is, or last was, in hand-over mode: the side "
+            "conversation of its latest hand-over and how that stands."
+        ),
+    )
     conversation_id: str | None = Field(
         default=None,
         description="None until a conversation has been started for this agent.",

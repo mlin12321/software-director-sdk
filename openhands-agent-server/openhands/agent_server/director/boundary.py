@@ -73,6 +73,14 @@ def owns(node: OrgNode, path: str) -> bool:
     return path == node.boundary.path or is_inside(path, node.boundary.path)
 
 
+def hand_over_refusal(path: str) -> str:
+    """Why an IC may not write ``path`` from its hand-over conversation."""
+    return (
+        f"In hand-over mode you do not edit files, so {path!r} was not "
+        "changed. Leave changes to your main conversation."
+    )
+
+
 def write_refusal(
     node: OrgNode, role: AgentRole, sub_teams: Iterable[OrgNode], path: str
 ) -> str | None:
@@ -81,11 +89,6 @@ def write_refusal(
     Returns:
         The reason, worded for the agent, or None when it may.
     """
-    if role == "handover":
-        return (
-            f"A hand-over conversation does not edit files, so {path!r} was not "
-            "changed. Leave changes to your main conversation."
-        )
     if role == "manager":
         return (
             f"A Manager does not edit files, so {path!r} was not changed. Have "

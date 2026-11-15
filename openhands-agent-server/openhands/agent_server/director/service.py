@@ -27,6 +27,7 @@ from openhands.agent_server.director.acp import (
     tools_server,
 )
 from openhands.agent_server.director.boundary import (
+    hand_over_refusal,
     nearest_team,
     write_refusal,
     written_paths,
@@ -78,6 +79,7 @@ from openhands.agent_server.director.models import (
     DirectorSettingsUpdate,
     FileEdit,
     FormerTeam,
+    HandOverMode,
     InheritedSpec,
     MemorySync,
     OldSpec,
@@ -128,6 +130,7 @@ from openhands.agent_server.director.org_store import (
 )
 from openhands.agent_server.director.pods import PodLauncher, StartedAgent
 from openhands.agent_server.director.prompts import (
+    HAND_OVER_FAILED,
     HAND_OVER_ROLE,
     MANAGER_ROLE,
     POD_PROTOCOL,
@@ -300,6 +303,14 @@ def agent_conversation(node: OrgNode, role: AgentRole) -> str | None:
     for agent in node.agents:
         if agent.role == role:
             return agent.conversation_id
+    return None
+
+
+def hand_over_of(node: OrgNode) -> HandOverMode | None:
+    """The hand-over mode of the node's IC, if it is or was in it."""
+    for agent in node.agents:
+        if agent.role == "ic":
+            return agent.hand_over
     return None
 
 
@@ -955,11 +966,12 @@ class DirectorService:
         if store is None or event.action is None:
             return None
         found = store.find_by_conversation(str(conversation_id))
-        if found is None:
-            return None
         paths = written_paths(event.tool_name, event.action.model_dump())
         if not paths:
             return None
+        if found is None:
+            in_hand_over = store.find_hand_over(str(conversation_id)) is not None
+            return hand_over_refusal(paths[0]) if in_hand_over else None
         node, role = found
         sub_teams = store.children(node.id)
         top = _checkout_root(node.worktree_path)
@@ -1302,10 +1314,14 @@ class DirectorService:
         for found in teams:
             teams.extend(store.children(found.id))
         return [
-            agent.conversation_id
+            conversation_id
             for found in teams
             for agent in found.agents
-            if agent.conversation_id is not None
+            for conversation_id in (
+                agent.conversation_id,
+                agent.hand_over.conversation_id if agent.hand_over else None,
+            )
+            if conversation_id is not None
         ]
 
     async def _stop(self, node_id: str) -> None:
@@ -1496,8 +1512,6 @@ class DirectorService:
             in_full: Also what the teams removed from below an IC's team
                 left, which is otherwise only named.
         """
-        if role == "handover":
-            role = "ic"
         store = self.store
         team_memory = self.team_memory
         above = store.get(node.parent_id) if node.parent_id else None
@@ -2539,6 +2553,26 @@ class DirectorService:
             with suppress(NotFound):
                 store.set_agent(node_id, role, status=AGENT_PAUSED)
             stopping.append(conversation_id)
+        # An IC in hand-over mode is paused in that conversation too.
+        modes = [
+            (node.id, mode)
+            for node in store.all()
+            if (mode := hand_over_of(node)) is not None
+        ]
+        running = await launcher.statuses(
+            [UUID(mode.conversation_id) for _, mode in modes]
+        )
+        for node_id, mode in modes:
+            aside = UUID(mode.conversation_id)
+            if running.get(aside) != ConversationExecutionStatus.RUNNING:
+                continue
+            run.mark(RUNNING, mode.conversation_id, node_id)
+            self._running.add(mode.conversation_id)
+            with suppress(NotFound):
+                store.set_hand_over(
+                    node_id, mode.model_copy(update={"status": AGENT_PAUSED})
+                )
+            stopping.append(aside)
         await asyncio.gather(*(launcher.pause(agent) for agent in stopping))
 
     async def _run_again(self, conversation_id: str, note: str | None) -> None:
@@ -2582,7 +2616,9 @@ class DirectorService:
         relative = target.relative_to(top).as_posix()
         return "" if relative == "." else relative
 
-    def _confine(self, node_id: str, role: AgentRole) -> ToolParams | None:
+    def _confine(
+        self, node_id: str, role: AgentRole, hand_over: str | None = None
+    ) -> ToolParams | None:
         """Write the shell an agent's terminal starts.
 
         Where the server can, the shell holds the agent to its team's
@@ -2594,11 +2630,15 @@ class DirectorService:
             no shell of its own.
         """
         node = self.store.get(node_id)
-        conversation_id = agent_conversation(node, role) if node else None
+        conversation_id = hand_over or (
+            agent_conversation(node, role) if node else None
+        )
         if node is None or conversation_id is None:
             return None
+        # An IC writes in its boundary from its main conversation alone.
+        writes = role == "ic" and hand_over is None
         bash, real_git = shutil.which("bash"), shutil.which("git")
-        own_git = role == "ic" and os.name != "nt" and bash and real_git
+        own_git = writes and os.name != "nt" and bash and real_git
         if self._bwrap is None and not own_git:
             return None
         shells = self._shells()
@@ -2635,7 +2675,7 @@ class DirectorService:
                 bash or "/bin/sh",
                 checkouts=self._checkouts(),
                 private=shells,
-                directory=node.boundary.path if role == "ic" else None,
+                directory=node.boundary.path if writes else None,
                 sub_team_directories=sub_teams,
                 rcfile=rc,
             ),
@@ -2648,7 +2688,7 @@ class DirectorService:
                 self._bwrap,
                 checkouts=self._checkouts(),
                 private=shells,
-                directory=node.boundary.path if role == "ic" else None,
+                directory=node.boundary.path if writes else None,
                 sub_team_directories=sub_teams,
                 first_on_path=bin_dir,
             ),
@@ -2885,8 +2925,6 @@ class DirectorService:
         if found is None:
             return text, None
         node, role = found
-        if role == "handover":
-            return text, None
         try:
             now = steady(self.context_of(node, role))
         except (GitError, OSError):
@@ -3080,6 +3118,7 @@ class DirectorService:
         agent = str(conversation_id)
         found = store.find_by_conversation(agent)
         if found is None:
+            self._on_hand_over_status(store, agent, status)
             return
         node, role = found
         if self._paused is None:
@@ -3087,21 +3126,31 @@ class DirectorService:
                 agent, node.id, status == ConversationExecutionStatus.RUNNING
             )
         was = node.status
-        shown = self._shown(agent, status)
-        worked = any(
-            other.role == role and other.status == "working" for other in node.agents
-        )
-        now = store.set_agent(node.id, role, status=shown)
-        if role == "handover":
-            if worked and shown not in ("working", AGENT_PAUSED):
-                self._hand_over_ended(node.id)
-            return
+        now = store.set_agent(node.id, role, status=self._shown(agent, status))
         if self._paused is None and self._loop is not None:
             if now.status == "blocked" and was != "blocked":
                 # A blocked team is no longer waited for.
                 self.release_reviews(node.parent_id)
             if role == "ic" and status == ConversationExecutionStatus.RUNNING:
                 self.release_reviews(node.id, now=True)
+
+    def _on_hand_over_status(
+        self, store: OrgStore, conversation_id: str, status: ConversationExecutionStatus
+    ) -> None:
+        """Follow the hand-over conversation of an IC. When it stops
+        working, the IC is told in its main conversation what it did."""
+        node = store.find_hand_over(conversation_id)
+        mode = hand_over_of(node) if node else None
+        if node is None or mode is None:
+            return
+        if self._paused is None:
+            self._note_running(
+                conversation_id, node.id, status == ConversationExecutionStatus.RUNNING
+            )
+        shown = self._shown(conversation_id, status)
+        store.set_hand_over(node.id, mode.model_copy(update={"status": shown}))
+        if mode.status == "working" and shown not in ("working", AGENT_PAUSED):
+            self._hand_over_ended(node.id)
 
     def _note_running(self, conversation_id: str, node_id: str, running: bool) -> None:
         if running == (conversation_id in self._running):
@@ -3182,19 +3231,76 @@ class DirectorService:
             node.boundary.path, above.boundary.path if above else None
         )
         context = self.context_of(node, role)
-        told = (
+        text = brief(
             node,
+            role,
             task,
             self.specs_of(node),
             contracts,
             self.reports_of(node),
             briefing_block(context),
         )
-        if role == "handover":
-            text = hand_over_brief(*told)
-        else:
-            text = brief(told[0], role, *told[1:])
         return text, json.dumps(steady(context))
+
+    def _hand_over_briefing(self, node: OrgNode, job: str) -> str:
+        """The first message of an IC's hand-over conversation."""
+        above = self.store.get(node.parent_id) if node.parent_id else None
+        _, contracts = self._memory().applies_to(
+            node.boundary.path, above.boundary.path if above else None
+        )
+        return hand_over_brief(
+            node,
+            job,
+            self.specs_of(node),
+            contracts,
+            self.reports_of(node),
+            briefing_block(self.context_of(node, "ic")),
+        )
+
+    async def _start_hand_over(
+        self, node: OrgNode, conversation_id: str, job: str
+    ) -> bool:
+        """Start the hand-over conversation of a node's IC, derived from its
+        main one.
+
+        Returns:
+            Whether it runs.
+        """
+        launcher = self._require_launcher()
+        try:
+            if await launcher.started(UUID(conversation_id)) is not None:
+                return True
+            parent = await self._started_ic(node)
+            if parent is None:
+                raise NotFound(f"Node {node.id} has no IC to hand over")
+            text = await asyncio.to_thread(self._hand_over_briefing, node, job)
+            tool_params = await asyncio.to_thread(
+                self._confine, node.id, "ic", conversation_id
+            )
+            adapt = await asyncio.to_thread(self._adapter, conversation_id)
+
+            async def start() -> StartedAgent:
+                return await launcher.start_derived(
+                    UUID(parent),
+                    UUID(conversation_id),
+                    title=f"{node.title} (IC, hand-over)",
+                    task=text,
+                    isolation="shared",
+                    suffixes=[HAND_OVER_ROLE],
+                    tool_params=tool_params,
+                    adapt_agent=adapt,
+                )
+
+            await self._when_there_is_room(node.id, start)
+            if self._paused is not None:
+                self._note_running(conversation_id, node.id, True)
+                await launcher.pause(UUID(conversation_id))
+        except _Held:
+            raise
+        except Exception:
+            logger.exception("Could not start the hand-over of node %s", node.id)
+            return False
+        return True
 
     async def _brief(self, node_id: str, role: AgentRole, task: str) -> None:
         node = self.store.get(node_id)
@@ -3316,7 +3422,7 @@ class DirectorService:
                 title=title,
                 task=text,
                 isolation=isolation,
-                suffixes=_ROLE_SUFFIXES[role],
+                suffixes=[] if role == "ic" else [MANAGER_ROLE],
                 tool_params=tool_params,
                 adapt_agent=adapt,
                 checkout=checkout,
@@ -3621,7 +3727,6 @@ class DirectorService:
                 proposal.children,
                 former,
                 contracts_replaced=replaced,
-                aside=True,
             ),
         )
         if former:
@@ -3719,9 +3824,7 @@ class DirectorService:
         former = [record for record in records if record.at == plan["stamp"]]
         self.notify(
             parent_ic,
-            pruned_notice(
-                plan["title"], where, plan["reason"], saved, former, aside=True
-            ),
+            pruned_notice(plan["title"], where, plan["reason"], saved, former),
         )
         if former and parent_ic is not None:
             self._begin(
@@ -3736,9 +3839,8 @@ class DirectorService:
             )
 
     async def _do_hand_over(self, intent: Intent) -> None:
-        """Start the side conversation in which a team's IC passes on what
-        removed teams left. Where it cannot be started, the IC is given all
-        of it in its main conversation."""
+        """Put a team's IC in hand-over mode: start the side conversation
+        in which it passes on what removed teams left."""
         store, run, payload = self.store, self._runs(), intent.payload
         node = store.get(intent.node_id)
         if node is None:
@@ -3775,14 +3877,11 @@ class DirectorService:
             job = pruned_job(
                 payload["title"], payload["where"], payload["reason"], former, specs
             )
-        before = agent_conversation(node, "handover")
+        mode = hand_over_of(node)
+        before = mode.conversation_id if mode else None
         if before != conversation:
-            aside = AgentRef(
-                role="handover", conversation_id=conversation, status="idle"
-            )
-            store.update_node(
-                node.id,
-                agents=[*(a for a in node.agents if a.role != "handover"), aside],
+            store.set_hand_over(
+                node.id, HandOverMode(conversation_id=conversation, status="idle")
             )
             run.mark(
                 HANDING,
@@ -3793,21 +3892,11 @@ class DirectorService:
                 # One hand-over at a time: the one before it ends here.
                 with suppress(NotFound):
                     await self._require_launcher().pause(UUID(before))
-        derived_from = await self._started_ic(node)
-        if await self._start_agent(node.id, "handover", derived_from, job):
+        if await self._start_hand_over(node, conversation, job):
             return
-        # It could not be started, so the main conversation does the job.
         run.unmark(HANDING, node.id)
-        left = store.get(node.id)
-        if left is not None:
-            store.update_node(
-                node.id, agents=[a for a in left.agents if a.role != "handover"]
-            )
-        self.notify(
-            agent_conversation(node, "ic"),
-            "The side conversation for the hand-over could not be started, so "
-            "it is yours to do here.\n\n" + job,
-        )
+        store.set_hand_over(node.id, None)
+        self.notify(agent_conversation(node, "ic"), HAND_OVER_FAILED)
 
     def note_hand_over(
         self, node_id: str, *, team: str | None = None, spec: bool = False
@@ -4400,14 +4489,6 @@ def _lane_for(intent: Intent) -> str:
     if intent.kind in _REVIEW_STEPS:
         return f"review:{intent.node_id}"
     return intent.node_id
-
-
-# What is added to the system prompt of an agent derived from an IC.
-_ROLE_SUFFIXES: dict[AgentRole, list[str]] = {
-    "ic": [],
-    "manager": [MANAGER_ROLE],
-    "handover": [HAND_OVER_ROLE],
-}
 
 
 def _new_pod(ic_id: UUID) -> list[AgentRef]:

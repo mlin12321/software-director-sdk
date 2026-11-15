@@ -43,6 +43,8 @@ class Caller:
 
     node: OrgNode
     role: AgentRole
+    # Whether it is an IC that calls from its hand-over conversation.
+    hand_over: bool = False
 
 
 def caller_of(service: DirectorService, conversation_id: UUID) -> Caller:
@@ -52,20 +54,24 @@ def caller_of(service: DirectorService, conversation_id: UUID) -> Caller:
         NotFound: The conversation is not an agent of the org.
     """
     found = service.store.find_by_conversation(str(conversation_id))
-    if found is None:
+    if found is not None:
+        return Caller(node=found[0], role=found[1])
+    node = service.store.find_hand_over(str(conversation_id))
+    if node is None:
         raise NotFound("This conversation is not an agent of the org")
-    return Caller(node=found[0], role=found[1])
+    return Caller(node=node, role="ic", hand_over=True)
 
 
 _ASIDE = (
-    "This side conversation is for the hand-over alone: of the director's "
+    "You are in hand-over mode, and this conversation is for the hand-over "
+    "alone: of the director's "
     "tools only `read_node_context`, `hand_over` and `write_spec` work here. "
     "Leave the rest to your main conversation."
 )
 
 
 def _not_aside(caller: Caller) -> None:
-    if caller.role == "handover":
+    if caller.hand_over:
         raise Invalid(_ASIDE)
 
 
@@ -73,9 +79,9 @@ def _only(caller: Caller, role: AgentRole, what: str, *, aside: bool = False) ->
     """Refuse an agent that is not in ``role``.
 
     Args:
-        aside: Whether an IC may do this from its hand-over conversation.
+        aside: Whether an IC may do this in hand-over mode.
     """
-    if caller.role == "handover" and role == "ic" and aside:
+    if caller.hand_over and role == "ic" and aside:
         return
     _not_aside(caller)
     if caller.role != role:
@@ -99,7 +105,7 @@ def write_spec(service: DirectorService, caller: Caller, content: str) -> str:
     summary = content.strip().splitlines()[0].lstrip("# ").strip()[:200]
     # With a spec of its own, what teams before it left is no longer its guide.
     service.store.update_node(caller.node.id, spec_summary=summary, old_specs=[])
-    if caller.role == "handover":
+    if caller.hand_over:
         service.note_hand_over(caller.node.id, spec=True)
     return f"Saved the spec of {path or 'the repository'}."
 
@@ -501,7 +507,7 @@ def hand_over(
         raise Invalid("Give notes, contracts, or both: there is nothing to hand over")
     target = _team_below(service, caller, team)
     service.hand_over(target, notes, contracts)
-    if caller.role == "handover":
+    if caller.hand_over:
         service.note_hand_over(caller.node.id, team=target.title)
     given = [
         part
