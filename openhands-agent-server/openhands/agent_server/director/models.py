@@ -559,6 +559,19 @@ class BoundaryContracts(BaseModel):
     )
 
 
+class FormerTeamSummary(BaseModel):
+    """A team that was removed from below a team, as a client shows it."""
+
+    id: str
+    title: str
+    path: str
+    purpose: str
+    ended: Literal["replaced", "pruned"]
+    at: str
+    compacted_report: str = ""
+    contracts: str = ""
+
+
 class NodeMemory(BaseModel):
     """Everything in the team memory that concerns one node."""
 
@@ -569,6 +582,14 @@ class NodeMemory(BaseModel):
     reports: list[Report] = Field(
         default_factory=list,
         description="What the team's own two agents recorded, oldest first.",
+    )
+    former_teams: list[FormerTeamSummary] = Field(
+        default_factory=list,
+        description="The teams removed from directly below it, oldest first.",
+    )
+    history: list[TeamEvent] = Field(
+        default_factory=list,
+        description="What became of the teams directly below it, oldest first.",
     )
 
 

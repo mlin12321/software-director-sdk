@@ -2,13 +2,17 @@
 come after it are given of it."""
 
 import json
+from contextlib import suppress
 from pathlib import Path
+from typing import Any
+from uuid import UUID
 
 import pytest
 
 from openhands.agent_server.director import compaction
 from openhands.agent_server.director.git_store import GitStore
 from openhands.agent_server.director.models import OldSpec, Report, SplitChild
+from openhands.agent_server.director.pods import StartedAgent
 from openhands.agent_server.director.prompts import HAND_OVER_ROLE, left_behind
 from openhands.agent_server.director.run_state import TASK
 from openhands.agent_server.director.service import (
@@ -30,14 +34,21 @@ from openhands.agent_server.director.tools.definition import (
     HandOverAction,
     MsgManagerAction,
     MsgTeamAction,
+    PruneTeamAction,
     ReadNodeContextAction,
     ReportAction,
     StopTeamAction,
     WriteSpecAction,
 )
+from openhands.agent_server.director_router import get_node_memory
 from openhands.sdk.conversation.state import ConversationExecutionStatus
 from tests.agent_server.director.conftest import FakeLauncher, tasked
 from tests.agent_server.director.test_director_limits import started
+from tests.agent_server.director.test_director_pause import (
+    ServerEnded,
+    again,
+    end_server_at,
+)
 from tests.agent_server.director.test_director_service import attempt, create
 from tests.agent_server.director.test_director_tools import (
     APPROVE,
@@ -645,18 +656,219 @@ async def test_each_hand_over_gets_a_conversation_of_its_own(
     assert "your Manager pruned the team 'Orders'" in given_aside(service, launcher)
 
 
-async def test_an_ic_is_told_when_its_hand_over_mode_cannot_start(
+async def test_a_hand_over_mode_that_cannot_start_is_tried_once_more_and_then_lost(
     service: DirectorService, launcher: FakeLauncher, monkeypatch: pytest.MonkeyPatch
 ):
+    tried: list[object] = []
+
     async def fails(*args: object, **kwargs: object) -> None:
+        tried.append(args)
         raise RuntimeError("no room for it")
 
     monkeypatch.setattr(launcher, "start_derived", fails)
 
     await replace(service, ORDERS, keep=["Web"])
 
-    assert aside(service) is None
+    assert len(tried) == 2
+    # It stays on the IC as lost, for whoever looks at the team.
+    mode = hand_over_of(node(service, "root"))
+    assert mode is not None and mode.status == "lost"
     told = launcher.messages_to(ic(service))[-1]
     assert "Your hand-over mode could not be started" in told
     # It is told so and no more: the job is not moved to its main conversation.
     assert "Team 'API'" not in told and "`hand_over`" not in told
+
+
+async def test_a_hand_over_mode_that_starts_at_the_second_try_is_not_reported(
+    service: DirectorService, launcher: FakeLauncher, monkeypatch: pytest.MonkeyPatch
+):
+    start_derived = launcher.start_derived
+    tried: list[object] = []
+
+    async def fails_once(*args: Any, **kwargs: Any) -> StartedAgent:
+        tried.append(args)
+        if len(tried) == 1:
+            raise RuntimeError("no room for it")
+        return await start_derived(*args, **kwargs)
+
+    monkeypatch.setattr(launcher, "start_derived", fails_once)
+
+    await replace(service, ORDERS, keep=["Web"])
+
+    mode = hand_over_of(node(service, "root"))
+    assert mode is not None and mode.status != "lost"
+    assert "Team 'API'" in given_aside(service, launcher)
+    assert "could not be started" not in "".join(launcher.messages_to(ic(service)))
+
+
+def ended_notices(service: DirectorService, launcher: FakeLauncher) -> list[str]:
+    return [
+        text
+        for text in launcher.messages_to(ic(service))
+        if "Your hand-over mode has ended." in text
+    ]
+
+
+async def test_a_hand_over_that_ended_while_the_server_was_down_is_told_at_its_start(
+    repo: Path, service: DirectorService, launcher: FakeLauncher
+):
+    await replace(service, ORDERS, keep=["Web"])
+    side = aside(service)
+    assert side is not None
+    launcher.report(side, ConversationExecutionStatus.RUNNING)
+    await use(service, side, HandOverTool, HandOverAction(team=API, notes="Keep it."))
+    await service.aclose()
+    launcher.known[UUID(side)] = ConversationExecutionStatus.FINISHED
+
+    second = await again(repo, launcher)
+    await second.resume()
+    await second.settled()
+
+    mode = hand_over_of(node(second, "root"))
+    assert mode is not None and mode.conversation_id == side
+    assert mode.status != "working"
+    [told] = ended_notices(second, launcher)
+    assert "It gave notes or contracts to: Orders." in told
+    await second.aclose()
+
+
+async def test_a_hand_over_conversation_gone_with_the_server_is_shown_as_lost(
+    repo: Path, service: DirectorService, launcher: FakeLauncher
+):
+    await use(service, manager(service), PruneTeamTool, PRUNE_API)
+    side = aside(service)
+    assert side is not None
+    launcher.report(side, ConversationExecutionStatus.RUNNING)
+    await service.aclose()
+    del launcher.known[UUID(side)]
+
+    second = await again(repo, launcher)
+    await second.resume()
+    await second.settled()
+
+    mode = hand_over_of(node(second, "root"))
+    assert mode is not None and mode.status == "lost"
+    [told] = ended_notices(second, launcher)
+    assert "It gave nothing to any team." in told
+    await second.aclose()
+
+
+async def test_a_server_that_ends_as_a_hand_over_starts_starts_it_at_its_next_start(
+    repo: Path, service: DirectorService, launcher: FakeLauncher
+):
+    ended = end_server_at(launcher, "derived")
+    await use(service, ic(service), MsgManagerTool, proposing([ORDERS], "", ["Web"]))
+    with suppress(ServerEnded):
+        await use(service, manager(service), ApproveTeamsTool, APPROVE)
+    await ended.wait()
+    await service.aclose()
+
+    second = await again(repo, launcher)
+    await second.resume()
+    await second.settled()
+
+    assert "Team 'API'" in given_aside(second, launcher)
+    mode = hand_over_of(node(second, "root"))
+    assert mode is not None and mode.status != "lost"
+    assert "could not be started" not in "".join(launcher.messages_to(ic(second)))
+    await second.aclose()
+
+
+async def test_a_paused_org_pauses_a_hand_over_and_it_goes_on_when_resumed(
+    service: DirectorService, launcher: FakeLauncher
+):
+    await replace(service, ORDERS, keep=["Web"])
+    side = aside(service)
+    assert side is not None
+    launcher.report(side, ConversationExecutionStatus.RUNNING)
+
+    await service.pause()
+    await service.settled()
+
+    assert UUID(side) in launcher.paused
+    assert ended_notices(service, launcher) == []
+
+    await service.resume()
+    await service.settled()
+
+    assert UUID(side) in [conversation for conversation, _ in launcher.resumed]
+    launcher.report(side, ConversationExecutionStatus.RUNNING)
+    launcher.report(side, ConversationExecutionStatus.FINISHED)
+    await service.settled()
+    assert len(ended_notices(service, launcher)) == 1
+
+
+DB = SplitChild(title="DB", path="services/api/db", task="Keep the tables")
+HTTP = SplitChild(title="HTTP", path="services/api/http", task="Serve the routes")
+
+
+async def api_in_hand_over(service: DirectorService, launcher: FakeLauncher) -> str:
+    """Have API's IC in hand-over mode, at work on a team its Manager pruned."""
+    await use(service, ic(service, API), MsgManagerTool, proposing([DB, HTTP]))
+    await use(service, manager(service, API), ApproveTeamsTool, APPROVE)
+    await use(
+        service,
+        manager(service, API),
+        PruneTeamTool,
+        PruneTeamAction(node_id="services.api.db", reason="Not needed."),
+    )
+    side = aside(service, API)
+    assert side is not None
+    launcher.report(side, ConversationExecutionStatus.RUNNING)
+    return side
+
+
+async def test_a_stopped_teams_hand_over_stops_with_it(
+    service: DirectorService, launcher: FakeLauncher
+):
+    side = await api_in_hand_over(service, launcher)
+
+    await use(
+        service,
+        ic(service),
+        StopTeamTool,
+        StopTeamAction(team=API, reason="Wrong direction."),
+    )
+
+    assert UUID(side) in launcher.paused
+
+
+async def test_a_pruned_teams_hand_over_goes_with_it(
+    service: DirectorService, launcher: FakeLauncher
+):
+    side = await api_in_hand_over(service, launcher)
+
+    await use(service, manager(service), PruneTeamTool, PRUNE_API)
+
+    assert node(service, "root").child_ids == [WEB]
+    assert service.store.find_hand_over(side) is None
+    late = await use(
+        service, side, HandOverTool, HandOverAction(team="services.api.http", notes="x")
+    )
+    assert late.is_error and "not an agent of the org" in late.text
+    # The team above hands over what API left, in a conversation of its own.
+    above = aside(service)
+    assert above is not None and above != side
+    assert "your Manager pruned the team 'API'" in given_aside(service, launcher)
+
+
+async def test_a_client_is_shown_the_teams_removed_from_below_a_team_and_their_record(
+    service: DirectorService,
+):
+    await replace(service, ORDERS, keep=["Web"])
+
+    shown = get_node_memory("root", service)
+
+    [former] = shown.former_teams
+    assert (former.title, former.path, former.ended) == (
+        "API",
+        "services/api",
+        "replaced",
+    )
+    assert "Chose SQLite." in former.compacted_report
+    assert [(event.kind, event.team) for event in shown.history][-2:] == [
+        ("replaced", "API"),
+        ("set_up", "Orders"),
+    ]
+    # They are the team above's to see, not the new team's.
+    assert get_node_memory(API, service).former_teams == []

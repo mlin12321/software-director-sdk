@@ -26,6 +26,7 @@ from openhands.agent_server.director.models import (
     EditFileRequest,
     FileEdit,
     FileSides,
+    FormerTeamSummary,
     MemorySync,
     MemorySyncRequest,
     NodeMemory,
@@ -473,6 +474,11 @@ def get_node_memory(
         specs=service.specs_of(node),
         contracts=contracts,
         reports=service.reports_of(node),
+        former_teams=[
+            FormerTeamSummary.model_validate(former.model_dump())
+            for former in service.former_teams_of(node)
+        ],
+        history=service.team_memory.history(node.id),
     )
 
 

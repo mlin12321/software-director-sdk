@@ -152,6 +152,7 @@ from openhands.agent_server.director.prompts import (
     review_request,
     stall_notice,
     track_records,
+    unstarted_notice,
 )
 from openhands.agent_server.director.recovery import (
     STARTING,
@@ -1465,6 +1466,17 @@ class DirectorService:
             and not any(above.stopped for above in self.store.ancestors(team.id))
         )
 
+    def _waits_for_a_task(self, team: OrgNode) -> bool:
+        """Whether a team was set up and never given a task, with nothing
+        that holds the team above from giving it one."""
+        return (
+            team.parent_id is not None
+            and not team.agents
+            and not team.waiting_to_start
+            and team.stopped is None
+            and not any(above.stopped for above in self.store.ancestors(team.id))
+        )
+
     async def _check_stalls(self) -> None:
         """Tell the IC above of each team that has shown no progress for
         longer than the org allows, once for every such stretch of time."""
@@ -1491,15 +1503,25 @@ class DirectorService:
                     PROGRESS, team.id, json.dumps({"at": now.isoformat(), "head": head})
                 )
                 continue
-            if not self._may_stall(team):
+            unstarted = self._waits_for_a_task(team)
+            if not unstarted and not self._may_stall(team):
                 continue
             since = datetime.fromisoformat(seen["at"])
             told = seen.get("told")
+            if unstarted and told is not None:
+                # Said once: a team may be left without a task on purpose.
+                continue
             if now - datetime.fromisoformat(told or seen["at"]) < timedelta(
                 minutes=limit
             ):
                 continue
             run.mark(PROGRESS, team.id, json.dumps({**seen, "told": now.isoformat()}))
+            if unstarted:
+                self.tell_ic(
+                    team.parent_id,
+                    unstarted_notice(team, int((now - since).total_seconds() // 60)),
+                )
+                continue
             if told is None:
                 # The IC above has this much time to act before it shows
                 # no progress itself.
@@ -1525,7 +1547,7 @@ class DirectorService:
         account = None
         if ic is not None and not in_a_turn:
             account = await self._ask_agent(ic, STALL_QUESTION)
-        self.record_event(above.id, "stalled", team, f"{minutes} minutes")
+        self.record_event(above.id, "stalled", team, f"{minutes} min")
         # Its reviewer is woken now anyway, and no longer waits for it.
         self._release_reviews(above.id, now=True)
         self.tell_ic(
@@ -1703,6 +1725,10 @@ class DirectorService:
         if node_id not in read:
             read[node_id] = team_memory.former_below(node_id)
         return read[node_id]
+
+    def former_teams_of(self, node: OrgNode) -> list[FormerTeam]:
+        """What the teams removed from directly below a node left."""
+        return self._former_below(self.team_memory, node.id)
 
     def hand_over(self, team: OrgNode, notes: str, contracts: str) -> None:
         """Give a team what its IC above passes on of the teams that were
@@ -3228,7 +3254,9 @@ class DirectorService:
             )
         shown = self._shown(conversation_id, status)
         store.set_hand_over(node.id, mode.model_copy(update={"status": shown}))
-        if mode.status == "working" and shown not in ("working", AGENT_PAUSED):
+        # One that was held while it worked may have ended while it was held.
+        at_work = ("working", AGENT_PAUSED)
+        if mode.status in at_work and shown not in at_work:
             self._hand_over_ended(node.id)
 
     def _note_running(self, conversation_id: str, node_id: str, running: bool) -> None:
@@ -3294,6 +3322,36 @@ class DirectorService:
                 shown = "idle" if node_id in starting else AGENT_LOST
             with suppress(NotFound):
                 store.set_agent(node_id, role, status=shown)
+        await self._resync_hand_overs()
+
+    async def _resync_hand_overs(self) -> None:
+        """Read back how each IC's hand-over conversation stands. One that
+        ended or was lost while nothing followed it is ended here."""
+        store = self.store
+        modes = [
+            (node.id, mode)
+            for node in store.all()
+            if (mode := hand_over_of(node)) is not None
+        ]
+        if not modes:
+            return
+        statuses = await self._require_launcher().statuses(
+            [UUID(mode.conversation_id) for _, mode in modes]
+        )
+        starting = {
+            intent.node_id
+            for intent in self._runs().open_intents()
+            if intent.kind == "hand_over"
+        }
+        for node_id, mode in modes:
+            status = statuses.get(UUID(mode.conversation_id))
+            if status is not None:
+                self._on_hand_over_status(store, mode.conversation_id, status)
+            elif node_id not in starting and mode.status != AGENT_LOST:
+                store.set_hand_over(
+                    node_id, mode.model_copy(update={"status": AGENT_LOST})
+                )
+                self._hand_over_ended(node_id)
 
     async def _send(self, conversation_id: str, text: str) -> None:
         """Deliver a message as part of a step, in its place among them."""
@@ -3981,8 +4039,15 @@ class DirectorService:
                     await self._require_launcher().pause(UUID(before))
         if await self._start_hand_over(node, conversation, job):
             return
+        # Once more, after what a full server is given to make room.
+        await asyncio.sleep(self._run_limit_retry)
+        if await self._start_hand_over(node, conversation, job):
+            return
         run.unmark(HANDING, node.id)
-        store.set_hand_over(node.id, None)
+        # The mode stays on the IC as lost, for whoever looks at the team.
+        store.set_hand_over(
+            node.id, HandOverMode(conversation_id=conversation, status=AGENT_LOST)
+        )
         self.notify(agent_conversation(node, "ic"), HAND_OVER_FAILED)
 
     def note_hand_over(

@@ -206,6 +206,8 @@ class TestTeamMemory:
             ],
             "contracts": [{"path": "", "contracts": "a serves b", "own": False}],
             "reports": [earlier.model_dump(), later.model_dump()],
+            "former_teams": [],
+            "history": [],
         }
 
     def test_is_unavailable_when_the_directory_is_not_a_repository(

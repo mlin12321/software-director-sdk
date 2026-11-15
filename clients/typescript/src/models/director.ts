@@ -490,12 +490,48 @@ export interface DirectorBoundaryContracts {
   own: boolean;
 }
 
+export type DirectorTeamEventKind =
+  | 'set_up'
+  | 'accepted'
+  | 'sent_back'
+  | 'stalled'
+  | 'stopped'
+  | 'replaced'
+  | 'pruned'
+  | 'woken';
+
+/** Something that became of a team directly below a team. */
+export interface DirectorTeamEvent {
+  at: string;
+  kind: DirectorTeamEventKind;
+  /** Empty when the event is about no single team. */
+  team_id?: string;
+  team?: string;
+  detail?: string;
+}
+
+/** A team that was removed from below a team. */
+export interface DirectorFormerTeam {
+  id: DirectorNodeId;
+  title: string;
+  path: string;
+  purpose: string;
+  ended: 'replaced' | 'pruned';
+  at: string;
+  compacted_report?: string;
+  contracts?: string;
+}
+
 export interface DirectorNodeMemory {
   /** The spec of the node's own boundary, when it has one. */
   specs: DirectorInheritedSpec[];
   contracts?: DirectorBoundaryContracts[];
   /** What the team's own two agents recorded, oldest first. */
   reports?: DirectorReport[];
+  /** The teams removed from directly below it, oldest first. */
+  former_teams?: DirectorFormerTeam[];
+  /** What became of the teams directly below it, oldest first. */
+  history?: DirectorTeamEvent[];
 }
 
 /** A direct report, as the owner of a directory. */
