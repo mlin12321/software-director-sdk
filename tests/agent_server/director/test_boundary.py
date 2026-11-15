@@ -176,3 +176,12 @@ def test_a_team_that_may_only_read_the_directory_is_passed_over():
 
 def test_no_team_takes_a_request_when_even_the_root_ic_is_gone():
     assert nearest_team([team("root", "", ic="lost")], "svc", lost="lost") is None
+
+
+def test_no_agent_writes_what_belongs_to_git():
+    root = team("root", "")
+
+    refusal = write_refusal(root, "ic", [], ".git/config")
+
+    assert refusal is not None and "belongs to git" in refusal
+    assert write_refusal(root, "ic", [], ".gitignore") is None

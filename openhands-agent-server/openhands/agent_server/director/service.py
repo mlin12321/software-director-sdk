@@ -63,14 +63,12 @@ from openhands.agent_server.director.git_store import (
     CONTRACTS_FILE,
     SPEC_FILE,
     GitStore,
-    adopt_former_memory,
     normalize_store_path,
 )
 from openhands.agent_server.director.headline import provisional_summary
 from openhands.agent_server.director.merge_back import merge_back
 from openhands.agent_server.director.models import (
     AGENT_ROLES,
-    AGENTS_PER_TEAM,
     ROLE_NAMES,
     AgentKind,
     AgentRef,
@@ -477,12 +475,9 @@ class DirectorService:
             "accept": self._do_accept,
             "prune": self._prune,
         }
-        self._memory_adopted_in: Path | None = None
         # The records of removed teams by the node they were below, as read
         # at one state of team memory.
         self._former_read: tuple[str | None, dict[str, list[FormerTeam]]] | None = None
-        # The state of team memory whose reports were last taken over.
-        self._reports_adopted_at: str | None = None
         self._bwrap: str | None = None
         self._stop_guard: Callable[[], None] | None = None
         self._save_delay = save_delay
@@ -563,9 +558,6 @@ class DirectorService:
         return self._memory()
 
     def _memory(self) -> GitStore:
-        if self._memory_adopted_in != self._repo_dir:
-            adopt_former_memory(self._repo_dir)
-            self._memory_adopted_in = self._repo_dir
         return GitStore(self._repo_dir)
 
     def state(self) -> OrgStateEvent:
@@ -640,8 +632,6 @@ class DirectorService:
         return DirectorSettingsState(
             **self.settings.model_dump(),
             teams=len(levels),
-            agents=len(levels) * AGENTS_PER_TEAM,
-            max_agents=self.settings.max_teams * AGENTS_PER_TEAM,
             depth=max(levels.values(), default=0),
             max_concurrent_runs=self._max_concurrent_runs,
         )
@@ -649,9 +639,6 @@ class DirectorService:
     def update_settings(self, update: DirectorSettingsUpdate) -> DirectorSettingsState:
         """Change the limits on new teams. Existing teams are left alone."""
         values = update.model_dump(exclude_none=True)
-        agents = values.pop("max_agents", None)
-        if agents is not None:
-            values.setdefault("max_teams", max(1, agents // AGENTS_PER_TEAM))
         changed = self.settings.model_copy(update=values)
         with self._lock:
             self._settings = changed
@@ -1931,32 +1918,12 @@ class DirectorService:
         """What the two agents of a team recorded, oldest first. Reports
         are the team's: an agent started again reads what it wrote before."""
         team_memory = self._memory()
-        self._adopt_reports(team_memory)
         reports = [
             report
             for role in AGENT_ROLES
             for report in team_memory.reports(node.id, role)
         ]
         return sorted(reports, key=lambda report: report.at)
-
-    def _adopt_reports(self, team_memory: GitStore) -> None:
-        """Take over reports kept under conversations, as they were before
-        they were kept by team: once for each state of team memory, so that
-        what a pull brings in is taken over too."""
-        head = team_memory.head()
-        if head is None or head == self._reports_adopted_at:
-            return
-        store = self._store
-        if store is not None:
-            owners: dict[str, tuple[str, AgentRole]] = {
-                agent.conversation_id: (node.id, agent.role)
-                for node in store.all()
-                for agent in node.agents
-                if agent.conversation_id is not None
-            }
-            with suppress(GitError):
-                team_memory.adopt_reports(owners)
-        self._reports_adopted_at = team_memory.head()
 
     def specs_of(self, node: OrgNode) -> list[InheritedSpec]:
         """The spec of a team's own boundary and the ones teams before it

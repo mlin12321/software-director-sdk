@@ -37,7 +37,6 @@ MEMORY_REF = "refs/agents/memory"
 SPEC_FILE = "spec.md"
 CONTRACTS_FILE = "contracts.md"
 # One file of reports for each agent of a team: `<node id>/<role>.json`.
-# They were once named after the agent's conversation; see `adopt_reports`.
 REPORTS_DIR = ".reports"
 # One record for each team that was replaced or pruned:
 # `<node id>/<time>.json`.
@@ -47,8 +46,6 @@ HISTORY_DIR = ".history"
 THREADS_DIR = ".threads"
 # One file for each IC and IC directly below that the first has written to.
 IC_THREADS_DIR = ".threads-ic"
-# What team memory was called before; a repository that still has it is moved.
-_FORMER_MEMORY_REF = "refs/agents/blackboard"
 
 _ZERO_OID = "0" * 40
 _MAX_COMMIT_ATTEMPTS = 8
@@ -172,17 +169,6 @@ def _settle(path: str, ours: str | None, theirs: str | None) -> tuple[str | None
     return ours, True
 
 
-def adopt_former_memory(repo_dir: Path) -> None:
-    """Move team memory kept under its former name to ``MEMORY_REF``."""
-    former = GitStore(repo_dir, _FORMER_MEMORY_REF)
-    commit = former.head()
-    if commit is None:
-        return
-    if GitStore(repo_dir).head() is None:
-        git(repo_dir, ["update-ref", MEMORY_REF, commit, _ZERO_OID])
-    git(repo_dir, ["update-ref", "-d", _FORMER_MEMORY_REF, commit])
-
-
 class GitStore:
     """Reads and writes one store ref of one repository."""
 
@@ -246,38 +232,6 @@ class GitStore:
         """What one agent of a team recorded, oldest first. They belong to
         the team's agent, whichever conversation it has."""
         return _parse_reports(self.read(_reports_file(node_id, role)))
-
-    def adopt_reports(self, owners: dict[str, tuple[str, AgentRole]]) -> int:
-        """Move reports kept under an agent's conversation, as they once
-        were, to the agent's team and role.
-
-        Args:
-            owners: The team and role of each conversation of the org.
-
-        Returns:
-            How many files were moved.
-        """
-        moved = 0
-
-        def mutate(read: StoreReader) -> list[StoreChange]:
-            nonlocal moved
-            changes: list[StoreChange] = []
-            for file in self._files(REPORTS_DIR):
-                owner = owners.get(Path(file).stem)
-                if file.count("/") != 1 or owner is None:
-                    continue
-                path = _reports_file(*owner)
-                reports = _union(_parse_reports(read(path)), _parse_reports(read(file)))
-                reports.sort(key=lambda report: report.at)
-                changes += [
-                    StoreChange(path, _serialize(_REPORTS.dump_python(reports))),
-                    StoreChange(file, None),
-                ]
-            moved = len(changes) // 2
-            return changes
-
-        self.commit(mutate, "memory: reports by team")
-        return moved
 
     def former(self, node_id: str) -> list[FormerTeam]:
         """The records of the teams that were removed from a node id,

@@ -662,14 +662,9 @@ export interface DirectorSettings {
   /**
    * The most teams a team may be together with every team below it. Every
    * team has an IC and a Manager; the Manager is inactive while the team has
-   * no sub-teams. Absent on a server from before limits counted teams.
+   * no sub-teams.
    */
-  max_teams?: number;
-  /**
-   * @deprecated Use `max_teams`. Twice `max_teams` when read; sent, it is
-   * read as half as many teams.
-   */
-  max_agents?: number;
+  max_teams: number;
   /** The most levels of teams; the root team is level 1. */
   max_depth: number;
   /**
@@ -709,10 +704,8 @@ export interface DirectorSettings {
 
 /** The settings, beside what the org has now. */
 export interface DirectorSettingsState extends DirectorSettings {
-  /** How many teams the org has. Absent on an older server. */
-  teams?: number;
-  /** @deprecated Use `teams`. Two for every team of the org. */
-  agents: number;
+  /** How many teams the org has. */
+  teams: number;
   depth: number;
   /**
    * How many conversations the server runs at once; teams beyond that wait
