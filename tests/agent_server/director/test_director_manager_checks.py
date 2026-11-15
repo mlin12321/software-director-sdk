@@ -9,12 +9,14 @@ from openhands.agent_server.director.service import DirectorService
 from openhands.agent_server.director.tools import (
     ApproveTeamsTool,
     MsgManagerTool,
+    PruneTeamTool,
     RaiseEscalationTool,
     ResolveEscalationTool,
     ReviewTeamTool,
     SubmitReviewTool,
 )
 from openhands.agent_server.director.tools.definition import (
+    PruneTeamAction,
     RaiseEscalationAction,
     ResolveEscalationAction,
 )
@@ -262,3 +264,27 @@ async def test_work_that_goes_up_without_a_review_is_not_counted(
     # The API team's IC accepted one review; the top team's IC none.
     assert len(looks(service, launcher, API)) == 1
     assert looks(service, launcher) == []
+
+
+async def test_a_new_team_in_a_removed_teams_place_starts_from_nothing(
+    service: DirectorService, launcher: FakeLauncher
+):
+    await escalates(service, API, times=2)
+    await use(
+        service,
+        manager(service),
+        PruneTeamTool,
+        PruneTeamAction(node_id=API, reason="Going nowhere."),
+    )
+    await service.settled()
+    again = [SplitChild(title="Orders", path="services/api", task="Take orders")]
+    await use(service, ic(service), MsgManagerTool, proposing(again, keep=["Web"]))
+    await use(service, manager(service), ApproveTeamsTool, APPROVE)
+    await service.settled()
+
+    # The new team has the removed one's node id, and none of its count.
+    assert node(service, API).title == "Orders"
+    await escalates(service, API, times=2)
+    assert looks(service, launcher) == []
+    await escalates(service, API)
+    assert len(looks(service, launcher)) == 1

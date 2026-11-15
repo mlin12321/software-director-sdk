@@ -3131,6 +3131,10 @@ class DirectorService:
         checkout = intent.payload.get("checkout")
         self._runs().mark(TASK, node_id, task)
         self.progressed(node_id)
+        started = self.store.get(node_id)
+        if started is not None:
+            # A team of the same name before it left nothing to count on.
+            self._work_accepted(started)
         if await self._start_agent(node_id, "ic", parent_ic, task, checkout):
             node = self.store.get(node_id)
             # Sub-teams it took over from a team it replaced.
