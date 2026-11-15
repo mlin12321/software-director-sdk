@@ -38,6 +38,7 @@ TEAMS_EXAMPLE = """\
 ```teams
 contracts: |
   What the sub-teams must keep between them: types, endpoints, file formats.
+keep: [Web]  # every sub-team you already have that is to stay as it is
 teams:
   - name: API
     path: services/api
@@ -62,7 +63,10 @@ class MsgManagerAction(Action):
             "read_node_context lists. A team whose directory covers "
             "sub-teams you already have replaces them, and so does one that "
             "takes part of an existing sub-team's directory; what the new "
-            "teams leave of it is yours again. The sub-teams cannot see "
+            "teams leave of it is yours again. When you already have "
+            "sub-teams, say what becomes of each: list under `keep` the "
+            "name of every one that stays as it is; leave `keep` out when "
+            "you have none. The sub-teams cannot see "
             "each other's work or your spec, so the contracts must hold "
             "everything they have to respect."
         )

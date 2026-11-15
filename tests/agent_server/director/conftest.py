@@ -129,7 +129,9 @@ def make_escalation(
     )
 
 
-def teams_block(children: list[SplitChild], contracts: str = "") -> str:
+def teams_block(
+    children: list[SplitChild], contracts: str = "", keep: list[str] | None = None
+) -> str:
     """The block an IC proposes ``children`` in, as it writes it."""
     teams = []
     for child in children:
@@ -147,9 +149,10 @@ def teams_block(children: list[SplitChild], contracts: str = "") -> str:
         if child.isolation != "shared":
             team["isolation"] = child.isolation
         teams.append(team)
-    written = (
-        {"contracts": contracts, "teams": teams} if contracts else {"teams": teams}
-    )
+    written: dict[str, object] = {"contracts": contracts} if contracts else {}
+    if keep:
+        written["keep"] = keep
+    written["teams"] = teams
     return f"```teams\n{yaml.safe_dump(written, sort_keys=False)}```"
 
 

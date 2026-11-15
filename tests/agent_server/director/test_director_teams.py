@@ -42,7 +42,9 @@ from tests.agent_server.director.test_director_tools import (
 
 API = "services.api"
 DB = "services.api.db"
-SERVICES = proposing([SplitChild(title="Services", path="services", task="Serve")])
+SERVICES = proposing(
+    [SplitChild(title="Services", path="services", task="Serve")], keep=["Web"]
+)
 
 
 @pytest.fixture
@@ -65,9 +67,13 @@ async def service(repo: Path, launcher: FakeLauncher):
 
 
 async def propose_and_approve(
-    service: DirectorService, node_id: str, *children: SplitChild
+    service: DirectorService,
+    node_id: str,
+    *children: SplitChild,
+    keep: list[str] | None = None,
 ) -> None:
-    await use(service, ic(service, node_id), MsgManagerTool, proposing(list(children)))
+    proposal = proposing(list(children), keep=keep)
+    await use(service, ic(service, node_id), MsgManagerTool, proposal)
     await use(service, manager(service, node_id), ApproveTeamsTool, APPROVE)
 
 
@@ -82,7 +88,11 @@ async def test_a_team_over_existing_ones_replaces_them_and_keeps_their_sub_teams
     kept = ic(service, DB)
 
     proposed = await use(service, ic(service), MsgManagerTool, SERVICES)
-    assert "take the place of: API" in launcher.messages_to(manager(service))[-1]
+    told = launcher.messages_to(manager(service))[-1]
+    assert "take the place of: API" in told and "Kept as they are: Web." in told
+    proposal = node(service, "root").pending_split
+    assert proposal is not None
+    assert (proposal.replaces, proposal.keeps) == ([API], ["apps.web"])
     await use(service, manager(service), ApproveTeamsTool, APPROVE)
 
     assert not proposed.is_error
@@ -107,6 +117,7 @@ async def test_teams_inside_an_existing_one_replace_it_and_the_rest_goes_back(
         "root",
         SplitChild(title="HTTP", path="services/api/http", task="Routes"),
         SplitChild(title="Jobs", path="services/api/jobs", task="Workers"),
+        keep=["Web"],
     )
 
     # Nothing new holds services/api/db, so its team reports to the proposer.
@@ -144,7 +155,10 @@ async def test_what_a_replaced_team_committed_in_its_own_checkout_is_brought_in(
     (worktree / "apps" / "web" / "draft.tsx").write_text("half\n")
 
     await propose_and_approve(
-        service, "root", SplitChild(title="Apps", path="apps", task="All the apps")
+        service,
+        "root",
+        SplitChild(title="Apps", path="apps", task="All the apps"),
+        keep=["API"],
     )
 
     assert below(service, "root") == ["apps", API]
@@ -163,7 +177,10 @@ async def test_work_that_does_not_merge_leaves_every_team_as_it_was(
     commit(repo, "apps/web/page.tsx", "ours\n")
 
     await propose_and_approve(
-        service, "root", SplitChild(title="Apps", path="apps", task="All the apps")
+        service,
+        "root",
+        SplitChild(title="Apps", path="apps", task="All the apps"),
+        keep=["API"],
     )
 
     assert below(service, "root") == ["apps.web", API]
@@ -304,3 +321,45 @@ async def test_an_approval_the_saved_tree_does_not_have_is_dropped_and_given_aga
 
     assert below(second, "root") == ["apps.web", "services"]
     await second.aclose()
+
+
+@pytest.mark.parametrize(
+    ("keep", "problem"),
+    [
+        (None, "'Web' is neither replaced by a proposed team nor listed under"),
+        (["Web", "API"], "'API' cannot be kept and replaced"),
+        (["Web", "Mobile"], "`keep` names 'Mobile', which is not among"),
+    ],
+)
+async def test_a_proposal_must_say_what_becomes_of_every_sub_team(
+    service: DirectorService, keep: list[str] | None, problem: str
+):
+    services = [SplitChild(title="Services", path="services", task="Serve")]
+
+    refused = await use(
+        service, ic(service), MsgManagerTool, proposing(services, keep=keep)
+    )
+
+    assert refused.is_error and problem in refused.text
+    assert node(service, "root").pending_split is None
+
+
+async def test_a_sub_team_is_kept_by_its_name_or_its_node_id(
+    service: DirectorService,
+):
+    mobile = [SplitChild(title="Mobile", path="apps/mobile", task="The app")]
+
+    refused = await use(
+        service, ic(service), MsgManagerTool, proposing(mobile, keep=["API"])
+    )
+    taken = await use(
+        service,
+        ic(service),
+        MsgManagerTool,
+        proposing(mobile, keep=[API, "Web"]),
+    )
+
+    assert refused.is_error and "'Web' is neither replaced" in refused.text
+    proposal = node(service, "root").pending_split
+    assert not taken.is_error and proposal is not None
+    assert (proposal.replaces, proposal.keeps) == ([], [API, "apps.web"])

@@ -96,7 +96,7 @@ def _checked(
                     else "The org allows none; leave `model` out."
                 )
             )
-    split = normalize_split(store, node, proposed.children)
+    split = normalize_split(store, node, proposed.children, proposed.keep)
     check_limits(
         store, node, len(split.children) - len(split.replaces), service.settings
     )
@@ -104,6 +104,7 @@ def _checked(
         children=split.children,
         contracts=proposed.contracts,
         replaces=[team.id for team in split.replaces],
+        keeps=[team.id for team in split.keeps],
         proposed_at=datetime.now(UTC).isoformat(timespec="seconds"),
     )
 
@@ -129,11 +130,9 @@ def msg_manager(service: DirectorService, caller: Caller, text: str) -> str:
             raise Conflict("The sub-teams your Manager approved are still being set up")
         proposal = _checked(service, node, proposed)
         service.store.update_node(node.id, pending_split=proposal)
-        replaced = [
-            team.title
-            for team in map(service.store.get, proposal.replaces)
-            if team is not None
-        ]
+        store = service.store
+        replaced = [team.title for team in map(store.get, proposal.replaces) if team]
+        kept = [team.title for team in map(store.get, proposal.keeps) if team]
         note = (
             "\n\n[director] The sub-teams in this message passed the org's "
             "checks."
@@ -143,6 +142,7 @@ def msg_manager(service: DirectorService, caller: Caller, text: str) -> str:
                 if replaced
                 else ""
             )
+            + (f" Kept as they are: {', '.join(kept)}." if kept else "")
             + " approve_teams sets them up exactly as written; to ask for "
             "changes or decline, answer with msg_ic."
         )

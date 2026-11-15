@@ -92,6 +92,7 @@ class _Teams(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     teams: list[_Team] = Field(min_length=1)
+    keep: list[str] = Field(default_factory=list)
     contracts: str = ""
 
 
@@ -100,6 +101,9 @@ class Proposed(NamedTuple):
 
     children: list[SplitChild]
     contracts: str
+    keep: list[str]
+    """The sub-teams the proposer has now that it says are to stay, by name
+    or node id."""
 
 
 def proposed_teams(text: str) -> Proposed | None:
@@ -146,6 +150,7 @@ def proposed_teams(text: str) -> Proposed | None:
             for team in written.teams
         ],
         written.contracts,
+        written.keep,
     )
 
 
@@ -156,6 +161,8 @@ class Split(NamedTuple):
     replaces: list[OrgNode]
     """The sub-teams the node has now that the proposed ones take the place
     of."""
+    keeps: list[OrgNode]
+    """The sub-teams the node has now that stay as they are."""
 
 
 def _overlap(path: str, other: str) -> bool:
@@ -174,11 +181,61 @@ def _may_write(parent: OrgNode, path: str) -> bool:
     return False
 
 
+def _kept(
+    existing: list[OrgNode], replaced: dict[str, OrgNode], keep: list[str]
+) -> list[OrgNode]:
+    """The sub-teams a proposal says are to stay.
+
+    Raises:
+        OrgStoreError: It names a team the node does not have or one it
+            also replaces, or leaves out a team it does not replace.
+    """
+    named = {name.strip() for name in keep}
+    known = {team.id for team in existing} | {team.title for team in existing}
+    unknown = sorted(named - known)
+    if unknown:
+        raise OrgStoreError(
+            f"`keep` names {', '.join(map(repr, unknown))}, which "
+            + ("is" if len(unknown) == 1 else "are")
+            + " not among your sub-teams: "
+            + (", ".join(repr(team.title) for team in existing) or "you have none")
+        )
+    kept = [team for team in existing if team.id in named or team.title in named]
+    both = [team.title for team in kept if team.id in replaced]
+    if both:
+        raise OrgStoreError(
+            f"{', '.join(map(repr, both))} cannot be kept and replaced: a "
+            "proposed team takes all or part of its directory. Leave it out of "
+            "`keep`, or move the proposed team."
+        )
+    left_out = [
+        team.title for team in existing if team.id not in replaced and team not in kept
+    ]
+    if left_out:
+        raise OrgStoreError(
+            "Say what becomes of every sub-team you have. "
+            f"{', '.join(map(repr, left_out))} "
+            + ("is" if len(left_out) == 1 else "are")
+            + " neither replaced by a proposed team nor listed under `keep`. "
+            "List a team under `keep` to leave it as it is; only your Manager "
+            "removes a team without replacing it."
+        )
+    return kept
+
+
 def normalize_split(
-    store: OrgStore, parent: OrgNode, children: list[SplitChild]
+    store: OrgStore,
+    parent: OrgNode,
+    children: list[SplitChild],
+    keep: list[str] | None = None,
 ) -> Split:
     """The proposed sub-teams with clean paths and explicit globs, and the
     sub-teams they replace.
+
+    Args:
+        keep: The sub-teams the proposer says are to stay, by name or node
+            id. None when a proposal that was checked before is checked
+            again: what it keeps is then not asked for.
 
     A proposed team that covers sub-teams the node already has takes their
     place (a merge), and so does one that takes part of an existing
@@ -189,7 +246,8 @@ def normalize_split(
         OrgStoreError: A sub-team is not a directory strictly inside the
             parent's boundary, overlaps another proposed one, repeats a
             title, reaches outside its own directory, or would sit inside
-            a team that stays.
+            a team that stays, or ``keep`` does not account for every
+            sub-team the proposal leaves alone.
     """
     if not 1 <= len(children) <= MAX_SPLIT_CHILDREN:
         raise OrgStoreError(
@@ -255,7 +313,8 @@ def normalize_split(
     for title in titles:
         if titles.count(title) > 1:
             raise OrgStoreError(f"More than one sub-team is titled {title!r}")
-    return Split(normalized, list(replaced.values()))
+    kept = [] if keep is None else _kept(existing, replaced, keep)
+    return Split(normalized, list(replaced.values()), kept)
 
 
 def home_of(below: OrgNode, parent_id: str, teams: dict[str, str]) -> str:

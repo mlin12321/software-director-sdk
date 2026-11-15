@@ -174,6 +174,13 @@ class SplitProposal(BaseModel):
             "team takes part of."
         ),
     )
+    keeps: list[str] = Field(
+        default_factory=list,
+        description=(
+            "The sub-teams the node already has that the IC said are to "
+            "stay as they are."
+        ),
+    )
     proposed_at: str = Field(description="ISO 8601 timestamp.")
 
 
