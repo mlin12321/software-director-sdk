@@ -2666,6 +2666,7 @@ class DirectorService:
             await self._require_launcher().send(UUID(conversation_id), text)
             if told is not None:
                 run.mark(TOLD, conversation_id, told)
+            self._turn_begun(conversation_id)
         except NotFound:
             store = self.store
             found = store.find_by_conversation(conversation_id)
@@ -2701,6 +2702,18 @@ class DirectorService:
         if not news:
             return text, None
         return f"{text}\n\n{update_block(news)}", json.dumps(now)
+
+    def _turn_begun(self, conversation_id: str) -> None:
+        """Count an agent that runs its own tools as in a turn from the
+        moment something is sent to it. Its conversation says so only a
+        moment later, and a second notice in between would end the turn the
+        first one began."""
+        found = self.store.find_by_conversation(conversation_id)
+        if found is None:
+            return
+        node, role = found
+        if any(agent.role == role and agent.kind == "acp" for agent in node.agents):
+            self._note_running(conversation_id, node.id, True)
 
     def _in_a_turn_of_its_own(self, conversation_id: str) -> bool:
         """Whether a message now would cut short the turn of an agent that

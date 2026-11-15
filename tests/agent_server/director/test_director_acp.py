@@ -532,6 +532,30 @@ async def test_a_notice_waits_for_the_turn_of_an_agent_that_runs_its_own_tools(
     await service.aclose()
 
 
+async def test_a_second_notice_waits_for_the_turn_the_first_one_began(repo: Path):
+    launcher = FakeLauncher(root_kind="acp")
+    service = await started(repo, launcher)
+    agent = ic(service)
+    assert agent is not None
+    launcher.report(agent, ConversationExecutionStatus.FINISHED)
+    await service.settled()
+    before = len(said_to(launcher, agent))
+
+    # The conversation has not said yet that it is running when the second
+    # one comes.
+    service.notify(agent, "The work of 'API' is merged into your checkout.")
+    service.notify(agent, "The work of 'Web' is merged into your checkout.")
+    await service.settled()
+    first = said_to(launcher, agent)[before:]
+
+    launcher.report(agent, ConversationExecutionStatus.FINISHED)
+    await service.settled()
+
+    assert [text.split("'")[1] for text in first] == ["API"]
+    assert said_to(launcher, agent)[-1].split("'")[1] == "Web"
+    await service.aclose()
+
+
 async def test_what_the_human_says_reaches_such_an_agent_in_the_middle_of_a_turn(
     repo: Path,
 ):
