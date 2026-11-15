@@ -138,9 +138,10 @@ not that every team is busy.
 - It is woken to look at its teams when its IC has accepted a number of
   reviews, and when one team keeps escalating on the same work. Each look
   shows what became of every team so far, also of teams that are gone,
-  and for each team how many of its tasks went without its escalations
-  reaching that limit. `read_node_context` returns that record, with what
-  its IC proposed before. The Manager weighs what it approves by it.
+  and each team's success rate: how many of its tasks were accepted
+  without its escalations reaching that number. `read_node_context`
+  returns that record, with what its IC proposed before. The Manager
+  weighs what it approves by it.
 - It settles what the Managers of the teams directly below escalate with
   `resolve_escalation`, or passes it up with the reason it could not.
 - A team directly below that is grossly inefficient, with no way forward
@@ -148,9 +149,10 @@ not that every team is busy.
   `prune_team`, saying why. This is rare and never a precaution: nothing
   obliges a Manager to prune, a look at its teams is not a call to, and a
   team that is slow, or had one bad task, is first written to with
-  `msg_ic`. The runtime refuses to prune a team with nothing against it
-  on record. The team's directory goes back to the IC. Teams are removed
-  or replaced only once their agents have finished what they are doing.
+  `msg_ic`. It waits until a team has had enough tasks to judge it by: a
+  success rate over one or two tasks says little. The team's directory
+  goes back to the IC. Teams are removed or replaced only once their
+  agents have finished what they are doing.
 
 Both record what matters with `report`: a design decision and its reason,
 a setback, an approach that failed and why, a reflection on how the work
@@ -692,10 +694,6 @@ _EVENT_WORDS: dict[TeamEventKind, str] = {
     "proposed": "sub-teams proposed",
     "approved": "sub-teams approved",
 }
-# How often a team must have stalled, or had work sent back, before that
-# alone lets its Manager prune it.
-PRUNE_STALLS = 2
-PRUNE_SENT_BACK = 3
 # What is counted of a team, in the order it is told.
 _COUNTED: tuple[TeamEventKind, ...] = ("accepted", "sent_back", "stalled", "stopped")
 
@@ -705,7 +703,7 @@ def _fresh() -> dict[str, Any]:
     return {kind: 0 for kind in _COUNTED} | {
         "ended": None,
         "tasks": 0,
-        "tasks_without_the_limit": 0,
+        "tasks_succeeded": 0,
         "limit_reached": 0,
         "limit_reached_on_the_work_in_hand": False,
     }
@@ -717,8 +715,8 @@ def track_records(events: list[TeamEvent]) -> list[dict[str, Any]]:
 
     A task is a piece of work of the team that was accepted, or the one it
     has in hand once its IC's escalations on it reached the limit that
-    wakes the Manager. `tasks_without_the_limit` are the accepted ones on
-    which that limit was never reached.
+    wakes the Manager. `tasks_succeeded` are the accepted ones on which
+    that limit was never reached.
     """
     records: dict[str, dict[str, Any]] = {}
     for event in events:
@@ -743,7 +741,7 @@ def track_records(events: list[TeamEvent]) -> list[dict[str, Any]]:
                 record["limit_reached_on_the_work_in_hand"] = False
             else:
                 record["tasks"] += 1
-                record["tasks_without_the_limit"] += 1
+                record["tasks_succeeded"] += 1
         elif event.kind in _COUNTED:
             record[event.kind] += 1
         elif event.kind in ("replaced", "pruned"):
@@ -761,16 +759,34 @@ def record_line(record: dict[str, Any]) -> str:
     return ", ".join(parts)
 
 
-def task_ratio(record: dict[str, Any]) -> str:
-    """How many of a team's tasks went without its escalations reaching the
-    limit, in words; empty before it has had a task."""
+def success_rate(record: dict[str, Any]) -> str:
+    """A team's success rate, in words: how many of its tasks were accepted
+    without its escalations reaching the limit. Empty before it has had a
+    task."""
     tasks = record.get("tasks", 0)
     if not tasks:
         return ""
-    clean = record.get("tasks_without_the_limit", 0)
+    succeeded = record.get("tasks_succeeded", 0)
     return (
-        f"{clean} of {tasks} task{'s' if tasks != 1 else ''} without its "
-        "escalations reaching the limit"
+        f"success rate {succeeded} of {tasks} task{'s' if tasks != 1 else ''} "
+        f"({round(100 * succeeded / tasks)}%)"
+    )
+
+
+def success_rate_meaning(escalation_limit: int) -> str:
+    """What a team's success rate counts, for the Manager that reads it.
+
+    Args:
+        escalation_limit: How many escalations of one team on the work it
+            has in hand wake the Manager; 0 when that is off.
+    """
+    if not escalation_limit:
+        return "A team's success rate is the share of its tasks that were accepted."
+    return (
+        "A team's success rate is the share of its tasks that were accepted "
+        f"without its IC escalating {escalation_limit} times on them, the "
+        "number that wakes you. A task on which that number was reached "
+        "counts against it, also while it is still in hand."
     )
 
 
@@ -788,6 +804,7 @@ def manager_check(
     events: list[TeamEvent] | None = None,
     *,
     after_successes: bool = False,
+    escalation_limit: int = 0,
 ) -> str:
     """What a Manager is told when the director wakes it to look at its
     teams.
@@ -802,6 +819,9 @@ def manager_check(
             that are gone.
         after_successes: The look comes after work that was accepted, not
             after anything that went wrong.
+        escalation_limit: How many escalations of one team on the work it
+            has in hand wake the Manager, which is what a success rate is
+            counted against.
     """
     records = {record["node_id"]: record for record in track_records(events or [])}
     lines = [
@@ -832,9 +852,9 @@ def manager_check(
         so_far = record_line(record)
         if so_far:
             facts.append(f"so far: {so_far}")
-        ratio = task_ratio(record)
-        if ratio:
-            facts.append(ratio)
+        rate = success_rate(record)
+        if rate:
+            facts.append(rate)
         lines.append(
             f"- {team.title!r} (node {team.id}, {team.boundary.path or '.'}): "
             + "; ".join(facts)
@@ -848,6 +868,8 @@ def manager_check(
     ]
     if gone:
         lines += ["", "Teams that were here before and are gone:", *gone]
+    if any(record.get("tasks") for record in records.values()):
+        lines += ["", success_rate_meaning(escalation_limit)]
     lines += [
         "",
         (
@@ -858,44 +880,11 @@ def manager_check(
         + "Nothing is asked of you, and nothing here is a call to prune. If "
         "the make-up of the teams is what holds the work back, write to an "
         "IC with `msg_ic`. `prune_team` is for a team that is grossly "
-        "inefficient, not for one that is slow or had one bad task. "
-        "Otherwise end your turn.",
+        "inefficient, not for one that is slow or had one bad task, and a "
+        "success rate over one or two tasks says little: wait until a team "
+        "has had enough tasks to judge it by. Otherwise end your turn.",
     ]
     return "\n".join(lines)
-
-
-def prune_refusal(team: OrgNode) -> str:
-    """What a Manager is told when it prunes a team with a clean record."""
-    return (
-        f"Refused: nothing on record says {team.title!r} is grossly "
-        "inefficient. Its escalations never reached the limit on a piece of "
-        f"work, it stalled fewer than {PRUNE_STALLS} times, its work was "
-        f"sent back fewer than {PRUNE_SENT_BACK} times, and your IC has not "
-        "stopped it. A prune is not a precaution. Write to its IC or to "
-        "yours with `msg_ic`; if the team is in the wrong place, have your "
-        "IC propose teams that take its place."
-    )
-
-
-def prune_grounds(team: OrgNode, record: dict[str, Any]) -> list[str]:
-    """What on record allows a Manager to prune a team; empty for a team
-    with a clean record.
-
-    Args:
-        record: The team's entry of `track_records`, or {} when it has none.
-    """
-    grounds = []
-    if not team.agents:
-        grounds.append("it was never given a task")
-    if team.stopped is not None or record.get("stopped"):
-        grounds.append("your IC stopped it")
-    if record.get("limit_reached"):
-        grounds.append("its escalations reached the limit on a piece of work")
-    if record.get("stalled", 0) >= PRUNE_STALLS:
-        grounds.append(f"it stalled {record['stalled']} times")
-    if record.get("sent_back", 0) >= PRUNE_SENT_BACK:
-        grounds.append(f"its work was sent back {record['sent_back']} times")
-    return grounds
 
 
 def proposal_facts(

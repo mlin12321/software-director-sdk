@@ -1,25 +1,23 @@
 """What a Manager and an IC are given to judge the make-up of their teams
-by, and when a prune is refused."""
+by."""
 
 from pathlib import Path
 
 import pytest
 
 from openhands.agent_server.director.models import TeamEvent
-from openhands.agent_server.director.prompts import task_ratio, track_records
+from openhands.agent_server.director.prompts import success_rate, track_records
 from openhands.agent_server.director.service import DirectorService
 from openhands.agent_server.director.tools import (
     ApproveTeamsTool,
     MsgManagerTool,
     PruneTeamTool,
     ReviewTeamTool,
-    StopTeamTool,
     SubmitReviewTool,
 )
 from openhands.agent_server.director.tools.definition import (
     MsgManagerAction,
     PruneTeamAction,
-    StopTeamAction,
 )
 from tests.agent_server.director.conftest import FakeLauncher
 from tests.agent_server.director.test_director_acp import started
@@ -72,26 +70,32 @@ def event(kind: str, team: str = "a") -> TeamEvent:
     ("kinds", "ratio"),
     [
         (["set_up"], ""),
-        (["set_up", "sent_back", "accepted"], "1 of 1 task"),
-        (["set_up", "accepted", "accepted", "woken"], "2 of 3 tasks"),
+        (["set_up", "sent_back", "accepted"], "success rate 1 of 1 task (100%)"),
+        (
+            ["set_up", "accepted", "accepted", "woken"],
+            "success rate 2 of 3 tasks (67%)",
+        ),
         # Reached twice on one piece of work is one task.
-        (["set_up", "woken", "woken", "accepted", "accepted"], "1 of 2 tasks"),
+        (
+            ["set_up", "woken", "woken", "accepted", "accepted"],
+            "success rate 1 of 2 tasks (50%)",
+        ),
         # A team set up in the place of one that is gone starts its own.
-        (["set_up", "woken", "replaced", "set_up", "accepted"], "1 of 1 task"),
+        (
+            ["set_up", "woken", "replaced", "set_up", "accepted"],
+            "success rate 1 of 1 task (100%)",
+        ),
     ],
 )
-def test_a_teams_tasks_are_counted_with_the_ones_that_reached_no_limit(
+def test_a_teams_success_rate_is_its_tasks_accepted_without_reaching_the_limit(
     kinds: list[str], ratio: str
 ):
     [record] = track_records([event(kind) for kind in kinds])
 
-    assert task_ratio(record).startswith(ratio)
-    assert not ratio or "without its escalations reaching the limit" in task_ratio(
-        record
-    )
+    assert success_rate(record) == ratio
 
 
-async def test_a_look_says_how_many_of_each_teams_tasks_reached_no_limit(
+async def test_a_look_tells_the_success_rate_of_each_team(
     service: DirectorService, launcher: FakeLauncher, repo: Path
 ):
     await accepted(service, repo, WEB, times=2)
@@ -100,8 +104,15 @@ async def test_a_look_says_how_many_of_each_teams_tasks_reached_no_limit(
     [look] = looks(service, launcher)
     web = next(line for line in look.splitlines() if line.startswith("- 'Web'"))
     api = next(line for line in look.splitlines() if line.startswith("- 'API'"))
-    assert "2 of 2 tasks without its escalations reaching the limit" in web
-    assert "0 of 1 task without its escalations reaching the limit" in api
+    assert web.endswith("success rate 2 of 2 tasks (100%)")
+    assert api.endswith("success rate 0 of 1 task (0%)")
+    # The number it is counted against is the one that wakes the Manager.
+    limit = service.settings.manager_check_ic_escalations
+    assert (
+        "A team's success rate is the share of its tasks that were accepted "
+        f"without its IC escalating {limit} times on them"
+    ) in look
+    assert "wait until a team has had enough tasks to judge it by" in look
     # The limit being reached is kept with the team it was reached by.
     [woken] = [e for e in service.team_memory.history("root") if e.kind == "woken"]
     assert (woken.team_id, woken.team) == (API, "API")
@@ -130,60 +141,23 @@ async def test_work_that_is_sent_back_is_kept_and_wakes_no_manager(
     await service.settled()
 
     assert looks(service, launcher) == []
-    assert service.record_of(node(service, API))["sent_back"] == 4
+    [api] = [
+        record
+        for record in track_records(service.team_memory.history("root"))
+        if record["node_id"] == API
+    ]
+    assert api["sent_back"] == 4
 
 
-async def test_a_team_with_nothing_against_it_cannot_be_pruned(
-    service: DirectorService, launcher: FakeLauncher, repo: Path
+async def test_a_manager_may_prune_a_team_with_nothing_against_it(
+    service: DirectorService, repo: Path
 ):
     await accepted(service, repo, API)
-
-    refused = await use(service, manager(service), PruneTeamTool, PRUNE)
-
-    assert refused.is_error
-    assert (
-        "Refused: nothing on record says 'API' is grossly inefficient" in refused.text
-    )
-    assert "A prune is not a precaution" in refused.text
-    assert node(service, "root").child_ids == [API, WEB]
-    assert launcher.deleted == []
-
-
-async def test_a_team_its_ic_stopped_can_be_pruned(service: DirectorService):
-    await use(
-        service,
-        ic(service),
-        StopTeamTool,
-        StopTeamAction(team=API, reason="Three hours on one failing test."),
-    )
 
     pruned = await use(service, manager(service), PruneTeamTool, PRUNE)
 
     assert not pruned.is_error
     assert node(service, "root").child_ids == [WEB]
-
-
-async def test_a_team_whose_escalations_reached_the_limit_can_be_pruned(
-    service: DirectorService,
-):
-    await escalates(service, API, times=3)
-
-    pruned = await use(service, manager(service), PruneTeamTool, PRUNE)
-
-    assert not pruned.is_error
-
-
-async def test_a_team_that_was_never_given_a_task_can_be_pruned(
-    repo: Path, launcher: FakeLauncher
-):
-    service = await started(repo, launcher, stall_poll=3600)
-    await use(service, ic(service), MsgManagerTool, SPLIT)
-    await use(service, manager(service), ApproveTeamsTool, APPROVE)
-
-    pruned = await use(service, manager(service), PruneTeamTool, PRUNE)
-
-    assert not pruned.is_error
-    await service.aclose()
 
 
 ORDERS = """\

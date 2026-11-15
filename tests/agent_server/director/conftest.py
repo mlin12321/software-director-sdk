@@ -444,15 +444,6 @@ def root_conversation(workspace: Path) -> StartConversationRequest:
     )
 
 
-def struggled(service: DirectorService, node_id: str = "services.api") -> None:
-    """Put on record that a team stalled twice, which is enough against it
-    for its Manager to be let to prune it."""
-    team = service.store.get(node_id)
-    assert team is not None
-    for _ in range(2):
-        service.record_event(team.parent_id, "stalled", team, "120 min")
-
-
 async def tasked(service: DirectorService) -> None:
     """Give every team that was only set up its first message, which starts it."""
     for team in service.store.all():

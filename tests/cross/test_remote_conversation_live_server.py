@@ -3856,14 +3856,11 @@ def test_director_prunes_a_blocked_team_and_maps_who_owns_what(
     repo = server_env["workspace_path"]
     _scripted_org_llm(
         monkeypatch,
-        # As often as lets a Manager prune: a team with nothing against it
-        # on record is not pruned.
         api_ic=[
             (
                 "raise_escalation",
-                {"category": "critical_issue", "title": f"Too much, {nth}"},
+                {"category": "critical_issue", "title": "Too much for one team"},
             )
-            for nth in ("once", "twice", "three times")
         ],
     )
     run_git_command(["git", "init", "-b", "main"], repo)

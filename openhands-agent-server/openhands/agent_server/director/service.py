@@ -1267,13 +1267,6 @@ class DirectorService:
         records = track_records(self.team_memory.history(team.parent_id))
         return next((record_line(r) for r in records if r["node_id"] == team.id), "")
 
-    def record_of(self, team: OrgNode) -> dict[str, Any]:
-        """What the team above has on record of a team; {} when nothing."""
-        if team.parent_id is None:
-            return {}
-        records = track_records(self.team_memory.history(team.parent_id))
-        return next((r for r in records if r["node_id"] == team.id), {})
-
     def facts_of_proposal(self, node: OrgNode, proposal: SplitProposal) -> str:
         """What the director knows of the sub-teams a team's IC proposes:
         how much is in each directory, which were changed together, and
@@ -1426,6 +1419,7 @@ class DirectorService:
                 counted["escalations"],
                 self.team_memory.history(node_id),
                 after_successes=after_successes,
+                escalation_limit=self.settings.manager_check_ic_escalations,
             ),
         )
 

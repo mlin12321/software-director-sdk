@@ -22,7 +22,7 @@ from openhands.agent_server.director.tools.definition import (
     ReadNodeContextAction,
     ResolveEscalationAction,
 )
-from tests.agent_server.director.conftest import FakeLauncher, struggled, tasked
+from tests.agent_server.director.conftest import FakeLauncher, tasked
 from tests.agent_server.director.test_director_acp import started
 from tests.agent_server.director.test_director_review import (
     DONE,
@@ -279,7 +279,6 @@ async def test_a_new_team_in_a_removed_teams_place_starts_from_nothing(
     service: DirectorService, launcher: FakeLauncher
 ):
     await escalates(service, API, times=2)
-    struggled(service, API)
     await use(
         service,
         manager(service),

@@ -29,7 +29,7 @@ from openhands.agent_server.director.tools.definition import (
     ReportAction,
 )
 from openhands.sdk.conversation.state import ConversationExecutionStatus
-from tests.agent_server.director.conftest import FakeLauncher, struggled
+from tests.agent_server.director.conftest import FakeLauncher
 from tests.agent_server.director.test_director_pause import again
 from tests.agent_server.director.test_director_review import DONE, commit
 from tests.agent_server.director.test_director_teams import started
@@ -283,7 +283,6 @@ async def test_what_the_agents_of_a_removed_team_were_told_is_forgotten(
     gone = {ic(service, "services.api"), await woken(service, "services.api")}
     assert gone <= set(service._runs().marked(TOLD))
 
-    struggled(service)
     await use(
         service,
         manager(service),

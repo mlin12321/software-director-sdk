@@ -20,12 +20,7 @@ from openhands.agent_server.director.tools.definition import (
     MsgTeamAction,
 )
 from openhands.sdk.conversation.state import ConversationExecutionStatus
-from tests.agent_server.director.conftest import (
-    FakeLauncher,
-    run_git,
-    struggled,
-    tasked,
-)
+from tests.agent_server.director.conftest import FakeLauncher, run_git, tasked
 from tests.agent_server.director.test_director_limits import started
 from tests.agent_server.director.test_director_pause import (
     again,
@@ -241,7 +236,6 @@ async def test_a_team_is_pruned_only_once_it_and_the_teams_below_are_at_rest(
     assert db_ic is not None
     launcher.report(db_ic, ConversationExecutionStatus.RUNNING)
 
-    struggled(service)
     await use(service, manager(service), PruneTeamTool, PRUNE_API)
 
     assert service.store.get(API) is not None and launcher.stopped == []

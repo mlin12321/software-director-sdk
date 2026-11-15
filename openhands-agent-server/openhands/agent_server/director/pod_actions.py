@@ -23,7 +23,6 @@ from openhands.agent_server.director.models import (
     ReviewFinding,
     SplitProposal,
 )
-from openhands.agent_server.director.prompts import prune_grounds, prune_refusal
 from openhands.agent_server.director.service import (
     DirectorService,
     agent_conversation,
@@ -571,8 +570,6 @@ def prune_team(
     team = service.store.get(node_id)
     if team is None or team.parent_id != caller.node.id:
         raise Invalid(f"{node_id} is not a team directly below yours")
-    if not prune_grounds(team, service.record_of(team)):
-        raise Invalid(prune_refusal(team))
     service.prune(node_id, reason.strip())
     return (
         f"Pruning {team.title!r}. Its directory goes back to your team's IC "

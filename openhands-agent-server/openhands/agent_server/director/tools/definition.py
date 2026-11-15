@@ -496,8 +496,8 @@ class PruneTeamTool(_DirectorTool[PruneTeamAction]):
     summary = (
         "Manager only. Remove a team directly below yours that is grossly "
         "inefficient, with every team below it. Rare, and never a "
-        "precaution: it is refused for a team with nothing against it on "
-        "record. Its agents are deleted and the uncommitted changes in its "
+        "precaution: wait until the team has had enough tasks to judge it "
+        "by. Its agents are deleted and the uncommitted changes in its "
         "directory are discarded (git keeps a copy). The directory goes back "
         "to your team's IC, who is told why."
     )
