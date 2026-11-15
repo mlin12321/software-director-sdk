@@ -9,9 +9,12 @@ import pytest
 from openhands.agent_server.director import compaction
 from openhands.agent_server.director.git_store import GitStore
 from openhands.agent_server.director.models import OldSpec, Report, SplitChild
-from openhands.agent_server.director.prompts import left_behind
+from openhands.agent_server.director.prompts import HAND_OVER_ROLE, left_behind
 from openhands.agent_server.director.run_state import TASK
-from openhands.agent_server.director.service import DirectorService
+from openhands.agent_server.director.service import (
+    DirectorService,
+    hand_over_of,
+)
 from openhands.agent_server.director.tools import (
     ApproveTeamsTool,
     HandOverTool,
@@ -35,6 +38,7 @@ from openhands.agent_server.director.tools.definition import (
 from openhands.sdk.conversation.state import ConversationExecutionStatus
 from tests.agent_server.director.conftest import FakeLauncher, tasked
 from tests.agent_server.director.test_director_limits import started
+from tests.agent_server.director.test_director_service import attempt, create
 from tests.agent_server.director.test_director_tools import (
     APPROVE,
     PRUNE_API,
@@ -90,6 +94,23 @@ async def replace(
 
 
 ORDERS = SplitChild(title="Orders", path="services/api", task="Keep the orders")
+
+
+def aside(service: DirectorService, node_id: str = "root") -> str | None:
+    """The conversation of a team's IC in hand-over mode."""
+    mode = hand_over_of(node(service, node_id))
+    return mode.conversation_id if mode else None
+
+
+def given_aside(service: DirectorService, launcher: FakeLauncher) -> str:
+    """What the top team's hand-over conversation was started with."""
+    conversation = aside(service)
+    [start] = [
+        start
+        for start in launcher.derived
+        if str(start.conversation_id) == conversation
+    ]
+    return start.task
 
 
 async def test_a_team_put_in_another_teams_directory_gets_none_of_its_memory(
@@ -202,7 +223,7 @@ async def test_the_ic_is_told_who_has_each_replaced_teams_directory_now(
         keep=["Web"],
     )
 
-    told = launcher.messages_to(ic(service))[-1]
+    told = given_aside(service, launcher)
     assert (
         "Its directory is now divided: HTTP (services/api/http), Store "
         "(services/api/db). What of services/api is in none of those is yours again."
@@ -227,7 +248,7 @@ async def test_the_ic_is_told_who_has_each_replaced_teams_directory_now(
         service, SplitChild(title="Services", path="services", task="Serve"), keep=[]
     )
 
-    told = launcher.messages_to(ic(service))[-1]
+    told = given_aside(service, launcher)
     assert (
         told.count("Its directory is now in the boundary of Services (services).") == 3
     )
@@ -344,13 +365,14 @@ async def test_the_ic_that_proposed_is_given_what_the_replaced_team_left(
 
     approved = await replace(service, ORDERS, keep=["Web"])
 
-    told = launcher.messages_to(ic(service))[-1]
+    told = given_aside(service, launcher)
     assert "Team 'API' (node services.api, services/api), replaced." in told
     assert "It was for: Serve the checkout API" in told
     assert "Its reports, as one:\nSQLite, no cache." in told
-    assert "nothing of it reaches a new team unless you hand it over" in told
-    for tool in ("`hand_over`", "`write_spec`", "`msg_team`"):
+    assert "reaches a new team unless you hand it over" in told
+    for tool in ("`hand_over`", "`write_spec`"):
         assert tool in told
+    assert "`msg_team`" in launcher.messages_to(ic(service))[-1]
     assert "pass on what the replaced teams left" in approved.text
     assert "msg_ic" in approved.text
 
@@ -463,8 +485,9 @@ async def test_the_ic_above_is_given_what_a_pruned_team_left(
 ):
     pruned = await use(service, manager(service), PruneTeamTool, PRUNE_API)
 
-    told = launcher.messages_to(ic(service))[-1]
-    assert "Your Manager pruned the team 'API'" in told
+    assert "Your Manager pruned the team 'API'" in launcher.messages_to(ic(service))[-1]
+    told = given_aside(service, launcher)
+    assert "your Manager pruned the team 'API'" in told
     assert "Team 'API' (node services.api, services/api), pruned." in told
     assert "Chose SQLite.\n\nDropped the cache." in told
     assert "Rewrite your own spec with `write_spec`" in told
@@ -486,3 +509,154 @@ async def test_an_ic_can_read_again_what_removed_teams_left(
     [named] = service.context_of(node(service, "root"), "ic")["former_teams"]
     assert sorted(named) == ["at", "directory", "ended", "node_id", "team"]
     assert "former_teams" not in service.context_of(node(service, "root"), "manager")
+
+
+async def test_a_hand_over_is_a_side_conversation_of_the_ic_with_its_own_briefing(
+    service: DirectorService, launcher: FakeLauncher
+):
+    launcher.answers[compaction.USAGE_ID] = "SQLite, no cache."
+    await use(service, ic(service), WriteSpecTool, WriteSpecAction(content="# Shop"))
+    before = len(launcher.derived)
+
+    await replace(service, ORDERS, keep=["Web"], contracts="Orders serves Web.")
+
+    # One conversation more, derived from the IC's and not started by a task.
+    [start] = launcher.derived[before:]
+    assert str(start.conversation_id) == aside(service)
+    assert str(start.parent_id) == ic(service)
+    assert start.title.endswith("(IC, hand-over)")
+    assert start.suffixes == [HAND_OVER_ROLE]
+    assert node(service, API).agents == []
+    # It is told who it is, what changed, what was left and what its team
+    # works to; none of it depends on what the IC's own conversation holds.
+    told = start.task
+    assert "You are the IC of the team" in told and "in hand-over mode" in told
+    # The team still has its two agents and no third.
+    assert [agent.role for agent in node(service, "root").agents] == ["ic", "manager"]
+    assert "- Orders (node services.api, services/api): Keep the orders" in told
+    assert "Its directory is now in the boundary of Orders (services/api)." in told
+    assert "Its reports, as one:\nSQLite, no cache." in told
+    assert "The spec it wrote (old; it stays in services/api):\n# API by hand" in told
+    assert "Your team's spec:\n# Shop" in told
+    assert "Contracts between your sub-teams:\nOrders serves Web." in told
+    assert '"sub_teams"' in told
+    # The IC's own conversation is told of it and is given none of the material.
+    main = launcher.messages_to(ic(service))[-1]
+    assert "in hand-over mode: a side conversation of yours" in main
+    assert "API (services/api)" in main
+    assert "SQLite, no cache." not in main and "`hand_over`: notes" not in main
+
+
+async def test_a_hand_over_conversation_hands_over_and_writes_the_spec_and_no_more(
+    service: DirectorService, launcher: FakeLauncher
+):
+    await replace(service, ORDERS, keep=["Web"])
+    side = aside(service)
+
+    handed = await use(
+        service, side, HandOverTool, HandOverAction(team=API, notes="Keep SQLite.")
+    )
+    spec = await use(service, side, WriteSpecTool, WriteSpecAction(content="# Shop"))
+    read = await use(service, side, ReadNodeContextTool, ReadNodeContextAction())
+    refused = [
+        await use(service, side, ReportTool, ReportAction(text="Done.")),
+        await use(service, side, MsgTeamTool, MsgTeamAction(team=API, text="Go.")),
+        await use(service, side, MsgManagerTool, MsgManagerAction(text="Hello.")),
+    ]
+
+    assert not handed.is_error and not spec.is_error
+    [report] = service.reports_of(node(service, API))
+    assert (report.text, report.handed_over) == ("Keep SQLite.", True)
+    assert node(service, "root").spec_summary == "Shop"
+    assert json.loads(read.text)["former_teams"][0]["reports_as_one"]
+    for answer in refused:
+        assert answer.is_error and "for the hand-over alone" in answer.text
+    assert node(service, API).agents == []
+    refusal = attempt(service, side, "file_editor", create("README.md"))
+    assert refusal is not None and "In hand-over mode you do not edit files" in refusal
+
+
+async def test_the_ic_is_told_what_its_hand_over_conversation_did_when_it_ends(
+    service: DirectorService, launcher: FakeLauncher
+):
+    await replace(service, ORDERS, keep=["Web"])
+    side = aside(service)
+    assert side is not None
+    was = node(service, "root").status
+
+    launcher.report(side, ConversationExecutionStatus.RUNNING)
+    # A hand-over beside the team's work does not change how the team stands.
+    assert node(service, "root").status == was
+    await use(service, side, HandOverTool, HandOverAction(team=API, notes="Keep it."))
+    await use(service, side, WriteSpecTool, WriteSpecAction(content="# Shop"))
+    launcher.report(side, ConversationExecutionStatus.FINISHED)
+    await service.settled()
+
+    told = launcher.messages_to(ic(service))[-1]
+    assert "Your hand-over mode has ended." in told
+    assert "It gave notes or contracts to: Orders." in told
+    assert "It rewrote your team's spec." in told
+    # Told once.
+    launcher.report(side, ConversationExecutionStatus.RUNNING)
+    launcher.report(side, ConversationExecutionStatus.FINISHED)
+    await service.settled()
+    ended = [
+        text
+        for text in launcher.messages_to(ic(service))
+        if "Your hand-over mode has ended." in text
+    ]
+    assert len(ended) == 1
+
+
+async def test_a_hand_over_conversation_that_did_nothing_leaves_it_to_the_ic(
+    service: DirectorService, launcher: FakeLauncher
+):
+    await use(service, manager(service), PruneTeamTool, PRUNE_API)
+    side = aside(service)
+    assert side is not None
+
+    launcher.report(side, ConversationExecutionStatus.RUNNING)
+    launcher.report(side, ConversationExecutionStatus.FINISHED)
+    await service.settled()
+
+    told = launcher.messages_to(ic(service))[-1]
+    assert "It gave nothing to any team." in told
+    assert "It did not rewrite your team's spec: do that with `write_spec`." in told
+
+
+async def test_each_hand_over_gets_a_conversation_of_its_own(
+    service: DirectorService, launcher: FakeLauncher
+):
+    await replace(service, ORDERS, keep=["Web"])
+    first = aside(service)
+    assert first is not None
+
+    await use(service, manager(service), PruneTeamTool, PRUNE_API)
+
+    second = aside(service)
+    assert second is not None and second != first
+    mode = hand_over_of(node(service, "root"))
+    assert mode is not None and mode.status == "idle"
+    # The first is no agent of the org any more.
+    late = await use(
+        service, first, HandOverTool, HandOverAction(team=WEB, notes="Too late.")
+    )
+    assert late.is_error and "not an agent of the org" in late.text
+    assert "your Manager pruned the team 'Orders'" in given_aside(service, launcher)
+
+
+async def test_an_ic_is_told_when_its_hand_over_mode_cannot_start(
+    service: DirectorService, launcher: FakeLauncher, monkeypatch: pytest.MonkeyPatch
+):
+    async def fails(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("no room for it")
+
+    monkeypatch.setattr(launcher, "start_derived", fails)
+
+    await replace(service, ORDERS, keep=["Web"])
+
+    assert aside(service) is None
+    told = launcher.messages_to(ic(service))[-1]
+    assert "Your hand-over mode could not be started" in told
+    # It is told so and no more: the job is not moved to its main conversation.
+    assert "Team 'API'" not in told and "`hand_over`" not in told

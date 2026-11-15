@@ -14,6 +14,8 @@ from uuid import UUID
 
 from openhands.agent_server.director.git import GitError, git
 from openhands.agent_server.director.models import (
+    ROLE_NAMES,
+    AgentRole,
     OrgNode,
     RecoveryItem,
     RecoveryKind,
@@ -148,15 +150,12 @@ def describe(
     items: list[RecoveryItem] = []
     for conversation_id, node_id in run.marked(RUNNING).items():
         node = nodes.get(node_id)
-        role = next(
-            (
-                agent.role
-                for agent in (node.agents if node else [])
-                if agent.conversation_id == conversation_id
-            ),
-            "ic",
-        )
-        name = "IC" if role == "ic" else "Manager"
+        roles: list[AgentRole] = [
+            agent.role
+            for agent in (node.agents if node else [])
+            if agent.conversation_id == conversation_id
+        ]
+        name = ROLE_NAMES[roles[0]] if roles else ROLE_NAMES["ic"]
         status = statuses.get(UUID(conversation_id))
         if status is None:
             items.append(
@@ -240,7 +239,7 @@ def describe(
             continue
         for agent in node.agents:
             if agent.status == AGENT_LOST:
-                name = "IC" if agent.role == "ic" else "Manager"
+                name = ROLE_NAMES[agent.role]
                 items.append(
                     _item(
                         node,

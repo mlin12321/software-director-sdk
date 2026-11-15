@@ -19,6 +19,7 @@ from openhands.agent_server.director.models import (
     EscalationKind,
     EscalationPathStep,
     EscalationsEvent,
+    HandOverMode,
     NodeRemovedEvent,
     NodeStatus,
     NodeUpsertEvent,
@@ -104,6 +105,8 @@ class OrgStore:
         self._listeners: dict[OrgListener, _Subscription] = {}
         self._change_listeners: list[Callable[[], None]] = []
         self._agents: dict[str, tuple[str, AgentRole]] = {}
+        # The hand-over conversation of each IC that has one -> its node.
+        self._hand_overs: dict[str, str] = {}
 
     @property
     def root_id(self) -> str | None:
@@ -149,6 +152,33 @@ class OrgStore:
                 return None
             node_id, role = found
             return self._nodes[node_id], role
+
+    def find_hand_over(self, conversation_id: str) -> OrgNode | None:
+        """The node whose IC has ``conversation_id`` as its hand-over
+        conversation."""
+        with self._lock:
+            node_id = self._hand_overs.get(conversation_id)
+            return self._nodes[node_id] if node_id is not None else None
+
+    def set_hand_over(self, node_id: str, mode: HandOverMode | None) -> OrgNode:
+        """Put a node's IC in hand-over mode, change how that stands, or
+        end it. The node's status does not follow: a hand-over says nothing
+        of how the team's work stands.
+
+        Raises:
+            NotFound: The node does not exist.
+        """
+        with self._lock:
+            node = self._require(node_id)
+            agents = [
+                agent.model_copy(update={"hand_over": mode})
+                if agent.role == "ic"
+                else agent
+                for agent in node.agents
+            ]
+            if agents == node.agents:
+                return node
+            return self.update_node(node_id, agents=agents)
 
     def on_change(self, listener: Callable[[], None]) -> Callable[[], None]:
         """Call ``listener`` after every change to the tree.
@@ -466,6 +496,7 @@ class OrgStore:
             self._nodes = nodes
             self._root_id = root_id
             self._agents = {}
+            self._hand_overs = {}
             for node in nodes.values():
                 self._index_agents(None, node)
 
@@ -802,10 +833,14 @@ class OrgStore:
             for agent in old.agents:
                 if agent.conversation_id is not None:
                     self._agents.pop(agent.conversation_id, None)
+                if agent.hand_over is not None:
+                    self._hand_overs.pop(agent.hand_over.conversation_id, None)
         if new is not None:
             for agent in new.agents:
                 if agent.conversation_id is not None:
                     self._agents[agent.conversation_id] = (new.id, agent.role)
+                if agent.hand_over is not None:
+                    self._hand_overs[agent.hand_over.conversation_id] = new.id
 
     def _changed(self) -> None:
         for listener in list(self._change_listeners):
