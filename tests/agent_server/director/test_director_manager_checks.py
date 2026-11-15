@@ -11,6 +11,7 @@ from openhands.agent_server.director.tools import (
     MsgManagerTool,
     PruneTeamTool,
     RaiseEscalationTool,
+    ReadNodeContextTool,
     ResolveEscalationTool,
     ReviewTeamTool,
     SubmitReviewTool,
@@ -18,11 +19,17 @@ from openhands.agent_server.director.tools import (
 from openhands.agent_server.director.tools.definition import (
     PruneTeamAction,
     RaiseEscalationAction,
+    ReadNodeContextAction,
     ResolveEscalationAction,
 )
 from tests.agent_server.director.conftest import FakeLauncher, tasked
 from tests.agent_server.director.test_director_acp import started
-from tests.agent_server.director.test_director_review import DONE, accept, commit
+from tests.agent_server.director.test_director_review import (
+    DONE,
+    accept,
+    commit,
+    reject,
+)
 from tests.agent_server.director.test_director_tools import (
     APPROVE,
     ic,
@@ -291,3 +298,90 @@ async def test_a_new_team_in_a_removed_teams_place_starts_from_nothing(
     assert looks(service, launcher) == []
     await escalates(service, API)
     assert len(looks(service, launcher)) == 1
+
+
+async def sent_back(service: DirectorService, repo: Path, team: str, times: int = 1):
+    """Have a team submit work and the top team's IC send it back."""
+    directory = node(service, team).boundary.path
+    for _ in range(times):
+        count = len(list((repo / directory).glob("*.txt")))
+        commit(repo, f"{directory}/try{count}.txt", "again\n")
+        await use(service, ic(service, team), SubmitReviewTool, DONE)
+        await use(service, ic(service), ReviewTeamTool, reject(team))
+    await service.settled()
+
+
+async def test_a_manager_looks_when_one_teams_work_keeps_being_sent_back(
+    service: DirectorService, launcher: FakeLauncher, repo: Path
+):
+    await sent_back(service, repo, API, times=2)
+    await sent_back(service, repo, WEB, times=2)
+    # Four in all, but no team's work was sent back three times.
+    assert looks(service, launcher) == []
+
+    await sent_back(service, repo, API)
+
+    [look] = looks(service, launcher)
+    assert "your IC has sent back the work of 'API' 3 times." in look
+    assert "so far: 3 sent back" in look and "so far: 2 sent back" in look
+
+    service.update_settings(DirectorSettingsUpdate(manager_check_sent_back=0))
+    await sent_back(service, repo, API, times=3)
+    assert len(looks(service, launcher)) == 1
+
+
+async def test_what_became_of_its_teams_is_kept_for_a_teams_two_agents(
+    service: DirectorService, launcher: FakeLauncher, repo: Path
+):
+    await sent_back(service, repo, API)
+    await accepted(service, repo, API)
+    await accepted(service, repo, WEB)
+
+    kinds = [
+        (event.team, event.kind, event.detail)
+        for event in service.team_memory.history("root")
+    ]
+    assert [kind for _, kind, _ in kinds[:2]] == ["set_up", "set_up"]
+    assert kinds[2:] == [
+        ("API", "sent_back", "round 1, 1 to change"),
+        ("API", "accepted", "at review 2"),
+        ("Web", "accepted", "at the first review"),
+    ]
+    # Both agents of the team read it with the rest of their context.
+    for agent in (ic(service), manager(service)):
+        read = await use(service, agent, ReadNodeContextTool, ReadNodeContextAction())
+        assert '"sent_back": 1' in read.text
+        assert "work accepted (at review 2)" in read.text
+    # The IC reads a team's record with the next work it submits.
+    commit(repo, "services/api/more.txt", "more\n")
+    await use(service, ic(service, API), SubmitReviewTool, DONE)
+    await service.settled()
+    asked = launcher.messages_to(ic(service))[-1]
+    assert "Its work so far: 1 accepted, 1 sent back." in asked
+
+
+async def test_a_manager_is_shown_what_became_of_teams_that_are_gone(
+    service: DirectorService, launcher: FakeLauncher, repo: Path
+):
+    service.update_settings(DirectorSettingsUpdate(manager_check_accepted_reviews=1))
+    await sent_back(service, repo, API, times=2)
+    await use(
+        service,
+        manager(service),
+        PruneTeamTool,
+        PruneTeamAction(node_id=API, reason="It never got it right."),
+    )
+    await service.settled()
+
+    await accepted(service, repo, WEB)
+
+    look = looks(service, launcher)[-1]
+    assert "Teams that were here before and are gone:" in look
+    assert "- 'API' (node services.api), pruned: 2 sent back" in look
+    history = service.team_memory.history("root")
+    assert [e.detail for e in history if e.kind == "woken"] == [
+        "your IC has accepted 1 reviews since the last look of this kind."
+    ]
+    assert [(e.team, e.detail) for e in history if e.kind == "pruned"] == [
+        ("API", "It never got it right.")
+    ]
