@@ -5,8 +5,16 @@ from pathlib import Path
 
 import pytest
 
-from openhands.agent_server.director.models import TeamEvent
-from openhands.agent_server.director.prompts import success_rate, track_records
+from openhands.agent_server.director.models import (
+    ReviewFinding,
+    SplitChild,
+    TeamEvent,
+)
+from openhands.agent_server.director.prompts import (
+    needs_between,
+    success_rate,
+    track_records,
+)
 from openhands.agent_server.director.service import DirectorService
 from openhands.agent_server.director.tools import (
     ApproveTeamsTool,
@@ -18,6 +26,7 @@ from openhands.agent_server.director.tools import (
 from openhands.agent_server.director.tools.definition import (
     MsgManagerAction,
     PruneTeamAction,
+    ReviewTeamAction,
 )
 from tests.agent_server.director.conftest import FakeLauncher
 from tests.agent_server.director.test_director_acp import started
@@ -30,14 +39,17 @@ from tests.agent_server.director.test_director_review import (
     DONE,
     commit,
     reject,
+    requests,
     run_git,
 )
+from tests.agent_server.director.test_director_service import attempt, create
 from tests.agent_server.director.test_director_tools import (
     APPROVE,
     SPLIT,
     ic,
     manager,
     node,
+    proposing,
     split_root,
     use,
 )
@@ -247,3 +259,113 @@ async def test_what_an_ic_proposed_and_what_was_approved_is_kept(
         ("proposed", "Orders (services/api); in place of API"),
         ("approved", "Orders (services/api); in place of API"),
     ]
+
+
+def needed(team: str, other: str, how: str = "write refused") -> TeamEvent:
+    return TeamEvent.model_validate(
+        {
+            "at": "2026-11-15T10:00:00+00:00",
+            "kind": "needed",
+            "team_id": team,
+            "team": team,
+            "other_id": other,
+            "other": other,
+            "detail": how,
+        }
+    )
+
+
+def test_teams_that_needed_each_other_are_counted_as_a_pair_while_both_are_there():
+    counted = needs_between(
+        [
+            event("set_up", "a"),
+            event("set_up", "b"),
+            event("set_up", "c"),
+            needed("a", "b"),
+            needed("b", "a", "review finding"),
+            needed("a", "b"),
+            needed("c", "a"),
+            # A team set up anew in c's place starts from nothing.
+            event("replaced", "c"),
+            event("set_up", "c"),
+        ]
+    )
+
+    assert counted == [
+        {
+            "node_ids": ["a", "b"],
+            "teams": ["a", "b"],
+            "writes_refused": 2,
+            "review_findings": 1,
+        }
+    ]
+
+
+def refused_in_web(service: DirectorService, repo: Path, name: str) -> str | None:
+    """API's IC tries to write a file of Web."""
+    path = repo / "apps" / "web" / name
+    return attempt(service, ic(service, API), "file_editor", create(path))
+
+
+async def test_a_refused_write_into_a_team_beside_is_kept_once_for_each_file(
+    service: DirectorService, repo: Path
+):
+    assert refused_in_web(service, repo, "page.js") is not None
+    assert refused_in_web(service, repo, "page.js") is not None
+    # A file that is no team's says nothing of two teams.
+    attempt(service, ic(service, API), "file_editor", create(repo / "README.md"))
+    await service.settled()
+
+    [kept] = [e for e in service.team_memory.history("root") if e.kind == "needed"]
+    assert (kept.team_id, kept.other_id, kept.other) == (API, WEB, "Web")
+    assert (kept.detail, kept.paths) == ("write refused", ["apps/web/page.js"])
+    # Once is not worth saying.
+    assert service.needs_below("root") == []
+
+
+async def test_an_ic_is_told_of_teams_that_keep_needing_each_other(
+    service: DirectorService, launcher: FakeLauncher, repo: Path
+):
+    for name in ("a.js", "b.js"):
+        refused_in_web(service, repo, name)
+    commit(repo, "services/api/app.py", "orders = []\n")
+    await use(service, ic(service, API), SubmitReviewTool, DONE)
+    finding = ReviewFinding(path="apps/web/form.js", issue="Posts the wrong field.")
+    await use(
+        service,
+        ic(service),
+        ReviewTeamTool,
+        ReviewTeamAction(node_id=API, decision="reject", findings=[finding]),
+    )
+    await use(service, ic(service, API), SubmitReviewTool, DONE)
+    # A review is asked for once every team below has submitted.
+    commit(Path(node(service, WEB).worktree_path), "apps/web/page.js", "x = 1\n")
+    await use(service, ic(service, WEB), SubmitReviewTool, DONE)
+
+    words = (
+        "needed each other's directory 3 times (2 writes refused, 1 review "
+        "finding): weigh whether the two are one concern"
+    )
+    asked = "\n".join(requests(service, launcher))
+    assert f"Its work so far: 1 sent back; it and 'Web' {words}." in asked
+    assert f"Its work so far: it and 'API' {words}." in asked
+    context = service.context_of(node(service, "root"), "ic", in_full=True)
+    assert context["teams_below_that_needed_each_other"] == [f"'API' and 'Web' {words}"]
+
+
+async def test_a_manager_is_told_how_often_teams_replaced_together_needed_each_other(
+    service: DirectorService, launcher: FakeLauncher, repo: Path
+):
+    refused_in_web(service, repo, "page.js")
+    redrawn = [
+        SplitChild(title="Services", path="services", task="Serve the shop"),
+        SplitChild(title="Apps", path="apps", task="Show the shop"),
+    ]
+
+    await use(service, ic(service), MsgManagerTool, proposing(redrawn))
+
+    told = launcher.messages_to(manager(service))[-1]
+    assert (
+        "- 'API' and 'Web' needed each other's directory 1 time (1 write "
+        "refused): weigh whether the two are one concern."
+    ) in told

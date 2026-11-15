@@ -460,6 +460,7 @@ TeamEventKind = Literal[
     "proposed",
     "approved",
     "declined",
+    "needed",
 ]
 
 
@@ -477,9 +478,17 @@ class TeamEvent(BaseModel):
         default_factory=list,
         description=(
             "The directories of the sub-teams a proposal was for, on "
-            "`proposed`, `approved` and `declined`."
+            "`proposed`, `approved` and `declined`; on `needed`, the file "
+            "in the other team's directory."
         ),
     )
+    other_id: str = Field(
+        default="",
+        description=(
+            "On `needed`, the team beside this one whose directory it needed."
+        ),
+    )
+    other: str = Field(default="", description="The title of that team.")
 
 
 class Report(BaseModel):
