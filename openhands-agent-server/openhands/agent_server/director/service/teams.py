@@ -60,9 +60,6 @@ from openhands.agent_server.director.service.state import (
     _STARTED_WITH,
     HAND_OVER_TOOLS,
     LEFT_REFS,
-    REVIEW_MANAGER_TOOLS,
-    REVIEW_TOOLS,
-    TOOLS_OF,
     _agent_title,
     _base_of,
     _branch_of,
@@ -72,6 +69,7 @@ from openhands.agent_server.director.service.state import (
     _new_pod,
     _progress_of,
     agent_conversation,
+    tools_of,
 )
 from openhands.sdk.errors import (
     NotFound,
@@ -228,12 +226,6 @@ class Teams(Delivery):
                 node.parent_id,
             )
         return node.parent_id
-
-    def _tools_of(self, node: SessionTeam, role: AgentRole) -> tuple[str, ...]:
-        """The director's tools an agent of ``node`` is offered."""
-        if reviews_only(node):
-            return REVIEW_TOOLS if role == "ic" else REVIEW_MANAGER_TOOLS
-        return TOOLS_OF[role]
 
     async def _template(self) -> str | None:
         """A conversation of the org to derive an agent from when nothing
@@ -649,7 +641,7 @@ class Teams(Delivery):
             # Nothing holds its process to the team's directory, so its
             # work is kept apart and checked when it is merged.
             isolation = "worktree"
-        tools = self._tools_of(node, role)
+        tools = tools_of(node, role)
         adapt = await asyncio.to_thread(self._adapter, conversation_id, tools)
         # A session starts from where the repository's checkout is.
         base = (

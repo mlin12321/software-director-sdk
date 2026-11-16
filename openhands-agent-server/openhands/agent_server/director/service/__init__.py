@@ -55,6 +55,7 @@ from openhands.agent_server.director.service.state import (
     _summary_of,
     agent_conversation,
     hand_over_of,
+    tools_of,
 )
 from openhands.agent_server.director.service.sync import Sync
 from openhands.sdk.errors import (
@@ -78,6 +79,7 @@ __all__ = [
     "DirectorService",
     "agent_conversation",
     "hand_over_of",
+    "tools_of",
 ]
 
 

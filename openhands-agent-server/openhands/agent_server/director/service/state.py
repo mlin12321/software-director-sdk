@@ -71,6 +71,7 @@ from openhands.agent_server.director.org_persistence import (
 )
 from openhands.agent_server.director.org_store import (
     OrgStore,
+    reviews_only,
     session_team_id,
 )
 from openhands.agent_server.director.pods import PodLauncher
@@ -146,6 +147,15 @@ REVIEW_TOOLS = ("read_node_context", "report", "review_team")
 # What a Manager has there: it settles the sub-teams a session and the org
 # each made something else of.
 REVIEW_MANAGER_TOOLS = ("read_node_context", "report", "settle_teams")
+
+
+def tools_of(node: SessionTeam, role: AgentRole) -> tuple[str, ...]:
+    """The director's tools an agent of ``node`` is offered."""
+    if reviews_only(node):
+        return REVIEW_TOOLS if role == "ic" else REVIEW_MANAGER_TOOLS
+    return TOOLS_OF[role]
+
+
 DIRECTOR_TOOL_NAMES = tuple(
     dict.fromkeys((*TOOLS_OF["ic"], *TOOLS_OF["manager"], *REVIEW_MANAGER_TOOLS))
 )
