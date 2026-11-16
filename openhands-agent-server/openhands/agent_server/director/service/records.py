@@ -82,18 +82,14 @@ logger = logging.getLogger(__name__)
 _REPORTS = TypeAdapter(list[Report])
 
 
-# How the org's own team is named to the sessions that work beside it.
-OWN_SESSION = "the team's own work"
-
-
 def _written_by(report: Report, session: str) -> str:
     """Who wrote a report, as the agents of a team in the session titled
-    ``session`` are told ('' for the org's own)."""
+    ``session`` are told."""
     if report.handed_over:
         return "ic_of_the_team_above"
     if report.session == session:
         return report.role
-    return f"{report.role} in {report.session or OWN_SESSION!r}"
+    return f"{report.role} in {report.session!r}"
 
 
 class Records(ServiceState):

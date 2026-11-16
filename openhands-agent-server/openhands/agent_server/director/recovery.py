@@ -19,7 +19,7 @@ from openhands.agent_server.director.models import (
     RecoveryKind,
     SessionTeam,
 )
-from openhands.agent_server.director.org_store import OrgStore
+from openhands.agent_server.director.org_store import AGENT_LOST, OrgStore
 from openhands.agent_server.director.run_state import (
     HELD,
     RUNNING,
@@ -32,7 +32,6 @@ from openhands.sdk.conversation.state import ConversationExecutionStatus
 
 logger = logging.getLogger(__name__)
 
-AGENT_LOST = "lost"
 _STARTS = ("start_team", "launch_manager")
 # The steps that start agents of their team: until they are finished, an
 # agent of it without a conversation has not been lost.
@@ -302,7 +301,7 @@ def _unfit(intent: Intent, nodes: Mapping[str, SessionTeam]) -> str | None:
         if split is None or split.status != "approved":
             return "its split is no longer approved"
     elif intent.kind == "request_review":
-        if review is None or review.state not in ("pending", "unreviewed"):
+        if review is None or review.state != "pending":
             return "its work no longer waits for a review"
     elif intent.kind == "accept":
         # Accepted already: what follows the acceptance may still be owed.

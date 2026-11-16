@@ -1,6 +1,6 @@
 """Wire models for the director API."""
 
-from typing import Annotated, Literal
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -25,8 +25,7 @@ ChosenBy = Literal["path", "named", "model", "top"]
 SplitStatus = Literal["proposed", "approved"]
 
 # 'pending': the IC of the team above has the team's work to review.
-# 'unreviewed': the root team's, which has nobody above.
-ReviewState = Literal["pending", "changes_requested", "accepted", "unreviewed"]
+ReviewState = Literal["pending", "changes_requested", "accepted"]
 
 # 'sandbox': an agent's shell can write only its team's directory, and its
 # file tools are checked. 'checks': only its file tools are checked.
@@ -300,15 +299,6 @@ class Review(BaseModel):
     at: str = Field(description="ISO 8601 timestamp of the last change.")
 
 
-class StatusCounts(BaseModel):
-    """Number of nodes in each status."""
-
-    idle: int = 0
-    working: int = 0
-    done: int = 0
-    blocked: int = 0
-
-
 class OrgNodeInput(BaseModel):
     """What a caller supplies for a node; the store derives the rest."""
 
@@ -350,20 +340,6 @@ class OrgNode(OrgNodeInput):
     """A node of the org tree, including the fields the store derives."""
 
     child_ids: list[str] = Field(default_factory=list)
-    descendant_counts: StatusCounts = Field(
-        default_factory=StatusCounts,
-        description=(
-            "Status of every node below this one, so a parent can summarize its "
-            "whole subtree without the client loading it."
-        ),
-    )
-    escalation_count: int = Field(
-        default=0,
-        description=(
-            "Escalations raised by this node or a node below it that wait on "
-            "the human. Those still held by a node are not counted."
-        ),
-    )
 
 
 class OrgNodeDetail(BaseModel):
@@ -1273,7 +1249,7 @@ class SessionInput(BaseModel):
     )
 
 
-ConversationRelation = Literal["above", "beside", "below", "session"]
+ConversationRelation = Literal["above", "beside", "below"]
 
 
 class ConversationLink(BaseModel):
@@ -1284,9 +1260,8 @@ class ConversationLink(BaseModel):
         description=(
             "Where the agent is from the conversation asked about: `above` "
             "is an agent of the team that reviews its team's work, `beside` "
-            "the other agent of its own team, `below` the IC of a team "
-            "directly below, and `session` the IC of a session whose work "
-            "its team reviews."
+            "the other agent of its own team, and `below` the IC of a team "
+            "directly below."
         )
     )
     node_id: str = Field(description="The team of the org the agent works for.")
@@ -1475,9 +1450,3 @@ class EscalationsEvent(BaseModel):
     escalations: list[OpenEscalation] = Field(
         description="The complete new list, in the snapshot's order."
     )
-
-
-OrgEvent = Annotated[
-    SnapshotEvent | NodeUpsertEvent | NodeRemovedEvent | EscalationsEvent,
-    Field(discriminator="type"),
-]

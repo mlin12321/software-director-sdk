@@ -528,8 +528,6 @@ async def test_what_a_session_waits_on_the_human_for_is_told_with_its_team(
         "Refunds",
     )
     assert [step.id for step in waiting.path] == ["root"]
-    root = service.store.team("root")
-    assert root is not None and root.escalation_count == 0
 
 
 async def test_a_session_is_kept_on_its_machine_and_what_it_changes_with_the_org(

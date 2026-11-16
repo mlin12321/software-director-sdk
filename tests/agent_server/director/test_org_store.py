@@ -703,7 +703,6 @@ def test_setting_an_agent_status_announces_the_session_once(working: OrgStore):
         pytest.param("idle", "pending", None, "done", id="its work waits for review"),
         pytest.param("idle", "changes_requested", None, "idle", id="work sent back"),
         pytest.param("idle", "accepted", None, "done", id="its work is accepted"),
-        pytest.param("idle", "unreviewed", None, "done", id="the top team submitted"),
         pytest.param("working", "accepted", None, "working", id="it works on"),
         pytest.param("lost", "accepted", None, "done", id="done and then gone"),
         pytest.param("working", None, "ic", "blocked", id="its IC waits on an answer"),

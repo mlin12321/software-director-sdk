@@ -431,7 +431,7 @@ def resolve_escalation(
 
 def submit_review(service: DirectorService, caller: Caller, summary: str) -> str:
     """Hand the work of the caller's team to the IC of the team above for
-    review; the top team's is shown to the human."""
+    review."""
     _only(caller, "ic", "submit its team's work")
     store = service.store
     node = caller.node
@@ -441,36 +441,36 @@ def submit_review(service: DirectorService, caller: Caller, summary: str) -> str
     review = node.review
     if review is not None and review.state == "pending":
         raise Conflict("Your team's work already waits for its review")
-    parent = store.place(node.parent_id) if node.parent_id else None
-    if parent is not None:
-        left = uncommitted(Path(node.worktree_path), node.boundary.path)
-        for team in store.below(node.id):
-            theirs = [path for path in left if owns(team, path)]
-            if theirs:
-                raise Conflict(
-                    f"{', '.join(theirs[:10])}"
-                    + (f" and {len(theirs) - 10} more" if len(theirs) > 10 else "")
-                    + f" in the directory of your sub-team {team.title!r} "
-                    "is not committed, and is that team's to commit. "
-                    + (
-                        "Wait until it has submitted its work and you have accepted it."
-                        if team.agents
-                        else "Give the team its task with msg_team; it "
-                        "commits and submits what is there, and you review "
-                        "that."
-                    )
-                )
-        if left:
+    if node.parent_id is None:
+        raise Conflict("A session's work is reviewed from here; nothing is submitted")
+    left = uncommitted(Path(node.worktree_path), node.boundary.path)
+    for team in store.below(node.id):
+        theirs = [path for path in left if owns(team, path)]
+        if theirs:
             raise Conflict(
-                "Commit your team's work before you submit it. Not "
-                f"committed: {', '.join(left[:10])}"
-                + (f" and {len(left) - 10} more" if len(left) > 10 else "")
+                f"{', '.join(theirs[:10])}"
+                + (f" and {len(theirs) - 10} more" if len(theirs) > 10 else "")
+                + f" in the directory of your sub-team {team.title!r} "
+                "is not committed, and is that team's to commit. "
+                + (
+                    "Wait until it has submitted its work and you have accepted it."
+                    if team.agents
+                    else "Give the team its task with msg_team; it "
+                    "commits and submits what is there, and you review "
+                    "that."
+                )
             )
+    if left:
+        raise Conflict(
+            "Commit your team's work before you submit it. Not "
+            f"committed: {', '.join(left[:10])}"
+            + (f" and {len(left) - 10} more" if len(left) > 10 else "")
+        )
     again = review is not None and review.state == "changes_requested"
     store.set_review(
         node.id,
         Review(
-            state="unreviewed" if parent is None else "pending",
+            state="pending",
             round=review.round + 1 if review is not None and again else 1,
             summary=summary,
             at=datetime.now(UTC).isoformat(timespec="seconds"),
@@ -480,11 +480,6 @@ def submit_review(service: DirectorService, caller: Caller, summary: str) -> str
     service.rest(node.id)
     service.request_review(node.id)
     service.refresh_headline(node.id, f"it submitted its work. {summary}")
-    if parent is None:
-        return (
-            "Submitted. Nobody is above your team: the human sees its work. "
-            "Your turn ends here."
-        )
     return (
         "Submitted. The IC of the team above reviews it. Your turn ends "
         "here: you are woken when it is accepted or sent back, or when "

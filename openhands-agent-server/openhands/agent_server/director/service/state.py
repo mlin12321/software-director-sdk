@@ -72,7 +72,6 @@ from openhands.agent_server.director.org_persistence import (
 from openhands.agent_server.director.org_store import (
     OrgStore,
     session_team_id,
-    team_id_of,
 )
 from openhands.agent_server.director.pods import PodLauncher
 from openhands.agent_server.director.run_state import (
@@ -243,13 +242,6 @@ def agent_conversation(node: SessionTeam, role: AgentRole) -> str | None:
         if agent.role == role:
             return agent.conversation_id
     return None
-
-
-def team_of(node: SessionTeam) -> str:
-    """The team of the org ``node`` is, or is the work of in a session.
-    What is kept for a team whatever session worked on it, such as its
-    reports, is kept under this."""
-    return team_id_of(node)
 
 
 def hand_over_of(node: SessionTeam) -> HandOverMode | None:

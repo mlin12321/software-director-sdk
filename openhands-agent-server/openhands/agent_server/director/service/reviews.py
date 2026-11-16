@@ -638,7 +638,7 @@ class Reviews(Requests):
         asked = node.review if node else None
         if node is None or asked is None:
             return
-        if asked.state not in ("pending", "unreviewed"):
+        if asked.state != "pending":
             return
         description, found = await self._own_account(node)
         node = store.place(node_id)
