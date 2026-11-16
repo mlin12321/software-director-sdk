@@ -32,12 +32,15 @@ from openhands.agent_server.director.tools import (
     ReportTool,
     ReviewTeamTool,
     SubmitReviewTool,
+    WriteSpecTool,
 )
 from openhands.agent_server.director.tools.definition import (
     MsgTeamAction,
     PruneTeamAction,
     ReadNodeContextAction,
     ReportAction,
+    ReviewTeamAction,
+    WriteSpecAction,
 )
 from openhands.sdk.errors import Conflict, NotFound
 from tests.agent_server.director.conftest import FakeLauncher, run_git
@@ -617,3 +620,142 @@ def test_a_merge_reaches_the_index_of_an_agent_that_owns_the_same_directory(
         "api/new.ts": "from the session\n",
         "api/own.ts": "staged by the agent\n",
     }
+
+
+ROUTES = "services/api/routes.ts"
+
+
+async def two_submitted(
+    service: DirectorService, repo: Path, tmp_path: Path
+) -> tuple[str, str]:
+    """Two sessions at API that each changed another line of one file and
+    submitted, the first before the second."""
+    commit(repo, ROUTES, "one\ntwo\nthree\nfour\nfive\n")
+    first = (await opened(service, title="Refunds")).session.teams[0].id
+    second = (await opened(service, title="Vouchers")).session.teams[0].id
+    for team, content, at in (
+        (first, "refunds\ntwo\nthree\nfour\nfive\n", "2026-01-01T00:00:01+00:00"),
+        (second, "one\ntwo\nthree\nfour\nvouchers\n", "2026-01-01T00:00:02+00:00"),
+    ):
+        commit(own_checkout(service, repo, tmp_path, team), ROUTES, content)
+        await use(service, ic(service, team), SubmitReviewTool, DONE)
+        review = node(service, team).review
+        assert review is not None
+        service.store.set_review(team, review.model_copy(update={"at": at}))
+    return first, second
+
+
+async def test_work_is_accepted_in_the_order_it_was_submitted(
+    service: DirectorService, repo: Path, tmp_path: Path
+):
+    first, second = await two_submitted(service, repo, tmp_path)
+
+    refused = await use(service, ic(service), ReviewTeamTool, accept(second))
+
+    assert "submitted before" in refused.text
+    pending = node(service, second).review
+    assert pending is not None and pending.state == "pending"
+
+    # Sending the earlier one back lets the later one through as well.
+    await use(service, ic(service), ReviewTeamTool, accept(first))
+    accepted = node(service, first).review
+    assert accepted is not None and accepted.state == "accepted"
+
+
+async def test_work_that_meets_merged_work_is_reconciled_before_it_is_merged(
+    service: DirectorService, launcher: FakeLauncher, repo: Path, tmp_path: Path
+):
+    """git merges two changes to different lines of a file without a word.
+    The reviewer is asked about them all the same."""
+    first, second = await two_submitted(service, repo, tmp_path)
+    await use(service, ic(service), ReviewTeamTool, accept(first))
+
+    asked = (await use(service, ic(service), ReviewTeamTool, accept(second))).text
+
+    assert "Not merged yet" in asked
+    assert f"- {ROUTES}" in asked
+    assert "merged meanwhile: API · Refunds" in asked
+    assert (repo / ROUTES).read_text() == "refunds\ntwo\nthree\nfour\nfive\n"
+
+    await use(
+        service,
+        ic(service),
+        ReviewTeamTool,
+        ReviewTeamAction(
+            node_id=second, decision="accept", reconciled="Both lines hold."
+        ),
+    )
+
+    assert (repo / ROUTES).read_text() == "refunds\ntwo\nthree\nfour\nvouchers\n"
+    history = service.team_memory.history("root")
+    assert [e.detail for e in history if e.kind == "reconciled"] == ["Both lines hold."]
+
+
+async def test_a_spec_a_session_writes_is_its_own_until_its_work_is_accepted(
+    service: DirectorService, repo: Path, tmp_path: Path
+):
+    top = (await opened(service)).session.teams[0].id
+    before = service.team_memory.read("services/api/spec.md")
+
+    await use(
+        service, ic(service, top), WriteSpecTool, WriteSpecAction(text="# Refunds")
+    )
+
+    assert service.team_memory.read("services/api/spec.md") == before
+    assert [spec.spec for spec in service.specs_of(node(service, top))] == ["# Refunds"]
+    assert "# Refunds" not in [
+        spec.spec for spec in service.specs_of(node(service, API))
+    ]
+
+    commit(own_checkout(service, repo, tmp_path, top), ROUTES, "refunds\n")
+    await use(service, ic(service, top), SubmitReviewTool, DONE)
+    await use(service, ic(service), ReviewTeamTool, accept(top))
+
+    assert service.team_memory.read("services/api/spec.md") == "# Refunds"
+    assert node(service, API).spec_summary == "Refunds"
+
+
+async def test_a_spec_written_over_one_that_changed_meanwhile_is_reconciled(
+    service: DirectorService, repo: Path, tmp_path: Path
+):
+    top = (await opened(service)).session.teams[0].id
+    await use(
+        service, ic(service, top), WriteSpecTool, WriteSpecAction(text="# Refunds")
+    )
+    await use(
+        service, ic(service, API), WriteSpecTool, WriteSpecAction(text="# The API")
+    )
+    commit(own_checkout(service, repo, tmp_path, top), ROUTES, "refunds\n")
+    await use(service, ic(service, top), SubmitReviewTool, DONE)
+
+    asked = (await use(service, ic(service), ReviewTeamTool, accept(top))).text
+
+    assert "It wrote a spec for services/api" in asked
+    assert "# The API" in asked and "# Refunds" in asked
+    assert service.team_memory.read("services/api/spec.md") == "# The API"
+
+    await use(
+        service,
+        ic(service),
+        ReviewTeamTool,
+        ReviewTeamAction(node_id=top, decision="accept", reconciled="Refunds holds."),
+    )
+
+    assert service.team_memory.read("services/api/spec.md") == "# Refunds"
+
+
+async def test_a_spec_of_a_closed_session_is_dropped(service: DirectorService):
+    session = (await opened(service)).session
+    before = service.team_memory.read("services/api/spec.md")
+    await use(
+        service,
+        ic(service, session.teams[0].id),
+        WriteSpecTool,
+        WriteSpecAction(text="# Refunds"),
+    )
+
+    service.close_session(session.id)
+    await service.settled()
+
+    assert service.team_memory.read("services/api/spec.md") == before
+    assert service.spec_draft(session.teams[0]) is None

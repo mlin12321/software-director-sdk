@@ -16,6 +16,7 @@ from openhands.agent_server.director.git import (
 )
 from openhands.agent_server.director.git_index import LOCK_FILE
 from openhands.agent_server.director.ownership import can_merge_in_memory, conflicts
+from openhands.agent_server.director.reconcile import MERGE_SUBJECT
 
 
 if sys.platform != "win32":
@@ -101,7 +102,7 @@ def merge_back(above: Path, team: Path, directory: str, title: str) -> MergeBack
             git(
                 above,
                 ["merge", "--no-ff", "--no-verify", "--no-gpg-sign", "--quiet"]
-                + ["-m", f"Merge the work of team {title} ({directory or '/'})", tip],
+                + ["-m", f"{MERGE_SUBJECT}{title} ({directory or '/'})", tip],
                 env=DIRECTOR_IDENTITY,
                 timeout=_MERGE_TIMEOUT_SECONDS,
             )

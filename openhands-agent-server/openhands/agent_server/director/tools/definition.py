@@ -166,6 +166,14 @@ class ReviewTeamAction(Action):
             "for what. Leave empty otherwise."
         ),
     )
+    reconciled: str = Field(
+        default="",
+        description=(
+            "Only when you were told this work meets other work that was "
+            "merged since it began: what you decided, having read both. "
+            "Leave empty otherwise."
+        ),
+    )
 
 
 class ReportAction(Action):
@@ -503,7 +511,10 @@ class ReviewTeamTool(_DirectorTool[ReviewTeamAction]):
         "IC only. Accept the work a team directly below yours submitted, or "
         "reject it with what must change. Accepted work of a team with its "
         "own worktree is merged into your checkout. If your team changed "
-        "nothing itself, accepted work goes on up without another review."
+        "nothing itself, accepted work goes on up without another review. "
+        "Work is accepted in the order it was submitted. Work that changed "
+        "files which also changed in your checkout since it began is not "
+        "merged until you say in `reconciled` what you decided about them."
     )
 
     @classmethod
@@ -519,6 +530,7 @@ class ReviewTeamTool(_DirectorTool[ReviewTeamAction]):
             action.decision,
             action.findings,
             action.needed_above,
+            action.reconciled,
         )
 
 

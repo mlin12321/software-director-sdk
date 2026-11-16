@@ -22,6 +22,7 @@ from openhands.agent_server.director.org_store import AGENT_LOST, session_team_i
 from openhands.agent_server.director.prompts import session_brief, session_closed
 from openhands.agent_server.director.run_state import (
     CHECKS,
+    DRAFT,
     PROGRESS,
     TASK,
     TOLD,
@@ -257,7 +258,7 @@ class Sessions(Splits):
             top = store.get(node_id)
             for team in map(store.get, plan["teams"]):
                 if team is not None:
-                    for kind in (TASK, PROGRESS, CHECKS):
+                    for kind in (TASK, PROGRESS, CHECKS, DRAFT):
                         run.unmark(kind, team.id)
                     self._work_accepted(team)
             if top is not None:

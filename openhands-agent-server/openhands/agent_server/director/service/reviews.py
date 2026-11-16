@@ -7,6 +7,7 @@ from pathlib import Path
 from uuid import UUID
 
 from openhands.agent_server.director import bugbot
+from openhands.agent_server.director.boundary import owns
 from openhands.agent_server.director.git import (
     GitError,
     git,
@@ -24,13 +25,17 @@ from openhands.agent_server.director.models import (
     Review,
     ReviewFinding,
 )
+from openhands.agent_server.director.ownership import can_merge_in_memory, conflicts
 from openhands.agent_server.director.prompts import (
     NEED_FINDING,
+    accept_in_order,
     changes_requested,
     put_aside_notice,
+    reconcile_request,
     review_request,
     session_work,
 )
+from openhands.agent_server.director.reconcile import changes_of
 from openhands.agent_server.director.run_state import (
     HELD,
     Intent,
@@ -40,6 +45,7 @@ from openhands.agent_server.director.service.state import (
     _REST_CHECK_SECONDS,
     _REST_CHECKS,
     ASIDE_REFS,
+    ASKED_KEPT,
     _checkout_root,
     _now,
     agent_conversation,
@@ -214,21 +220,114 @@ class Reviews(Requests):
                 )
         self.tell_ic(node.id, "\n\n---\n\n".join(requests))
 
-    def accept_review(self, node_id: str, needed_above: str) -> None:
+    def accept_review(
+        self, node_id: str, needed_above: str, reconciled: str = ""
+    ) -> None:
         """Take a team's reviewed work into the team above. Safe from any
         thread.
 
         Args:
             needed_above: Why a team further up waits on the work; '' when
                 none does.
+            reconciled: What the reviewer decided about what the work meets
+                in the checkout above; '' when it was asked nothing.
         """
-        self._begin("accept", node_id, needed_above=needed_above)
+        self._begin("accept", node_id, needed_above=needed_above, reconciled=reconciled)
+
+    def _merged_as(self, node: OrgNode) -> str:
+        """What the commit that merges a team's work calls it: the session
+        too, for the work of one."""
+        session = self.store.session_title(node)
+        return f"{node.title} · {session}" if session else node.title
+
+    def _to_reconcile(self, node: OrgNode, above: OrgNode) -> str | None:
+        """What the IC above has to settle before the work of a team is
+        merged: the files both it and the checkout above changed since it
+        began, and the specs it wrote over ones that changed meanwhile.
+
+        Returns:
+            What to tell that IC; None when the work meets nothing.
+
+        Raises:
+            GitError: A checkout could not be read.
+        """
+        team, checkout = Path(node.worktree_path), Path(above.worktree_path)
+        changes = (
+            changes_of(checkout, team)
+            if _checkout_root(str(team)) != _checkout_root(str(checkout))
+            else None
+        )
+        files = []
+        if changes is not None:
+            ours = head_of(checkout)
+            # Lines that do not merge, and files outside the team's
+            # directory, go back to the team when it is merged; there is
+            # nothing for the reviewer to weigh in them.
+            unmergeable = (
+                conflicts(checkout, ours, changes.tip)
+                if ours and can_merge_in_memory(checkout)
+                else ()
+            )
+            if not unmergeable:
+                files = [path for path in changes.both if owns(node, path)]
+        specs = self.specs_to_reconcile(node)
+        if not files and not specs:
+            return None
+        return reconcile_request(
+            node,
+            above.worktree_path,
+            changes.tip if changes else "",
+            files,
+            list(changes.landed) if changes else [],
+            specs,
+        )
+
+    def check_accept(self, node_id: str, reconciled: str) -> None:
+        """Hold the acceptance of a team's work to what is asked of every
+        one: work is accepted in the order it was submitted, and work that
+        meets other work is reconciled with it first.
+
+        Raises:
+            Conflict: Work submitted before it still waits, or it meets
+                work the reviewer has not said it reconciled.
+        """
+        store = self.store
+        node = store.get(node_id)
+        above = store.get(node.parent_id) if node and node.parent_id else None
+        if node is None or above is None or node.review is None:
+            return
+        waiting = [
+            other
+            for other in (*store.children(above.id), *store.opened_under(above.id))
+            if other.id != node.id
+            and other.review is not None
+            and other.review.state == "pending"
+            and other.review.at < node.review.at
+        ]
+        if waiting:
+            first = min(
+                waiting, key=lambda other: other.review.at if other.review else ""
+            )
+            raise Conflict(accept_in_order(node, first))
+        if reconciled:
+            return
+        try:
+            meets = self._to_reconcile(node, above)
+        except (GitError, OSError):
+            # Merging says what is wrong with the checkouts.
+            return
+        if meets is not None:
+            raise Conflict(meets)
 
     async def _do_request_review(self, intent: Intent) -> None:
         await self._request_review(intent.node_id)
 
     async def _do_accept(self, intent: Intent) -> None:
-        await self._accept(intent.node_id, intent.payload["needed_above"])
+        await self._accept(
+            intent.node_id,
+            intent.payload["needed_above"],
+            intent.payload.get("reconciled", ""),
+        )
 
     async def _own_account(
         self, node: OrgNode
@@ -258,11 +357,16 @@ class Reviews(Requests):
         if instructions is None:
             return description or "", None
         above = self.store.get(node.parent_id) if node.parent_id else None
-        specs, contracts = await asyncio.to_thread(
+        _, contracts = await asyncio.to_thread(
             GitStore(self._repo_dir).applies_to,
             node.boundary.path,
             above.boundary.path if above else None,
         )
+        specs = [
+            spec
+            for spec in await asyncio.to_thread(self.specs_of, node)
+            if not spec.old
+        ]
         answer = await self._ask_agent(
             ic,
             bugbot.review_question(
@@ -305,7 +409,9 @@ class Reviews(Requests):
                 + "\n".join(f"- {finding.issue}" for finding in found),
             )
 
-    async def _accept(self, node_id: str, needed_above: str) -> None:
+    async def _accept(
+        self, node_id: str, needed_above: str, reconciled: str = ""
+    ) -> None:
         store = self.store
         node = store.get(node_id)
         above = store.get(node.parent_id) if node and node.parent_id else None
@@ -322,6 +428,14 @@ class Reviews(Requests):
         team, checkout = Path(node.worktree_path), Path(above.worktree_path)
         merged = False
         opens = store.opens_session(node)
+        try:
+            meets = await asyncio.to_thread(self._to_reconcile, node, above)
+        except (GitError, OSError):
+            meets = None
+        if meets is not None and not reconciled:
+            # Something came into the checkout between the review and now.
+            self.notify(reviewer, meets)
+            return
         if _checkout_root(str(team)) != _checkout_root(str(checkout)):
             if not opens:
                 # What is uncommitted in a session's directory is the work
@@ -329,7 +443,11 @@ class Reviews(Requests):
                 await asyncio.to_thread(self._put_aside, above, node)
             try:
                 result = await asyncio.to_thread(
-                    merge_back, checkout, team, node.boundary.path, node.title
+                    merge_back,
+                    checkout,
+                    team,
+                    node.boundary.path,
+                    self._merged_as(node),
                 )
             except (GitError, OSError) as error:
                 self.notify(
@@ -381,6 +499,9 @@ class Reviews(Requests):
         )
         self.progressed(above.id)
         self._work_accepted(node)
+        await asyncio.to_thread(self._land_specs, node)
+        if meets is not None:
+            self.record_event(above.id, "reconciled", node, reconciled[:ASKED_KEPT])
         self.record_event(
             above.id,
             "accepted",
