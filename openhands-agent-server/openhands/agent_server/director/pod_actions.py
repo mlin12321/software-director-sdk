@@ -23,6 +23,7 @@ from openhands.agent_server.director.models import (
     ReviewFinding,
     SplitProposal,
 )
+from openhands.agent_server.director.org_store import session_id_of
 from openhands.agent_server.director.service import (
     DirectorService,
     agent_conversation,
@@ -625,9 +626,10 @@ def prune_team(
     team = service.store.get(node_id)
     if team is None or team.parent_id != caller.node.id:
         raise Invalid(f"{node_id} is not a team directly below yours")
-    if team.session:
+    if session_id_of(team):
         raise Invalid(
-            f"{team.title!r} works in the session {team.session_title!r}, "
+            f"{team.title!r} works in the session "
+            f"{service.store.session_title(team)!r}, "
             "which the human opened. Only the human closes a session, and "
             "its teams are not pruned one by one."
         )

@@ -3908,16 +3908,17 @@ def test_director_opens_a_session_beside_a_team_and_closes_it(
         assert unknown.status_code == 404, unknown.text
         assert opened.status_code == 201, opened.text
         session = opened.json()["session"]
-        top = session["node_id"]
+
+        def top() -> dict:
+            response = client.get(f"/api/director/org/sessions/{session['id']}")
+            return response.json()["teams"][0] if response.status_code == 200 else {}
+
         # Its IC works in a git worktree of its own, on a branch of its own.
-        until(lambda: node(top).get("base_commit"))
-        started = node(top)
+        until(lambda: top().get("base_commit"))
+        started = top()
         worktree = Path(started["worktree_path"])
-        assert (started["parent_id"], started["instance_of"]) == (
-            "root",
-            "services.api",
-        )
-        assert started["session_title"] == "Refunds"
+        assert (session["team_id"], session["above_id"]) == ("services.api", "root")
+        assert (session["title"], started["team_id"]) == ("Refunds", "services.api")
         assert worktree.is_dir() and worktree.resolve() != Path(repo).resolve()
         assert started["branch"] not in ("", "main")
         assert started["branch"] == run_git_command(
@@ -3936,20 +3937,46 @@ def test_director_opens_a_session_beside_a_team_and_closes_it(
         assert "Add refunds to the API." in said and "session 'Refunds'" in said
         listed = client.get("/api/director/org/sessions").json()
         assert [found["id"] for found in listed] == [session["id"]]
-        # The org has the teams it had: a session adds none.
+        # The human wrote in its conversation, so it is listed with theirs,
+        # and it links to the conversation of the IC that reviews it.
+        talk = opened.json()["conversation_id"]
+        until(
+            lambda: (
+                client.get(f"/api/conversations/{talk}").json()["tags"]
+                == {"startedby": "director", "humanjoined": "true"}
+            )
+        )
+        place = client.get(f"/api/director/org/conversations/{talk}").json()
+        assert (place["node_id"], place["session"], place["human_joined"]) == (
+            "services.api",
+            "Refunds",
+            True,
+        )
+        assert place["links"][0]["relation"] == "above"
+        assert (
+            place["links"][0]["conversation_id"]
+            == node("root")["agents"][0]["conversation_id"]
+        )
+        again_joined = client.post(f"/api/director/org/conversations/{talk}/joined")
+        assert again_joined.status_code == 200, again_joined.text
+        missing = "00000000-0000-0000-0000-000000000000"
+        assert (
+            client.get(f"/api/director/org/conversations/{missing}").status_code == 404
+        )
+        # The org tree has the teams it had, and the session is none of them.
         root = client.get("/api/director/org/nodes/root").json()
-        assert [child["id"] for child in root["children"] if not child["session"]] == [
+        assert [child["id"] for child in root["children"]] == [
             "services.api",
             "apps.web",
         ]
+        assert not node(started["id"])
 
         closed = client.delete(f"/api/director/org/sessions/{session['id']}")
-        until(lambda: not node(top))
+        until(lambda: not top())
         again = client.delete(f"/api/director/org/sessions/{session['id']}")
 
         assert closed.status_code == 202, closed.text
         assert again.status_code == 404, again.text
-        assert not node(top)
         assert client.get("/api/director/org/sessions").json() == []
         until(lambda: not worktree.exists(), 10)
         assert not worktree.exists()

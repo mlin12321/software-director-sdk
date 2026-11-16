@@ -22,6 +22,7 @@ from openhands.agent_server.director.models import (
 from openhands.agent_server.director.org_store import (
     OrgStore,
     OrgStoreError,
+    session_id_of,
 )
 
 
@@ -246,9 +247,9 @@ def normalize_split(
             sub-team the proposal leaves alone, or a session works in a
             team the proposal would change.
     """
-    if parent.session:
+    if session_id_of(parent):
         raise OrgStoreError(
-            f"Your team works in the session {parent.session_title!r}, which "
+            f"Your team works in the session {store.session_title(parent)!r}, which "
             "has the sub-teams the team had when the session was opened. "
             "Sub-teams are not changed inside a session: do the work with "
             "the sub-teams you have, or in your own team."

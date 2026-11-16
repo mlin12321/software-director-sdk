@@ -14,7 +14,7 @@ from openhands.agent_server.director.models import (
     OrgNode,
     Stopped,
 )
-from openhands.agent_server.director.org_store import AGENT_LOST
+from openhands.agent_server.director.org_store import AGENT_LOST, session_id_of
 from openhands.agent_server.director.prompts import (
     NEED_ASKED,
     PASSED_UP,
@@ -113,7 +113,7 @@ class Watch(Reviews):
             asked, root, asker=store.get(team_of(raiser)) or raiser
         )
         # The team as it is in the session that asks, when it works there.
-        within = store.instance(choice.node_id, raiser.session)
+        within = store.instance(choice.node_id, session_id_of(raiser))
         owner = within if within and within.agents else store.get(choice.node_id)
         if not choice.sure or owner is None or not self._may_ask(raiser, owner):
             self.hand_escalation(escalation.held_by, raiser, raiser, escalation, [])
@@ -357,7 +357,7 @@ class Watch(Reviews):
         return (
             team.parent_id is not None
             # The teams of a session are there for its IC to use or not.
-            and not team.session
+            and not session_id_of(team)
             and not team.agents
             and not team.waiting_to_start
             and team.stopped is None

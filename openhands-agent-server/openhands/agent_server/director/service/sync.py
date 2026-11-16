@@ -415,7 +415,7 @@ class Sync(Sessions):
         )
         if conversation is not None and not own_checkout:
             raise Conflict(
-                f"The session {node.session_title!r} has no checkout yet. "
+                f"The session {store.session_title(node)!r} has no checkout yet. "
                 "Start it again without a conversation."
             )
         if conversation is None:
@@ -502,7 +502,10 @@ class Sync(Sessions):
             nodes = saved_nodes(board, theirs)
             here = rehomed(nodes, {}, _shared_root(nodes), str(repo))
             if here != nodes:
-                board.land([org_file(here)], f"org: at home in {repo.name}")
+                board.land(
+                    [org_file(here)],
+                    f"org: at home in {repo.name}",
+                )
             pulled = self._pull_memory(repo, remote, ())
             self._join(repo)
             return OrgSync(
@@ -595,7 +598,9 @@ class Sync(Sessions):
                     landed, result = board.move_to(theirs), "fast_forward"
                 else:
                     landed = board.land(
-                        [org_file(nodes)], f"org: merge {remote}", merging=theirs
+                        [org_file(nodes)],
+                        f"org: merge {remote}",
+                        merging=theirs,
                     )
                     result = "merged"
                 if not landed:

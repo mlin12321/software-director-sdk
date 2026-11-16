@@ -195,7 +195,7 @@ class Reviews(Requests):
         )
         # The work of a session waits for no sub-team: no task of this IC
         # brought it.
-        of_a_session = any(team.session != node.session for team in waiting)
+        of_a_session = any(store.opens_session(team) for team in waiting)
         if not (now or settled or of_a_session or reviewer in self._running):
             return
         requests = []
@@ -203,7 +203,11 @@ class Reviews(Requests):
             run.unmark(HELD, team.id)
             if team.review is not None:
                 requests.append(
-                    (session_work(team) if team.session != node.session else "")
+                    (
+                        session_work(team, store.session_title(team))
+                        if store.opens_session(team)
+                        else ""
+                    )
                     + review_request(
                         team, team.review, self._so_far(team), self.asked_of(team)
                     )

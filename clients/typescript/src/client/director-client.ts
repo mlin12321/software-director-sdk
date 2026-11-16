@@ -15,6 +15,8 @@ import type {
   DirectorOpenedSession,
   DirectorRoutedMessage,
   DirectorSession,
+  DirectorSessionTeam,
+  DirectorConversationPlace,
   DirectorThread,
   DirectorOrgMerge,
   DirectorOrgSync,
@@ -68,11 +70,6 @@ export interface RouteMessageRequest {
    * or absolute inside it. Defaults to the org summary's `directory`.
    */
   path?: string;
-  /**
-   * The one team the message is written to, such as a team of a session.
-   * `path` and `auto` are then not used.
-   */
-  node_id?: DirectorNodeId;
   /**
    * Let the director choose a team below the one `path` gives, by the files
    * the text names and by what a model makes of it. It moves down only when
@@ -227,13 +224,68 @@ export class DirectorClient {
   }
 
   /**
-   * Close a session: its agents, its teams and its checkout are removed.
+   * Close a session: its agents and its checkout are removed.
    * Work of it that was accepted stays where it was merged.
    *
    * @throws HttpError 404 when no such session is open.
    */
   async closeSession(sessionId: string): Promise<void> {
     await this.client.delete(`${DIRECTOR_PATH}/org/sessions/${encodeURIComponent(sessionId)}`);
+  }
+
+  /** One open session with what it has at each of its teams. */
+  async getSession(sessionId: string): Promise<DirectorSession> {
+    const response = await this.client.get<DirectorSession>(
+      `${DIRECTOR_PATH}/org/sessions/${encodeURIComponent(sessionId)}`
+    );
+    return response.data;
+  }
+
+  /**
+   * Answer an escalation a team raised in a session and that waits on the
+   * human. The answer is sent to the session's IC at that team.
+   *
+   * @throws HttpError 404 when there is no such session, team or escalation;
+   *   409 when the escalation is still with a team.
+   */
+  async answerSessionEscalation(
+    sessionId: string,
+    nodeId: DirectorNodeId,
+    escalationId: string,
+    answer: string
+  ): Promise<DirectorSessionTeam> {
+    const response = await this.client.post<DirectorSessionTeam>(
+      `${DIRECTOR_PATH}/org/sessions/${encodeURIComponent(sessionId)}/teams/${encodeURIComponent(
+        nodeId
+      )}/escalations/${encodeURIComponent(escalationId)}/answer`,
+      { answer }
+    );
+    return response.data;
+  }
+
+  /**
+   * Where an agent's conversation is in the org, with links to the
+   * conversations one level from it.
+   *
+   * @throws HttpError 404 when no agent of the org has the conversation.
+   */
+  async getConversationPlace(conversationId: string): Promise<DirectorConversationPlace> {
+    const response = await this.client.get<DirectorConversationPlace>(
+      `${DIRECTOR_PATH}/org/conversations/${encodeURIComponent(conversationId)}`
+    );
+    return response.data;
+  }
+
+  /**
+   * Note that the human has written in an agent's conversation, so that it
+   * is tagged `humanjoined=true` and listed with the human's own. A message
+   * sent through the director does this itself.
+   */
+  async joinConversation(conversationId: string): Promise<DirectorConversationPlace> {
+    const response = await this.client.post<DirectorConversationPlace>(
+      `${DIRECTOR_PATH}/org/conversations/${encodeURIComponent(conversationId)}/joined`
+    );
+    return response.data;
   }
 
   /**

@@ -216,6 +216,7 @@ class FakeLauncher:
     # the server in the middle of a step by raising from it.
     before: Callable[[str], None] = lambda _: None
     deleted: list[UUID] = field(default_factory=list)
+    joined: list[UUID] = field(default_factory=list)
     # What the model answers to a question of the director, by usage id.
     answers: dict[str, str | list[str | None] | None] = field(default_factory=dict)
     asked: list[tuple[UUID, str, str, str]] = field(default_factory=list)
@@ -430,6 +431,11 @@ class FakeLauncher:
         if conversation_id not in self.known:
             raise NotFound(f"Conversation {conversation_id} does not exist")
         self.titles[conversation_id] = title
+
+    async def mark_joined(self, conversation_id: UUID) -> None:
+        if conversation_id not in self.known:
+            raise NotFound(f"Conversation {conversation_id} does not exist")
+        self.joined.append(conversation_id)
 
     def report(self, conversation_id: str, status: ConversationExecutionStatus) -> None:
         """A conversation changed status."""

@@ -199,11 +199,6 @@ export interface DirectorOrgNode {
   id: DirectorNodeId;
   parent_id: DirectorNodeId | null;
   child_ids: DirectorNodeId[];
-  /**
-   * Those of `child_ids` that are no sub-teams of this team: the teams
-   * sessions were opened at whose work its IC reviews.
-   */
-  session_ids: DirectorNodeId[];
   title: string;
   boundary: DirectorBoundary;
   isolation: DirectorIsolationMode;
@@ -248,17 +243,6 @@ export interface DirectorOrgNode {
   agent_profile: string | null;
   /** How this team is held to its boundary; `null` until its IC ran. */
   boundary_enforcement: DirectorTeamEnforcement | null;
-  /**
-   * The parallel session this team works in; `''` for the org's own teams.
-   * A session is one line of work the human opened at a team: that team and
-   * its sub-teams are there once more, with agents and a checkout of their
-   * own.
-   */
-  session?: string;
-  /** What the human called that session. */
-  session_title?: string;
-  /** On a team of a session, the team of the org it is there for. */
-  instance_of?: string | null;
   /** Status of every node below this one. */
   descendant_counts: DirectorStatusCounts;
   /** Escalations from this node or below that wait on the human. */
@@ -444,27 +428,87 @@ export interface DirectorRoutedMessage {
 export type DirectorChosenBy = 'path' | 'named' | 'model' | 'top';
 
 /**
- * A line of work the human opened at a team, beside the org's own. The team
- * and its sub-teams are in the org once more for it, with agents and a
- * checkout of their own. Its work is reviewed by the IC of the team above
- * and merged into that team's checkout.
+ * What a session has at one team of the org: agents, a checkout, a review
+ * and escalations of its own. It is no node of the org tree. `id` is its
+ * own (`<team id>@<session id>`), `parent_id` what the session has at the
+ * team above, or for the team it was opened at the team whose IC reviews
+ * it, and `child_ids` what it has at the team's sub-teams.
+ */
+export interface DirectorSessionTeam extends DirectorOrgNode {
+  /** The session. */
+  session: string;
+  /** The team of the org. */
+  team_id: DirectorNodeId;
+}
+
+/**
+ * A line of work the human opened at a team, beside the org's own. It is not
+ * part of the org tree, which is the org's structure: it has agents and a
+ * checkout of its own at the team it was opened at and, once they are given
+ * a task in it, at the teams below. Its work is reviewed by the IC of the
+ * team above and merged into that team's checkout.
  */
 export interface DirectorSession {
   id: string;
   title: string;
-  /** The team of the session it was opened at. */
-  node_id: DirectorNodeId;
-  /** The team of the org that one is there for. */
+  /** The team of the org it was opened at. */
   team_id: DirectorNodeId;
   /** The title of that team. */
   team: string;
   /** The team whose IC reviews its work. */
   above_id: DirectorNodeId;
+  /** What the human asked of it. */
+  request: string;
+  /** ISO 8601 timestamp. */
+  opened_at: string;
+  /** Of the team it was opened at. */
   status: DirectorNodeStatus;
   /** Where the review of its work stands. */
   review: DirectorReviewState | null;
-  /** How many of its teams have started. */
-  teams: number;
+  /** The conversation of its IC at the team it was opened at. */
+  conversation_id: string | null;
+  /** What it has at each of its teams, the one it was opened at first. */
+  teams: DirectorSessionTeam[];
+}
+
+/**
+ * Where an agent is from a conversation: `above` an agent of the team that
+ * reviews its team's work, `beside` the other agent of its own team, `below`
+ * the IC of a team directly below, `session` the IC of a session whose work
+ * its team reviews.
+ */
+export type DirectorConversationRelation = 'above' | 'beside' | 'below' | 'session';
+
+/** An agent's conversation, as it is reached from another one. */
+export interface DirectorConversationLink {
+  conversation_id: string;
+  relation: DirectorConversationRelation;
+  /** The team of the org the agent works for. */
+  node_id: DirectorNodeId;
+  team: string;
+  role: DirectorAgentRole;
+  /** The session the agent works in; `''` for none. */
+  session_id: string;
+  session: string;
+  /** The agent's status. */
+  status: string;
+}
+
+/**
+ * Where an agent's conversation is in the org, and the conversations one
+ * level from it.
+ */
+export interface DirectorConversationPlace {
+  conversation_id: string;
+  node_id: DirectorNodeId;
+  team: string;
+  role: DirectorAgentRole;
+  session_id: string;
+  session: string;
+  /** Whether the human has written in this conversation. */
+  human_joined: boolean;
+  /** Above first, then beside, below and sessions. */
+  links: DirectorConversationLink[];
 }
 
 /** A session that was just opened. */
@@ -483,8 +527,12 @@ export interface DirectorEscalationPathStep {
 
 /** An escalation that waits on the human, with the nodes it came up through. */
 export interface DirectorOpenEscalation {
-  /** The node that raised it. */
+  /** The team of the org that raised it. */
   node_id: DirectorNodeId;
+  /** The session it was raised in; `''` when it is the org's own. */
+  session_id: string;
+  /** That session's title. */
+  session: string;
   escalation: DirectorEscalation;
   /** Root first, ending at the node that raised it. */
   path: DirectorEscalationPathStep[];
@@ -750,13 +798,16 @@ export type DirectorOrgEvent =
       focus_id: DirectorNodeId;
       nodes: DirectorOrgNode[];
       escalations: DirectorOpenEscalation[];
+      /** The sessions that are open. They are no nodes of the tree. */
+      sessions: DirectorSession[];
       paused?: DirectorPauseReason | null;
       merging?: boolean;
     }
   | { type: 'org_state'; paused: DirectorPauseReason | null; merging: boolean }
   | { type: 'node_upsert'; node: DirectorOrgNode }
   | { type: 'node_removed'; id: DirectorNodeId }
-  | { type: 'escalations'; escalations: DirectorOpenEscalation[] };
+  | { type: 'escalations'; escalations: DirectorOpenEscalation[] }
+  | { type: 'sessions'; sessions: DirectorSession[] };
 
 /**
  * Limits on the teams an org may still add. They are checked when a team

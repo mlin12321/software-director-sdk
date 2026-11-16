@@ -314,17 +314,6 @@ class DirectorService(Sync):
                 else self._repo_relative(request.path)
             )
         )
-        if request.node_id is not None:
-            named = store.get(request.node_id)
-            if named is None:
-                raise NotFound(f"Unknown node: {request.node_id}")
-            conversation_id = self.tell_ic(named.id, request.text, human=True)
-            return RoutedMessage(
-                node_id=named.id,
-                team=named.title,
-                conversation_id=conversation_id or "",
-                started_org=False,
-            )
         node = nearest_team(store.teams(), path, lost=AGENT_LOST)
         if node is None and request.conversation is not None:
             # Nobody here can take it: the nearest team whose agents have no

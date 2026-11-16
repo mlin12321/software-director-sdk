@@ -608,10 +608,11 @@ def _finding_lines(findings: list[ReviewFinding]) -> list[str]:
     return lines
 
 
-def session_work(team: OrgNode) -> str:
-    """What comes before the review request for the work of a session."""
+def session_work(team: OrgNode, title: str) -> str:
+    """What comes before the review request for the work of the session
+    titled ``title``."""
     return (
-        f"The human opened the session {team.session_title!r} at "
+        f"The human opened the session {title!r} at "
         f"{team.title!r}, beside that team's own work, and asked it for "
         "something directly. It worked in a checkout of its own "
         f"({team.worktree_path}, branch {team.branch}). You gave it no task: "
@@ -622,7 +623,7 @@ def session_work(team: OrgNode) -> str:
     )
 
 
-def session_brief(team: OrgNode, above: OrgNode, others: list[str]) -> str:
+def session_brief(team: OrgNode, title: str, above: OrgNode, others: list[str]) -> str:
     """What the IC a session starts with is told after the human's request."""
     beside = (
         f" Beside you work: {', '.join(others)}."
@@ -631,7 +632,7 @@ def session_brief(team: OrgNode, above: OrgNode, others: list[str]) -> str:
     )
     return (
         f"\n\n[director] You are the IC of {team.title!r} in the session "
-        f"{team.session_title!r}, which the human opened for this request "
+        f"{title!r}, which the human opened for this request "
         "beside the team's other work. You have a checkout and a branch of "
         "your own, started from the checkout of "
         f"{above.title!r}.{beside} Each works on the same directory in its "

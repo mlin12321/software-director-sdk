@@ -34,14 +34,14 @@ def create_org_board(repo_dir: Path) -> GitStore:
     return GitStore(repo_dir, ref=ORG_REF)
 
 
-def _persisted(node: OrgNodeInput) -> dict[str, Any]:
+def persisted(node: OrgNodeInput) -> dict[str, Any]:
     """A node without what its agents' conversations determine.
 
     Whether an agent is running changes many times a minute and is read back
     from the conversations on load, so it is not worth a commit each time.
     """
     data = node.model_dump(
-        exclude={"child_ids", "session_ids", "descendant_counts", "escalation_count"}
+        exclude={"child_ids", "descendant_counts", "escalation_count"}
     )
     for agent in data["agents"]:
         agent["status"] = "idle"
@@ -66,17 +66,17 @@ def saved_nodes(board: GitStore, commit: str | None) -> list[dict[str, Any]]:
     raw = board.read_at(commit, _ORG_FILE)
     if raw is None:
         return []
-    persisted = _PersistedOrg.model_validate_json(raw)
-    if persisted.version != _VERSION:
+    saved = _PersistedOrg.model_validate_json(raw)
+    if saved.version != _VERSION:
         raise ValueError(
-            f"Unrecognized org tree version {persisted.version} in {board.ref}"
+            f"Unrecognized org tree version {saved.version} in {board.ref}"
         )
-    return [_persisted(node) for node in persisted.nodes]
+    return [persisted(node) for node in saved.nodes]
 
 
 def stored_nodes(store: OrgStore) -> list[dict[str, Any]]:
     """The nodes of ``store`` as they are saved."""
-    return [_persisted(node) for node in store.all()]
+    return [persisted(node) for node in store.teams()]
 
 
 def save_org(board: GitStore, store: OrgStore) -> None:
@@ -101,10 +101,10 @@ def load_org(board: GitStore, store: OrgStore) -> bool:
     raw = board.read(_ORG_FILE)
     if raw is None:
         return False
-    persisted = _PersistedOrg.model_validate_json(raw)
-    if persisted.version != _VERSION:
+    saved = _PersistedOrg.model_validate_json(raw)
+    if saved.version != _VERSION:
         raise ValueError(
-            f"Unrecognized org tree version {persisted.version} in {board.ref}"
+            f"Unrecognized org tree version {saved.version} in {board.ref}"
         )
-    store.replace_all(persisted.nodes)
+    store.replace_all(saved.nodes)
     return True

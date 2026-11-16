@@ -13,10 +13,12 @@ from openhands.agent_server.director.models import (
     OpenedSession,
     OpenSessionRequest,
     OrgNode,
-    OrgNodeInput,
     Session,
+    SessionInput,
+    SessionTeam,
+    SessionTeamInput,
 )
-from openhands.agent_server.director.org_store import AGENT_LOST
+from openhands.agent_server.director.org_store import AGENT_LOST, session_team_id
 from openhands.agent_server.director.prompts import session_brief, session_closed
 from openhands.agent_server.director.run_state import (
     CHECKS,
@@ -44,45 +46,21 @@ SESSION_REFS = "refs/agents/sessions"
 _TITLE_LENGTH = 60
 
 
-def session_node_id(team_id: str, session_id: str) -> str:
-    """The id of the team that is there for ``team_id`` in a session."""
-    return f"{team_id}@{session_id}"
-
-
 class Sessions(Splits):
     """Opens and closes the human's sessions."""
 
     def sessions(self) -> list[Session]:
-        """The sessions that are open, in the order of the org tree."""
-        store = self.store
-        return [
-            self._session_of(node)
-            for node in store.all()
-            if node.session and store.opens_session(node)
-        ]
-
-    def _session_of(self, top: OrgNode) -> Session:
-        teams = self.store.session(top.session)
-        return Session(
-            id=top.session,
-            title=top.session_title,
-            node_id=top.id,
-            team_id=team_of(top),
-            team=top.title,
-            above_id=top.parent_id or "",
-            status=top.status,
-            review=top.review.state if top.review else None,
-            teams=sum(1 for team in teams if team.agents),
-        )
+        """The sessions that are open, oldest first."""
+        return self.store.sessions()
 
     async def open_session(self, request: OpenSessionRequest) -> OpenedSession:
         """Open a session at a team and start it with the human's request.
 
-        The team and every sub-team below it are put into the org once
-        more, for the session alone, under the team whose IC reviews the
-        session's work: the team above, or the top team itself for a
-        session opened there. Only the team the session is opened at
-        starts; a sub-team starts when that IC gives it a task.
+        The session is recorded beside the org tree, with a place of its
+        own for the team it is opened at and for every team below that one.
+        Its work is reviewed by the IC of the team above, or of the top team
+        itself for a session opened there. Only the team it is opened at
+        starts; a team below starts when that IC gives it a task.
 
         Raises:
             NotFound: The team does not exist.
@@ -101,16 +79,16 @@ class Sessions(Splits):
         chosen_by: ChosenBy = "path"
         reason = ""
         if request.node_id is not None:
-            team = store.get(request.node_id)
+            team = store.team(request.node_id)
             if team is None:
                 raise NotFound(f"Unknown node: {request.node_id}")
         elif self.settings.route_requests:
             choice = await self.choose_team(text, root)
             chosen_by, reason = choice.by, choice.reason
-            team = store.get(choice.node_id) or root
+            team = store.team(choice.node_id) or root
         else:
             team = root
-        above = store.get(team.parent_id) if team.parent_id else team
+        above = store.team(team.parent_id) if team.parent_id else team
         reviewer = next(
             (agent for agent in above.agents if agent.role == "ic")
             if above
@@ -139,53 +117,60 @@ class Sessions(Splits):
         title = request.title.strip() or provisional_summary(text).title
         title = title[:_TITLE_LENGTH]
         others = [
-            other.session_title or OWN_SESSION
+            store.session_title(other) or OWN_SESSION
             for other in store.all()
-            if team_of(other) == team_of(team) and other.agents
+            if team_of(other) == team.id and other.agents
         ]
         run = self._runs()
-        ids = {
-            current.id: session_node_id(team_of(current), session_id)
-            for current in shape
-        }
-        for current in shape:
-            opened_at = current.id == team.id
-            store.upsert(
-                OrgNodeInput(
+        ids = {current.id: session_team_id(current.id, session_id) for current in shape}
+        top = store.open_session(
+            SessionInput(
+                id=session_id,
+                title=title,
+                team_id=team.id,
+                above_id=above.id,
+                request=text[:ASKED_KEPT],
+                opened_at=datetime.now(UTC).isoformat(),
+            ),
+            [
+                SessionTeamInput(
                     id=ids[current.id],
-                    parent_id=above.id if opened_at else ids[current.parent_id or ""],
+                    session=session_id,
+                    team_id=current.id,
+                    parent_id=above.id
+                    if current.id == team.id
+                    else ids[current.parent_id or ""],
                     title=current.title,
                     boundary=current.boundary,
                     # Its work is kept apart from the team's own until the
                     # IC above has reviewed it.
-                    isolation="worktree" if opened_at else current.isolation,
+                    isolation="worktree"
+                    if current.id == team.id
+                    else current.isolation,
                     agent_profile=current.agent_profile,
                     worktree_path=above.worktree_path,
                     branch=above.branch,
                     agents=[],
                     status="idle",
                     headline=provisional_summary(text).headline
-                    if opened_at
+                    if current.id == team.id
                     else current.headline,
                     spec_summary=current.spec_summary,
-                    session=session_id,
-                    session_title=title,
-                    instance_of=team_of(current),
                 )
-            )
+                for current in shape
+            ],
+        )
+        for current in shape:
             run.mark(TASK, ids[current.id], self._purpose(current))
-        top = store.get(ids[team.id])
-        if top is None:
-            raise NotFound(f"Unknown node: {ids[team.id]}")
         await asyncio.to_thread(
             self.record_event, above.id, "session_opened", top, text[:ASKED_KEPT]
         )
         conversation_id = self.tell_ic(
-            top.id, text + session_brief(top, above, others), human=True
+            top.id, text + session_brief(top, title, above, others), human=True
         )
         self._save_soon()
         return OpenedSession(
-            session=self._session_of(store.get(top.id) or top),
+            session=next(found for found in store.sessions() if found.id == session_id),
             conversation_id=conversation_id or "",
             chosen_by=chosen_by,
             reason=reason,
@@ -200,14 +185,10 @@ class Sessions(Splits):
         Raises:
             NotFound: No such session is open.
         """
-        store = self.store
-        top = next(
-            (node for node in store.session(session_id) if store.opens_session(node)),
-            None,
-        )
-        if not session_id or top is None:
+        teams = self.store.session(session_id)
+        if not teams:
             raise NotFound(f"No session {session_id!r} is open")
-        self._begin("close_session", top.id)
+        self._begin("close_session", teams[0].id)
 
     async def _close_session(self, intent: Intent) -> None:
         store = self.store
@@ -216,20 +197,19 @@ class Sessions(Splits):
         launcher = self._require_launcher()
         if "planned" not in intent.steps:
             top = store.get(node_id)
-            above = store.get(top.parent_id) if top and top.parent_id else None
-            if top is None or above is None:
+            session = store.session_of(top) if top else None
+            if top is None or session is None:
                 return
-            teams = [top]
-            for team in teams:
-                teams.extend(store.below(team.id))
+            teams = store.session(session.id)
             # Fixed before anything is removed, so that closing again after
             # a restart removes the same things and records them once.
             intent = run.step_done(
                 intent,
                 "planned",
-                title=top.session_title,
+                session=session.id,
+                title=session.title,
                 team=top.title,
-                parent=above.id,
+                parent=session.above_id,
                 teams=[team.id for team in teams],
                 conversations=[
                     agent.conversation_id
@@ -257,7 +237,12 @@ class Sessions(Splits):
             kept = None
             # A session whose IC never started has no checkout of its own:
             # what is in the checkout above is not its work.
-            if started and top is not None and above is not None and apart(top, above):
+            if (
+                started
+                and isinstance(top, SessionTeam)
+                and above is not None
+                and apart(top, above)
+            ):
                 kept = await asyncio.to_thread(
                     self._keep_unmerged, top, above, plan["stamp"]
                 )
@@ -282,7 +267,7 @@ class Sessions(Splits):
                     top,
                     "with work that was not merged" if intent.payload["kept"] else "",
                 )
-            store.remove(node_id)
+            store.close_session(plan["session"])
             await self._save()
             intent = run.step_done(intent, "removed")
         self._settling.pop(intent.id, None)
@@ -292,7 +277,9 @@ class Sessions(Splits):
             session_closed(plan["title"], plan["team"], intent.payload["kept"]),
         )
 
-    def _keep_unmerged(self, top: OrgNode, above: OrgNode, stamp: str) -> str | None:
+    def _keep_unmerged(
+        self, top: SessionTeam, above: OrgNode, stamp: str
+    ) -> str | None:
         """Keep the last commit of a session whose commits are not all in
         the checkout above.
 

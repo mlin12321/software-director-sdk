@@ -160,9 +160,12 @@ class Teams(Delivery):
                     purpose=purpose,
                     parent=node.parent_id,
                 )
+                if human and ic.conversation_id:
+                    self.joined(ic.conversation_id)
                 return ic.conversation_id
         if human:
             self._post(conversation_id, text, at_once=True)
+            self.joined(conversation_id)
         else:
             self.notify(conversation_id, text)
         return conversation_id
@@ -569,7 +572,10 @@ class Teams(Delivery):
             # work is kept apart and checked when it is merged.
             isolation = "worktree"
         adapt = await asyncio.to_thread(self._adapter, conversation_id, TOOLS_OF[role])
-        title = _agent_title(node.title, role)
+        session = self.store.session_title(node)
+        title = _agent_title(
+            f"{node.title} · {session}" if session else node.title, role
+        )
 
         async def start() -> StartedAgent:
             if profile:
