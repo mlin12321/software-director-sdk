@@ -1,10 +1,13 @@
 """What the director tells the agents of an org."""
 
+import json
+from datetime import datetime
 from typing import Any
 
 from openhands.agent_server.director.models import (
     AgentRole,
     BoundaryContracts,
+    Escalation,
     FormerTeam,
     InheritedSpec,
     OrgNode,
@@ -39,7 +42,9 @@ The IC owns the technical work of the team's boundary:
   a write anywhere else in the repository. What the human asks of the
   team directly it does inside its boundary, though the task from the team
   above did not ask for it. Files of another team change
-  through that team, by raising an escalation.
+  through that team, by raising an escalation: say in its `team_for` what
+  is needed of that team, and the runtime takes it straight to that team's
+  IC when it is sure which team it is.
 - When the team's work is complete it commits it and calls
   `submit_review`. Its turn ends there: the IC of the team above reviews
   the work and the runtime wakes this IC with the outcome, or when anything
@@ -668,6 +673,81 @@ def review_request(
     return "\n".join(lines)
 
 
+def asked_by_team(raiser: OrgNode, escalation: Escalation, team_for: str) -> str:
+    """What a team's IC is told when the IC of a team that is not above it
+    asks something of it directly."""
+    return (
+        f"The IC of team {raiser.title!r} (node {raiser.id}), which is not "
+        f"above yours, asks your team directly {escalation.title!r} "
+        f"(escalation {escalation.id}):\n{team_for}"
+        + (f"\n{escalation.detail}" if escalation.detail else "")
+        + "\nThe runtime brought it straight to you because it concerns what "
+        "your team holds. It is a request, not a task: your own task and "
+        "your contracts come first, and that team waits on your answer. "
+        f"Call `resolve_escalation` for node {raiser.id}: `settle` with what "
+        "you did or why you will not, or `pass_up` with the reason if it is "
+        "not yours to settle or needs a contract changed. Passed up, it "
+        "goes up the chain of teams above the one that asked."
+    )
+
+
+def requests_between(events: list[TeamEvent]) -> list[dict[str, Any]]:
+    """What teams below a team asked of each other directly, an entry for
+    each asking and asked team, in the order they first appear."""
+    rows: dict[tuple[str, str], dict[str, Any]] = {}
+    asked_at: dict[tuple[str, str], list[str]] = {}
+    for event in events:
+        key = (event.team_id, event.other_id)
+        if event.kind == "asked_team":
+            row = rows.setdefault(
+                key,
+                {
+                    "from_node": event.team_id,
+                    "from": event.team,
+                    "to_node": event.other_id,
+                    "to": event.other,
+                    "asked": 0,
+                    "settled": 0,
+                    "passed_up": 0,
+                    "not_answered": 0,
+                    "open": 0,
+                    "longest_wait_minutes": 0,
+                },
+            )
+            row["asked"] += 1
+            row["open"] += 1
+            asked_at.setdefault(key, []).append(event.at)
+        elif event.kind == "answered" and key in rows:
+            row = rows[key]
+            counted = {SETTLED: "settled", PASSED_UP: "passed_up"}.get(
+                event.detail, "not_answered"
+            )
+            row[counted] += 1
+            row["open"] = max(0, row["open"] - 1)
+            if asked_at.get(key):
+                waited = datetime.fromisoformat(event.at) - datetime.fromisoformat(
+                    asked_at[key].pop(0)
+                )
+                row["longest_wait_minutes"] = max(
+                    row["longest_wait_minutes"], int(waited.total_seconds() // 60)
+                )
+    return list(rows.values())
+
+
+def many_requests_notice(row: dict[str, Any], table: list[dict[str, Any]]) -> str:
+    """What the IC above two teams is told when one has asked the other
+    directly as often as the org's setbacks number."""
+    return (
+        f"Team {row['from']!r} has now asked team {row['to']!r} directly "
+        f"{row['asked']} times. The runtime takes such requests straight to "
+        "the team that holds what is asked for, so they did not pass you. "
+        "Weigh whether the contract between the two says enough, or whether "
+        "the two are one concern. Nothing else is asked of you.\n"
+        "What your teams asked of each other directly so far:\n"
+        + json.dumps(table, indent=2)
+    )
+
+
 DIRECT_NOTE = (
     "\n\n(The human sent this to your team directly. The ICs of the teams "
     "above are told of it and have not acted on it. Do what is your team's "
@@ -781,6 +861,8 @@ _EVENT_WORDS: dict[TeamEventKind, str] = {
     "needed": "needed another team's directory",
     "asked": "asked directly by the human",
     "misrouted": "said a request was not its own",
+    "asked_team": "asked another team directly",
+    "answered": "had its request to another team",
 }
 # What is counted of a team, in the order it is told.
 _COUNTED: tuple[TeamEventKind, ...] = ("accepted", "sent_back", "stalled", "stopped")
@@ -884,6 +966,11 @@ NEEDED_WORTH_SAYING = 3
 # What is counted as one team needing another, by the event's detail.
 NEED_WRITE = "write refused"
 NEED_FINDING = "review finding"
+NEED_ASKED = "asked directly"
+# How a request one team made of another directly ended.
+SETTLED = "settled"
+PASSED_UP = "passed up"
+UNANSWERED = "not answered"
 
 
 def needs_between(events: list[TeamEvent]) -> list[dict[str, Any]]:
@@ -908,10 +995,11 @@ def needs_between(events: list[TeamEvent]) -> list[dict[str, Any]]:
                     "teams": [event.team, event.other],
                     "writes_refused": 0,
                     "review_findings": 0,
+                    "requests": 0,
                 },
             )
-            counted = (
-                "review_findings" if event.detail == NEED_FINDING else "writes_refused"
+            counted = {NEED_FINDING: "review_findings", NEED_ASKED: "requests"}.get(
+                event.detail, "writes_refused"
             )
             pair[counted] += 1
     return list(pairs.values())
@@ -925,12 +1013,14 @@ def need_words(pair: dict[str, Any], seen_from: str = "") -> str:
             about, when they are; the other is then named alone.
     """
     writes, findings = pair["writes_refused"], pair["review_findings"]
-    times = writes + findings
+    requests = pair["requests"]
+    times = writes + findings + requests
     parts = [
         f"{count} {many if count != 1 else single}"
         for count, single, many in (
             (writes, "write refused", "writes refused"),
             (findings, "review finding", "review findings"),
+            (requests, "request made directly", "requests made directly"),
         )
         if count
     ]
@@ -951,6 +1041,8 @@ def event_line(event: TeamEvent) -> str:
     detail = f" ({event.detail})" if event.detail else ""
     if event.kind == "needed":
         detail = f" ({event.other!r}, {', '.join(event.paths)}: {event.detail})"
+    if event.kind in ("asked_team", "answered"):
+        detail = f" ({event.other!r}: {event.detail})"
     return f"{event.at} {who}{_EVENT_WORDS[event.kind]}{detail}"
 
 

@@ -101,6 +101,14 @@ export interface DirectorEscalation {
   held_by: DirectorNodeId | null;
   /** The nodes that passed it up, nearest to the one that raised it first. */
   handoffs: DirectorEscalationHandoff[];
+  /**
+   * A team that is not above the one that raised it, which the director asked
+   * to settle it directly. While set, that team's IC has it and `held_by`
+   * does not.
+   */
+  asked_of: DirectorNodeId | null;
+  /** When `asked_of` was asked (ISO 8601). */
+  asked_at: string | null;
 }
 
 export type DirectorStatusCounts = Record<DirectorNodeStatus, number>;
@@ -528,7 +536,9 @@ export type DirectorTeamEventKind =
   | 'declined'
   | 'needed'
   | 'asked'
-  | 'misrouted';
+  | 'misrouted'
+  | 'asked_team'
+  | 'answered';
 
 /** Something that became of a team directly below a team. */
 export interface DirectorTeamEvent {

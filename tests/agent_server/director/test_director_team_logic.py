@@ -322,6 +322,7 @@ def test_teams_that_needed_each_other_are_counted_as_a_pair_while_both_are_there
             "teams": ["a", "b"],
             "writes_refused": 2,
             "review_findings": 1,
+            "requests": 0,
         }
     ]
 
