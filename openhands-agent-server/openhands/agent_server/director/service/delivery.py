@@ -44,6 +44,7 @@ from openhands.agent_server.director.service.state import (
     _instant,
     _lane_for,
     agent_conversation,
+    team_of,
 )
 from openhands.agent_server.event_service import ConversationRunLimitExceeded
 from openhands.sdk.errors import (
@@ -88,9 +89,11 @@ class Delivery(Records):
         text = text.strip()
         if not text:
             raise Invalid("A report cannot be empty")
-        node_id = node.id
+        node_id = team_of(node)
         reports = self._memory().append_report(
-            node_id, role, Report(at=_instant(), role=role, text=text)
+            node_id,
+            role,
+            Report(at=_instant(), role=role, text=text, session=node.session_title),
         )
         if compaction.due(reports, self.settings.report_compaction_chars):
             self._enqueue(lambda: self._compact(node_id, role), MODELS_LANE)

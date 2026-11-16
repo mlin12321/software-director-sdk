@@ -59,6 +59,7 @@ export type {
 export type {
   CreateOrgRequest,
   DirectorClientOptions,
+  OpenSessionRequest,
   RouteMessageRequest,
   StreamOrgTreeOptions,
 } from './client/director-client';
@@ -91,7 +92,9 @@ export type {
   DirectorOrgSummary,
   DirectorReport,
   DirectorChosenBy,
+  DirectorOpenedSession,
   DirectorRoutedMessage,
+  DirectorSession,
   DirectorSplitChild,
   DirectorSplitProposal,
   DirectorSplitStatus,

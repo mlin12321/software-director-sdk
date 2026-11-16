@@ -243,6 +243,17 @@ export interface DirectorOrgNode {
   agent_profile: string | null;
   /** How this team is held to its boundary; `null` until its IC ran. */
   boundary_enforcement: DirectorTeamEnforcement | null;
+  /**
+   * The parallel session this team works in; `''` for the org's own teams.
+   * A session is one line of work the human opened at a team: that team and
+   * its sub-teams are there once more, with agents and a checkout of their
+   * own.
+   */
+  session?: string;
+  /** What the human called that session. */
+  session_title?: string;
+  /** On a team of a session, the team of the org it is there for. */
+  instance_of?: string | null;
   /** Status of every node below this one. */
   descendant_counts: DirectorStatusCounts;
   /** Escalations from this node or below that wait on the human. */
@@ -427,6 +438,39 @@ export interface DirectorRoutedMessage {
  */
 export type DirectorChosenBy = 'path' | 'named' | 'model' | 'top';
 
+/**
+ * A line of work the human opened at a team, beside the org's own. The team
+ * and its sub-teams are in the org once more for it, with agents and a
+ * checkout of their own. Its work is reviewed by the IC of the team above
+ * and merged into that team's checkout.
+ */
+export interface DirectorSession {
+  id: string;
+  title: string;
+  /** The team of the session it was opened at. */
+  node_id: DirectorNodeId;
+  /** The team of the org that one is there for. */
+  team_id: DirectorNodeId;
+  /** The title of that team. */
+  team: string;
+  /** The team whose IC reviews its work. */
+  above_id: DirectorNodeId;
+  status: DirectorNodeStatus;
+  /** Where the review of its work stands. */
+  review: DirectorReviewState | null;
+  /** How many of its teams have started. */
+  teams: number;
+}
+
+/** A session that was just opened. */
+export interface DirectorOpenedSession {
+  session: DirectorSession;
+  /** The conversation of the IC the session starts with. */
+  conversation_id: string;
+  chosen_by: DirectorChosenBy;
+  reason: string;
+}
+
 export interface DirectorEscalationPathStep {
   id: DirectorNodeId;
   title: string;
@@ -448,6 +492,11 @@ export interface DirectorReport {
   /** Which agent of the team wrote it. */
   role: DirectorAgentRole;
   text: string;
+  /**
+   * The title of the session the agent that wrote it works in; `''` for an
+   * agent of the org's own team.
+   */
+  session?: string;
   /** True for the one report a model wrote in place of earlier ones. */
   compacted?: boolean;
   /**
@@ -538,7 +587,9 @@ export type DirectorTeamEventKind =
   | 'asked'
   | 'misrouted'
   | 'asked_team'
-  | 'answered';
+  | 'answered'
+  | 'session_opened'
+  | 'session_closed';
 
 /** Something that became of a team directly below a team. */
 export interface DirectorTeamEvent {
@@ -550,6 +601,8 @@ export interface DirectorTeamEvent {
    */
   team_id?: string;
   team?: string;
+  /** The title of the session that team works in, if it is in one. */
+  session?: string;
   detail?: string;
   /**
    * The directories a proposal was for, on `proposed`, `approved` and

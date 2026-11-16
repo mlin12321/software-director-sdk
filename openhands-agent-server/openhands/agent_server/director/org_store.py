@@ -118,12 +118,96 @@ class OrgStore:
     def get(self, node_id: str) -> OrgNode | None:
         return self._nodes.get(node_id)
 
-    def children(self, node_id: str) -> list[OrgNode]:
+    def below(self, node_id: str) -> list[OrgNode]:
+        """Every node directly below ``node_id``: its sub-teams, and the
+        teams sessions were opened at whose work its IC reviews."""
         with self._lock:
             node = self._nodes.get(node_id)
             if node is None:
                 return []
             return [self._nodes[child_id] for child_id in node.child_ids]
+
+    def children(self, node_id: str) -> list[OrgNode]:
+        """The sub-teams of ``node_id``: the teams directly below it that
+        work in the session it works in."""
+        with self._lock:
+            node = self._nodes.get(node_id)
+            if node is None:
+                return []
+            return [
+                child for child in self.below(node_id) if child.session == node.session
+            ]
+
+    def opened_under(self, node_id: str) -> list[OrgNode]:
+        """The teams sessions were opened at whose work the IC of
+        ``node_id`` reviews."""
+        with self._lock:
+            node = self._nodes.get(node_id)
+            if node is None:
+                return []
+            return [
+                child for child in self.below(node_id) if child.session != node.session
+            ]
+
+    def opens_session(self, node: OrgNode) -> bool:
+        """Whether ``node`` is the team a session was opened at."""
+        with self._lock:
+            above = self._nodes.get(node.parent_id) if node.parent_id else None
+            return above is not None and above.session != node.session
+
+    def teams(self) -> list[OrgNode]:
+        """The org's own teams, parents before children: every node that is
+        in no session."""
+        return [node for node in self.all() if not node.session]
+
+    def session(self, session_id: str) -> list[OrgNode]:
+        """The teams of a session, the one it was opened at first."""
+        return [node for node in self.all() if node.session == session_id]
+
+    def instance(self, team_id: str, session_id: str) -> OrgNode | None:
+        """The team that is there for ``team_id`` in a session."""
+        with self._lock:
+            return next(
+                (
+                    node
+                    for node in self._nodes.values()
+                    if node.session == session_id
+                    and (node.instance_of or node.id) == team_id
+                ),
+                None,
+            )
+
+    def teams_below(self, node_id: str) -> int:
+        """How many sub-teams ``node_id`` has, at any depth. The teams of
+        sessions opened below it are not counted: a session adds no team
+        to the org."""
+        with self._lock:
+            found = [node_id]
+            for current in found:
+                found.extend(team.id for team in self.children(current))
+            return len(found) - 1
+
+    def sessions_at(self, node_id: str, *, below: bool = True) -> list[str]:
+        """The titles of the sessions that work in ``node_id`` and, with
+        ``below``, in a team below it."""
+        with self._lock:
+            node = self._nodes.get(node_id)
+            if node is None:
+                return []
+            subtree = [node]
+            if below:
+                for current in subtree:
+                    subtree.extend(self.below(current.id))
+            own = {team.id for team in subtree if team.session == node.session}
+            titles = [
+                team.session_title for team in subtree if team.session != node.session
+            ]
+            titles += [
+                other.session_title
+                for other in self._nodes.values()
+                if other.instance_of in own and other.session != node.session
+            ]
+            return sorted(set(titles))
 
     def ancestors(self, node_id: str) -> list[OrgNode]:
         """The nodes above ``node_id``, root first, excluding the node itself."""
@@ -679,11 +763,11 @@ class OrgStore:
                 for node in (
                     *self.ancestors(focus_id),
                     focus,
-                    *self.children(focus_id),
+                    *self.below(focus_id),
                 )
             }
             for node_id in expanded:
-                for child in self.children(node_id):
+                for child in self.below(node_id):
                     nodes[child.id] = child
             if full:
                 for node in self._ordered(self._nodes, focus_id):

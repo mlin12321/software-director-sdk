@@ -38,6 +38,7 @@ from openhands.agent_server.director.service.state import (
     _now,
     _progress_of,
     agent_conversation,
+    team_of,
 )
 from openhands.sdk.errors import (
     Conflict,
@@ -108,8 +109,12 @@ class Watch(Reviews):
         if escalation.held_by is None or escalation.asked_of is not None:
             return
         asked = "\n".join(filter(None, (team_for, escalation.title, escalation.detail)))
-        choice = await self.choose_team(asked, root, asker=raiser)
-        owner = store.get(choice.node_id)
+        choice = await self.choose_team(
+            asked, root, asker=store.get(team_of(raiser)) or raiser
+        )
+        # The team as it is in the session that asks, when it works there.
+        within = store.instance(choice.node_id, raiser.session)
+        owner = within if within and within.agents else store.get(choice.node_id)
         if not choice.sure or owner is None or not self._may_ask(raiser, owner):
             self.hand_escalation(escalation.held_by, raiser, raiser, escalation, [])
             return
@@ -351,6 +356,8 @@ class Watch(Reviews):
         that holds the team above from giving it one."""
         return (
             team.parent_id is not None
+            # The teams of a session are there for its IC to use or not.
+            and not team.session
             and not team.agents
             and not team.waiting_to_start
             and team.stopped is None

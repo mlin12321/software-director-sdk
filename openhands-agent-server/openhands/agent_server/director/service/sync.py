@@ -64,7 +64,7 @@ from openhands.agent_server.director.run_state import (
     TEAM,
     WAITING,
 )
-from openhands.agent_server.director.service.splits import Splits
+from openhands.agent_server.director.service.sessions import Sessions
 from openhands.agent_server.director.service.state import (
     _MERGE_ATTEMPTS,
     AGENT_PAUSED,
@@ -78,6 +78,7 @@ from openhands.agent_server.director.service.state import (
     _new_pod,
     _shared_root,
     agent_conversation,
+    apart,
     hand_over_of,
 )
 from openhands.sdk.conversation.request import AgentLaunchAdditions
@@ -93,7 +94,7 @@ from openhands.sdk.tool.spec import Tool
 logger = logging.getLogger(__name__)
 
 
-class Sync(Splits):
+class Sync(Sessions):
     """Holds an org, takes it up again, and moves it between clones."""
 
     async def pause(self) -> Recovery:
@@ -406,8 +407,18 @@ class Sync(Splits):
         if ic is not None and await launcher.started(UUID(ic)) is not None:
             raise Conflict(f"The IC of team {node.title} has a conversation here")
         conversation = request.conversation
+        above = store.get(node.parent_id) if node.parent_id else None
+        # A session's IC that never started has no checkout yet: it gets
+        # one of its own, never the one of the team it works beside.
+        own_checkout = not (
+            above is not None and store.opens_session(node) and not apart(node, above)
+        )
+        if conversation is not None and not own_checkout:
+            raise Conflict(
+                f"The session {node.session_title!r} has no checkout yet. "
+                "Start it again without a conversation."
+            )
         if conversation is None:
-            above = store.get(node.parent_id) if node.parent_id else None
             if above is None:
                 raise Conflict(
                     f"Team {node.title} is the top of the org: it is started "
@@ -429,7 +440,7 @@ class Sync(Splits):
                 node_id,
                 task=task,
                 parent=node.parent_id,
-                checkout=node.worktree_path,
+                checkout=node.worktree_path if own_checkout else None,
             )
             return store.get(node_id) or node
         additions = conversation.agent_launch_additions or AgentLaunchAdditions()

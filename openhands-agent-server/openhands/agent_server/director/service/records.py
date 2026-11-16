@@ -59,6 +59,7 @@ from openhands.agent_server.director.service.state import (
     ServiceState,
     _now,
     _spec_file,
+    team_of,
 )
 from openhands.agent_server.director.split import (
     is_inside,
@@ -66,6 +67,19 @@ from openhands.agent_server.director.split import (
 
 
 logger = logging.getLogger(__name__)
+
+
+# How the org's own team is named to the sessions that work beside it.
+OWN_SESSION = "the team's own work"
+
+
+def _written_by(report: Report, reader: OrgNode) -> str:
+    """Who wrote a report, as the agents of ``reader`` are told."""
+    if report.handed_over:
+        return "ic_of_the_team_above"
+    if report.session == reader.session_title:
+        return report.role
+    return f"{report.role} in {report.session or OWN_SESSION!r}"
 
 
 class Records(ServiceState):
@@ -101,6 +115,7 @@ class Records(ServiceState):
             kind=kind,
             team_id=team.id if team else "",
             team=team.title if team else "",
+            session=team.session_title if team else "",
             detail=detail,
             paths=list(paths),
             other_id=other.id if other else (other_gone or ("", ""))[0],
@@ -394,8 +409,14 @@ class Records(ServiceState):
             if escalation.raised_by == role
             and (escalation.asked_of or escalation.held_by) == node.id
         ]
+        others = [
+            other
+            for other in store.all()
+            if team_of(other) == team_of(node) and other.id != node.id and other.agents
+        ]
         context: dict[str, Any] = {
-            "you": {"role": role, "node_id": node.id, "team": node.title},
+            "you": {"role": role, "node_id": node.id, "team": node.title}
+            | ({"session": node.session_title} if node.session else {}),
             "team_above": node.parent_id,
             "status": node.status,
             "boundary": node.boundary.model_dump(),
@@ -418,7 +439,7 @@ class Records(ServiceState):
             ],
             "reports_of_your_team": [
                 {
-                    "by": "ic_of_the_team_above" if report.handed_over else report.role,
+                    "by": _written_by(report, node),
                     "at": report.at,
                     "text": report.text,
                 }
@@ -453,7 +474,33 @@ class Records(ServiceState):
             ],
             "escalations_for_you_to_settle": to_settle,
         }
-        if role == "ic" and node.child_ids:
+        if others:
+            # They work on the same directory at the same time, each in a
+            # checkout of its own, and share the team's reports.
+            context["other_sessions_of_your_team"] = [
+                {
+                    "node_id": other.id,
+                    "session": other.session_title or OWN_SESSION,
+                    "status": other.status,
+                    "headline": other.headline,
+                    "review": other.review.state if other.review else None,
+                    "branch": other.branch,
+                }
+                for other in others
+            ]
+        opened = store.opened_under(node.id)
+        if role == "ic" and opened:
+            context["sessions_whose_work_you_review"] = [
+                {
+                    "node_id": top.id,
+                    "team": top.title,
+                    "session": top.session_title,
+                    "status": top.status if top.agents else NOT_STARTED,
+                    "review": top.review.state if top.review else None,
+                }
+                for top in opened
+            ]
+        if role == "ic" and store.children(node.id):
             context["asked_directly_of_teams_below"] = self.asked_below(node)
             context["what_teams_below_asked_of_each_other_directly"] = requests_between(
                 team_memory.history(node.id)
@@ -541,7 +588,7 @@ class Records(ServiceState):
         reports = [
             report
             for role in AGENT_ROLES
-            for report in team_memory.reports(node.id, role)
+            for report in team_memory.reports(team_of(node), role)
         ]
         return sorted(reports, key=lambda report: report.at)
 

@@ -12,7 +12,9 @@ import type {
   DirectorOrgNode,
   DirectorOrgNodeDetail,
   DirectorOrgSummary,
+  DirectorOpenedSession,
   DirectorRoutedMessage,
+  DirectorSession,
   DirectorThread,
   DirectorOrgMerge,
   DirectorOrgSync,
@@ -67,6 +69,11 @@ export interface RouteMessageRequest {
    */
   path?: string;
   /**
+   * The one team the message is written to, such as a team of a session.
+   * `path` and `auto` are then not used.
+   */
+  node_id?: DirectorNodeId;
+  /**
    * Let the director choose a team below the one `path` gives, by the files
    * the text names and by what a model makes of it. It moves down only when
    * it is sure, and not at all while the org's `route_requests` is off.
@@ -79,6 +86,19 @@ export interface RouteMessageRequest {
    * there and becomes its task. Ignored when an org exists.
    */
   conversation?: CreateConversationPayload;
+}
+
+/** A request the human wants worked on beside what a team is doing. */
+export interface OpenSessionRequest {
+  /** What the session is to do. */
+  text: string;
+  /** What to call the session; taken from the text when empty. */
+  title?: string;
+  /**
+   * The team the session is opened at. Without it the director chooses the
+   * team as it does for a message sent with `auto`.
+   */
+  node_id?: DirectorNodeId;
 }
 
 const DIRECTOR_PATH = '/api/director';
@@ -181,6 +201,39 @@ export class DirectorClient {
       request
     );
     return response.data;
+  }
+
+  /** The sessions that are open. */
+  async listSessions(): Promise<DirectorSession[]> {
+    const response = await this.client.get<DirectorSession[]>(`${DIRECTOR_PATH}/org/sessions`);
+    return response.data;
+  }
+
+  /**
+   * Open a session at a team and start it with a request: the team gets one
+   * more IC for it, in a git worktree of its own, whose work the IC of the
+   * team above reviews. It adds no team to the org.
+   *
+   * @throws HttpError 404 when there is no such team; 409 when there is no
+   *   org, it is paused, the team's sub-teams are being set up, or the IC
+   *   that would review the session's work is not running.
+   */
+  async openSession(request: OpenSessionRequest): Promise<DirectorOpenedSession> {
+    const response = await this.client.post<DirectorOpenedSession>(
+      `${DIRECTOR_PATH}/org/sessions`,
+      request
+    );
+    return response.data;
+  }
+
+  /**
+   * Close a session: its agents, its teams and its checkout are removed.
+   * Work of it that was accepted stays where it was merged.
+   *
+   * @throws HttpError 404 when no such session is open.
+   */
+  async closeSession(sessionId: string): Promise<void> {
+    await this.client.delete(`${DIRECTOR_PATH}/org/sessions/${encodeURIComponent(sessionId)}`);
   }
 
   /**

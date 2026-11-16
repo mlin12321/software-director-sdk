@@ -62,7 +62,8 @@ class Requests(Teams):
                 nothing about whose the request is.
         """
         store = self.store
-        nodes = store.all()
+        # A session takes what the human writes to it and no request more.
+        nodes = store.teams()
         parents = {node.id: node.parent_id for node in nodes}
         below = [
             node
@@ -115,7 +116,7 @@ class Requests(Teams):
         return choice
 
     def _cards(self, teams: list[OrgNode], tracked: list[str]) -> list[Card]:
-        directories = {node.boundary.path for node in self.store.all()}
+        directories = {node.boundary.path for node in self.store.teams()}
         took: dict[str, list[str]] = {}
         for request in self.routed_requests():
             if request.kind == "asked":

@@ -31,6 +31,8 @@ from openhands.agent_server.director.models import (
     MemorySyncRequest,
     NodeMemory,
     NodeOwnership,
+    OpenedSession,
+    OpenSessionRequest,
     OrgHistory,
     OrgMerge,
     OrgNode,
@@ -43,6 +45,7 @@ from openhands.agent_server.director.models import (
     ResolveMergeRequest,
     RoutedMessage,
     RouteMessageRequest,
+    Session,
     SnapshotEvent,
     StartAgainRequest,
     TeamChanges,
@@ -457,8 +460,77 @@ def get_org_node(
     return OrgNodeDetail(
         node=node,
         ancestors=service.store.ancestors(node_id),
-        children=service.store.children(node_id),
+        children=service.store.below(node_id),
     )
+
+
+@director_router.get("/org/sessions", response_model=list[Session])
+def list_sessions(
+    service: DirectorService = Depends(get_director_service),
+) -> list[Session]:
+    """List the sessions that are open.
+
+    A session is a line of work the human opened at a team beside the
+    org's own. Its teams are nodes of the org like any other, marked with
+    `session`, below the team whose IC reviews the session's work.
+    """
+    return service.sessions()
+
+
+@director_router.post(
+    "/org/sessions",
+    response_model=OpenedSession,
+    status_code=status.HTTP_201_CREATED,
+    responses=error_responses(
+        {
+            NotFound: "There is no such team",
+            Conflict: (
+                "There is no org, it is paused, the team's sub-teams are "
+                "being set up, or the IC that would review the session's "
+                "work is not running"
+            ),
+            Unavailable: "The director is not running agents",
+        }
+    ),
+)
+async def open_session(
+    request: OpenSessionRequest,
+    service: DirectorService = Depends(get_director_service),
+) -> OpenedSession:
+    """Open a session at a team and start it with a request.
+
+    The team gets one more IC for the request, in a git worktree and on a
+    branch of its own, so that it can work on the team's directory while
+    the team's own IC and other sessions do. Its sub-teams are there once
+    more for the session and start when that IC gives them a task. The IC
+    of the team above reviews the session's work like a sub-team's and an
+    accept merges it into that team's checkout; the work of a session
+    opened at the top team is reviewed by the top team's own IC.
+
+    Without `node_id` the director chooses the team by what the text
+    concerns, as for a message sent with `auto`. Opening a session adds no
+    team to the org, so `max_teams` and `max_depth` do not count it.
+    """
+    return await service.open_session(request)
+
+
+@director_router.delete(
+    "/org/sessions/{session_id}",
+    status_code=status.HTTP_202_ACCEPTED,
+    responses=error_responses({NotFound: "No such session is open"}),
+)
+def close_session(
+    session_id: str, service: DirectorService = Depends(get_director_service)
+) -> None:
+    """Close a session.
+
+    Its agents end the step they are in, and are removed with their
+    conversations, the session's teams and its checkout. Work of the
+    session that was accepted stays where it was merged. Uncommitted work
+    is kept as a commit under `refs/agents/pruned/`, and commits that were
+    never merged stay reachable from `refs/agents/sessions/<session id>/`.
+    """
+    service.close_session(session_id)
 
 
 @director_router.get(

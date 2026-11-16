@@ -392,6 +392,22 @@ class OrgNodeInput(BaseModel):
             "one of them ends."
         ),
     )
+    session: str = Field(
+        default="",
+        description=(
+            "The parallel session this team works in; '' for the org's own "
+            "teams. A session is one line of work the human opened at a "
+            "team: that team and its sub-teams are there once more, with "
+            "agents and a checkout of their own."
+        ),
+    )
+    session_title: str = Field(
+        default="", description="What the human called that session."
+    )
+    instance_of: str | None = Field(
+        default=None,
+        description=("On a team of a session, the team of the org it is there for."),
+    )
 
 
 class OrgNode(OrgNodeInput):
@@ -477,6 +493,8 @@ TeamEventKind = Literal[
     "misrouted",
     "asked_team",
     "answered",
+    "session_opened",
+    "session_closed",
 ]
 
 
@@ -489,6 +507,10 @@ class TeamEvent(BaseModel):
     kind: TeamEventKind
     team_id: str = ""
     team: str = ""
+    session: str = Field(
+        default="",
+        description="The title of the session that team works in, if it is in one.",
+    )
     detail: str = ""
     paths: list[str] = Field(
         default_factory=list,
@@ -514,6 +536,13 @@ class Report(BaseModel):
     at: str = Field(description="ISO 8601 timestamp.")
     role: AgentRole = Field(description="Which agent of the team wrote it.")
     text: str = Field(min_length=1)
+    session: str = Field(
+        default="",
+        description=(
+            "The title of the session the agent that wrote it works in; '' "
+            "for an agent of the org's own team."
+        ),
+    )
     compacted: bool = Field(
         default=False,
         description=(
@@ -1139,6 +1168,13 @@ class RouteMessageRequest(BaseModel):
             "org summary's `directory`."
         ),
     )
+    node_id: str | None = Field(
+        default=None,
+        description=(
+            "The one team the message is written to, such as a team of a "
+            "session. `path` and `auto` are then not used."
+        ),
+    )
     auto: bool = Field(
         default=False,
         description=(
@@ -1182,6 +1218,55 @@ class RoutedMessage(BaseModel):
     reason: str = Field(
         default="", description="Why this team, in a sentence; may be empty."
     )
+
+
+class OpenSessionRequest(BaseModel):
+    """A request the human wants worked on beside what a team is doing."""
+
+    text: str = Field(min_length=1, description="What the session is to do.")
+    title: str = Field(
+        default="",
+        description="What to call the session; taken from the text when empty.",
+    )
+    node_id: str | None = Field(
+        default=None,
+        description=(
+            "The team the session is opened at. Without it the director "
+            "chooses the team as it does for a message sent with `auto`."
+        ),
+    )
+
+
+class Session(BaseModel):
+    """A line of work the human opened at a team, beside the org's own.
+
+    The team and its sub-teams are in the org once more for it, with agents
+    and a checkout of their own. Its work is reviewed by the IC of the team
+    above and merged into that team's checkout.
+    """
+
+    id: str
+    title: str
+    node_id: str = Field(description="The team of the session it was opened at.")
+    team_id: str = Field(description="The team of the org that one is there for.")
+    team: str = Field(description="The title of that team.")
+    above_id: str = Field(description="The team whose IC reviews its work.")
+    status: NodeStatus
+    review: ReviewState | None = Field(
+        default=None, description="Where the review of its work stands."
+    )
+    teams: int = Field(description="How many of its teams have started.")
+
+
+class OpenedSession(BaseModel):
+    """A session that was just opened."""
+
+    session: Session
+    conversation_id: str = Field(
+        description="The conversation of the IC the session starts with."
+    )
+    chosen_by: ChosenBy = "path"
+    reason: str = ""
 
 
 class RoutedRequest(BaseModel):

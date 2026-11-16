@@ -98,6 +98,47 @@ describe('DirectorClient', () => {
     expect(result).toEqual(routed);
   });
 
+  it('opens a session at a team, lists the open ones and closes one', async () => {
+    const session = {
+      id: 's1a2b3c',
+      title: 'Refunds',
+      node_id: 'payments.api@s1a2b3c',
+      team_id: 'payments.api',
+      team: 'API',
+      above_id: 'payments',
+      status: 'idle',
+      review: null,
+      teams: 1,
+    };
+    const opened = { session, conversation_id: 'c-9', chosen_by: 'path', reason: '' };
+    const fetchMock = mockFetch(() => jsonResponse(opened));
+    const client = new DirectorClient({ host: 'http://example.com' });
+
+    const result = await client.openSession({
+      text: 'Add refunds',
+      title: 'Refunds',
+      node_id: 'payments.api',
+    });
+    fetchMock.mockImplementation(() => Promise.resolve(jsonResponse([session])));
+    const listed = await client.listSessions();
+    fetchMock.mockImplementation(() => Promise.resolve(jsonResponse(null, 202)));
+    await client.closeSession('s1a2b3c');
+
+    const calls = fetchMock.mock.calls;
+    expect(calls.map(([url, init]) => `${init.method} ${url}`)).toEqual([
+      'POST http://example.com/api/director/org/sessions',
+      'GET http://example.com/api/director/org/sessions',
+      'DELETE http://example.com/api/director/org/sessions/s1a2b3c',
+    ]);
+    expect(JSON.parse(calls[0][1].body)).toEqual({
+      text: 'Add refunds',
+      title: 'Refunds',
+      node_id: 'payments.api',
+    });
+    expect(result).toEqual(opened);
+    expect(listed).toEqual([session]);
+  });
+
   it('answers an escalation of the node that raised it', async () => {
     const fetchMock = mockFetch(() => jsonResponse({ id: 'payments.api', escalations: [] }));
     const client = new DirectorClient({ host: 'http://example.com' });

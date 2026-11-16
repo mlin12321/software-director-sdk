@@ -20,7 +20,6 @@ from openhands.agent_server.director.models import (
     SplitChild,
 )
 from openhands.agent_server.director.org_store import (
-    NODE_STATUSES,
     OrgStore,
     OrgStoreError,
 )
@@ -32,12 +31,6 @@ TEAMS_FENCE = "teams"
 _TEAMS_BLOCK = re.compile(
     rf"^```{TEAMS_FENCE}[ \t]*\n(.*?)^```[ \t]*$", re.DOTALL | re.MULTILINE
 )
-
-
-def teams_below(node: OrgNode) -> int:
-    """How many teams there are below ``node``, at any depth."""
-    counts = node.descendant_counts.model_dump()
-    return sum(counts[status] for status in NODE_STATUSES)
 
 
 def check_limits(
@@ -58,7 +51,7 @@ def check_limits(
             "work in your own team."
         )
     for team in (node, *reversed(above)):
-        teams = 1 + teams_below(team)
+        teams = 1 + store.teams_below(team.id)
         room = settings.max_teams - teams
         if added > room:
             raise OrgStoreError(
@@ -250,8 +243,17 @@ def normalize_split(
             parent's boundary, overlaps another proposed one, repeats a
             title, reaches outside its own directory, or would sit inside
             a team that stays, or ``keep`` does not account for every
-            sub-team the proposal leaves alone.
+            sub-team the proposal leaves alone, or a session works in a
+            team the proposal would change.
     """
+    if parent.session:
+        raise OrgStoreError(
+            f"Your team works in the session {parent.session_title!r}, which "
+            "has the sub-teams the team had when the session was opened. "
+            "Sub-teams are not changed inside a session: do the work with "
+            "the sub-teams you have, or in your own team."
+        )
+    _no_session_in(store, parent, below=False)
     if not 1 <= len(children) <= MAX_SPLIT_CHILDREN:
         raise OrgStoreError(
             f"A split needs between 1 and {MAX_SPLIT_CHILDREN} sub-teams"
@@ -292,6 +294,7 @@ def normalize_split(
             )
         )
     for team in replaced.values():
+        _no_session_in(store, team, below=True)
         if team.isolation == "worktree":
             sharing = [
                 below.title
@@ -318,6 +321,26 @@ def normalize_split(
             raise OrgStoreError(f"More than one sub-team is titled {title!r}")
     kept = [] if keep is None else _kept(existing, replaced, keep)
     return Split(normalized, list(replaced.values()), kept)
+
+
+def _no_session_in(store: OrgStore, team: OrgNode, *, below: bool) -> None:
+    """Refuse to change the sub-teams of a team a session works in: the
+    session has the teams as they were when it was opened.
+
+    Raises:
+        OrgStoreError: A session works in the team or, with ``below``, in
+            a team below it.
+    """
+    sessions = store.sessions_at(team.id, below=below)
+    if sessions:
+        raise OrgStoreError(
+            f"{team.title!r} cannot be changed while "
+            + ("the session " if len(sessions) == 1 else "the sessions ")
+            + ", ".join(repr(title) for title in sessions)
+            + (" works" if len(sessions) == 1 else " work")
+            + " in it. Propose it again once the human has closed "
+            + ("it." if len(sessions) == 1 else "them.")
+        )
 
 
 def home_of(below: OrgNode, parent_id: str, teams: dict[str, str]) -> str:
