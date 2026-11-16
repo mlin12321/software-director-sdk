@@ -107,12 +107,12 @@ class Sync(Sessions):
         :meth:`resume`.
 
         Raises:
-            Conflict: There is no org, or it is the fixture.
+            Conflict: There is no org.
             Unavailable: The director is not running.
         """
         self._require_launcher()
         store = await asyncio.to_thread(lambda: self.store)
-        if store.root_id is None or self._fixture:
+        if store.root_id is None:
             raise Conflict("There is no org to pause")
         if self._paused is None:
             self._hold("human")
@@ -225,14 +225,12 @@ class Sync(Sessions):
         or the merge is abandoned (:meth:`abort_merge`).
 
         Raises:
-            Conflict: A merge waits for choices, or this is the fixture.
+            Conflict: A merge waits for choices.
             NotFound: The repository has no such remote.
             UpstreamFailed: The remote could not be reached.
             Unavailable: The director is not running, or has no repository.
         """
         self._require_launcher()
-        if self._fixture:
-            raise Conflict("The director serves a fixture tree; it has no remote")
         store = await asyncio.to_thread(lambda: self.store)
         async with self._sync_lock:
             if self._merging() is not None:
@@ -265,7 +263,7 @@ class Sync(Sessions):
             UpstreamFailed: The remote could not be reached or refused.
         """
         store = await asyncio.to_thread(lambda: self.store)
-        if store.root_id is None or self._fixture:
+        if store.root_id is None:
             raise Conflict("There is no org to push")
         async with self._sync_lock:
             if self._merging() is not None:
@@ -695,7 +693,7 @@ class Sync(Sessions):
             await self.resume()
 
     def _look_at_what_was_left(self) -> None:
-        if self._fixture or self.store.root_id is None:
+        if self.store.root_id is None:
             return
         run = self._runs()
         self._put_aside_stale()

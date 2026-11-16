@@ -261,7 +261,7 @@ class Watch(Reviews):
         that it can no longer answer, or has not answered for as long as a
         team may show no progress."""
         store = self._store
-        if store is None or self._paused is not None or self._fixture:
+        if store is None or self._paused is not None:
             return
         limit = self.settings.stall_check_minutes
         now = self._clock()
@@ -375,7 +375,7 @@ class Watch(Reviews):
         longer than the org allows, once for every such stretch of time."""
         limit = self.settings.stall_check_minutes
         store = self._store
-        if not limit or store is None or self._paused is not None or self._fixture:
+        if not limit or store is None or self._paused is not None:
             return
         run = self._runs()
         marks = run.marked(PROGRESS)

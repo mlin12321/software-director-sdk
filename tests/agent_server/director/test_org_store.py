@@ -1,10 +1,9 @@
-"""OrgStore, the fixture tree and persistence in a hidden git ref."""
+"""OrgStore and persistence in a hidden git ref."""
 
 from pathlib import Path
 
 import pytest
 
-from openhands.agent_server.director.fixture import build_fixture_nodes
 from openhands.agent_server.director.models import (
     AgentRef,
     AgentRole,
@@ -582,26 +581,6 @@ class TestReplaceAll:
             store.replace_all(nodes)
 
         assert store.all() == before
-
-
-def test_the_fixture_is_one_consistent_deterministic_tree():
-    store = OrgStore()
-
-    store.replace_all(build_fixture_nodes())
-
-    root = store.get("root")
-    assert root is not None
-    assert len(store) == 487
-    assert sum(root.descendant_counts.model_dump().values()) == 486
-    assert len(root.child_ids) == 6
-    # Four are open; three are still held by a node above the one that
-    # raised them.
-    assert sum(len(node.escalations) for node in store.all()) == 4
-    assert root.escalation_count == 1
-    assert [item.node_id for item in store.escalations("root")] == [
-        "data.worker.module-03"
-    ]
-    assert build_fixture_nodes() == build_fixture_nodes()
 
 
 class TestPersistence:

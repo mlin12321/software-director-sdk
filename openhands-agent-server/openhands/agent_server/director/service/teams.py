@@ -418,7 +418,7 @@ class Teams(Delivery):
     def progressed(self, node_id: str | None) -> None:
         """Note that a team got somewhere just now: the time it may show no
         progress starts again. Safe from any thread."""
-        if node_id is None or self._fixture:
+        if node_id is None:
             return
         run = self._runs()
         seen = _progress_of(run.marked(PROGRESS).get(node_id))

@@ -305,18 +305,6 @@ async def test_an_org_needs_a_git_repository(tmp_path: Path, launcher: FakeLaunc
         await service.aclose()
 
 
-async def test_the_fixture_tree_cannot_be_replaced_by_an_org(
-    repo: Path, launcher: FakeLauncher
-):
-    service = DirectorService(repo, fixture=True)
-    await service.start(launcher)
-    try:
-        with pytest.raises(Conflict):
-            await service.create_org(org_request(repo))
-    finally:
-        await service.aclose()
-
-
 async def test_an_org_cannot_be_started_before_the_director_runs(repo: Path):
     with pytest.raises(Unavailable):
         await DirectorService(repo).create_org(org_request(repo))

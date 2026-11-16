@@ -135,7 +135,7 @@ class DirectorService(Sync):
         """
         bind_director(None)
         store = self._store
-        if store is not None and store.root_id is not None and not self._fixture:
+        if store is not None and store.root_id is not None:
             run = self._runs()
             if self._paused is None and has_work(run):
                 self._hold("shutdown")
@@ -172,14 +172,12 @@ class DirectorService(Sync):
         the task, whose IC is the conversation the task came in.
 
         Raises:
-            Conflict: The director already has an org, or serves the fixture.
+            Conflict: The director already has an org.
             Unavailable: The director is not running, or the conversation's
                 workspace is not in a git repository.
             Unprocessable: The conversation cannot lead an org.
         """
         self._require_launcher()
-        if self._fixture:
-            raise Conflict("The director serves a fixture tree; it cannot run an org")
         store = await asyncio.to_thread(lambda: self.store)
         conversation = request.conversation
         workspace = Path(conversation.workspace.working_dir).resolve()
@@ -310,7 +308,7 @@ class DirectorService(Sync):
                     "so that it can start one."
                 )
             if store.root_id is None and conversation is not None:
-                joined = not self._fixture and await asyncio.to_thread(
+                joined = await asyncio.to_thread(
                     self._join, Path(conversation.workspace.working_dir)
                 )
                 if not joined:

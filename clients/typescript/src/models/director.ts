@@ -276,8 +276,6 @@ export interface DirectorOrgSummary {
   directory: string;
   /** Whether `repo_path` is in a git repository. An org needs one. */
   is_git_repository: boolean;
-  /** The tree is a fixed sample; its agents are not running. */
-  fixture: boolean;
   boundary_enforcement: DirectorBoundaryEnforcement;
   /**
    * Why the org's agents are held and its steps and messages wait; `null`

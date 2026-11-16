@@ -308,7 +308,7 @@ def search_org(
     status_code=status.HTTP_201_CREATED,
     responses=error_responses(
         {
-            Conflict: "The director already has an org, or serves the fixture",
+            Conflict: "The director already has an org",
             Invalid: (
                 "The conversation cannot lead an org: it runs in Docker, or "
                 "its agent is an ACP agent"
@@ -342,7 +342,7 @@ async def create_org(
     response_model=Recovery,
     responses=error_responses(
         {
-            Conflict: "There is no org, or the director serves the fixture",
+            Conflict: "There is no org",
             Unavailable: "The director is not running agents",
         }
     ),
@@ -810,7 +810,7 @@ def push_memory(
     responses=error_responses(
         {
             **_NO_REMOTE,
-            Conflict: "A merge waits for choices, or this is the fixture",
+            Conflict: "A merge waits for choices",
             Unavailable: "The director is not running, or has no repository",
         }
     ),

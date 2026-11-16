@@ -1094,9 +1094,6 @@ class OrgSummary(BaseModel):
             "started in one."
         )
     )
-    fixture: bool = Field(
-        description="The tree is a fixed sample; its agents are not running."
-    )
     boundary_enforcement: BoundaryEnforcement = Field(
         description=(
             "How far a team is held to its boundary. 'sandbox': the shell of "

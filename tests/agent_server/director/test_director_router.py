@@ -125,19 +125,6 @@ def test_routes_require_the_session_key_when_one_is_configured(saved_tree: Path)
     assert (denied.status_code, allowed.status_code) == (401, 200)
 
 
-def test_the_fixture_tree_is_served_when_enabled(tmp_path: Path):
-    client = make_client(tmp_path, director_fixture=True)
-
-    response = client.get("/api/director/org/nodes/payments.api")
-
-    assert response.status_code == 200
-    assert len(response.json()["children"]) == 15
-    assert [node["id"] for node in response.json()["ancestors"]] == [
-        "root",
-        "payments",
-    ]
-
-
 def test_the_tree_is_empty_without_a_saved_tree_or_a_repository(
     tmp_path: Path, repo: Path
 ):
@@ -232,15 +219,6 @@ class TestTeamMemory:
             "former_teams": [],
             "history": [],
         }
-
-    def test_is_unavailable_when_the_directory_is_not_a_repository(
-        self, tmp_path: Path
-    ):
-        client = make_client(tmp_path, director_fixture=True)
-
-        read = client.get("/api/director/org/nodes/root/memory")
-
-        assert read.status_code == 503
 
     def test_returns_the_threads_the_nodes_agents_take_part_in(self, repo: Path):
         store = OrgStore()
@@ -534,7 +512,6 @@ def test_the_summary_says_there_is_no_org_yet_and_where_one_would_work(repo: Pat
         "repo_path": str(repo),
         "directory": "",
         "is_git_repository": True,
-        "fixture": False,
         "boundary_enforcement": "checks",
         "paused": None,
         "merging": False,

@@ -26,7 +26,6 @@ from openhands.agent_server.director.acp import (
     conversation_of,
     tools_server,
 )
-from openhands.agent_server.director.fixture import build_fixture_nodes
 from openhands.agent_server.director.git import (
     GitError,
     enclosing_repository,
@@ -315,7 +314,6 @@ class ServiceState:
         self,
         repo_dir: Path,
         *,
-        fixture: bool = False,
         save_delay: float = SAVE_DELAY_SECONDS,
         run_limit_retry: float = RUN_LIMIT_RETRY_SECONDS,
         worktree_root: Path | None = None,
@@ -354,7 +352,6 @@ class ServiceState:
         self._directory = repo_dir
         # Where the org is; moves up when the store is loaded from above.
         self._repo_dir = repo_dir
-        self._fixture = fixture
         self._worktree_root = worktree_root
         self._find_sandbox = find_sandbox
         self._summary_timeout = summary_timeout
@@ -435,7 +432,6 @@ class ServiceState:
     def from_config(cls, config: Config) -> Self:
         return cls(
             config.director_repo_path or config.workspace_path,
-            fixture=config.director_fixture,
             worktree_root=config.conversation_worktree_root,
             find_sandbox=find_bwrap,
             remembered=config.conversations_path.parent / _REMEMBERED_FILE,
@@ -515,7 +511,6 @@ class ServiceState:
             repo_path=str(self._repo_dir),
             directory=self._home(),
             is_git_repository=is_git_repository(self._repo_dir),
-            fixture=self._fixture,
             boundary_enforcement="sandbox" if self._bwrap else "checks",
             paused=self._paused if self._runs() else None,
             merging=self._runs().get("merge") is not None,
@@ -744,7 +739,7 @@ class ServiceState:
             return self._run
 
     def _open_run_state(self) -> RunState:
-        if self._fixture or not is_git_repository(self._repo_dir):
+        if not is_git_repository(self._repo_dir):
             return RunState(None)
         try:
             return RunState(self._shells().parent / _RUN_STATE)
@@ -918,10 +913,6 @@ class ServiceState:
 
     def _load_store(self) -> OrgStore:
         store = OrgStore()
-        if self._fixture:
-            store.replace_all(build_fixture_nodes())
-            logger.info("Director serving the fixture tree (%d nodes)", len(store))
-            return store
         remembered = self._remembered_repo()
         if remembered is None or not self._load_from(remembered, store):
             self._load_from(self._directory, store)
@@ -1102,7 +1093,7 @@ class ServiceState:
 
     async def _save(self) -> None:
         store = self._store
-        if store is None or self._fixture:
+        if store is None:
             return
         try:
             await asyncio.to_thread(self._save_tree, store)

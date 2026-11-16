@@ -47,7 +47,6 @@ describe('DirectorClient', () => {
       repo_path: '/repo',
       directory: '',
       is_git_repository: true,
-      fixture: false,
       boundary_enforcement: 'sandbox',
     };
     const fetchMock = mockFetch(() => jsonResponse(summary));

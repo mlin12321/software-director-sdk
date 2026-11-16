@@ -835,7 +835,7 @@ class OrgStore:
     def replace_all(self, inputs: Iterable[OrgNodeInput]) -> None:
         """Replace the whole tree without emitting events.
 
-        Used when loading persisted state or a fixture. The store is left
+        Used when loading persisted state. The store is left
         untouched if the input is not one well-formed tree. The sessions
         that are open stay, but for one that has lost a team.
 
