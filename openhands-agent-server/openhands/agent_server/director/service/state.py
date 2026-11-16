@@ -471,8 +471,10 @@ class ServiceState:
 
     def summary(self) -> OrgSummary:
         store = self.store
+        root = store.get(store.root_id) if store.root_id else None
         return OrgSummary(
             root_id=store.root_id,
+            top_conversation_id=agent_conversation(root, "ic") if root else None,
             node_count=len(store),
             repo_path=str(self._repo_dir),
             directory=self._home(),

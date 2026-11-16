@@ -252,6 +252,12 @@ export interface DirectorOrgNodeDetail {
 export interface DirectorOrgSummary {
   /** `null` when no org has been started. */
   root_id: DirectorNodeId | null;
+  /**
+   * The conversation of the top team's IC; `null` when there is no org or
+   * that IC has no conversation here. What the human writes there is for the
+   * org as a whole and may be sent with `auto`.
+   */
+  top_conversation_id: string | null;
   node_count: number;
   /**
    * The repository the org works in: the one its first conversation was
@@ -392,6 +398,8 @@ export type DirectorBoundaryEnforcement = 'sandbox' | 'checks';
 export interface DirectorRoutedMessage {
   /** The team that received it. */
   node_id: DirectorNodeId;
+  /** The title of that team. */
+  team: string;
   /** The conversation of that team's IC. */
   conversation_id: string;
   /** There was no org, and the message started one. */

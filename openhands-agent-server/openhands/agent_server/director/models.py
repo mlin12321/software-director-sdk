@@ -1035,6 +1035,14 @@ class OrgSummary(BaseModel):
     """Whether the director has an org, and where it would keep one."""
 
     root_id: str | None = Field(description="None when no org has been started.")
+    top_conversation_id: str | None = Field(
+        default=None,
+        description=(
+            "The conversation of the top team's IC. What the human writes "
+            "there is for the org as a whole and may be sent with `auto`. "
+            "None when there is no org or that IC has no conversation here."
+        ),
+    )
     node_count: int
     repo_path: str = Field(
         description=(
@@ -1142,6 +1150,7 @@ class RoutedMessage(BaseModel):
     """Where a message to the org went."""
 
     node_id: str = Field(description="The team that received it.")
+    team: str = Field(default="", description="The title of that team.")
     conversation_id: str = Field(description="The conversation of that team's IC.")
     started_org: bool = Field(
         description="There was no org, and the message started one."

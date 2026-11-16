@@ -87,8 +87,9 @@ async def test_a_request_the_model_is_sure_of_goes_straight_to_that_team(
 
     sent = await ask(service, "Add an index on orders.")
 
-    assert (sent.node_id, sent.chosen_by) == (DB, "model")
+    assert (sent.node_id, sent.team, sent.chosen_by) == (DB, "DB", "model")
     assert sent.reason == "It is about the schema."
+    assert service.summary().top_conversation_id == ic(service)
     assert sent.conversation_id == ic(service, DB)
     assert launcher.messages_to(ic(service, DB))[-1] == (
         f"Add an index on orders.{DIRECT_NOTE}"

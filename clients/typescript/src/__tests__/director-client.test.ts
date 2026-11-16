@@ -73,6 +73,7 @@ describe('DirectorClient', () => {
   it('sends a message to the org from a directory', async () => {
     const routed = {
       node_id: 'payments.api',
+      team: 'API',
       conversation_id: 'c-1',
       started_org: false,
       chosen_by: 'model',

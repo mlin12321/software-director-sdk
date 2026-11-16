@@ -302,6 +302,7 @@ class DirectorService(Sync):
                     )
                     return RoutedMessage(
                         node_id=root.id,
+                        team=root.title,
                         conversation_id=agent_conversation(root, "ic") or "",
                         started_org=True,
                     )
@@ -341,6 +342,7 @@ class DirectorService(Sync):
                 )
                 return RoutedMessage(
                     node_id=lower.id,
+                    team=lower.title,
                     conversation_id=conversation_id or "",
                     started_org=False,
                     chosen_by=chosen_by,
@@ -351,6 +353,7 @@ class DirectorService(Sync):
         conversation_id = self.tell_ic(node.id, text, human=True) or ""
         return RoutedMessage(
             node_id=node.id,
+            team=node.title,
             conversation_id=conversation_id,
             started_org=False,
             chosen_by=chosen_by,
