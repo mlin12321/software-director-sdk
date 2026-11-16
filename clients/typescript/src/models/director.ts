@@ -252,6 +252,12 @@ export interface DirectorOrgNodeDetail {
 export interface DirectorOrgSummary {
   /** `null` when no org has been started. */
   root_id: DirectorNodeId | null;
+  /**
+   * The conversation of the top team's IC; `null` when there is no org or
+   * that IC has no conversation here. What the human writes there is for the
+   * org as a whole and may be sent with `auto`.
+   */
+  top_conversation_id: string | null;
   node_count: number;
   /**
    * The repository the org works in: the one its first conversation was
@@ -392,11 +398,26 @@ export type DirectorBoundaryEnforcement = 'sandbox' | 'checks';
 export interface DirectorRoutedMessage {
   /** The team that received it. */
   node_id: DirectorNodeId;
+  /** The title of that team. */
+  team: string;
   /** The conversation of that team's IC. */
   conversation_id: string;
   /** There was no org, and the message started one. */
   started_org: boolean;
+  /** How the team was found. */
+  chosen_by: DirectorChosenBy;
+  /** Why this team, in a sentence; may be empty. */
+  reason: string;
 }
+
+/**
+ * How the team a message went to was found. `path`: it owns the directory
+ * the message came from. `named`: the director chose it by the files the
+ * text names. `model`: the director chose it by what a model made of the
+ * text. `top`: the director was asked to choose and was not sure of any team
+ * below the one the directory gives.
+ */
+export type DirectorChosenBy = 'path' | 'named' | 'model' | 'top';
 
 export interface DirectorEscalationPathStep {
   id: DirectorNodeId;
@@ -505,7 +526,9 @@ export type DirectorTeamEventKind =
   | 'proposed'
   | 'approved'
   | 'declined'
-  | 'needed';
+  | 'needed'
+  | 'asked'
+  | 'misrouted';
 
 /** Something that became of a team directly below a team. */
 export interface DirectorTeamEvent {
@@ -712,6 +735,11 @@ export interface DirectorSettings {
    * back, a Manager is woken to look at its teams. 0 turns the check off.
    */
   manager_check_ic_setbacks: number;
+  /**
+   * Whether a message sent with `auto`, and what an IC asks of another team,
+   * may go straight to the team the director chooses.
+   */
+  route_requests: boolean;
 }
 
 /** The settings, beside what the org has now. */

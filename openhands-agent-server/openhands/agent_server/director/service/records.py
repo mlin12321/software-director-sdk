@@ -30,6 +30,7 @@ from openhands.agent_server.director.models import (
     OrgHistory,
     OrgNode,
     Report,
+    RoutedRequest,
     SplitProposal,
     TeamEvent,
     TeamEventKind,
@@ -48,6 +49,8 @@ from openhands.agent_server.director.run_state import (
     CHECKS,
 )
 from openhands.agent_server.director.service.state import (
+    ASKED_KEPT,
+    ASKED_TOLD,
     DECLINED_TOLD,
     HISTORY_TOLD,
     NOT_STARTED,
@@ -138,6 +141,80 @@ class Records(ServiceState):
                     ) == (team.id, beside.id, [path], how)
             if not kept:
                 self.record_event(team.parent_id, "needed", team, how, [path], beside)
+
+    def routed_requests(self) -> list[RoutedRequest]:
+        """What the human said that went straight to a team, oldest first.
+        Read once for each state of team memory. Safe from any thread."""
+        team_memory = self._memory()
+        head = team_memory.head()
+        with self._lock:
+            if self._routed_read is not None and self._routed_read[0] == head:
+                return self._routed_read[1]
+        routed = team_memory.routed()
+        with self._lock:
+            self._routed_read = (head, routed)
+        return routed
+
+    def keep_routed(
+        self, kind: str, team: OrgNode, text: str, chosen_by: str, reason: str
+    ) -> None:
+        """Keep a request that went straight to a team, or that the team
+        said was not its own: for the whole org, and as an event in the
+        record of the team above. Safe from any thread."""
+        self._memory().append_routed(
+            RoutedRequest.model_validate(
+                {
+                    "at": _now(),
+                    "kind": kind,
+                    "team_id": team.id,
+                    "team": team.title,
+                    "text": text,
+                    "chosen_by": chosen_by,
+                    "reason": reason,
+                }
+            )
+        )
+        self.record_event(
+            team.parent_id,
+            "asked" if kind == "asked" else "misrouted",
+            team,
+            text[:ASKED_KEPT],
+        )
+
+    def asked_below(self, node: OrgNode) -> list[dict[str, str]]:
+        """The latest of what the human asked directly of the teams below
+        a team, oldest first."""
+        store = self.store
+        below = {
+            team.id
+            for team in store.all()
+            if any(above.id == node.id for above in store.ancestors(team.id))
+        }
+        return [
+            {
+                "node_id": request.team_id,
+                "team": request.team,
+                "at": request.at,
+                "text": request.text,
+            }
+            for request in self.routed_requests()
+            if request.kind == "asked" and request.team_id in below
+        ][-ASKED_TOLD:]
+
+    def asked_of(self, team: OrgNode) -> list[str]:
+        """What the human asked a team directly since its work was last
+        accepted, by the order of the record of the team above."""
+        if team.parent_id is None:
+            return []
+        asked: list[str] = []
+        for event in self.team_memory.history(team.parent_id):
+            if event.team_id != team.id:
+                continue
+            if event.kind in ("accepted", "set_up"):
+                asked = []
+            elif event.kind == "asked":
+                asked.append(event.detail)
+        return asked
 
     def needs_below(self, node_id: str) -> list[dict[str, Any]]:
         """The pairs of teams directly below a node that needed each
@@ -367,6 +444,8 @@ class Records(ServiceState):
             ],
             "escalations_for_you_to_settle": to_settle,
         }
+        if role == "ic" and node.child_ids:
+            context["asked_directly_of_teams_below"] = self.asked_below(node)
         if role == "ic":
             # The IC is the one that passes on what removed teams left.
             context["former_teams"] = [

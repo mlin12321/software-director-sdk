@@ -19,6 +19,8 @@ NodeStatus = Literal["idle", "working", "done", "blocked"]
 IsolationMode = Literal["worktree", "shared"]
 
 EscalationKind = Literal["critical_issue", "design_decision"]
+# How the team a message went to was found.
+ChosenBy = Literal["path", "named", "model", "top"]
 
 SplitStatus = Literal["proposed", "approved"]
 
@@ -459,6 +461,8 @@ TeamEventKind = Literal[
     "approved",
     "declined",
     "needed",
+    "asked",
+    "misrouted",
 ]
 
 
@@ -839,6 +843,15 @@ class DirectorSettings(BaseModel):
             "teams. 0 turns the check off."
         ),
     )
+    route_requests: bool = Field(
+        default=True,
+        description=(
+            "Whether a message sent with `auto`, and what an IC asks of "
+            "another team, may go straight to the team the director "
+            "chooses. Off, the first goes to the team its directory gives "
+            "and the second up the chain of teams."
+        ),
+    )
 
 
 class DirectorSettingsUpdate(BaseModel):
@@ -852,6 +865,7 @@ class DirectorSettingsUpdate(BaseModel):
     stall_check_minutes: int | None = Field(default=None, ge=0)
     manager_check_accepted_reviews: int | None = Field(default=None, ge=0)
     manager_check_ic_setbacks: int | None = Field(default=None, ge=0)
+    route_requests: bool | None = None
 
 
 class DirectorSettingsState(DirectorSettings):
@@ -1021,6 +1035,14 @@ class OrgSummary(BaseModel):
     """Whether the director has an org, and where it would keep one."""
 
     root_id: str | None = Field(description="None when no org has been started.")
+    top_conversation_id: str | None = Field(
+        default=None,
+        description=(
+            "The conversation of the top team's IC. What the human writes "
+            "there is for the org as a whole and may be sent with `auto`. "
+            "None when there is no org or that IC has no conversation here."
+        ),
+    )
     node_count: int
     repo_path: str = Field(
         description=(
@@ -1103,6 +1125,15 @@ class RouteMessageRequest(BaseModel):
             "org summary's `directory`."
         ),
     )
+    auto: bool = Field(
+        default=False,
+        description=(
+            "Let the director choose a team below the one `path` gives, by "
+            "the files the text names and by what a model makes of it. It "
+            "moves down only when it is sure, and not at all while the "
+            "org's `route_requests` is off."
+        ),
+    )
     conversation: StartConversationRequest | None = Field(
         default=None,
         description=(
@@ -1119,10 +1150,37 @@ class RoutedMessage(BaseModel):
     """Where a message to the org went."""
 
     node_id: str = Field(description="The team that received it.")
+    team: str = Field(default="", description="The title of that team.")
     conversation_id: str = Field(description="The conversation of that team's IC.")
     started_org: bool = Field(
         description="There was no org, and the message started one."
     )
+    chosen_by: ChosenBy = Field(
+        default="path",
+        description=(
+            "How the team was found. `path`: it owns the directory the "
+            "message came from. `named`: the director chose it by the files "
+            "the text names. `model`: the director chose it by what a model "
+            "made of the text. `top`: the director was asked to choose and "
+            "was not sure of any team below the one the directory gives."
+        ),
+    )
+    reason: str = Field(
+        default="", description="Why this team, in a sentence; may be empty."
+    )
+
+
+class RoutedRequest(BaseModel):
+    """Something the human said that the director sent straight to a team
+    below the one it was said to, or that such a team said was not its own."""
+
+    at: str = Field(description="ISO 8601 timestamp.")
+    kind: Literal["asked", "misrouted"]
+    team_id: str
+    team: str
+    text: str
+    chosen_by: ChosenBy = "model"
+    reason: str = ""
 
 
 class AnswerEscalationRequest(BaseModel):

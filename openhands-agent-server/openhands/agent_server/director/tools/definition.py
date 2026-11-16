@@ -105,10 +105,12 @@ class DeclineTeamsAction(Action):
 class RaiseEscalationAction(Action):
     """Raise something your team cannot settle itself."""
 
-    category: EscalationKind = Field(
+    category: EscalationKind | Literal["misrouted"] = Field(
         description=(
             "`critical_issue`: the work cannot continue. `design_decision`: a "
-            "choice that reaches beyond your boundary."
+            "choice that reaches beyond your boundary. `misrouted`: what the "
+            "human sent your team directly is not your team's; it goes to "
+            "the team above and you do not wait on it."
         )
     )
     title: str

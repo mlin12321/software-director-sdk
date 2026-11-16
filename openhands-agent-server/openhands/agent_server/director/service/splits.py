@@ -264,7 +264,12 @@ class Splits(Watch):
                 if below and below.review and below.review.state == "pending":
                     self.tell_ic(
                         home,
-                        review_request(below, below.review, self._so_far(below)),
+                        review_request(
+                            below,
+                            below.review,
+                            self._so_far(below),
+                            self.asked_of(below),
+                        ),
                     )
                 # Under a new team it starts from now: its time without
                 # progress, and what was held for it while a team above

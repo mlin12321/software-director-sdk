@@ -27,6 +27,7 @@ from openhands.agent_server.director.models import (
     FormerThread,
     InheritedSpec,
     Report,
+    RoutedRequest,
     TeamEvent,
     ThreadMessage,
 )
@@ -46,6 +47,8 @@ HISTORY_DIR = ".history"
 THREADS_DIR = ".threads"
 # One file for each IC and IC directly below that the first has written to.
 IC_THREADS_DIR = ".threads-ic"
+# What the human said that went straight to a team, for the whole org.
+ROUTED_FILE = ".routed.json"
 
 _ZERO_OID = "0" * 40
 _MAX_COMMIT_ATTEMPTS = 8
@@ -55,6 +58,8 @@ _EVENTS = TypeAdapter(list[TeamEvent])
 # How many events are kept of the teams below one team; the oldest go first.
 HISTORY_KEPT = 300
 _MESSAGES = TypeAdapter(list[ThreadMessage])
+_ROUTED = TypeAdapter(list[RoutedRequest])
+ROUTED_KEPT = 200
 
 
 class StoreScopeError(Invalid):
@@ -164,6 +169,10 @@ def _settle(path: str, ours: str | None, theirs: str | None) -> tuple[str | None
             messages = _union(_parse_messages(ours), _parse_messages(theirs))
             messages.sort(key=lambda message: message.at)
             return _serialize(_MESSAGES.dump_python(messages)), False
+        if path == ROUTED_FILE:
+            routed = _union(_ROUTED.validate_json(ours), _ROUTED.validate_json(theirs))
+            routed.sort(key=lambda request: request.at)
+            return _serialize(_ROUTED.dump_python(routed[-ROUTED_KEPT:])), False
     except ValidationError:
         pass
     return ours, True
@@ -323,6 +332,20 @@ class GitStore:
             return [StoreChange(path, _serialize(_EVENTS.dump_python(kept)))]
 
         self.commit(mutate, f"memory: history {path}")
+
+    def routed(self) -> list[RoutedRequest]:
+        """What the human said that went straight to a team, oldest first."""
+        raw = self.read(ROUTED_FILE)
+        return _ROUTED.validate_json(raw) if raw else []
+
+    def append_routed(self, request: RoutedRequest) -> None:
+        def mutate(read: StoreReader) -> list[StoreChange]:
+            raw = read(ROUTED_FILE)
+            kept = [*(_ROUTED.validate_json(raw) if raw else []), request]
+            kept = kept[-ROUTED_KEPT:]
+            return [StoreChange(ROUTED_FILE, _serialize(_ROUTED.dump_python(kept)))]
+
+        self.commit(mutate, "memory: a request sent straight to a team")
 
     def append_report(
         self, node_id: str, role: AgentRole, report: Report

@@ -510,6 +510,7 @@ def test_the_summary_says_there_is_no_org_yet_and_where_one_would_work(repo: Pat
     assert response.status_code == 200
     assert response.json() == {
         "root_id": None,
+        "top_conversation_id": None,
         "node_count": 0,
         "repo_path": str(repo),
         "directory": "",
@@ -668,8 +669,11 @@ async def test_the_first_message_starts_an_org_and_later_ones_find_its_teams(
     assert root is not None and root.title == "Build the checkout flow"
     assert first.json() == {
         "node_id": "root",
+        "team": "Build the checkout flow",
         "conversation_id": agent_conversation(root, "ic"),
         "started_org": True,
+        "chosen_by": "path",
+        "reason": "",
     }
 
     later = await client.post(
@@ -796,6 +800,7 @@ def test_the_limits_on_new_teams_are_read_changed_and_kept(saved_tree: Path):
         "stall_check_minutes": 120,
         "manager_check_accepted_reviews": 5,
         "manager_check_ic_setbacks": 3,
+        "route_requests": True,
         "teams": 5,
         "depth": 3,
         "max_concurrent_runs": 7,

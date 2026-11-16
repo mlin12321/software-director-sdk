@@ -404,6 +404,12 @@ async def route_message(
     submodule that has no org of its own searches on through the repository
     that has the submodule.
 
+    With `auto`, the director may then send it to a team below that one: the
+    lowest team that holds every team the text concerns, by the files it
+    names and by what a model makes of it. It does so only when it is sure,
+    and the answer says how the team was chosen. The ICs above that team are
+    not woken; they are told of the message in their context.
+
     When there is no org yet, the message needs a `conversation`. If the
     repository of that conversation's workspace (or one above that has it as
     a submodule) has a saved org, the director takes that org up and routes

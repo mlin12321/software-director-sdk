@@ -325,15 +325,21 @@ def _role_name(role: AgentRole) -> str:
 def raise_escalation(
     service: DirectorService,
     caller: Caller,
-    kind: EscalationKind,
+    kind: EscalationKind | Literal["misrouted"],
     title: str,
     detail: str,
 ) -> str:
     """Send something the caller cannot settle to the agent of its own role
-    in the team above."""
+    in the team above. `misrouted` hands back what the human's words
+    brought the team directly, and is no escalation that waits."""
     _not_aside(caller)
     if not title.strip():
         raise Invalid("An escalation needs a title")
+    if kind == "misrouted":
+        _only(caller, "ic", "say a request is not its team's")
+        return service.not_ours(
+            caller.node, ": ".join(filter(None, (title.strip(), detail.strip())))
+        )
     store = service.store
     node = caller.node
     escalation = store.raise_escalation(

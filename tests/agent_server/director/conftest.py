@@ -217,7 +217,7 @@ class FakeLauncher:
     before: Callable[[str], None] = lambda _: None
     deleted: list[UUID] = field(default_factory=list)
     # What the model answers to a question of the director, by usage id.
-    answers: dict[str, str | None] = field(default_factory=dict)
+    answers: dict[str, str | list[str | None] | None] = field(default_factory=dict)
     asked: list[tuple[UUID, str, str, str]] = field(default_factory=list)
     # What an agent answers to a question on top of its conversation, by a
     # text the question contains.
@@ -408,7 +408,11 @@ class FakeLauncher:
         if conversation_id not in self.known:
             raise NotFound(f"Conversation {conversation_id} does not exist")
         self.asked.append((conversation_id, usage_id, system, user))
-        return self.answers.get(usage_id)
+        answer = self.answers.get(usage_id)
+        if isinstance(answer, list):
+            # One answer for each time it is asked, in turn.
+            return answer.pop(0) if answer else None
+        return answer
 
     async def ask_agent(self, conversation_id: UUID, question: str) -> str | None:
         if conversation_id not in self.known:

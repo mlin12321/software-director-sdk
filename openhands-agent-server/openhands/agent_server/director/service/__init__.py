@@ -19,6 +19,7 @@ from openhands.agent_server.director.git import (
 from openhands.agent_server.director.headline import provisional_summary
 from openhands.agent_server.director.models import (
     Boundary,
+    ChosenBy,
     CreateOrgRequest,
     OrgNode,
     OrgNodeInput,
@@ -31,6 +32,7 @@ from openhands.agent_server.director.org_store import (
 )
 from openhands.agent_server.director.pods import PodLauncher
 from openhands.agent_server.director.prompts import (
+    DIRECT_NOTE,
     NEED_WRITE,
     POD_PROTOCOL,
 )
@@ -300,6 +302,7 @@ class DirectorService(Sync):
                     )
                     return RoutedMessage(
                         node_id=root.id,
+                        team=root.title,
                         conversation_id=agent_conversation(root, "ic") or "",
                         started_org=True,
                     )
@@ -326,11 +329,35 @@ class DirectorService(Sync):
                 f"{path or 'the repository'!r}"
             )
         text = request.text
+        chosen_by: ChosenBy = "path"
+        reason = ""
+        if request.auto and self.settings.route_requests:
+            choice = await self.choose_team(text, node)
+            chosen_by, reason = choice.by, choice.reason
+            lower = store.get(choice.node_id)
+            if lower is not None and lower.id != node.id:
+                conversation_id = self.tell_ic(lower.id, text + DIRECT_NOTE, human=True)
+                await asyncio.to_thread(
+                    self.keep_routed, "asked", lower, text, chosen_by, reason
+                )
+                return RoutedMessage(
+                    node_id=lower.id,
+                    team=lower.title,
+                    conversation_id=conversation_id or "",
+                    started_org=False,
+                    chosen_by=chosen_by,
+                    reason=reason,
+                )
         if path != node.boundary.path:
             text = f"{text}\n\n(The human sent this from {path}.)"
         conversation_id = self.tell_ic(node.id, text, human=True) or ""
         return RoutedMessage(
-            node_id=node.id, conversation_id=conversation_id, started_org=False
+            node_id=node.id,
+            team=node.title,
+            conversation_id=conversation_id,
+            started_org=False,
+            chosen_by=chosen_by,
+            reason=reason,
         )
 
     def guard_action(self, conversation_id: UUID, event: ActionEvent) -> str | None:

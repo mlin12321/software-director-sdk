@@ -90,6 +90,7 @@ export type {
   DirectorOrgNodeDetail,
   DirectorOrgSummary,
   DirectorReport,
+  DirectorChosenBy,
   DirectorRoutedMessage,
   DirectorSplitChild,
   DirectorSplitProposal,
