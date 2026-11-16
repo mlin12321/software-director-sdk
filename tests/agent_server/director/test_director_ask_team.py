@@ -74,6 +74,23 @@ async def service(repo: Path, launcher: FakeLauncher, clock: Clock):
     await service.aclose()
 
 
+async def test_a_request_in_the_words_of_the_asking_team_still_goes_direct(
+    service: DirectorService, launcher: FakeLauncher
+):
+    """A team asks in the words of its own work, so its own card shares
+    most with what it asks. That is no doubt about whose the request is."""
+    launcher.answers[USAGE_ID] = TO_WEB
+    asked = RaiseEscalationAction(
+        category="design_decision",
+        title="Which schema column holds it?",
+        team_for="Own the schema: the schema needs the order id from the form.",
+    )
+
+    await use(service, ic(service, DB), RaiseEscalationTool, asked)
+
+    assert the_one(service).asked_of == WEB
+
+
 def the_one(service: DirectorService, node_id: str = DB):
     [escalation] = node(service, node_id).escalations
     return escalation

@@ -108,7 +108,7 @@ class Watch(Reviews):
         if escalation.held_by is None or escalation.asked_of is not None:
             return
         asked = "\n".join(filter(None, (team_for, escalation.title, escalation.detail)))
-        choice = await self.choose_team(asked, root)
+        choice = await self.choose_team(asked, root, asker=raiser)
         owner = store.get(choice.node_id)
         if not choice.sure or owner is None or not self._may_ask(raiser, owner):
             self.hand_escalation(escalation.held_by, raiser, raiser, escalation, [])

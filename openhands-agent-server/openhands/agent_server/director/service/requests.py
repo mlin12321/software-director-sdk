@@ -49,9 +49,18 @@ def takes_requests(node: OrgNode) -> bool:
 class Requests(Teams):
     """Chooses the team a request goes straight to."""
 
-    async def choose_team(self, text: str, start: OrgNode) -> Choice:
+    async def choose_team(
+        self, text: str, start: OrgNode, *, asker: OrgNode | None = None
+    ) -> Choice:
         """The team at or below ``start`` that what is asked in ``text``
-        goes to. It is ``start`` unless a lower team is sure."""
+        goes to. It is ``start`` unless a lower team is sure.
+
+        Args:
+            asker: The team whose IC asks, when it is not the human. What
+                a team asks for is told in the words of its own work, so
+                its card and those of the teams above and below it say
+                nothing about whose the request is.
+        """
         store = self.store
         nodes = store.all()
         parents = {node.id: node.parent_id for node in nodes}
@@ -80,6 +89,15 @@ class Requests(Teams):
             [node for node in below if node.agents or node.id == start.id],
             tracked,
         )
+        own = (
+            {
+                node.id
+                for node in below
+                if routing.on_one_line(node.id, asker.id, parents)
+            }
+            if asker
+            else set()
+        )
         shown = routing.cards_to_show(text, cards)
         answers, reason = await self._ask_which(text, shown)
         choice = routing.choose(
@@ -88,7 +106,9 @@ class Requests(Teams):
             takes=takes,
             named_owners=owners,
             answers=answers,
-            worded=routing.best_by_words(text, cards),
+            worded=routing.best_by_words(
+                text, [card for card in cards if card.node_id not in own]
+            ),
             reason=reason,
         )
         logger.info("A request was %s", choice.log_line())
