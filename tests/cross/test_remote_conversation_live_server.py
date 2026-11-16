@@ -3855,6 +3855,13 @@ def test_director_holds_a_paused_org_and_takes_it_up_again(
         assert resumed.status_code == 200 and resumed.json()["paused"] is None
         assert told_the_answer()
         assert client.get("/api/director/org").json()["paused"] is None
+        # What is said in a session goes on in it and opens no other.
+        said = client.post(
+            "/api/director/org/messages",
+            json={"text": "And a wishlist.", "session_id": session_id},
+        )
+        assert said.status_code == 200, said.text
+        assert said.json()["conversation_id"] == created.json()["conversation_id"]
         assert [
             found["id"] for found in client.get("/api/director/org/sessions").json()
         ] == [session_id]

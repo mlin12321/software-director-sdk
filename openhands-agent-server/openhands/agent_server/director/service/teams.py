@@ -171,16 +171,12 @@ class Teams(Delivery):
                 [ic] = _new_pod(uuid4())
                 store.update_node(node_id, agents=[ic, *node.agents])
                 purpose = self._purpose(node)
-                opened = store.session_of(node)
                 self._begin(
                     "start_team",
                     node_id,
                     task=f"{purpose}{_STARTED_WITH}{text}",
                     purpose=purpose,
-                    # A reviewer is derived from the IC whose work it reads.
-                    parent=session_team_id(opened.team_id, opened.id)
-                    if reviewing and opened
-                    else node.parent_id,
+                    parent=self._derived_from(node),
                     **(
                         {"checkout": node.worktree_path} if self._in_place(node) else {}
                     ),
@@ -196,12 +192,33 @@ class Teams(Delivery):
         return conversation_id
 
     def _in_place(self, node: OrgNode) -> bool:
-        """Whether a team that starts works in the repository's own
-        checkout: the place a session is reviewed from, and the team a
-        session is opened at when sessions get no worktree."""
+        """Whether a team that starts works in the checkout it has: the
+        place a session is reviewed from, and the team a session is opened
+        at when sessions get no worktree or the session has one already."""
         return reviews_only(node) or (
-            self.store.opens_session(node) and node.isolation != "worktree"
+            self.store.opens_session(node)
+            and (
+                node.isolation != "worktree"
+                or _checkout_root(node.worktree_path)
+                != _checkout_root(str(self._repo_dir))
+            )
         )
+
+    def _derived_from(self, node: OrgNode) -> str | None:
+        """The place whose IC the IC of ``node`` is derived from when it
+        starts: the team above, or for the team a session is opened at and
+        its reviewer, who of the session works already."""
+        store = self.store
+        opened = store.session_of(node)
+        if reviews_only(node) and opened:
+            return session_team_id(opened.team_id, opened.id)
+        if store.opens_session(node):
+            # A session that went a team higher has an IC below already.
+            return next(
+                (team.id for team in store.children(node.id) if team.agents),
+                node.parent_id,
+            )
+        return node.parent_id
 
     def _tools_of(self, node: OrgNode, role: AgentRole) -> tuple[str, ...]:
         """The director's tools an agent of ``node`` is offered."""

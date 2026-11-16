@@ -13,6 +13,7 @@ from openhands.agent_server.director.models import (
 from openhands.agent_server.director.org_store import team_id_of
 from openhands.agent_server.director.routing import USAGE_ID
 from openhands.agent_server.director.service import DirectorService
+from openhands.agent_server.director.service.state import agent_conversation
 from openhands.agent_server.director.tools import (
     RaiseEscalationTool,
     SubmitReviewTool,
@@ -227,28 +228,53 @@ async def test_a_team_hands_back_what_is_not_its_own_and_the_model_is_told(
     sent = await ask(service, "Make the cart page faster.")
     asked = sent.conversation_id
 
+    [opened] = [
+        session for session in service.store.sessions() if session.team_id == DB
+    ]
+    checkout = node(service, sent.node_id).worktree_path
+
     handed = await use(service, asked, RaiseEscalationTool, NOT_MINE)
     again = await use(service, asked, RaiseEscalationTool, NOT_MINE)
     await service.settled()
 
-    assert not handed.is_error and "Handed to the team above (API)" in handed.text
+    assert not handed.is_error
+    assert "Handed to the IC of the team above (API)" in handed.text
     assert again.is_error and "Nothing was sent to your team directly" in again.text
-    # Nobody works above the team a session was opened at, so the request
-    # goes one team up the org in a session of its own, not to the human.
-    assert node(service, sent.node_id).escalations == []
-    at_api = service.store.sessions()[-1]
-    assert at_api.team_id == API
-    taken = briefing(launcher, at_api.conversation_id)
+    # Nobody works above the team a session was opened at, so the session
+    # itself goes one team up the org: the human is not asked and no other
+    # session is opened.
+    sessions = len(service.store.sessions())
+    [lifted] = [
+        session for session in service.store.sessions() if session.id == opened.id
+    ]
+    assert (lifted.team_id, lifted.above_id) == (API, "root")
+    top = lifted.teams[0]
+    assert team_id_of(top) == API and top.worktree_path == checkout
+    at_db = node(service, sent.node_id)
+    assert (at_db.parent_id, at_db.escalations) == (top.id, [])
+    assert agent_conversation(at_db, "ic") == asked
+    # It is reviewed from the top now.
+    assert {team_id_of(place) for place in lifted.teams} == {API, DB, "root"}
+    assert [place.id for place in lifted.teams if place.review_only] == [
+        f"root@{opened.id}@review"
+    ]
+    taken = briefing(launcher, lifted.conversation_id)
     assert "Make the cart page faster." in taken
     assert "whose IC said it is not that team's" in taken
+    assert lifted.conversation_id != asked
 
     # It goes on up while each team says the same, and to the human from
     # the top.
-    await use(service, at_api.conversation_id, RaiseEscalationTool, NOT_MINE)
+    await use(service, lifted.conversation_id, RaiseEscalationTool, NOT_MINE)
     await service.settled()
-    at_top = service.store.sessions()[-1]
-    assert at_top.team_id == "root"
-    assert node(service, at_api.teams[0].id).escalations == []
+    [at_top] = [
+        session for session in service.store.sessions() if session.id == opened.id
+    ]
+    assert (at_top.team_id, at_top.above_id) == ("root", "root")
+    # The session has the top team's other sub-teams too.
+    assert {team_id_of(place) for place in at_top.teams} == {"root", API, DB, WEB}
+    assert node(service, f"{WEB}@{opened.id}").parent_id == at_top.teams[0].id
+    assert len(service.store.sessions()) == sessions
     last = await use(service, at_top.conversation_id, RaiseEscalationTool, NOT_MINE)
     assert "The human, who asked, is told" in last.text
     [told] = node(service, at_top.teams[0].id).escalations
@@ -257,6 +283,23 @@ async def test_a_team_hands_back_what_is_not_its_own_and_the_model_is_told(
     await ask(service, "Make the cart page lighter.")
 
     assert "- Make the cart page faster. (not for 'DB')" in launcher.asked[-1][3]
+
+
+async def test_a_session_whose_work_is_in_review_stays_where_it_was_opened(
+    service: DirectorService, launcher: FakeLauncher
+):
+    launcher.answers[USAGE_ID] = TO_DB
+    sent = await ask(service, "Make the cart page faster.")
+    await use(service, sent.conversation_id, SubmitReviewTool, DONE)
+
+    handed = await use(service, sent.conversation_id, RaiseEscalationTool, NOT_MINE)
+
+    # Its reviewer reads the work already: the human, who asked, is told.
+    assert "The human, who asked, is told" in handed.text
+    at_db = node(service, sent.node_id)
+    assert service.store.opens_session(at_db)
+    [told] = at_db.escalations
+    assert told.held_by is None
 
 
 async def test_a_teams_card_holds_nothing_the_team_wrote_itself(

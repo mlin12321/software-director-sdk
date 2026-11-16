@@ -96,6 +96,12 @@ describe('DirectorClient', () => {
       auto: true,
     });
     expect(result).toEqual(routed);
+
+    await client.routeMessage({ text: 'And partial ones', session_id: 's1a2b3c' });
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({
+      text: 'And partial ones',
+      session_id: 's1a2b3c',
+    });
   });
 
   it('opens a session at a team, lists the open ones and closes one', async () => {

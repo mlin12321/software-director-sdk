@@ -716,6 +716,19 @@ def reconcile_request(
     return "\n".join(lines)
 
 
+def handed_up(sent: OrgNode, text: str, why: str) -> str:
+    """What the IC of the team above is started with when the team a
+    request was sent to said it is not its own."""
+    return (
+        f"{text}\n\n(The director sent this request of the human's to "
+        f"{sent.title!r} (node {sent.id}) first, whose IC said it is not that "
+        f"team's: {why}\nIt is yours now, in the same session and the same "
+        f"checkout. {sent.title!r} is a sub-team of yours here and has done "
+        "nothing for it: give it a task with `msg_team` if part of it is "
+        "theirs. If it is not your team's either, raise it as `misrouted`.)"
+    )
+
+
 def session_brief(team: OrgNode, title: str, others: list[str]) -> str:
     """What the IC a session starts with is told after the human's request."""
     beside = (

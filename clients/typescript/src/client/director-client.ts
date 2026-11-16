@@ -76,6 +76,14 @@ export interface RouteMessageRequest {
    */
   auto?: boolean;
   /**
+   * The session the human says it in, when the message continues that
+   * session's conversation and begins no new one. It goes to the IC of one
+   * of the session's own teams, those it set up itself included: the team it
+   * was opened at unless the director is sure of one below. `path`, `auto`
+   * and `conversation` are ignored.
+   */
+  session_id?: string;
+  /**
    * How to start the root team's IC when there is no org yet. If the git
    * repository of its workspace already has a saved org, that org is taken
    * up and the message routed in it; otherwise the message starts an org

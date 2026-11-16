@@ -1163,6 +1163,18 @@ class RouteMessageRequest(BaseModel):
             "org's `route_requests` is off."
         ),
     )
+    session_id: str | None = Field(
+        default=None,
+        description=(
+            "The session the human says it in, when the message continues "
+            "that session's conversation and begins no new one. It goes to "
+            "the IC of one of the session's own teams, those it set up "
+            "itself included: the team it was opened at unless the director "
+            "is sure of one below, and always that team while the org's "
+            "`route_requests` is off. `path`, `auto` and `conversation` are "
+            "ignored."
+        ),
+    )
     conversation: StartConversationRequest | None = Field(
         default=None,
         description=(

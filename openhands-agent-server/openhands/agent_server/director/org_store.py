@@ -243,7 +243,9 @@ class OrgStore:
             seats = [
                 seat for seat in self._seats.values() if seat.session == session_id
             ]
-            return sorted(seats, key=reviews_only)
+            opened = self._sessions.get(session_id)
+            top = session_team_id(opened.team_id, session_id) if opened else ""
+            return sorted(seats, key=lambda seat: (seat.review_only, seat.id != top))
 
     def sessions(self) -> list[Session]:
         """The open sessions as a client reads them, oldest first."""
@@ -313,6 +315,71 @@ class OrgStore:
                 raise OrgStoreError(
                     f"Session {session.id} does not fit: {error}"
                 ) from error
+
+    def lift_session(
+        self,
+        session: SessionInput,
+        top: SessionTeamInput,
+        review: SessionTeamInput,
+        others: Iterable[SessionTeamInput],
+    ) -> SessionTeam:
+        """Make a session one opened at the team above the one it was
+        opened at. The team it was opened at before becomes a sub-team of
+        ``top``, and its work is reviewed from ``review``.
+
+        Args:
+            session: The session as it is from now on.
+            others: What it has at the other teams below ``top`` from now
+                on, parents before children.
+
+        Raises:
+            OrgStoreError: The session is not open, its work is being
+                reviewed, or the places do not hang together.
+        """
+        with self._lock:
+            was = self._sessions.get(session.id)
+            if was is None:
+                raise OrgStoreError(f"Session {session.id} is not open")
+            before = self._seats[session_team_id(was.team_id, was.id)]
+            reviewed_from = self._seats[before.parent_id or ""]
+            if reviewed_from.agents or before.review is not None:
+                raise OrgStoreError(f"The work of session {session.id} is in review")
+            if (
+                top.id != session_team_id(session.team_id, session.id)
+                or top.id in self._seats
+                or top.parent_id != review.id
+                or review.id != review_place_id(session.above_id, session.id)
+                or not review.review_only
+            ):
+                raise OrgStoreError(f"Session {session.id} cannot go to {top.id}")
+            self._sessions[session.id] = session
+            del self._seats[reviewed_from.id]
+            self._seats[review.id] = SessionTeam(
+                **review.model_dump(), child_ids=[top.id]
+            )
+            self._seats[top.id] = SessionTeam(**top.model_dump(), child_ids=[before.id])
+            self._seats[before.id] = before.model_copy(update={"parent_id": top.id})
+            moved = [before.id]
+            for current in moved:
+                moved.extend(self._seats[current].child_ids)
+            home = cast(dict[str, OrgNode], self._seats)
+            for current in moved:
+                below = self._seats[current]
+                chain = self._chain(home, below.parent_id)
+                self._seats[current] = below.model_copy(
+                    update={
+                        "escalations": [
+                            self._rerouted(escalation, chain)
+                            for escalation in below.escalations
+                        ]
+                    }
+                )
+            for other in others:
+                self._upsert_seat(other)
+            self._announce_sessions()
+            self._announce_escalations()
+            self._changed()
+            return self._seats[top.id]
 
     def set_shape(self, session_id: str, shape: list[tuple[str, str, str]]) -> None:
         """Keep the sub-teams the org has under a session's team, as the

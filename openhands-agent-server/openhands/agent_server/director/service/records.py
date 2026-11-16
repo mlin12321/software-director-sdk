@@ -693,7 +693,9 @@ class Records(ServiceState):
         run = self._runs()
         grown: list[tuple[str, AgentRole]] = []
         for team in self.store.session(session) if session else []:
-            for report in self.own_reports(team):
+            # What a team the org no longer has reported is dropped with it.
+            kept = self.store.team(team_of(team)) is not None
+            for report in self.own_reports(team) if kept else []:
                 team_memory.append_report(team_of(team), report.role, report)
                 if (team_of(team), report.role) not in grown:
                     grown.append((team_of(team), report.role))
@@ -797,14 +799,18 @@ class Records(ServiceState):
             draft = self.spec_draft(team)
             if draft is None:
                 continue
+            run.unmark(DRAFT, team.id)
+            if self.store.team(team.team_id) is None:
+                # The org lost the team meanwhile and the session did not
+                # set it up again: its spec goes with it.
+                logger.info("The spec %s drafted is dropped with the team", team.id)
+                continue
             path = team.boundary.path
             if team_memory.read(_spec_file(path)) != draft[0]:
                 team_memory.write(path, SPEC_FILE, draft[0])
-            if self.store.team(team.team_id) is not None:
-                self.store.update_node(
-                    team.team_id, spec_summary=team.spec_summary, old_specs=[]
-                )
-            run.unmark(DRAFT, team.id)
+            self.store.update_node(
+                team.team_id, spec_summary=team.spec_summary, old_specs=[]
+            )
 
     def _specs_left_in(self, path: str, removed: list[OrgNode]) -> list[OldSpec]:
         """The specs a team that is given ``path`` finds there: the one of

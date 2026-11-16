@@ -7,8 +7,11 @@ from pathlib import Path
 import pytest
 
 from openhands.agent_server.director.models import (
+    DirectorSettingsUpdate,
     OpenSessionRequest,
     RouteMessageRequest,
+    SessionTeam,
+    SessionTeamInput,
 )
 from openhands.agent_server.director.org_store import session_id_of, team_id_of
 from openhands.agent_server.director.routing import USAGE_ID
@@ -25,6 +28,7 @@ from openhands.agent_server.director.tools.definition import (
     ReportAction,
     ReviewTeamAction,
 )
+from openhands.sdk.errors import NotFound
 from tests.agent_server.director.conftest import FakeLauncher, run_git
 from tests.agent_server.director.test_director_limits import started
 from tests.agent_server.director.test_director_review import DONE, accept, commit
@@ -184,27 +188,119 @@ async def test_a_team_a_session_set_up_is_asked_within_that_session_only(
         "asks your team directly" in launcher.messages_to(ic(service, "apps.web"))[-1]
     )
 
-    # A request of the human's is for the org's own teams: it cannot go to
-    # a team only a session has.
+    # A new request of the human's is for the org's own teams: it cannot
+    # go to a team only a session has.
     sent = await service.route_message(
         RouteMessageRequest(text="Make the cart page faster.", auto=True)
     )
     assert team_id_of(node(service, sent.node_id)) == "root"
 
 
-async def test_a_team_the_org_lost_meanwhile_comes_back_when_the_reviewer_says_so(
-    service: DirectorService,
+async def test_what_the_human_says_in_a_session_is_routed_among_its_own_teams(
+    service: DirectorService, launcher: FakeLauncher
 ):
+    await split_root(service)
+    launcher.answers[USAGE_ID] = "Teams: apps.web\nReason: The cart page is Web's."
+    [session] = service.store.sessions()
+
+    said = await service.route_message(
+        RouteMessageRequest(text="Make the cart page faster.", session_id=session.id)
+    )
+    await service.settled()
+
+    # Web is a team only this session has. No session was opened for it.
+    assert [open_now.id for open_now in service.store.sessions()] == [session.id]
+    assert (said.node_id, said.chosen_by) == (node(service, "apps.web").id, "model")
+    assert said.conversation_id == ic(service, "apps.web")
+    assert launcher.messages_to(said.conversation_id)[-1] == (
+        "Make the cart page faster."
+    )
+    # Its IC may say it is not Web's, which the IC above then has.
+    handed = await use(
+        service,
+        said.conversation_id,
+        RaiseEscalationTool,
+        RaiseEscalationAction(category="misrouted", title="Not ours", detail="API's."),
+    )
+    assert "Handed to the IC of the team above" in handed.text
+    assert "Make the cart page faster." in launcher.messages_to(ic(service))[-1]
+
+    service.update_settings(DirectorSettingsUpdate(route_requests=False))
+    kept = await service.route_message(
+        RouteMessageRequest(text="Make the cart page lighter.", session_id=session.id)
+    )
+    assert (kept.node_id, kept.conversation_id) == (
+        node(service, "root").id,
+        ic(service),
+    )
+    with pytest.raises(NotFound):
+        await service.route_message(
+            RouteMessageRequest(text="Anyone?", session_id="s000000")
+        )
+
+
+async def at_api(service: DirectorService) -> tuple[str, str]:
+    """A session opened at API once the org has it.
+
+    Returns:
+        The place it was opened at and its IC's conversation.
+    """
     await split_root(service)
     await landed(service)
     opened = await service.open_session(
         OpenSessionRequest(text="Add refunds.", node_id="services.api")
     )
     await service.settled()
-    top = opened.session.teams[0].id
+    return opened.session.teams[0].id, opened.conversation_id
+
+
+async def test_work_is_accepted_and_a_team_the_org_lost_meanwhile_stays_gone(
+    service: DirectorService,
+):
+    top, conversation = await at_api(service)
+    await use(
+        service,
+        conversation,
+        ReportTool,
+        ReportAction(text="Refunds are in."),
+    )
     service.store.remove("services.api")
 
-    await use(service, opened.conversation_id, SubmitReviewTool, DONE)
+    await use(service, conversation, SubmitReviewTool, DONE)
+    accepted = await use(service, reviewer(service, top), ReviewTeamTool, accept(top))
+
+    # The session set up no teams of its own, so nothing is asked and what
+    # it has of the org's teams is dropped; its code is merged all the same.
+    assert "Accepting the work of 'API'" in accepted.text
+    assert service.store.team("services.api") is None
+    place = service.store.get(top)
+    assert place is not None and place.review is not None
+    assert place.review.state == "accepted"
+    assert service.own_reports(place) == []
+
+
+async def test_a_team_the_org_lost_comes_back_with_a_session_that_set_up_teams(
+    service: DirectorService,
+):
+    top, conversation = await at_api(service)
+    place = service.store.get(top)
+    assert isinstance(place, SessionTeam)
+    # The session sets up a sub-team of its own.
+    service.store.upsert(
+        SessionTeamInput(
+            **place.model_dump(include={"session", "title", "isolation", "status"}),
+            worktree_path=place.worktree_path,
+            branch=place.branch,
+            id=f"services.api.jobs@{place.session}",
+            team_id="services.api.jobs",
+            parent_id=top,
+            agents=[],
+            boundary=place.boundary.model_copy(update={"path": "services/api/jobs"}),
+        )
+    )
+    service.store.remove("services.api")
+
+    await use(service, conversation, SubmitReviewTool, DONE)
     asked = reviewer(service, top)
     refused = await use(service, asked, ReviewTeamTool, accept(top))
 
@@ -220,3 +316,4 @@ async def test_a_team_the_org_lost_meanwhile_comes_back_when_the_reviewer_says_s
 
     back = service.store.team("services.api")
     assert back is not None and (back.parent_id, back.agents) == ("root", [])
+    assert service.store.team("services.api.jobs") is not None

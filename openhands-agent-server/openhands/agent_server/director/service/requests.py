@@ -56,7 +56,12 @@ class Requests(Teams):
     """Chooses the team a request goes straight to."""
 
     async def choose_team(
-        self, text: str, start: OrgNode, *, asker: OrgNode | None = None
+        self,
+        text: str,
+        start: OrgNode,
+        *,
+        asker: OrgNode | None = None,
+        within: str = "",
     ) -> Choice:
         """The team at or below ``start`` that what is asked in ``text``
         goes to. It is ``start`` unless a lower team is sure.
@@ -66,20 +71,21 @@ class Requests(Teams):
                 a team asks for is told in the words of its own work, so
                 its card and those of the teams above and below it say
                 nothing about whose the request is.
+            within: The session the human says it in, when it does not
+                begin a new one.
         """
         store = self.store
-        if asker is None:
-            # What the human asks opens a session of its own, which any
-            # team of the org can have.
+        within = session_id_of(asker) if asker else within
+        if not within:
+            # What the human asks anew opens a session of its own, which
+            # any team of the org can have.
             nodes = store.teams()
         else:
-            # What a team asks stays in its session: the teams are the ones
+            # What is said in a session stays in it: the teams are the ones
             # the session has, those it set up itself included, each as it
             # is there, under the team's own id.
             places = [
-                place
-                for place in store.session(session_id_of(asker))
-                if not reviews_only(place)
+                place for place in store.session(within) if not reviews_only(place)
             ]
             ids = {place.id: team_of(place) for place in places}
             nodes = [
@@ -104,14 +110,14 @@ class Requests(Teams):
             return False
 
         below = [node for node in nodes if under(node.id)]
-        takes = {node.id for node in below if asker is None or takes_requests(node)} | {
+        takes = {node.id for node in below if not within or takes_requests(node)} | {
             start.id
         }
         if len(takes) == 1:
             return Choice(start.id, "top", False, "no team below can take it")
         root = store.get(store.root_id) if store.root_id else None
         # A session's own checkout has the directories of the teams it set up.
-        checkout = Path((start if asker else root or start).worktree_path)
+        checkout = Path((start if within else root or start).worktree_path)
         tracked = await asyncio.to_thread(_tracked, checkout)
         named = routing.paths_named(text, tracked)
         owners = [
@@ -126,7 +132,7 @@ class Requests(Teams):
             [
                 node
                 for node in below
-                if asker is None or node.id == start.id or node.agents
+                if not within or node.id == start.id or node.agents
             ],
             tracked,
         )

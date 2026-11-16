@@ -21,6 +21,7 @@ from openhands.agent_server.director.models import (
     SessionTeamInput,
 )
 from openhands.agent_server.director.org_store import (
+    OrgStoreError,
     review_place_id,
     reviews_only,
     session_team_id,
@@ -28,6 +29,7 @@ from openhands.agent_server.director.org_store import (
 from openhands.agent_server.director.pods import PodLauncher
 from openhands.agent_server.director.prompts import (
     POD_PROTOCOL,
+    handed_up,
     session_brief,
     session_closed,
 )
@@ -60,10 +62,7 @@ from openhands.sdk.conversation.request import (
 )
 from openhands.sdk.errors import (
     Conflict,
-    Invalid,
     NotFound,
-    RateLimited,
-    Unavailable,
 )
 from openhands.sdk.tool.spec import Tool
 
@@ -323,19 +322,127 @@ class Sessions(Splits):
             return super()._hand_on(node, above, request, why)
         own = self.store.team(team_of(node))
         higher = self.store.team(own.parent_id or "") if own else None
-        if higher is None:
+        try:
+            top = self._lift(node, higher) if higher else None
+        except OrgStoreError:
+            top = None
+        if top is None:
             self._tell_human_misrouted(node, request.text, why)
             return (
                 "The human, who asked, is told that it is not your team's. "
                 "Wait for the answer."
             )
-        self._enqueue(
-            lambda: self._hand_up(node.id, higher.id, request.text, why), higher.id
+        # It may say the same, and the session then goes up once more.
+        self.keep_routed("asked", top, request.text, "top", why)
+        self.tell_ic(
+            top.id,
+            handed_up(node, request.text, why)
+            + session_brief(top, self.store.session_title(top), []),
         )
+        self._save_soon()
         return (
-            f"Handed to the team above ({higher.title}), which takes it up "
-            "in a session of its own. It is no longer yours."
+            f"Handed to the IC of the team above ({top.title}), which this "
+            "session is now opened at. Your team stays in it as a sub-team: "
+            "that IC gives you a task if it has one for you."
         )
+
+    def _lift(self, node: OrgNode, higher: OrgNode) -> SessionTeam:
+        """Make the session opened at ``node`` one opened at ``higher``,
+        the team above it in the org, in the checkout it has.
+
+        Raises:
+            OrgStoreError: Its work is in review already.
+        """
+        store = self.store
+        session = store.session_of(node)
+        reviewed_from = store.get(node.parent_id or "")
+        above = store.team(higher.parent_id) if higher.parent_id else higher
+        if session is None or reviewed_from is None or above is None:
+            raise OrgStoreError(f"{node.id} is not what a session was opened at")
+        sid = session.id
+        shape = [higher]
+        for current in shape:
+            shape.extend(store.children(current.id))
+        # What it has below its own team stays as the session made it.
+        has = {team_of(place) for place in store.session(sid)}
+        added: list[OrgNode] = []
+        for current in shape[1:]:
+            if current.id not in has and (
+                current.parent_id == higher.id
+                or any(current.parent_id == other.id for other in added)
+            ):
+                added.append(current)
+        reviewing = review_place_id(above.id, sid)
+        top_id = session_team_id(higher.id, sid)
+        top = store.lift_session(
+            session.model_copy(
+                update={
+                    "team_id": higher.id,
+                    "above_id": above.id,
+                    "shape": shape_of(shape),
+                }
+            ),
+            SessionTeamInput(
+                id=top_id,
+                session=sid,
+                team_id=higher.id,
+                parent_id=reviewing,
+                title=higher.title,
+                boundary=higher.boundary,
+                # The session's own checkout is this team's from now on.
+                isolation=node.isolation,
+                agent_profile=higher.agent_profile,
+                worktree_path=node.worktree_path,
+                branch=node.branch,
+                base_commit=node.base_commit,
+                agents=[],
+                status="idle",
+                headline=node.headline,
+                spec_summary=higher.spec_summary,
+                old_specs=higher.old_specs,
+            ),
+            SessionTeamInput(
+                id=reviewing,
+                session=sid,
+                team_id=above.id,
+                review_only=True,
+                parent_id=None,
+                title=above.title,
+                boundary=above.boundary.model_copy(update={"writable": []}),
+                isolation="shared",
+                agent_profile=above.agent_profile,
+                worktree_path=reviewed_from.worktree_path,
+                branch=reviewed_from.branch,
+                agents=[],
+                status="idle",
+                spec_summary=above.spec_summary,
+            ),
+            [
+                SessionTeamInput(
+                    id=session_team_id(current.id, sid),
+                    session=sid,
+                    team_id=current.id,
+                    parent_id=session_team_id(current.parent_id or "", sid),
+                    title=current.title,
+                    boundary=current.boundary,
+                    isolation=current.isolation,
+                    agent_profile=current.agent_profile,
+                    worktree_path=node.worktree_path,
+                    branch=node.branch,
+                    agents=[],
+                    status="idle",
+                    headline=current.headline,
+                    spec_summary=current.spec_summary,
+                    old_specs=current.old_specs,
+                )
+                for current in added
+            ],
+        )
+        store.update_node(node.id, isolation="shared")
+        run = self._runs()
+        for current in [higher, *added]:
+            run.mark(TASK, session_team_id(current.id, sid), self._purpose(current))
+        return top
 
     def _tell_human_misrouted(self, node: OrgNode, text: str, why: str) -> None:
         """Put a request no team took before the human, who asked."""
@@ -348,28 +455,6 @@ class Sessions(Splits):
             detail=f"{why}\n\nThe request:\n{text}",
         )
         self._save_soon()
-
-    async def _hand_up(self, from_id: str, team_id: str, text: str, why: str) -> None:
-        """Open a session at the team above for a request the team it was
-        sent to said is not its own. The human is told when none can be."""
-        sent = self.store.get(from_id)
-        if sent is None:
-            return
-        try:
-            opened = await self.open_session(
-                OpenSessionRequest(
-                    text=f"{text}\n\n(The director sent this to {sent.title!r} "
-                    f"first, whose IC said it is not that team's: {why})",
-                    node_id=team_id,
-                )
-            )
-        except (Conflict, Invalid, NotFound, RateLimited, Unavailable):
-            self._tell_human_misrouted(sent, text, why)
-            return
-        # It may say the same, and the request then goes up once more.
-        await asyncio.to_thread(
-            self.keep_routed, "asked", opened.session.teams[0], text, "top", why
-        )
 
     def close_session(self, session_id: str) -> None:
         """Close a session: its agents are stopped and removed with its

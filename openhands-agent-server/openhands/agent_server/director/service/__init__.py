@@ -30,6 +30,7 @@ from openhands.agent_server.director.models import (
 )
 from openhands.agent_server.director.org_store import (
     AGENT_LOST,
+    reviews_only,
 )
 from openhands.agent_server.director.pods import PodLauncher
 from openhands.agent_server.director.prompts import (
@@ -241,8 +242,47 @@ class DirectorService(Sync):
                 self.store.root_id, title=top.title, headline=top.headline
             )
 
+    async def _say_in_session(self, session_id: str, text: str) -> RoutedMessage:
+        """Give what the human says in a session's conversation to the IC
+        of one of the session's teams: the one it was opened at, unless the
+        director is sure of one below.
+
+        Raises:
+            NotFound: The session is not open.
+        """
+        store = self.store
+        places = [
+            place for place in store.session(session_id) if not reviews_only(place)
+        ]
+        if not places:
+            raise NotFound(f"Unknown session: {session_id}")
+        top = place = places[0]
+        chosen_by: ChosenBy = "path"
+        reason = ""
+        if self.settings.route_requests and len(places) > 1:
+            choice = await self.choose_team(text, top, within=session_id)
+            chosen_by, reason = choice.by, choice.reason
+            place = store.instance(choice.node_id, session_id) or top
+        conversation_id = await asyncio.to_thread(
+            lambda: self.tell_ic(place.id, text, human=True)
+        )
+        if place.id != top.id:
+            # Its IC may say it is not the team's own: the IC above has it then.
+            await asyncio.to_thread(
+                self.keep_routed, "asked", place, text, chosen_by, reason
+            )
+        return RoutedMessage(
+            node_id=place.id,
+            team=place.title,
+            conversation_id=conversation_id or "",
+            started_org=False,
+            chosen_by=chosen_by,
+            reason=reason,
+        )
+
     async def route_message(self, request: RouteMessageRequest) -> RoutedMessage:
-        """Open a session for what the human asks.
+        """Open a session for what the human asks, or with ``session_id``
+        say it in the session that is open.
 
         With ``auto`` the director chooses the team the request belongs to.
         Without it the request goes to the team nearest to where the human
@@ -260,6 +300,8 @@ class DirectorService(Sync):
         """
         self._require_launcher()
         store = await asyncio.to_thread(lambda: self.store)
+        if request.session_id is not None:
+            return await self._say_in_session(request.session_id, request.text)
         async with self._first_message_lock:
             conversation = request.conversation
             if store.root_id is None and conversation is None:

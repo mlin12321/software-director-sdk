@@ -256,10 +256,12 @@ class Reviews(Requests):
         sub-teams it set up."""
         if not self.store.opens_session(node):
             return
+        # The sub-teams first: what a team the org does not have wrote is
+        # dropped with it.
+        await self._land_shape(node)
         await asyncio.to_thread(self._land_specs, node)
         for team_id, role in await asyncio.to_thread(self._land_reports, node):
             self.reports_grew(team_id, role)
-        await self._land_shape(node)
 
     def _shapes(self, top: OrgNode) -> tuple[list[OrgNode], Shape, Shape] | None:
         """The sub-teams a session has under the team it was opened at, in
@@ -286,13 +288,16 @@ class Reviews(Requests):
         if session is None or shapes is None:
             return None
         _, theirs, now = shapes
+        if theirs == session.shape:
+            # It changed none: the org's are kept as they are now.
+            return None
         if not now:
             # The team it was opened at was removed from the org meanwhile.
             return (
                 [f"none: the org no longer has {top.title!r} ({top.boundary.path})"],
                 [f"{team} ({path})" for team, _, path in theirs],
             )
-        if theirs == session.shape or now == session.shape or theirs == now:
+        if now == session.shape or theirs == now:
             return None
         return (
             [f"{team} ({path})" for team, _, path in now[1:]],
@@ -301,15 +306,17 @@ class Reviews(Requests):
 
     async def _land_shape(self, top: OrgNode) -> None:
         """Make the sub-teams a session set up the org's. A session that
-        changed none leaves the org's as they are."""
+        changed none leaves the org's as they are, also when the org lost
+        teams of it meanwhile: its work is merged and the teams stay gone."""
         store = self.store
         session = store.session_of(top)
         shapes = self._shapes(top)
         if session is None or shapes is None:
             return
         seats, theirs, now = shapes
-        if now and (theirs == session.shape or theirs == now):
-            store.set_shape(session.id, now)
+        if theirs == session.shape or theirs == now:
+            if now:
+                store.set_shape(session.id, now)
             return
         if not now and store.team(session.above_id) is None:
             # Nowhere in the org to put the team back under.

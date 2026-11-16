@@ -729,6 +729,23 @@ async def test_the_first_message_starts_an_org_and_later_ones_open_sessions_in_i
     assert str(start.conversation_id) == later.json()["conversation_id"]
     assert "Add refunds\n\n(The human sent this from services/api.)" in start.task
 
+    said = await client.post(
+        "/api/director/org/messages",
+        json={"text": "And partial ones.", "session_id": opened.id},
+    )
+    unknown = await client.post(
+        "/api/director/org/messages", json={"text": "Hi", "session_id": "s000000"}
+    )
+    await service.settled()
+
+    # What is said in a session goes to its IC and opens no other session.
+    assert said.json() == {**later.json(), "chosen_by": "path", "reason": ""}
+    assert unknown.status_code == 404
+    assert len(service.sessions()) == 2
+    assert launcher.messages_to(said.json()["conversation_id"])[-1] == (
+        "And partial ones."
+    )
+
 
 async def test_a_message_that_cannot_be_routed_is_refused(running, repo):
     client, _, service = running

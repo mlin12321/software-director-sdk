@@ -433,6 +433,11 @@ async def route_message(
     and the answer says how the team was chosen. The ICs above that team are
     not woken; they are told of the message in their context.
 
+    With `session_id` the message continues that session and opens none: it
+    goes to the IC of the team the session was opened at, or of a team the
+    session has below it when the director is sure, a team the session set
+    up itself included.
+
     When there is no org yet, the message needs a `conversation`. If the
     repository of that conversation's workspace (or one above that has it as
     a submodule) has a saved org, the director takes that org up and routes
