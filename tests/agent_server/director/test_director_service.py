@@ -136,6 +136,8 @@ def test_every_director_tool_is_offered_to_the_role_that_may_use_it():
     assert "approve_teams" not in TOOLS_OF["ic"]
     assert "submit_review" not in TOOLS_OF["manager"]
     assert set(HAND_OVER_TOOLS) <= set(TOOLS_OF["ic"])
+    # Only a Manager where a session is reviewed from settles its teams.
+    assert "settle_teams" not in {*TOOLS_OF["ic"], *TOOLS_OF["manager"]}
     # A tool an agent is given and the server cannot find stops its first turn.
     assert set(DIRECTOR_TOOL_NAMES) <= set(list_registered_tools())
 

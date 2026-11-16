@@ -380,3 +380,78 @@ def shape_of(teams: Sequence[OrgNodeInput]) -> Shape:
         )
         for team in teams
     )
+
+
+# A team in a shape: the team above it and its directory. None where the
+# team is not there.
+Side = tuple[str, str] | None
+
+
+class ShapeConflict(NamedTuple):
+    """A team that a session and the org each made something else of."""
+
+    team: str
+    session: Side
+    org: Side
+
+
+def merge_shapes(
+    base: Shape, theirs: Shape, now: Shape
+) -> tuple[dict[str, Side], list[ShapeConflict]]:
+    """Settle, team by team, what the sub-teams a session has make of the
+    org's, which may have changed since.
+
+    A team the session left as it was in ``base`` stays as the org has it
+    now. One only the session changed is taken from the session. One both
+    changed, and not to the same, is a conflict; so is a team that would
+    not hang together with the rest: under a team that is gone, with a
+    directory another team has, or removed while a team is still below it.
+
+    Args:
+        base: The sub-teams as the session last knew the org's.
+        theirs: The sub-teams the session has.
+        now: The sub-teams the org has.
+
+    Returns:
+        What to take from the session, each team as the session has it
+        (None to remove it), and the conflicts.
+    """
+    was, session, org = (
+        {team: (above, path) for team, above, path in shape}
+        for shape in (base, theirs, now)
+    )
+    take: dict[str, Side] = {}
+    conflicts: set[str] = set()
+    for team in {*was, *session, *org}:
+        wanted, has = session.get(team), org.get(team)
+        if wanted == was.get(team) or wanted == has:
+            continue
+        if has == was.get(team):
+            take[team] = wanted
+        else:
+            conflicts.add(team)
+    while True:
+        after = {
+            team: side for team, side in {**org, **take}.items() if side is not None
+        }
+        apart = {
+            team
+            for team, side in take.items()
+            if (
+                any(held[0] == team for held in after.values())
+                if side is None
+                else (side[0] != "" and side[0] not in after)
+                or any(
+                    other != team and held[1] == side[1]
+                    for other, held in after.items()
+                )
+            )
+        }
+        if not apart:
+            break
+        conflicts |= apart
+        take = {team: side for team, side in take.items() if team not in apart}
+    return take, [
+        ShapeConflict(team, session.get(team), org.get(team))
+        for team in sorted(conflicts)
+    ]

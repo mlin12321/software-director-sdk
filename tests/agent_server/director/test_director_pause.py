@@ -29,8 +29,10 @@ from openhands.agent_server.director.tools import (
     MsgManagerTool,
     PruneTeamTool,
     ReviewTeamTool,
+    SettleTeamsTool,
     SubmitReviewTool,
 )
+from openhands.agent_server.director.tools.definition import SettleTeamsAction
 from openhands.sdk.conversation.state import ConversationExecutionStatus
 from tests.agent_server.director.conftest import (
     FakeLauncher,
@@ -38,7 +40,17 @@ from tests.agent_server.director.conftest import (
     run_git,
     tasked,
 )
-from tests.agent_server.director.test_director_landing import landed
+from tests.agent_server.director.test_director_landing import (
+    JOBS,
+    accepted,
+    at_api,
+    landed,
+    org_gains,
+    path_of,
+    review_manager,
+    sets_up_jobs,
+    waiting,
+)
 from tests.agent_server.director.test_director_limits import (
     eventually,
     split,
@@ -700,3 +712,21 @@ def test_run_state_stays_out_of_the_repository(repo: Path):
     assert service.summary().paused is None
     assert run_git(repo, "status", "--porcelain") == ""
     assert (repo / ".git" / "director" / "state.db").is_file()
+
+
+async def test_teams_that_wait_are_still_there_after_a_restart(
+    repo: Path, launcher: FakeLauncher
+):
+    first = await started(repo, launcher)
+    top, conversation = await at_api(first)
+    sets_up_jobs(first, top)
+    org_gains(first, JOBS, "services/api/workers")
+    await accepted(first, top, conversation)
+    await first.aclose()
+
+    second = await again(repo, launcher)
+
+    assert waiting(second, top) == [JOBS]
+    await use(second, review_manager(second, top), SettleTeamsTool, SettleTeamsAction())
+    assert path_of(second, JOBS) == "services/api/jobs"
+    await second.aclose()

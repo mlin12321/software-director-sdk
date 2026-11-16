@@ -151,7 +151,12 @@ HAND_OVER_TOOLS = ("read_node_context", "hand_over", "write_spec")
 # What an IC has of the director's tools where it only reviews the work of
 # a session.
 REVIEW_TOOLS = ("read_node_context", "report", "review_team")
-DIRECTOR_TOOL_NAMES = tuple(dict.fromkeys((*TOOLS_OF["ic"], *TOOLS_OF["manager"])))
+# What a Manager has there: it settles the sub-teams a session and the org
+# each made something else of.
+REVIEW_MANAGER_TOOLS = ("read_node_context", "report", "settle_teams")
+DIRECTOR_TOOL_NAMES = tuple(
+    dict.fromkeys((*TOOLS_OF["ic"], *TOOLS_OF["manager"], *REVIEW_MANAGER_TOOLS))
+)
 # How a team that was set up and given no task reads to the IC above.
 NOT_STARTED = "not started"
 # What follows a team's purpose in its task once something started it.

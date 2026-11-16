@@ -9,6 +9,7 @@ import pytest
 from openhands.agent_server.director.models import (
     DirectorSettingsUpdate,
     OpenSessionRequest,
+    OrgNodeInput,
     RouteMessageRequest,
     SessionTeam,
     SessionTeamInput,
@@ -16,17 +17,21 @@ from openhands.agent_server.director.models import (
 from openhands.agent_server.director.org_store import session_id_of, team_id_of
 from openhands.agent_server.director.routing import USAGE_ID
 from openhands.agent_server.director.service import DirectorService
-from openhands.agent_server.director.service.state import MERGE_WAITS
+from openhands.agent_server.director.service.state import (
+    MERGE_WAITS,
+    agent_conversation,
+)
 from openhands.agent_server.director.tools import (
     RaiseEscalationTool,
     ReportTool,
     ReviewTeamTool,
+    SettleTeamsTool,
     SubmitReviewTool,
 )
 from openhands.agent_server.director.tools.definition import (
     RaiseEscalationAction,
     ReportAction,
-    ReviewTeamAction,
+    SettleTeamsAction,
 )
 from openhands.sdk.errors import NotFound
 from tests.agent_server.director.conftest import FakeLauncher, run_git
@@ -279,41 +284,175 @@ async def test_work_is_accepted_and_a_team_the_org_lost_meanwhile_stays_gone(
     assert service.own_reports(place) == []
 
 
-async def test_a_team_the_org_lost_comes_back_with_a_session_that_set_up_teams(
-    service: DirectorService,
-):
-    top, conversation = await at_api(service)
+JOBS = "services.api.jobs"
+
+
+def sets_up_jobs(service: DirectorService, top: str, path: str = "services/api/jobs"):
+    """Have a session set up a team for a directory under the team it was
+    opened at."""
     place = service.store.get(top)
     assert isinstance(place, SessionTeam)
-    # The session sets up a sub-team of its own.
     service.store.upsert(
         SessionTeamInput(
             **place.model_dump(include={"session", "title", "isolation", "status"}),
             worktree_path=place.worktree_path,
             branch=place.branch,
-            id=f"services.api.jobs@{place.session}",
-            team_id="services.api.jobs",
+            id=f"{JOBS}@{place.session}",
+            team_id=JOBS,
             parent_id=top,
             agents=[],
-            boundary=place.boundary.model_copy(update={"path": "services/api/jobs"}),
+            boundary=place.boundary.model_copy(update={"path": path}),
         )
     )
-    service.store.remove("services.api")
 
+
+def org_gains(service: DirectorService, team_id: str, path: str) -> None:
+    """Have other accepted work give the org a team under API."""
+    api = service.store.team("services.api")
+    assert api is not None
+    service.store.upsert(
+        OrgNodeInput(
+            **api.model_dump(
+                include={"title", "isolation", "worktree_path", "branch", "status"}
+            ),
+            id=team_id,
+            parent_id=api.id,
+            agents=[],
+            boundary=api.boundary.model_copy(update={"path": path}),
+        )
+    )
+
+
+def waiting(service: DirectorService, top: str) -> list[str]:
+    """The teams of a session that wait to be settled."""
+    place = service.store.get(review_place_of(service, top))
+    assert isinstance(place, SessionTeam)
+    return [team.team_id for team in place.org_change.teams] if place.org_change else []
+
+
+def review_manager(service: DirectorService, top: str) -> str | None:
+    place = service.store.get(review_place_of(service, top))
+    assert place is not None
+    return agent_conversation(place, "manager")
+
+
+def path_of(service: DirectorService, team_id: str) -> str | None:
+    team = service.store.team(team_id)
+    return team.boundary.path if team else None
+
+
+async def accepted(service: DirectorService, top: str, conversation: str) -> str:
+    """Have a session's work submitted and accepted.
+
+    Returns:
+        What its reviewer was answered.
+    """
     await use(service, conversation, SubmitReviewTool, DONE)
-    asked = reviewer(service, top)
-    refused = await use(service, asked, ReviewTeamTool, accept(top))
+    answer = await use(service, reviewer(service, top), ReviewTeamTool, accept(top))
+    await service.settled()
+    return answer.text
 
-    assert "the org no longer has 'API'" in refused.text
-    assert service.store.team("services.api") is None
 
-    await use(
+async def test_a_stale_session_adds_its_team_and_keeps_what_the_org_gained(
+    service: DirectorService,
+):
+    top, conversation = await at_api(service)
+    sets_up_jobs(service, top)
+    org_gains(service, "services.api.cache", "services/api/cache")
+
+    answer = await accepted(service, top, conversation)
+
+    # Each team is settled on its own, and nobody is asked.
+    assert "Accepting the work of 'API'" in answer
+    assert path_of(service, JOBS) == "services/api/jobs"
+    assert path_of(service, "services.api.cache") == "services/api/cache"
+    assert waiting(service, top) == []
+    assert review_manager(service, top) is None
+
+    # What the session did not change is not brought up again either.
+    service.store.remove("services.api.cache")
+    await use(service, conversation, SubmitReviewTool, DONE)
+    await use(service, reviewer(service, top), ReviewTeamTool, accept(top))
+    await service.settled()
+    assert path_of(service, JOBS) == "services/api/jobs"
+    assert service.store.team("services.api.cache") is None
+
+
+@pytest.mark.parametrize("org_holds", [True, False])
+async def test_a_team_both_made_something_else_of_waits_for_the_manager_above(
+    service: DirectorService, launcher: FakeLauncher, repo: Path, org_holds: bool
+):
+    top, conversation = await at_api(service)
+    sets_up_jobs(service, top)
+    org_gains(service, JOBS, "services/api/workers")
+    commit(repo, "services/api/refunds.py", "refunds = True\n")
+    place = service.store.get(f"{JOBS}@{top.split('@')[1]}")
+    assert place is not None
+    service.write_spec(place, "Run the refund jobs.")
+
+    answer = await accepted(service, top, conversation)
+
+    # The code is merged whatever becomes of the team; the org's stays.
+    assert "Accepting the work of 'API'" in answer
+    review = node(service, top).review
+    assert review is not None and review.state == "accepted"
+    assert path_of(service, JOBS) == "services/api/workers"
+    assert waiting(service, top) == [JOBS]
+    asked = review_manager(service, top)
+    assert asked is not None
+    start = launcher.derived[-1]
+    assert str(start.conversation_id) == asked
+    assert "Manager of your team in review mode" in "".join(start.suffixes or [])
+    told = launcher.messages_to(asked)[-1]
+    assert "the session: services/api/jobs, under services.api" in told
+    assert "the org now: services/api/workers, under services.api" in told
+    # What the session wrote for it waits with it.
+    assert service.spec_draft(place) is not None
+
+    by_ic = await use(
+        service, reviewer(service, top), SettleTeamsTool, SettleTeamsAction()
+    )
+    unknown = await use(
+        service, asked, SettleTeamsTool, SettleTeamsAction(org_teams=["apps.web"])
+    )
+    settled = await use(
         service,
         asked,
-        ReviewTeamTool,
-        ReviewTeamAction(node_id=top, decision="accept", reconciled="API stays."),
+        SettleTeamsTool,
+        SettleTeamsAction(org_teams=[JOBS] if org_holds else [], note="One queue."),
+    )
+    again = await use(service, asked, SettleTeamsTool, SettleTeamsAction())
+
+    assert by_ic.is_error and unknown.is_error and again.is_error
+    assert f"The teams that wait: {JOBS}" in unknown.text
+    assert not settled.is_error
+    assert waiting(service, top) == []
+    assert path_of(service, JOBS) == (
+        "services/api/workers" if org_holds else "services/api/jobs"
+    )
+    assert service.spec_draft(place) is None
+    said = launcher.messages_to(conversation)[-1]
+    assert "One queue." in said
+    assert ("The org's stay" in said) is org_holds
+
+
+async def test_a_team_set_up_under_one_the_org_lost_waits_and_brings_it_back(
+    service: DirectorService,
+):
+    top, conversation = await at_api(service)
+    sets_up_jobs(service, top)
+    service.store.remove("services.api")
+
+    answer = await accepted(service, top, conversation)
+
+    assert "Accepting the work of 'API'" in answer
+    assert service.store.team("services.api") is None
+    assert waiting(service, top) == [JOBS]
+
+    await use(
+        service, review_manager(service, top), SettleTeamsTool, SettleTeamsAction()
     )
 
     back = service.store.team("services.api")
     assert back is not None and (back.parent_id, back.agents) == ("root", [])
-    assert service.store.team("services.api.jobs") is not None
+    assert path_of(service, JOBS) == "services/api/jobs"

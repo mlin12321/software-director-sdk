@@ -38,6 +38,7 @@ from openhands.agent_server.director.models import (
     OrgNode,
     Report,
     RoutedRequest,
+    SessionTeam,
     SplitProposal,
     TeamEvent,
     TeamEventKind,
@@ -680,7 +681,9 @@ class Records(ServiceState):
         above = self.store.get(node.parent_id) if node.parent_id else None
         return None if above is None or reviews_only(above) else above
 
-    def _land_reports(self, top: OrgNode) -> list[tuple[str, AgentRole]]:
+    def _land_reports(
+        self, top: OrgNode, only: set[str] | None = None
+    ) -> list[tuple[str, AgentRole]]:
         """Add what a session's agents recorded to the records of their
         teams, now that its work is accepted. The other sessions at those
         teams read it with the next message they get.
@@ -692,7 +695,10 @@ class Records(ServiceState):
         team_memory = self._memory()
         run = self._runs()
         grown: list[tuple[str, AgentRole]] = []
+        waits = self._waits(top)
         for team in self.store.session(session) if session else []:
+            if team.team_id in waits or (only is not None and team.team_id not in only):
+                continue
             # What a team the org no longer has reported is dropped with it.
             kept = self.store.team(team_of(team)) is not None
             for report in self.own_reports(team) if kept else []:
@@ -787,15 +793,31 @@ class Records(ServiceState):
                 found.append((team.boundary.path, now or "", draft[0]))
         return found
 
-    def _land_specs(self, top: OrgNode) -> None:
+    def _waits(self, top: OrgNode) -> set[str]:
+        """The teams of a session that wait to be settled before they are
+        the org's."""
+        review = self.store.get(top.parent_id or "")
+        if not isinstance(review, SessionTeam) or review.org_change is None:
+            return set()
+        return {team.team_id for team in review.org_change.teams}
+
+    def _land_specs(self, top: OrgNode, only: set[str] | None = None) -> None:
         """Make the specs a session wrote the specs of its teams, now that
-        its work is accepted."""
+        its work is accepted. What it wrote for a team that waits to be
+        settled is kept with the session until then.
+
+        Args:
+            only: The teams that were settled, when it is those alone.
+        """
         session = session_id_of(top)
         if not session:
             return
         team_memory = self._memory()
         run = self._runs()
+        waits = self._waits(top)
         for team in self.store.session(session):
+            if team.team_id in waits or (only is not None and team.team_id not in only):
+                continue
             draft = self.spec_draft(team)
             if draft is None:
                 continue

@@ -40,6 +40,7 @@ from openhands.agent_server.director.prompts import (
     HAND_OVER_ROLE,
     MANAGER_ROLE,
     POD_PROTOCOL,
+    REVIEW_MANAGER_ROLE,
     REVIEW_ROLE,
     brief,
     hand_over_brief,
@@ -59,6 +60,7 @@ from openhands.agent_server.director.service.state import (
     _STARTED_WITH,
     HAND_OVER_TOOLS,
     LEFT_REFS,
+    REVIEW_MANAGER_TOOLS,
     REVIEW_TOOLS,
     TOOLS_OF,
     _agent_title,
@@ -119,16 +121,24 @@ class Teams(Delivery):
         )
         self.tell_ic(ic_node_id, f"{heading}\n{text}{note}")
 
-    def tell_manager(self, node_id: str, text: str) -> None:
+    def tell_manager(self, node_id: str, text: str, *, review: bool = False) -> None:
         """Send a team's Manager a message from the director. A team has no
         Manager until something is sent to it: the first message starts
-        one, and follows its briefing. Safe from any thread."""
+        one, and follows its briefing. Safe from any thread.
+
+        Args:
+            review: The text asks it to settle a session's sub-teams.
+                Nothing else reaches the Manager of the place a session's
+                work is reviewed from.
+        """
         store = self.store
         with self._adding_manager:
             node = store.get(node_id)
             # Nobody stands at a team of the org itself: agents are at its
             # places in the sessions.
-            if node is None or reviews_only(node) or not session_id_of(node):
+            if node is None or not session_id_of(node):
+                return
+            if reviews_only(node) and not review:
                 return
             if agent_conversation(node, "manager") is None:
                 manager = AgentRef(
@@ -222,7 +232,9 @@ class Teams(Delivery):
 
     def _tools_of(self, node: OrgNode, role: AgentRole) -> tuple[str, ...]:
         """The director's tools an agent of ``node`` is offered."""
-        return REVIEW_TOOLS if reviews_only(node) else TOOLS_OF[role]
+        if reviews_only(node):
+            return REVIEW_TOOLS if role == "ic" else REVIEW_MANAGER_TOOLS
+        return TOOLS_OF[role]
 
     async def _template(self) -> str | None:
         """A conversation of the org to derive an agent from when nothing
@@ -651,7 +663,7 @@ class Teams(Delivery):
             node.title,
             role,
             self.store.session_title(node),
-            review=reviews_only(node),
+            review=reviews_only(node) and role == "ic",
         )
 
         async def start() -> StartedAgent:
@@ -676,7 +688,7 @@ class Teams(Delivery):
                 title=title,
                 task=text,
                 isolation=isolation,
-                suffixes=[REVIEW_ROLE]
+                suffixes=[REVIEW_ROLE if role == "ic" else REVIEW_MANAGER_ROLE]
                 if reviewing
                 else []
                 if role == "ic"
@@ -706,7 +718,13 @@ class Teams(Delivery):
     async def _launch_manager(self, node_id: str, task: str) -> None:
         node = self.store.get(node_id)
         if node is not None:
-            derived_from = await self._started_ic(node)
+            # Where a session is reviewed from, its IC may never have
+            # started: the session's own then stands in.
+            derived_from = await self._started_ic(node) or (
+                await self._started_ic(self.store.get(self._derived_from(node) or ""))
+                if reviews_only(node)
+                else None
+            )
             await self._start_agent(node_id, "manager", derived_from, task)
 
     async def _do_brief(self, intent: Intent) -> None:

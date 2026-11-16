@@ -523,6 +523,16 @@ def review_team(
     )
 
 
+def settle_teams(
+    service: DirectorService, caller: Caller, org_teams: list[str], note: str
+) -> str:
+    """Settle the sub-teams of a session that wait for the caller."""
+    _only(caller, "manager", "settle the sub-teams of a session")
+    return service.settle_teams(
+        caller.node.id, [team.strip().split("@")[0] for team in org_teams], note.strip()
+    )
+
+
 def report(service: DirectorService, caller: Caller, text: str) -> str:
     """Record something for the two agents of the caller's team."""
     _not_aside(caller)

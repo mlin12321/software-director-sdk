@@ -1228,6 +1228,23 @@ class OpenSessionRequest(BaseModel):
     )
 
 
+class OrgChangeTeam(BaseModel):
+    """A team a session and the org each made something else of."""
+
+    team_id: str = Field(description="The team, by its id in the org.")
+    title: str = Field(default="", description="What the team is called.")
+    session: str = Field(description="What the session made of it, in words.")
+    org: str = Field(description="What the org has there now, in words.")
+
+
+class OrgChange(BaseModel):
+    """Sub-teams of a session that wait to be settled before they are the
+    org's. Everything else the session changed of its teams is the org's
+    already."""
+
+    teams: list[OrgChangeTeam] = Field(default_factory=list)
+
+
 class SessionTeamInput(OrgNodeInput):
     """A team as it is at work in one session.
 
@@ -1247,6 +1264,15 @@ class SessionTeamInput(OrgNodeInput):
             "Whether this is the place the session's work is reviewed from: "
             "the team above the one the session was opened at, or that team "
             "itself for a session opened at the top. Its IC only reviews."
+        ),
+    )
+    org_change: OrgChange | None = Field(
+        default=None,
+        description=(
+            "On the place a session is reviewed from: the sub-teams of the "
+            "session that wait for this place's Manager, because the org "
+            "made something else of them while the session worked. The "
+            "session's code is merged all the same."
         ),
     )
 

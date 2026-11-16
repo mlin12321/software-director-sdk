@@ -11,6 +11,7 @@ from openhands.agent_server.director.models import (
     Escalation,
     FormerTeam,
     InheritedSpec,
+    OrgChange,
     OrgNode,
     Report,
     Review,
@@ -120,6 +121,21 @@ checkout, run its checks there if you need to, and decide with
 `review_team`. Accepting merges it into the repository's checkout at once.
 Judge it by what the human asked of the session and by your team's spec,
 contracts and records. Use `report` for what the team must remember."""
+
+REVIEW_MANAGER_ROLE = """\
+<ORG_ROLE>
+You are the Manager of your team in review mode, not its IC: what is said
+above of the IC is not yours to do. You do not write files, give tasks or
+review code. A session's code was accepted and merged already. The session
+also changed its sub-teams while the org's teams there were changed by
+other accepted work, and you decide, team by team, which holds. The
+director tells you each such team with what the session made of it and what
+the org has now; everything else of the session's teams is settled.
+Decide by your team's spec, contracts and records, which `read_node_context`
+returns, and settle all of them with one call of `settle_teams`: name in
+`org_teams` the teams for which the org's stays, and the others become what
+the session made of them. Use `report` for what the team must remember.
+</ORG_ROLE>"""
 
 MANAGER_ROLE = """\
 <ORG_ROLE>
@@ -652,7 +668,6 @@ def reconcile_request(
     files: list[str],
     landed: list[str],
     specs: list[tuple[str, str, str]],
-    shape: tuple[list[str], list[str]] | None = None,
 ) -> str:
     """What a reviewing IC is told when work it accepts meets other work.
 
@@ -664,8 +679,6 @@ def reconcile_request(
         landed: The teams whose work was merged there meanwhile.
         specs: For each spec it wrote while the team's spec changed: the
             directory, the team's spec now and the one it wrote.
-        shape: The sub-teams the org has under the team now and the ones
-            it set up, when both were changed since it began.
     """
     lines = [
         f"Not merged yet: the work of {team.title!r} (node {team.id}) meets "
@@ -696,15 +709,6 @@ def reconcile_request(
             "The spec it wrote:",
             written,
         ]
-    if shape is not None:
-        lines += [
-            "",
-            "It set up sub-teams of its own, and the org's sub-teams there "
-            "were changed meanwhile by other accepted work. Accepting puts "
-            "its sub-teams in place of the org's.",
-            "The org's sub-teams now: " + (", ".join(shape[0]) or "none"),
-            "The sub-teams it set up: " + (", ".join(shape[1]) or "none"),
-        ]
     lines += [
         "",
         "Decide what holds. If its work must change, reject it with what "
@@ -714,6 +718,46 @@ def reconcile_request(
         "that it is not merged.",
     ]
     return "\n".join(lines)
+
+
+def org_change_request(team: OrgNode, session: str, change: OrgChange) -> str:
+    """What the Manager of the place a session is reviewed from is told
+    when sub-teams of the session wait for it."""
+    lines = [
+        f"The work of {team.title!r} (node {team.id}) in the session "
+        f"{session!r} is accepted and merged. Its sub-teams are the org's "
+        "now, but for these, which the org made something else of while "
+        "the session worked:",
+    ]
+    for waiting in change.teams:
+        lines += [
+            "",
+            f"- {waiting.title or waiting.team_id} (team {waiting.team_id})",
+            f"  the session: {waiting.session}",
+            f"  the org now: {waiting.org}",
+        ]
+    lines += [
+        "",
+        "Until you settle them the org's stay. Call `settle_teams` once: "
+        "name in `org_teams` every team above for which the org's holds; "
+        "the others become what the session made of them.",
+    ]
+    return "\n".join(lines)
+
+
+def teams_settled(above: str, taken: list[str], kept: list[str]) -> str:
+    """What a session's IC is told when its waiting sub-teams are settled."""
+    return (
+        f"The Manager of {above!r} settled the sub-teams of your session "
+        "that the org had made something else of. "
+        + (f"The org has yours now: {', '.join(taken)}. " if taken else "")
+        + (
+            f"The org's stay, and what your session has there is only the "
+            f"session's: {', '.join(kept)}."
+            if kept
+            else ""
+        )
+    ).strip()
 
 
 def handed_up(sent: OrgNode, text: str, why: str) -> str:

@@ -21,25 +21,33 @@ from openhands.agent_server.director.git_store import (
 )
 from openhands.agent_server.director.merge_back import merge_back
 from openhands.agent_server.director.models import (
+    OrgChange,
+    OrgChangeTeam,
     OrgNode,
     OrgNodeInput,
     Review,
     ReviewFinding,
+    SessionInput,
+    SessionTeam,
 )
-from openhands.agent_server.director.org_store import reviews_only
+from openhands.agent_server.director.org_store import OrgStoreError, reviews_only
 from openhands.agent_server.director.ownership import can_merge_in_memory, conflicts
 from openhands.agent_server.director.prompts import (
     NEED_FINDING,
     accept_in_order,
     changes_requested,
+    org_change_request,
     put_aside_notice,
     reconcile_request,
     review_request,
     session_work,
+    teams_settled,
 )
 from openhands.agent_server.director.reconcile import changes_of
 from openhands.agent_server.director.run_state import (
+    DRAFT,
     HELD,
+    REPORTS,
     Intent,
 )
 from openhands.agent_server.director.service.requests import Requests
@@ -54,14 +62,29 @@ from openhands.agent_server.director.service.state import (
     agent_conversation,
     team_of,
 )
-from openhands.agent_server.director.split import Shape, shape_of
+from openhands.agent_server.director.split import (
+    Shape,
+    ShapeConflict,
+    Side,
+    merge_shapes,
+    shape_of,
+)
 from openhands.sdk.errors import (
     Conflict,
+    Invalid,
     NotFound,
 )
 
 
 logger = logging.getLogger(__name__)
+
+
+def _in_words(side: Side) -> str:
+    """A team as a session or the org has it, for a Manager to read."""
+    if side is None:
+        return "no such team"
+    above, path = side
+    return f"{path or 'the repository'}, under {above}" if above else path
 
 
 class Reviews(Requests):
@@ -280,88 +303,179 @@ class Reviews(Requests):
             teams.extend(store.children(team.id))
         return seats, shape_of(seats), shape_of(teams)
 
-    def _shape_to_reconcile(self, top: OrgNode) -> tuple[list[str], list[str]] | None:
-        """The sub-teams the org has now and the ones a session set up,
-        when both changed them since the session was opened."""
-        session = self.store.session_of(top)
-        shapes = self._shapes(top)
-        if session is None or shapes is None:
-            return None
-        _, theirs, now = shapes
-        if theirs == session.shape:
-            # It changed none: the org's are kept as they are now.
-            return None
-        if not now:
-            # The team it was opened at was removed from the org meanwhile.
-            return (
-                [f"none: the org no longer has {top.title!r} ({top.boundary.path})"],
-                [f"{team} ({path})" for team, _, path in theirs],
-            )
-        if now == session.shape or theirs == now:
-            return None
-        return (
-            [f"{team} ({path})" for team, _, path in now[1:]],
-            [f"{team} ({path})" for team, _, path in theirs[1:]],
-        )
-
     async def _land_shape(self, top: OrgNode) -> None:
-        """Make the sub-teams a session set up the org's. A session that
-        changed none leaves the org's as they are, also when the org lost
-        teams of it meanwhile: its work is merged and the teams stay gone."""
+        """Make of the org's sub-teams what a session's accepted work makes
+        of them, team by team: a team the session left alone stays as the
+        org has it now, one only the session changed becomes the org's, and
+        one both changed waits for the Manager of the place the session is
+        reviewed from. The code is merged whatever becomes of them."""
         store = self.store
         session = store.session_of(top)
         shapes = self._shapes(top)
         if session is None or shapes is None:
             return
         seats, theirs, now = shapes
-        if theirs == session.shape or theirs == now:
-            if now:
-                store.set_shape(session.id, now)
-            return
-        if not now and store.team(session.above_id) is None:
-            # Nowhere in the org to put the team back under.
-            return
-        was = {team for team, _, _ in now[1:]}
-        checkout = str(self._repo_dir)
-        # A team the org lost while the session worked comes back with it.
-        for seat in seats[1:] if now else seats:
-            above = store.get(seat.parent_id or "")
-            if above is None:
-                continue
-            team_id, above_id = team_of(seat), team_of(above)
-            if store.team(team_id) is None:
-                store.upsert(
-                    OrgNodeInput(
-                        id=team_id,
-                        parent_id=above_id,
-                        title=seat.title,
-                        boundary=seat.boundary,
-                        isolation=seat.isolation,
-                        agent_profile=seat.agent_profile,
-                        worktree_path=checkout,
-                        branch="",
-                        agents=[],
-                        status="idle",
-                        headline=seat.headline,
-                        spec_summary=seat.spec_summary,
-                        old_specs=seat.old_specs,
-                    )
-                )
-                continue
-            store.move(team_id, above_id)
-            store.update_node(
-                team_id,
-                title=seat.title,
-                boundary=seat.boundary,
-                agent_profile=seat.agent_profile,
-                spec_summary=seat.spec_summary,
-                old_specs=seat.old_specs,
-            )
-        # What stays was moved under where it belongs before this.
-        for gone in was - {team_of(seat) for seat in seats}:
-            store.remove(gone)
+        take, conflicts = merge_shapes(session.shape, theirs, now)
+        places = {team_of(seat): seat for seat in seats}
+        # Those above before those below, and what goes after what moved.
+        for team in places:
+            if take.get(team) is not None:
+                self._put_team(session, places, team)
+        for team, side in take.items():
+            if side is None:
+                store.remove(team)
+        # What it has now is what it is next compared by: a team the org
+        # keeps otherwise is not brought up again unless the session changes
+        # it once more.
         store.set_shape(session.id, theirs)
+        if conflicts:
+            self._ask_manager(top, places, conflicts)
         await self._save()
+
+    def _put_team(
+        self, session: SessionInput, places: dict[str, OrgNode], team_id: str
+    ) -> bool:
+        """Make a team of the org what a session has at it, with the teams
+        above it that the org lost.
+
+        Returns:
+            Whether the org has it now.
+        """
+        store = self.store
+        seat = places.get(team_id)
+        above = store.get(seat.parent_id or "") if seat else None
+        if seat is None or above is None:
+            return False
+        above_id = session.above_id if reviews_only(above) else team_of(above)
+        if above_id == team_id:
+            # The top team of the org.
+            return store.team(team_id) is not None
+        if store.team(above_id) is None and (
+            reviews_only(above) or not self._put_team(session, places, above_id)
+        ):
+            return False
+        if store.team(team_id) is None:
+            store.upsert(
+                OrgNodeInput(
+                    id=team_id,
+                    parent_id=above_id,
+                    title=seat.title,
+                    boundary=seat.boundary,
+                    isolation=seat.isolation,
+                    agent_profile=seat.agent_profile,
+                    worktree_path=str(self._repo_dir),
+                    branch="",
+                    agents=[],
+                    status="idle",
+                    headline=seat.headline,
+                    spec_summary=seat.spec_summary,
+                    old_specs=seat.old_specs,
+                )
+            )
+            return True
+        try:
+            store.move(team_id, above_id)
+        except OrgStoreError:
+            logger.exception("Could not move team %s under %s", team_id, above_id)
+            return False
+        store.update_node(
+            team_id,
+            title=seat.title,
+            boundary=seat.boundary,
+            agent_profile=seat.agent_profile,
+            spec_summary=seat.spec_summary,
+            old_specs=seat.old_specs,
+        )
+        return True
+
+    def _ask_manager(
+        self, top: OrgNode, places: dict[str, OrgNode], conflicts: list[ShapeConflict]
+    ) -> None:
+        """Keep the sub-teams of a session that it and the org each made
+        something else of, and ask the Manager of the place the session is
+        reviewed from which holds."""
+        store = self.store
+        review = store.get(top.parent_id or "")
+        if not isinstance(review, SessionTeam):
+            return
+        before = review.org_change
+        waiting = {team.team_id: team for team in (before.teams if before else [])}
+        for conflict in conflicts:
+            known = places.get(conflict.team) or store.team(conflict.team)
+            waiting[conflict.team] = OrgChangeTeam(
+                team_id=conflict.team,
+                title=known.title if known else "",
+                session=_in_words(conflict.session),
+                org=_in_words(conflict.org),
+            )
+        change = OrgChange(teams=list(waiting.values()))
+        store.update_node(review.id, org_change=change)
+        self.tell_manager(
+            review.id,
+            org_change_request(top, store.session_title(top), change),
+            review=True,
+        )
+
+    def settle_teams(self, review_id: str, org_teams: list[str], note: str) -> str:
+        """Settle the sub-teams of a session that wait at the place it is
+        reviewed from: the org's stay for ``org_teams``, and the others
+        become what the session has. Safe from any thread.
+
+        Raises:
+            Conflict: Nothing waits there.
+            Invalid: A team named does not wait.
+        """
+        store = self.store
+        review = store.get(review_id)
+        if not isinstance(review, SessionTeam):
+            raise Conflict("No sub-teams of a session wait for you to settle")
+        change, session = review.org_change, store.session_of(review)
+        if change is None or session is None or not change.teams:
+            raise Conflict("No sub-teams of a session wait for you to settle")
+        waiting = [team.team_id for team in change.teams]
+        unknown = [team for team in org_teams if team not in waiting]
+        if unknown:
+            raise Invalid(
+                f"Not waiting: {', '.join(unknown)}. The teams that wait: "
+                f"{', '.join(waiting)}"
+            )
+        top = store.session(session.id)[0]
+        seats: list[OrgNode] = [top]
+        for seat in seats:
+            seats.extend(store.children(seat.id))
+        places = {team_of(seat): seat for seat in seats}
+        taken: list[str] = []
+        kept = list(org_teams)
+        # Those above before those below.
+        for team in [*(team for team in places if team in waiting), *waiting]:
+            if team in org_teams or team in taken or team in kept:
+                continue
+            if team in places:
+                done = self._put_team(session, places, team)
+            else:
+                store.remove(team)
+                done = True
+            (taken if done else kept).append(team)
+        store.update_node(review.id, org_change=None)
+        run = self._runs()
+        for team in kept:
+            # What the session wrote for a team that is not the org's goes
+            # no further than the session.
+            if team in places:
+                run.unmark(DRAFT, places[team].id)
+                run.unmark(REPORTS, places[team].id)
+        self._land_specs(top, only=set(taken))
+        for team_id, role in self._land_reports(top, only=set(taken)):
+            self.reports_grew(team_id, role)
+        self.tell_ic(
+            top.id,
+            teams_settled(review.title, taken, kept) + (f"\n\n{note}" if note else ""),
+        )
+        self._save_soon()
+        return (
+            f"Settled. From the session: {', '.join(taken) or 'none'}. "
+            f"The org's stay: {', '.join(kept) or 'none'}."
+        )
 
     def _merged_as(self, node: OrgNode) -> str:
         """What the commit that merges a team's work calls it: the session
@@ -400,8 +514,7 @@ class Reviews(Requests):
             if not unmergeable:
                 files = [path for path in changes.both if owns(node, path)]
         specs = self.specs_to_reconcile(node)
-        shape = self._shape_to_reconcile(node)
-        if not files and not specs and shape is None:
+        if not files and not specs:
             return None
         return reconcile_request(
             node,
@@ -410,7 +523,6 @@ class Reviews(Requests):
             files,
             list(changes.landed) if changes else [],
             specs,
-            shape,
         )
 
     def check_accept(self, node_id: str, reconciled: str) -> None:
