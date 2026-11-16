@@ -38,8 +38,10 @@ inside that team's. You are given the teams and one request. Name every \
 team whose own files the request asks to change or to explain. Name a team \
 only when the request clearly concerns what that team holds; name the team \
 above when it concerns what several teams below it share, or how they fit \
-together. When the request concerns the whole repository, or you cannot \
-tell, answer none. Answer with exactly two lines and nothing else:
+together. The list may leave teams out: when the request concerns a team \
+that is not listed, name the listed team it would be under. When the \
+request concerns the whole repository, or you cannot tell, answer none. \
+Answer with exactly two lines and nothing else:
 Teams: <the ids of the teams, separated by commas, or none>
 Reason: <one sentence of at most 20 words>"""
 
@@ -215,7 +217,12 @@ def cards_to_show(text: str, cards: Sequence[Card]) -> list[Card]:
         return list(cards)
     parents = {card.node_id: card.parent_id for card in cards}
     scores = word_scores(text, cards)
-    best = sorted(scores, key=lambda node_id: -scores[node_id])[:CARDS_KEPT]
+    # A team's card shares the words of the teams above it, so a team and
+    # the teams below it often score alike. The higher team goes first, or
+    # the sub-teams of one team crowd out the team beside it.
+    depth = {node_id: len(_line_up(node_id, parents)) for node_id in scores}
+    best = sorted(scores, key=lambda node_id: (-scores[node_id], depth[node_id]))
+    best = best[:CARDS_KEPT]
     kept = {above for node_id in best for above in _line_up(node_id, parents)}
     kept.update(card.node_id for card in cards if card.parent_id is None)
     return [card for card in cards if card.node_id in kept]

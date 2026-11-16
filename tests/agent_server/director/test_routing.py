@@ -184,3 +184,20 @@ def test_a_large_org_shows_the_model_the_likeliest_teams_and_those_above():
     assert {"root", "t3", "deep"} <= set(shown)
     assert len(shown) <= CARDS_KEPT * 2 + 1
     assert len(cards_to_show("fix the invoices", CARDS)) == len(CARDS)
+
+
+def test_sub_teams_do_not_crowd_out_the_team_beside_theirs():
+    """A team's sub-teams share its words; two teams a request names are
+    both shown before the sub-teams of either."""
+    services = ["gateway", "console"]
+    many = [Card("root", None, "Shop", "")]
+    for service in services:
+        many.append(Card(service, "root", service, f"pay/{service}"))
+        many += [
+            Card(f"{service}.{n}", service, f"part {n}", f"pay/{service}/part{n}")
+            for n in range(MAX_CARDS)
+        ]
+
+    shown = {c.node_id for c in cards_to_show("gateway and console take cards", many)}
+
+    assert {"gateway", "console"} <= shown
