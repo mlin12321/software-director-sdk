@@ -26,7 +26,6 @@ from openhands.agent_server.director.acp import (
 from openhands.agent_server.director.models import (
     CreateOrgRequest,
     DirectorSettingsUpdate,
-    RouteMessageRequest,
     SplitChild,
 )
 from openhands.agent_server.director.prompts import POD_PROTOCOL
@@ -37,7 +36,6 @@ from openhands.agent_server.director.sandbox import (
 )
 from openhands.agent_server.director.service import (
     DirectorService,
-    agent_conversation,
     reviews as reviews_module,
 )
 from openhands.agent_server.director.tools import (
@@ -51,7 +49,12 @@ from openhands.agent_server.director.tools.definition import (
 )
 from openhands.sdk.agent import ACPAgent
 from openhands.sdk.conversation.state import ConversationExecutionStatus
-from tests.agent_server.director.conftest import FakeLauncher, root_conversation, tasked
+from tests.agent_server.director.conftest import (
+    DerivedStart,
+    FakeLauncher,
+    root_conversation,
+    tasked,
+)
 from tests.agent_server.director.test_director_router import server_config
 from tests.agent_server.director.test_director_tools import (
     APPROVE,
@@ -84,6 +87,11 @@ async def started(repo: Path, launcher: FakeLauncher, **options) -> DirectorServ
     )
     await service.settled()
     return service
+
+
+def starts_of(launcher: FakeLauncher) -> dict[str | None, DerivedStart]:
+    """How each agent the director started was started, by its conversation."""
+    return {str(start.conversation_id): start for start in launcher.derived}
 
 
 def split(*children: SplitChild) -> MsgManagerAction:
@@ -338,7 +346,7 @@ async def test_an_agent_calls_the_directors_tools_with_its_token_alone(
     assert not {"msg_ic", "approve_teams", "prune_team"} & set(tools)
     assert "text" in tools["msg_manager"]["inputSchema"]["properties"]
     assert spec.json()["is_error"] is False
-    assert service.team_memory.applies_to("", None)[0][0].spec == "# Spec"
+    assert service.specs_of(node(service, "root"))[0].spec == "# Spec"
     assert refused.status_code == 200 and refused.json()["is_error"] is True
     assert "Manager" in refused.json()["text"]
     assert malformed.json()["is_error"] is True
@@ -354,14 +362,11 @@ async def test_a_manager_is_listed_its_own_tools_and_a_stranger_none(
         )
     )
     await service.settled()
-    service.tell_manager("root", "Look in on your team.")
-    await service.settled()
-    manager = agent_conversation(node(service, "root"), "manager")
-    assert manager is not None
+    asking = await woken(service)
 
     listed = await client.get(
         "/api/director/tools",
-        headers={mcp_shim.TOKEN_HEADER: agent_token(service._key(), manager)},
+        headers={mcp_shim.TOKEN_HEADER: agent_token(service._key(), asking)},
     )
     # Its token is right, and it is no agent of the org.
     stranger = await client.get(
@@ -460,11 +465,11 @@ async def test_an_acp_team_without_a_sandbox_gets_its_own_worktree(repo: Path):
     await carry_out(service, SplitChild(title="API", path="svc/api", task="Serve"))
 
     team = node(service, "svc.api")
-    await woken(service, "svc.api")
-    starts = {start.title: start for start in launcher.derived}
-    assert starts["API (IC)"].isolation == "worktree"
+    its_manager = await woken(service, "svc.api")
+    starts = starts_of(launcher)
+    assert starts[ic(service, "svc.api")].isolation == "worktree"
     assert team.isolation == "worktree" and team.boundary_enforcement == "merge"
-    assert starts["API (Manager)"].isolation == "shared"
+    assert starts[its_manager].isolation == "shared"
     await service.aclose()
 
 
@@ -479,7 +484,7 @@ async def test_an_acp_team_in_a_sandbox_works_where_the_split_put_it(repo: Path)
     conversation_id = ic(service, "svc.api")
     launch = repo / ".git" / "director-shells" / f"{conversation_id}.acp.sh"
     assert "/usr/bin/bwrap" in launch.read_text()
-    start = next(start for start in launcher.derived if start.title == "API (IC)")
+    start = starts_of(launcher)[conversation_id]
     assert start.adapt_agent is not None
     adapted = start.adapt_agent(ACPAgent(acp_command=CLAUDE))
     assert isinstance(adapted, ACPAgent)
@@ -499,15 +504,16 @@ async def test_a_sub_team_runs_on_another_agent_profile_when_the_org_allows_it(
     await carry_out(service, codex, SplitChild(title="Web", path="web", task="Pages"))
 
     assert refused.is_error and "leave `model` out" in refused.text
-    await woken(service, "svc.api")
-    starts = {start.title: start for start in launcher.derived}
-    assert starts["API (IC)"].profile == "codex"
-    assert starts["API (IC)"].suffixes == [POD_PROTOCOL]
-    assert starts["API (IC)"].parent_id == UUID(str(ic(service)))
+    its_manager = await woken(service, "svc.api")
+    starts = starts_of(launcher)
+    api_ic = starts[ic(service, "svc.api")]
+    assert api_ic.profile == "codex"
+    assert api_ic.suffixes == [POD_PROTOCOL]
+    assert api_ic.parent_id == UUID(str(ic(service)))
     # Its Manager is derived from it, so it runs on the same agent.
-    assert starts["API (Manager)"].profile is None
-    assert starts["API (Manager)"].parent_id == UUID(str(ic(service, "svc.api")))
-    assert starts["Web (IC)"].profile is None
+    assert starts[its_manager].profile is None
+    assert starts[its_manager].parent_id == UUID(str(ic(service, "svc.api")))
+    assert starts[ic(service, "web")].profile is None
     team = node(service, "svc.api")
     assert team.agent_profile == "codex"
     assert [agent.kind for agent in team.agents] == ["acp", "acp"]
@@ -601,13 +607,14 @@ async def test_what_the_human_says_reaches_such_an_agent_in_the_middle_of_a_turn
     service = await started(repo, launcher)
     agent = ic(service)
     assert agent is not None
+    top = node(service, "root").id
     service.store.raise_escalation(
-        "root", "jwt", kind="design_decision", title="JWT or opaque tokens?"
+        top, "jwt", kind="design_decision", title="JWT or opaque tokens?"
     )
     launcher.report(agent, ConversationExecutionStatus.RUNNING)
 
-    await service.route_message(RouteMessageRequest(text="The human: stop, use Go."))
-    service.answer_escalation("root", "jwt", "Opaque.")
+    service.tell_ic(top, "The human: stop, use Go.", human=True)
+    service.answer_escalation(top, "jwt", "Opaque.")
     await service.settled()
 
     said = said_to(launcher, agent)

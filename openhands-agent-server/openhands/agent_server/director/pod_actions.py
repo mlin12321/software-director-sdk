@@ -220,7 +220,7 @@ def msg_ic(service: DirectorService, caller: Caller, text: str, team: str) -> st
         raise Invalid("A message cannot be empty")
     target = node
     if team.strip() and team.strip() != node.id:
-        found = service.store.get(team.strip())
+        found = _team_named(service, caller, team)
         if found is None or found.parent_id != node.id:
             raise Invalid(f"{team.strip()} is not your team or one directly below it")
         target = found
@@ -386,7 +386,7 @@ def resolve_escalation(
     if not text.strip():
         raise Invalid("Say what you decided, or why you cannot")
     store = service.store
-    raiser = store.get(node_id)
+    raiser = _team_named(service, caller, node_id)
     escalation = next(
         (e for e in raiser.escalations if e.id == escalation_id)
         if raiser
@@ -409,15 +409,15 @@ def resolve_escalation(
     if direct:
         return service.answered_directly(raiser, escalation, action, text.strip())
     if action == "settle":
-        store.settle_escalation(node_id, escalation_id)
-        service.progressed(node_id)
+        store.settle_escalation(raiser.id, escalation_id)
+        service.progressed(raiser.id)
         service.notify(
             agent_conversation(raiser, escalation.raised_by),
             f"The {_role_name(caller.role)} of {caller.node.title!r} settled "
             f"your escalation {escalation.title!r}:\n{text.strip()}",
         )
         return "Settled; the agent that raised it has your answer."
-    passed = store.pass_up_escalation(node_id, escalation_id, reason=text)
+    passed = store.pass_up_escalation(raiser.id, escalation_id, reason=text)
     if passed.held_by is None:
         return "Passed up. Nobody is above your team: it now waits on the human."
     service.hand_escalation(
@@ -504,9 +504,10 @@ def review_team(
 ) -> str:
     """Accept the work a team directly below submitted, or send it back."""
     _only(caller, "ic", "review the work of a team")
-    team = service.store.get(node_id)
+    team = _team_named(service, caller, node_id)
     if team is None or team.parent_id != caller.node.id:
         raise Invalid(f"{node_id} is not a team directly below yours")
+    node_id = team.id
     if team.review is None or team.review.state != "pending":
         raise Conflict(f"Team {node_id} has no work waiting for your review")
     if decision == "reject":
@@ -529,8 +530,19 @@ def report(service: DirectorService, caller: Caller, text: str) -> str:
     return "Recorded for you and the other agent of your team."
 
 
+def _team_named(service: DirectorService, caller: Caller, name: str) -> OrgNode | None:
+    """The team an agent names: by the id of its place in the agent's own
+    session, or by the team's id in the org, which is then its place in
+    that session."""
+    name = name.strip()
+    store = service.store
+    if "@" in name:
+        return store.get(name)
+    return store.instance(name, session_id_of(caller.node)) or store.get(name)
+
+
 def _team_below(service: DirectorService, caller: Caller, node_id: str) -> OrgNode:
-    team = service.store.get(node_id.strip())
+    team = _team_named(service, caller, node_id)
     if team is None or team.parent_id != caller.node.id:
         raise Invalid(f"{node_id.strip()} is not a team directly below yours")
     return team
@@ -624,22 +636,10 @@ def prune_team(
     _only(caller, "manager", "prune a team")
     if not reason.strip():
         raise Invalid("Say why the team is removed; your team's IC is told")
-    team = service.store.get(node_id)
+    team = _team_named(service, caller, node_id)
     if team is None or team.parent_id != caller.node.id:
         raise Invalid(f"{node_id} is not a team directly below yours")
-    if session_id_of(team):
-        raise Invalid(
-            f"{team.title!r} works in the session "
-            f"{service.store.session_title(team)!r}, "
-            "which the human opened. Only the human closes a session, and "
-            "its teams are not pruned one by one."
-        )
-    sessions = service.store.sessions_at(team.id)
-    if sessions:
-        raise Conflict(
-            f"{team.title!r} cannot be pruned while the human's sessions "
-            f"({', '.join(sessions)}) work in it or below it."
-        )
+    node_id = team.id
     service.prune(node_id, reason.strip())
     return (
         f"Pruning {team.title!r}. Its directory goes back to your team's IC "

@@ -98,7 +98,7 @@ async def test_a_manager_looks_after_every_so_many_reviews_its_ic_accepted(
 
     [look] = looks(service, launcher)
     assert "your IC has accepted 5 reviews" in look
-    assert "'API' (node services.api, services/api): " in look
+    assert f"'API' (node {node(service, API).id}, services/api): " in look
     assert "review accepted, round 1" in look
     assert "Nothing is asked of you" in look
 
@@ -322,7 +322,7 @@ async def test_what_became_of_its_teams_is_kept_for_a_teams_two_agents(
     kinds = [
         (event.team, event.kind, event.detail)
         for event in service.team_memory.history("root")
-        if event.team
+        if event.team and event.kind != "session_opened"
     ]
     assert [kind for _, kind, _ in kinds[:2]] == ["set_up", "set_up"]
     assert kinds[2:] == [

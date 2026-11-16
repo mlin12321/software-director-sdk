@@ -57,7 +57,7 @@ def describe(events: list[OrgChange]) -> list[tuple[str, str]]:
             described.append((event.type, event.node.id))
         elif event.type == "node_removed":
             described.append((event.type, event.id))
-        else:
+        elif event.type == "escalations":
             ids = ",".join(item.escalation.id for item in event.escalations)
             described.append((event.type, ids))
     return described
@@ -247,17 +247,18 @@ class TestEscalations:
         assert root.escalation_count == 3
         assert "held" not in [e.escalation.id for e in store.escalations("root")]
 
-    def test_escalations_survive_a_save_and_load(self, store: OrgStore, repo: Path):
+    def test_escalations_are_not_saved_with_the_tree(self, store: OrgStore, repo: Path):
+        # What a team waits on is of the work, which is done in sessions
+        # and kept with them; the saved tree is the org's reference only.
         board = create_org_board(repo)
         save_org(board, store)
         loaded = OrgStore()
 
         load_org(board, loaded)
 
-        assert [node.escalations for node in loaded.all()] == [
-            node.escalations for node in store.all()
-        ]
-        assert loaded.escalations("root") == store.escalations("root")
+        assert store.escalations("root")
+        assert [node.escalations for node in loaded.all()] == [[]] * len(store.all())
+        assert loaded.escalations("root") == []
 
 
 class TestEscalationChain:
@@ -617,7 +618,18 @@ class TestPersistence:
         loaded = OrgStore()
 
         assert load_org(board, loaded) is True
-        assert loaded.all() == store.all()
+        # The teams come back as the org's reference: nothing of the work.
+        assert [
+            (node.id, node.parent_id, node.title, node.boundary)
+            for node in loaded.all()
+        ] == [
+            (node.id, node.parent_id, node.title, node.boundary) for node in store.all()
+        ]
+        assert all(
+            (node.agents, node.status, node.escalations, node.review)
+            == ([], "idle", [], None)
+            for node in loaded.all()
+        )
         # Saving an unchanged tree adds no commit, and nothing leaks into the
         # working tree.
         assert board.head() == head
@@ -873,4 +885,5 @@ def test_saving_does_not_record_whether_agents_are_running(repo: Path):
     assert run_git(repo, "rev-parse", ORG_REF) == saved
     loaded = OrgStore()
     assert load_org(board, loaded)
-    assert loaded.find_by_conversation("conv-ic") is not None
+    # Nor the agents themselves: they are of a session, kept with it.
+    assert loaded.find_by_conversation("conv-ic") is None

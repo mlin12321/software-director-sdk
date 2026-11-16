@@ -11,7 +11,6 @@ import pytest
 from openhands.agent_server.director.models import (
     CreateOrgRequest,
     DirectorSettingsUpdate,
-    RouteMessageRequest,
     SplitChild,
 )
 from openhands.agent_server.director.org_store import OrgStore
@@ -19,10 +18,12 @@ from openhands.agent_server.director.service import DirectorService
 from openhands.agent_server.director.tools import (
     ApproveTeamsTool,
     MsgManagerTool,
+    ReviewTeamTool,
     SubmitReviewTool,
 )
 from openhands.agent_server.director.tools.definition import (
     MsgManagerAction,
+    ReviewTeamAction,
     SubmitReviewAction,
 )
 from openhands.sdk.conversation.state import ConversationExecutionStatus
@@ -39,6 +40,7 @@ from tests.agent_server.director.test_director_tools import (
     manager,
     node,
     proposing,
+    reviewer,
     split_root,
     use,
     woken,
@@ -58,6 +60,8 @@ async def started(repo: Path, launcher: FakeLauncher, **options) -> DirectorServ
         **{"run_limit_retry": 0, **options},
     )
     await service.start(launcher)
+    # A session works in the repository's checkout, as the tests commit there.
+    service.update_settings(DirectorSettingsUpdate(session_worktrees=False))
     await service.create_org(
         CreateOrgRequest(
             title="Checkout", task="Build", conversation=root_conversation(repo)
@@ -80,6 +84,20 @@ def split(below: str, count: int) -> MsgManagerAction:
             SplitChild(title=f"{below} {n}", path=f"{below}/t{n}", task="Work")
             for n in range(count)
         ]
+    )
+
+
+async def accepted(service: DirectorService) -> None:
+    """Have the work of the session opened first accepted, so that the org
+    has that session's sub-teams."""
+    await use(
+        service, ic(service), SubmitReviewTool, SubmitReviewAction(summary="Done.")
+    )
+    await use(
+        service,
+        reviewer(service),
+        ReviewTeamTool,
+        ReviewTeamAction(node_id=node(service, "root").id, decision="accept"),
     )
 
 
@@ -143,6 +161,7 @@ async def test_a_lowered_limit_removes_nothing_and_stops_the_next_split(
     service: DirectorService,
 ):
     await split_root(service)
+    await accepted(service)
 
     state = service.update_settings(DirectorSettingsUpdate(max_teams=1, max_depth=1))
 
@@ -190,6 +209,7 @@ async def test_settings_are_kept_for_the_next_start_beside_the_repository(
         "manager_check_accepted_reviews": 5,
         "manager_check_ic_setbacks": 3,
         "route_requests": True,
+        "session_worktrees": False,
     }
     assert kept["repo_path"] == str(repo)
     assert again.settings.max_depth == 3 and again.store.root_id == "root"
@@ -211,6 +231,7 @@ async def test_a_team_is_found_by_words_of_its_title_or_directory(
     service: DirectorService,
 ):
     await split_root(service)
+    await accepted(service)
 
     assert [found.id for found in service.search("API", 5)] == ["services.api"]
     assert [found.id for found in service.search("apps web", 5)] == ["apps.web"]
@@ -238,8 +259,9 @@ async def test_a_team_whose_review_is_slow_does_not_hold_up_another_team(
     )
     await eventually(lambda: launcher.agents_asked)
 
-    await service.route_message(RouteMessageRequest(text="First", path="apps/web"))
-    await service.route_message(RouteMessageRequest(text="Second", path="apps/web"))
+    web = node(service, "apps.web").id
+    service.tell_ic(web, "First", human=True)
+    service.tell_ic(web, "Second", human=True)
     await eventually(lambda: len(launcher.messages_to(ic(service, "apps.web"))) == 2)
 
     assert launcher.messages_to(ic(service, "apps.web")) == ["First", "Second"]
@@ -257,11 +279,12 @@ async def test_teams_wait_for_a_free_run_and_start_when_one_ends(
     launcher.full_for = 1_000_000
     await use(service, ic(service), MsgManagerTool, split("a", 2))
     await use(service, manager(service), ApproveTeamsTool, APPROVE)
-    for team in service.store.children("root"):
+    top = node(service, "root").id
+    for team in service.store.children(top):
         service.tell_ic(team.id, "Begin.")
     await eventually(
         lambda: (
-            [team.waiting_to_start for team in service.store.children("root")]
+            [team.waiting_to_start for team in service.store.children(top)]
             == [True, True]
         )
     )
@@ -273,7 +296,7 @@ async def test_teams_wait_for_a_free_run_and_start_when_one_ends(
     launcher.report(root_ic, ConversationExecutionStatus.IDLE)
     await service.settled()
 
-    teams = service.store.children("root")
+    teams = service.store.children(top)
     assert [team.waiting_to_start for team in teams] == [False, False]
     assert len(launcher.derived) == 3 and node(service, "root").pending_split is None
     await service.aclose()

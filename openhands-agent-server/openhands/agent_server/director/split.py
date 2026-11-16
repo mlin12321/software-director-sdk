@@ -6,23 +6,26 @@ decided reliably.
 """
 
 import re
+from collections.abc import Sequence
 from pathlib import PurePosixPath
 from typing import NamedTuple
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from openhands.agent_server.director.git_store import team_key
 from openhands.agent_server.director.models import (
     Boundary,
     DirectorSettings,
     IsolationMode,
     OrgNode,
+    OrgNodeInput,
     SplitChild,
 )
 from openhands.agent_server.director.org_store import (
     OrgStore,
     OrgStoreError,
-    session_id_of,
+    team_id_of,
 )
 
 
@@ -188,7 +191,11 @@ def _kept(
             also replaces, or leaves out a team it does not replace.
     """
     named = {name.strip() for name in keep}
-    known = {team.id for team in existing} | {team.title for team in existing}
+    known = (
+        {team.id for team in existing}
+        | {team_key(team.id) for team in existing}
+        | {team.title for team in existing}
+    )
     unknown = sorted(named - known)
     if unknown:
         raise OrgStoreError(
@@ -197,7 +204,11 @@ def _kept(
             + " not among your sub-teams: "
             + (", ".join(repr(team.title) for team in existing) or "you have none")
         )
-    kept = [team for team in existing if team.id in named or team.title in named]
+    kept = [
+        team
+        for team in existing
+        if team.id in named or team_key(team.id) in named or team.title in named
+    ]
     both = [team.title for team in kept if team.id in replaced]
     if both:
         raise OrgStoreError(
@@ -244,17 +255,8 @@ def normalize_split(
             parent's boundary, overlaps another proposed one, repeats a
             title, reaches outside its own directory, or would sit inside
             a team that stays, or ``keep`` does not account for every
-            sub-team the proposal leaves alone, or a session works in a
-            team the proposal would change.
+            sub-team the proposal leaves alone.
     """
-    if session_id_of(parent):
-        raise OrgStoreError(
-            f"Your team works in the session {store.session_title(parent)!r}, which "
-            "has the sub-teams the team had when the session was opened. "
-            "Sub-teams are not changed inside a session: do the work with "
-            "the sub-teams you have, or in your own team."
-        )
-    _no_session_in(store, parent, below=False)
     if not 1 <= len(children) <= MAX_SPLIT_CHILDREN:
         raise OrgStoreError(
             f"A split needs between 1 and {MAX_SPLIT_CHILDREN} sub-teams"
@@ -295,7 +297,6 @@ def normalize_split(
             )
         )
     for team in replaced.values():
-        _no_session_in(store, team, below=True)
         if team.isolation == "worktree":
             sharing = [
                 below.title
@@ -322,26 +323,6 @@ def normalize_split(
             raise OrgStoreError(f"More than one sub-team is titled {title!r}")
     kept = [] if keep is None else _kept(existing, replaced, keep)
     return Split(normalized, list(replaced.values()), kept)
-
-
-def _no_session_in(store: OrgStore, team: OrgNode, *, below: bool) -> None:
-    """Refuse to change the sub-teams of a team a session works in: the
-    session has the teams as they were when it was opened.
-
-    Raises:
-        OrgStoreError: A session works in the team or, with ``below``, in
-            a team below it.
-    """
-    sessions = store.sessions_at(team.id, below=below)
-    if sessions:
-        raise OrgStoreError(
-            f"{team.title!r} cannot be changed while "
-            + ("the session " if len(sessions) == 1 else "the sessions ")
-            + ", ".join(repr(title) for title in sessions)
-            + (" works" if len(sessions) == 1 else " work")
-            + " in it. Propose it again once the human has closed "
-            + ("it." if len(sessions) == 1 else "them.")
-        )
 
 
 def home_of(below: OrgNode, parent_id: str, teams: dict[str, str]) -> str:
@@ -381,3 +362,21 @@ def is_inside(path: str, ancestor: str) -> bool:
     if not path:
         return False
     return not ancestor or path.startswith(f"{ancestor}/")
+
+
+Shape = list[tuple[str, str, str]]
+
+
+def shape_of(teams: Sequence[OrgNodeInput]) -> Shape:
+    """The sub-teams under a team, as they are compared between the org and
+    a session: each team, the team above it and its directory. The first of
+    ``teams`` is the team itself and has nothing above it here."""
+    top = teams[0].id if teams else ""
+    return sorted(
+        (
+            team_id_of(team),
+            "" if team.id == top else (team.parent_id or "").split("@")[0],
+            team.boundary.path,
+        )
+        for team in teams
+    )

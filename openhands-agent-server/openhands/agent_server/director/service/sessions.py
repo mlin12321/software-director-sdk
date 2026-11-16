@@ -18,25 +18,45 @@ from openhands.agent_server.director.models import (
     SessionTeam,
     SessionTeamInput,
 )
-from openhands.agent_server.director.org_store import AGENT_LOST, session_team_id
-from openhands.agent_server.director.prompts import session_brief, session_closed
+from openhands.agent_server.director.org_store import (
+    review_place_id,
+    session_team_id,
+)
+from openhands.agent_server.director.pods import PodLauncher
+from openhands.agent_server.director.prompts import (
+    POD_PROTOCOL,
+    session_brief,
+    session_closed,
+)
 from openhands.agent_server.director.run_state import (
     CHECKS,
     DRAFT,
     PROGRESS,
+    REPORTS,
     TASK,
     TOLD,
     Intent,
 )
-from openhands.agent_server.director.service.records import OWN_SESSION
 from openhands.agent_server.director.service.splits import Splits
 from openhands.agent_server.director.service.state import (
     ASKED_KEPT,
+    TOOLS_OF,
+    _agent_title,
+    _base_of,
+    _branch_of,
+    _new_pod,
     agent_conversation,
     apart,
     team_of,
 )
+from openhands.agent_server.director.split import shape_of
+from openhands.sdk.conversation.request import (
+    AgentLaunchAdditions,
+    ConversationWorktreeOptions,
+    StartConversationRequest,
+)
 from openhands.sdk.errors import Conflict, NotFound
+from openhands.sdk.tool.spec import Tool
 
 
 logger = logging.getLogger(__name__)
@@ -54,24 +74,36 @@ class Sessions(Splits):
         """The sessions that are open, oldest first."""
         return self.store.sessions()
 
-    async def open_session(self, request: OpenSessionRequest) -> OpenedSession:
+    async def open_session(
+        self,
+        request: OpenSessionRequest,
+        conversation: StartConversationRequest | None = None,
+        *,
+        rename: bool = False,
+    ) -> OpenedSession:
         """Open a session at a team and start it with the human's request.
 
-        The session is recorded beside the org tree, with a place of its
-        own for the team it is opened at and for every team below that one.
-        Its work is reviewed by the IC of the team above, or of the top team
-        itself for a session opened there. Only the team it is opened at
-        starts; a team below starts when that IC gives it a task.
+        All work of the org is done in sessions. One has a place of its own
+        for the team it is opened at and for every team the org has below
+        that one, and a place its work is reviewed from: the team above, or
+        the top team itself for a session opened there. Only the team it is
+        opened at starts; a team below starts when that IC gives it a task,
+        and the reviewer when the session submits its work.
+
+        Args:
+            conversation: The conversation the human started the request
+                in, which becomes the session's IC. Without it the IC is
+                derived from one the org has already.
 
         Raises:
             NotFound: The team does not exist.
-            Conflict: There is no org, it is paused, the team's sub-teams
-                are being changed, or nobody can review the session's work.
+            Conflict: There is no org, it is paused, or the org has no
+                conversation to derive the session's IC from.
             Unavailable: The director is not running.
         """
-        self._require_launcher()
+        launcher = self._require_launcher()
         store = await asyncio.to_thread(lambda: self.store)
-        root = store.get(store.root_id) if store.root_id else None
+        root = store.team(store.root_id) if store.root_id else None
         if root is None:
             raise Conflict("There is no org to open a session in")
         if self._paused is not None:
@@ -83,46 +115,37 @@ class Sessions(Splits):
             team = store.team(request.node_id)
             if team is None:
                 raise NotFound(f"Unknown node: {request.node_id}")
-        elif self.settings.route_requests:
+        elif self.settings.route_requests and store.children(root.id):
             choice = await self.choose_team(text, root)
             chosen_by, reason = choice.by, choice.reason
             team = store.team(choice.node_id) or root
         else:
             team = root
         above = store.team(team.parent_id) if team.parent_id else team
-        reviewer = next(
-            (agent for agent in above.agents if agent.role == "ic")
-            if above
-            else iter(()),
-            None,
-        )
-        if above is None or reviewer is None or reviewer.status == AGENT_LOST:
+        if above is None:
+            raise NotFound(f"Unknown node: {team.parent_id}")
+        if conversation is None and await self._template() is None:
             raise Conflict(
-                f"The IC of {(above or team).title!r} reviews the work of a "
-                f"session opened at {team.title!r}, and it is not running "
-                "here. Start that team first."
+                "No conversation of the org runs on this server to start the "
+                "session's IC from. Send the request from a new conversation."
             )
         shape = [team]
         for current in shape:
             shape.extend(store.children(current.id))
-        if any(
-            current.pending_split is not None
-            and current.pending_split.status == "approved"
-            for current in shape
-        ):
-            raise Conflict(
-                f"The sub-teams of {team.title!r} are being set up. Open the "
-                "session once that is done."
-            )
         session_id = f"s{uuid4().hex[:6]}"
         title = request.title.strip() or provisional_summary(text).title
         title = title[:_TITLE_LENGTH]
-        others = [
-            store.session_title(other) or OWN_SESSION
-            for other in store.all()
-            if team_of(other) == team.id and other.agents
-        ]
+        others = sorted(
+            {
+                store.session_title(other)
+                for other in store.all()
+                if team_of(other) == team.id and other.agents
+            }
+        )
         run = self._runs()
+        checkout = str(self._repo_dir)
+        branch = await asyncio.to_thread(_branch_of, checkout)
+        reviewing = review_place_id(above.id, session_id)
         ids = {current.id: session_team_id(current.id, session_id) for current in shape}
         top = store.open_session(
             SessionInput(
@@ -132,33 +155,56 @@ class Sessions(Splits):
                 above_id=above.id,
                 request=text[:ASKED_KEPT],
                 opened_at=datetime.now(UTC).isoformat(),
+                shape=shape_of(shape),
             ),
             [
                 SessionTeamInput(
-                    id=ids[current.id],
+                    id=reviewing,
                     session=session_id,
-                    team_id=current.id,
-                    parent_id=above.id
-                    if current.id == team.id
-                    else ids[current.parent_id or ""],
-                    title=current.title,
-                    boundary=current.boundary,
-                    # Its work is kept apart from the team's own until the
-                    # IC above has reviewed it.
-                    isolation="worktree"
-                    if current.id == team.id
-                    else current.isolation,
-                    agent_profile=current.agent_profile,
-                    worktree_path=above.worktree_path,
-                    branch=above.branch,
+                    team_id=above.id,
+                    review_only=True,
+                    parent_id=None,
+                    title=above.title,
+                    # It reads the session's work and writes nothing.
+                    boundary=above.boundary.model_copy(update={"writable": []}),
+                    isolation="shared",
+                    agent_profile=above.agent_profile,
+                    worktree_path=checkout,
+                    branch=branch,
                     agents=[],
                     status="idle",
-                    headline=provisional_summary(text).headline
-                    if current.id == team.id
-                    else current.headline,
-                    spec_summary=current.spec_summary,
-                )
-                for current in shape
+                    spec_summary=above.spec_summary,
+                ),
+                *(
+                    SessionTeamInput(
+                        id=ids[current.id],
+                        session=session_id,
+                        team_id=current.id,
+                        parent_id=reviewing
+                        if current.id == team.id
+                        else ids[current.parent_id or ""],
+                        title=current.title,
+                        boundary=current.boundary,
+                        # Its work is kept apart from the repository's
+                        # checkout until it is reviewed.
+                        isolation=(
+                            "worktree" if self.settings.session_worktrees else "shared"
+                        )
+                        if current.id == team.id
+                        else current.isolation,
+                        agent_profile=current.agent_profile,
+                        worktree_path=checkout,
+                        branch=branch,
+                        agents=[],
+                        status="idle",
+                        headline=provisional_summary(text).headline
+                        if current.id == team.id
+                        else current.headline,
+                        spec_summary=current.spec_summary,
+                        old_specs=current.old_specs,
+                    )
+                    for current in shape
+                ),
             ],
         )
         for current in shape:
@@ -166,16 +212,97 @@ class Sessions(Splits):
         await asyncio.to_thread(
             self.record_event, above.id, "session_opened", top, text[:ASKED_KEPT]
         )
-        conversation_id = self.tell_ic(
-            top.id, text + session_brief(top, title, above, others), human=True
-        )
+        brief = session_brief(top, title, others)
+        if conversation is None:
+            conversation_id = self.tell_ic(top.id, text + brief, human=True) or ""
+        else:
+            try:
+                conversation_id = await self._start_with(
+                    top, conversation, text, brief, launcher, rename
+                )
+            except BaseException:
+                store.close_session(session_id)
+                raise
         self._save_soon()
         return OpenedSession(
             session=next(found for found in store.sessions() if found.id == session_id),
-            conversation_id=conversation_id or "",
+            conversation_id=conversation_id,
             chosen_by=chosen_by,
             reason=reason,
         )
+
+    async def _start_with(
+        self,
+        top: SessionTeam,
+        conversation: StartConversationRequest,
+        text: str,
+        brief: str,
+        launcher: PodLauncher,
+        rename: bool = False,
+    ) -> str:
+        """Start a session's IC as the conversation the human began the
+        request in, and brief it.
+
+        Returns:
+            Its conversation.
+        """
+        store = self.store
+        ic_id = conversation.conversation_id or uuid4()
+        store.update_node(top.id, agents=_new_pod(ic_id))
+        additions = conversation.agent_launch_additions or AgentLaunchAdditions()
+        suffix = "\n\n".join(
+            part
+            for part in (additions.system_message_suffix_append, POD_PROTOCOL)
+            if part
+        )
+        apart = top.isolation == "worktree"
+        tool_params = await asyncio.to_thread(self._confine, top.id, "ic")
+        started = await launcher.start_root(
+            conversation.model_copy(
+                update={
+                    "conversation_id": ic_id,
+                    "initial_message": None,
+                    # Named like every other agent of the org.
+                    "autotitle": False,
+                    "agent_launch_additions": additions.model_copy(
+                        update={"system_message_suffix_append": suffix}
+                    ),
+                    **(
+                        {
+                            "worktree": True,
+                            "worktree_options": ConversationWorktreeOptions(
+                                base="head"
+                            ),
+                        }
+                        if apart
+                        else {}
+                    ),
+                }
+            ),
+            [Tool(name=name) for name in TOOLS_OF["ic"]],
+            title=_agent_title(top.title, "ic", store.session_title(top)),
+            tool_params=tool_params,
+            adapt_agent=await asyncio.to_thread(
+                self._adapter, str(ic_id), TOOLS_OF["ic"]
+            ),
+        )
+        store.set_agent(top.id, "ic", kind=started.kind, acp_server=started.acp_server)
+        store.update_node(
+            top.id,
+            worktree_path=started.workspace,
+            isolation=started.isolation if apart else "shared",
+            branch=await asyncio.to_thread(_branch_of, started.workspace),
+            base_commit=await asyncio.to_thread(_base_of, started.workspace),
+            boundary_enforcement=self._enforcement(started.kind),
+        )
+        self._checkout_for_session(top.id)
+        self.progressed(top.id)
+        self.joined(str(ic_id))
+        self._enqueue(
+            lambda: self._summarize(top.id, text, first=True, rename=rename), top.id
+        )
+        self._begin("brief", top.id, role="ic", task=text + brief)
+        return str(ic_id)
 
     def close_session(self, session_id: str) -> None:
         """Close a session: its agents are stopped and removed with its
@@ -258,7 +385,7 @@ class Sessions(Splits):
             top = store.get(node_id)
             for team in map(store.get, plan["teams"]):
                 if team is not None:
-                    for kind in (TASK, PROGRESS, CHECKS, DRAFT):
+                    for kind in (TASK, PROGRESS, CHECKS, DRAFT, REPORTS):
                         run.unmark(kind, team.id)
                     self._work_accepted(team)
             if top is not None:

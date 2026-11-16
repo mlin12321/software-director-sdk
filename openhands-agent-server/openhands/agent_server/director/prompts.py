@@ -4,6 +4,7 @@ import json
 from datetime import datetime
 from typing import Any
 
+from openhands.agent_server.director.git_store import team_key
 from openhands.agent_server.director.models import (
     AgentRole,
     BoundaryContracts,
@@ -110,6 +111,15 @@ WITH_SUB_TEAMS = (
     "Do not propose again a division that failed or was declined unless "
     "something has changed.",
 )
+
+REVIEW_ROLE = """\
+You are this team's IC in review mode. You review the work a session
+delivers into the repository's own checkout and do nothing else: you do not
+write files, give tasks or change teams. Read the work in the session's
+checkout, run its checks there if you need to, and decide with
+`review_team`. Accepting merges it into the repository's checkout at once.
+Judge it by what the human asked of the session and by your team's spec,
+contracts and records. Use `report` for what the team must remember."""
 
 MANAGER_ROLE = """\
 <ORG_ROLE>
@@ -608,19 +618,19 @@ def _finding_lines(findings: list[ReviewFinding]) -> list[str]:
     return lines
 
 
-def session_work(team: OrgNode, title: str) -> str:
+def session_work(team: OrgNode, title: str, request: str) -> str:
     """What comes before the review request for the work of the session
-    titled ``title``."""
+    titled ``title``, which was opened for ``request``."""
     return (
-        f"The human opened the session {title!r} at "
-        f"{team.title!r}, beside that team's own work, and asked it for "
-        "something directly. It worked in a checkout of its own "
-        f"({team.worktree_path}, branch {team.branch}). You gave it no task: "
-        "judge its work by what the human asked and by the team's spec. "
-        "Accepting it merges it into your checkout, where it meets whatever "
-        "was delivered there meanwhile; if the two do not merge, it goes "
-        "back to the session to resolve. A spec it wrote is its own until "
-        "you accept its work and the team's from then on.\n\n"
+        f"The session {title!r} at {team.title!r} submits its work. It was "
+        f"opened for this request:\n{request}\n\nIt worked in a checkout of "
+        f"its own ({team.worktree_path}, branch {team.branch}). Judge its "
+        "work by that request and by your team's spec, contracts and "
+        "records. Accepting it merges it into the repository's checkout at "
+        "once, where it meets whatever was merged there meanwhile; if the "
+        "two do not merge, it goes back to the session to resolve. A spec "
+        "it wrote and sub-teams it set up are its own until you accept its "
+        "work and the org's from then on.\n\n"
     )
 
 
@@ -642,6 +652,7 @@ def reconcile_request(
     files: list[str],
     landed: list[str],
     specs: list[tuple[str, str, str]],
+    shape: tuple[list[str], list[str]] | None = None,
 ) -> str:
     """What a reviewing IC is told when work it accepts meets other work.
 
@@ -653,6 +664,8 @@ def reconcile_request(
         landed: The teams whose work was merged there meanwhile.
         specs: For each spec it wrote while the team's spec changed: the
             directory, the team's spec now and the one it wrote.
+        shape: The sub-teams the org has under the team now and the ones
+            it set up, when both were changed since it began.
     """
     lines = [
         f"Not merged yet: the work of {team.title!r} (node {team.id}) meets "
@@ -683,6 +696,15 @@ def reconcile_request(
             "The spec it wrote:",
             written,
         ]
+    if shape is not None:
+        lines += [
+            "",
+            "It set up sub-teams of its own, and the org's sub-teams there "
+            "were changed meanwhile by other accepted work. Accepting puts "
+            "its sub-teams in place of the org's.",
+            "The org's sub-teams now: " + (", ".join(shape[0]) or "none"),
+            "The sub-teams it set up: " + (", ".join(shape[1]) or "none"),
+        ]
     lines += [
         "",
         "Decide what holds. If its work must change, reject it with what "
@@ -694,35 +716,32 @@ def reconcile_request(
     return "\n".join(lines)
 
 
-def session_brief(team: OrgNode, title: str, above: OrgNode, others: list[str]) -> str:
+def session_brief(team: OrgNode, title: str, others: list[str]) -> str:
     """What the IC a session starts with is told after the human's request."""
     beside = (
-        f" Beside you work: {', '.join(others)}."
+        f" Other sessions at work on this team's directory: {', '.join(others)}."
         if others
-        else " Nobody else works on the team's directory just now."
+        else " No other session works on the team's directory just now."
     )
     return (
         f"\n\n[director] You are the IC of {team.title!r} in the session "
-        f"{title!r}, which the human opened for this request "
-        "beside the team's other work. You have a checkout and a branch of "
-        "your own, started from the checkout of "
-        f"{above.title!r}.{beside} Each works on the same directory in its "
-        "own checkout; `other_sessions_of_your_team` in your context names "
-        "them, and the team's reports are shared, so record with `report` "
-        "what the others must know. You start from the team's spec. A spec "
-        "you write with `write_spec` is your session's alone until your "
-        "work is accepted, and the team's from then on: rewrite it only "
-        "where your request changes it. The sub-teams you "
-        "see are the team's, "
-        "there once more for this session and not started: one starts when "
-        "you give it a task with `msg_team`. Sub-teams cannot be proposed, "
-        "replaced or pruned inside a session. When the request is done, "
-        f"commit and call `submit_review`: the IC of {above.title!r} reviews "
-        "it and it is merged into that team's checkout. You need not keep "
-        "up with that checkout while you work: what your work meets there "
-        "is settled when it is merged. If it does not merge with what was "
-        "delivered there meanwhile, it comes back to you: merge that "
-        "team's branch into yours, resolve and submit again."
+        f"{title!r}, which was opened for this request. All work of the org "
+        "is done in sessions like this one, each in a checkout and on a "
+        f"branch of its own, started from the repository's checkout.{beside} "
+        "`other_sessions_of_your_team` in your context names them, and the "
+        "team's reports are shared, so record with `report` what the others "
+        "must know. You start from the team's spec, contracts and records. "
+        "A spec you write with `write_spec` and sub-teams your Manager "
+        "approves are your session's alone until your work is accepted, and "
+        "the org's from then on. The sub-teams you see are not started: one "
+        "starts when you give it a task with `msg_team`. When the request "
+        "is done, commit and call `submit_review`: the team's IC above, in "
+        "review mode, reviews it, and accepted work is merged into the "
+        "repository's checkout. You need not keep up with that checkout "
+        "while you work: what your work meets there is settled when it is "
+        "merged. If it does not merge with what was delivered there "
+        "meanwhile, it comes back to you: merge that checkout's branch into "
+        "yours, resolve and submit again."
     )
 
 
@@ -882,15 +901,6 @@ def many_requests_notice(row: dict[str, Any], table: list[dict[str, Any]]) -> st
     )
 
 
-DIRECT_NOTE = (
-    "\n\n(The human sent this to your team directly. The ICs of the teams "
-    "above are told of it and have not acted on it. Do what is your team's "
-    "own. Raise an escalation for what needs another team's files or "
-    "changes a contract. If none of it is your team's, raise an escalation "
-    "of the category `misrouted` and it goes to the team above.)"
-)
-
-
 def misrouted_notice(team: OrgNode, text: str, why: str) -> str:
     """What the IC above is told when a team says a request the human's
     words brought it directly is not its own."""
@@ -998,6 +1008,8 @@ _EVENT_WORDS: dict[TeamEventKind, str] = {
     "misrouted": "said a request was not its own",
     "asked_team": "asked another team directly",
     "answered": "had its request to another team",
+    "session_opened": "session opened",
+    "session_closed": "session closed",
 }
 # What is counted of a team, in the order it is told.
 _COUNTED: tuple[TeamEventKind, ...] = ("accepted", "sent_back", "stalled", "stopped")
@@ -1241,7 +1253,7 @@ def manager_check(
             facts.append(f"{waiting} unsettled")
         if team.id in quiet and team.id not in blocked:
             facts.append(f"no progress for {_span(quiet[team.id])}")
-        record = records.get(team.id, {})
+        record = records.get(team_key(team.id), {})
         so_far = record_line(record)
         if so_far:
             facts.append(f"so far: {so_far}")

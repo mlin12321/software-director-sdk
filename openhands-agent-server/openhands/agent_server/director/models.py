@@ -871,6 +871,14 @@ class DirectorSettings(BaseModel):
             "teams. 0 turns the check off."
         ),
     )
+    session_worktrees: bool = Field(
+        default=True,
+        description=(
+            "Whether a session works in a worktree of its own, made from "
+            "the repository's checkout. Without it a session works in that "
+            "checkout itself."
+        ),
+    )
     route_requests: bool = Field(
         default=True,
         description=(
@@ -894,6 +902,7 @@ class DirectorSettingsUpdate(BaseModel):
     manager_check_accepted_reviews: int | None = Field(default=None, ge=0)
     manager_check_ic_setbacks: int | None = Field(default=None, ge=0)
     route_requests: bool | None = None
+    session_worktrees: bool | None = None
 
 
 class DirectorSettingsState(DirectorSettings):
@@ -1063,14 +1072,6 @@ class OrgSummary(BaseModel):
     """Whether the director has an org, and where it would keep one."""
 
     root_id: str | None = Field(description="None when no org has been started.")
-    top_conversation_id: str | None = Field(
-        default=None,
-        description=(
-            "The conversation of the top team's IC. What the human writes "
-            "there is for the org as a whole and may be sent with `auto`. "
-            "None when there is no org or that IC has no conversation here."
-        ),
-    )
     node_count: int
     repo_path: str = Field(
         description=(
@@ -1228,6 +1229,14 @@ class SessionTeamInput(OrgNodeInput):
 
     session: str = Field(description="The session it belongs to.")
     team_id: str = Field(description="The team of the org it is the work of.")
+    review_only: bool = Field(
+        default=False,
+        description=(
+            "Whether this is the place the session's work is reviewed from: "
+            "the team above the one the session was opened at, or that team "
+            "itself for a session opened at the top. Its IC only reviews."
+        ),
+    )
 
 
 class SessionTeam(SessionTeamInput, OrgNode):
@@ -1244,6 +1253,13 @@ class SessionInput(BaseModel):
     above_id: str = Field(description="The team whose IC reviews its work.")
     request: str = Field(default="", description="What the human asked of it.")
     opened_at: str = Field(default="", description="ISO 8601 timestamp.")
+    shape: list[tuple[str, str, str]] = Field(
+        default_factory=list,
+        description=(
+            "The sub-teams the org had under the team when the session was "
+            "opened: each team, the team above it and its directory."
+        ),
+    )
 
 
 ConversationRelation = Literal["above", "beside", "below", "session"]

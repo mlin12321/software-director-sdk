@@ -11,6 +11,7 @@ from openhands.agent_server.director.models import (
     SplitChild,
     TeamEvent,
 )
+from openhands.agent_server.director.org_store import team_id_of
 from openhands.agent_server.director.prompts import (
     needs_between,
     success_rate,
@@ -52,6 +53,7 @@ from tests.agent_server.director.test_director_tools import (
     node,
     proposing,
     split_root,
+    sub_teams,
     use,
 )
 
@@ -194,7 +196,7 @@ async def test_a_manager_may_prune_a_team_with_nothing_against_it(
     pruned = await use(service, manager(service), PruneTeamTool, PRUNE)
 
     assert not pruned.is_error
-    assert node(service, "root").child_ids == [WEB]
+    assert [team_id_of(team) for team in sub_teams(service)] == [WEB]
 
 
 ORDERS = """\

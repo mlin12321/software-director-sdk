@@ -11,6 +11,7 @@ import pytest
 
 from openhands.agent_server.director import compaction
 from openhands.agent_server.director.models import OldSpec, SplitChild
+from openhands.agent_server.director.org_store import team_id_of
 from openhands.agent_server.director.pods import StartedAgent
 from openhands.agent_server.director.prompts import HAND_OVER_ROLE, left_behind
 from openhands.agent_server.director.run_state import TASK
@@ -52,10 +53,12 @@ from tests.agent_server.director.test_director_service import attempt, create
 from tests.agent_server.director.test_director_tools import (
     APPROVE,
     PRUNE_API,
+    has_place,
     ic,
     manager,
     node,
     proposing,
+    sub_teams,
     use,
 )
 
@@ -134,7 +137,7 @@ async def test_a_team_put_in_another_teams_directory_gets_none_of_its_memory(
     assert orders.title == "Orders" and orders.agents == []
     assert service.reports_of(orders) == []
     assert service.threads_of(orders) == []
-    assert service._runs().marked(TASK)[API] == "Keep the orders"
+    assert service._runs().marked(TASK)[orders.id] == "Keep the orders"
     [former] = service.team_memory.former(API)
     assert (former.title, former.ended, former.path) == (
         "API",
@@ -149,7 +152,7 @@ async def test_a_team_put_in_another_teams_directory_gets_none_of_its_memory(
     ]
     assert former.compacted_report == "SQLite, no cache."
     assert [thread.file for thread in former.threads] == [
-        ".threads-ic/root/services.api.json"
+        f".threads-ic/{node(service, 'root').id}/{orders.id}.json"
     ]
 
 
@@ -281,7 +284,7 @@ async def test_a_pruned_team_is_recorded_and_its_spec_is_old_for_the_team_above(
 ):
     await use(service, manager(service), PruneTeamTool, PRUNE_API)
 
-    assert service.store.get(API) is None
+    assert not has_place(service, API)
     [former] = service.team_memory.former(API)
     assert (former.ended, len(former.reports)) == ("pruned", 2)
     assert node(service, "root").old_specs == [OldSpec(path="services/api", team="API")]
@@ -316,7 +319,7 @@ async def test_sub_teams_of_a_stopped_team_that_is_replaced_go_on(
     )
     await service.settled()
 
-    assert node(service, "services.api.db").parent_id == "services"
+    assert node(service, "services.api.db").parent_id == node(service, "services").id
     assert db_ic in [str(conversation) for conversation, _ in launcher.resumed[before:]]
 
 
@@ -333,12 +336,12 @@ async def test_what_was_said_to_a_manager_is_archived_with_its_team(
         ),
     )
 
+    api = node(service, API).id
+
     await replace(service, ORDERS, keep=["Web"])
 
     [former] = service.team_memory.former(API)
-    assert ".threads/services.api/services.api.json" in [
-        thread.file for thread in former.threads
-    ]
+    assert f".threads/{api}/{api}.json" in [thread.file for thread in former.threads]
     assert service.threads_of(node(service, API)) == []
 
 
@@ -517,7 +520,8 @@ async def test_a_hand_over_is_a_side_conversation_of_the_ic_with_its_own_briefin
     assert "You are the IC of the team" in told and "in hand-over mode" in told
     # The team still has its two agents and no third.
     assert [agent.role for agent in node(service, "root").agents] == ["ic", "manager"]
-    assert "- Orders (node services.api, services/api): Keep the orders" in told
+    orders = node(service, API).id
+    assert f"- Orders (node {orders}, services/api): Keep the orders" in told
     assert "Its directory is now in the boundary of Orders (services/api)." in told
     assert "Its reports, as one:\nSQLite, no cache." in told
     assert "The spec it wrote (old; it stays in services/api):\n# API by hand" in told
@@ -818,7 +822,7 @@ async def test_a_pruned_teams_hand_over_goes_with_it(
 
     await use(service, manager(service), PruneTeamTool, PRUNE_API)
 
-    assert node(service, "root").child_ids == [WEB]
+    assert [team_id_of(team) for team in sub_teams(service)] == [WEB]
     assert service.store.find_hand_over(side) is None
     late = await use(
         service, side, HandOverTool, HandOverAction(team="services.api.http", notes="x")
@@ -835,7 +839,7 @@ async def test_a_client_is_shown_the_teams_removed_from_below_a_team_and_their_r
 ):
     await replace(service, ORDERS, keep=["Web"])
 
-    shown = get_node_memory("root", service)
+    shown = get_node_memory(node(service, "root").id, service)
 
     [former] = shown.former_teams
     assert (former.title, former.path, former.ended) == (
@@ -849,4 +853,4 @@ async def test_a_client_is_shown_the_teams_removed_from_below_a_team_and_their_r
         ("set_up", "Orders"),
     ]
     # They are the team above's to see, not the new team's.
-    assert get_node_memory(API, service).former_teams == []
+    assert get_node_memory(node(service, API).id, service).former_teams == []

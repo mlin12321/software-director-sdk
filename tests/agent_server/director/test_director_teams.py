@@ -6,7 +6,10 @@ from uuid import UUID
 import pytest
 
 from openhands.agent_server.director.models import RouteMessageRequest, SplitChild
+from openhands.agent_server.director.org_store import team_id_of
+from openhands.agent_server.director.run_state import SESSION, RunState
 from openhands.agent_server.director.service import DirectorService
+from openhands.agent_server.director.session_state import kept_sessions
 from openhands.agent_server.director.tools import (
     ApproveTeamsTool,
     MsgIcTool,
@@ -21,6 +24,7 @@ from openhands.agent_server.director.tools.definition import (
 )
 from openhands.sdk.conversation.state import ConversationExecutionStatus
 from tests.agent_server.director.conftest import FakeLauncher, run_git, tasked
+from tests.agent_server.director.test_director_landing import landed
 from tests.agent_server.director.test_director_limits import started
 from tests.agent_server.director.test_director_pause import (
     again,
@@ -37,11 +41,13 @@ from tests.agent_server.director.test_director_tools import (
     APPROVE,
     PRUNE_API,
     SPLIT,
+    has_place,
     ic,
     manager,
     node,
     proposing,
     split_root,
+    sub_teams,
     use,
 )
 
@@ -85,7 +91,7 @@ async def propose_and_approve(
 
 
 def below(service: DirectorService, node_id: str) -> list[str]:
-    return sorted(team.id for team in service.store.children(node_id))
+    return sorted(team_id_of(team) for team in sub_teams(service, node_id))
 
 
 async def test_a_team_over_existing_ones_replaces_them_and_keeps_their_sub_teams(
@@ -99,14 +105,17 @@ async def test_a_team_over_existing_ones_replaces_them_and_keeps_their_sub_teams
     assert "take the place of: API" in told and "Kept as they are: Web." in told
     proposal = node(service, "root").pending_split
     assert proposal is not None
-    assert (proposal.replaces, proposal.keeps) == ([API], ["apps.web"])
+    assert (proposal.replaces, proposal.keeps) == (
+        [node(service, API).id],
+        [node(service, "apps.web").id],
+    )
     await use(service, manager(service), ApproveTeamsTool, APPROVE)
     await tasked(service)
 
     assert not proposed.is_error
     assert below(service, "root") == ["apps.web", "services"]
     assert below(service, "services") == [DB]
-    assert service.store.get(API) is None
+    assert not has_place(service, API)
     assert {str(conversation) for conversation in launcher.deleted} == gone
     assert ic(service, DB) == kept
     assert node(service, DB).boundary.path == "services/api/db"
@@ -135,8 +144,8 @@ async def test_teams_inside_an_existing_one_replace_it_and_the_rest_goes_back(
         "services.api.http",
         "services.api.jobs",
     ]
-    assert service.store.get(API) is None
-    assert node(service, DB).parent_id == "root"
+    assert not has_place(service, API)
+    assert node(service, DB).parent_id == node(service, "root").id
 
 
 async def test_a_new_team_inside_a_sub_team_that_stays_is_refused(
@@ -247,12 +256,12 @@ async def test_a_team_is_pruned_only_once_it_and_the_teams_below_are_at_rest(
 
     await use(service, manager(service), PruneTeamTool, PRUNE_API)
 
-    assert service.store.get(API) is not None and launcher.stopped == []
+    assert has_place(service, API) and launcher.stopped == []
 
     launcher.report(db_ic, ConversationExecutionStatus.FINISHED)
     await service.settled()
 
-    assert service.store.get(API) is None and service.store.get(DB) is None
+    assert not has_place(service, API) and not has_place(service, DB)
     assert "services/api is yours again" in launcher.messages_to(ic(service))[-1]
 
 
@@ -272,8 +281,10 @@ async def test_work_a_kept_sub_team_had_in_review_goes_to_the_ic_it_now_reports_
     await use(service, manager(service), ApproveTeamsTool, APPROVE)
 
     # The request is the first thing sent to the new team, so it starts it.
-    [request] = [s.task for s in launcher.derived if s.title == "Services (IC)"]
-    assert "Review mode" in request and DB in request
+    [request] = [
+        s.task for s in launcher.derived if s.title == "Services · Checkout (IC)"
+    ]
+    assert "Review mode" in request and node(service, DB).id in request
     await service.aclose()
 
 
@@ -296,7 +307,7 @@ async def test_a_replacement_cut_off_by_a_crash_is_finished_once(
     ended = end_server_at(launcher, "delete", nth=2)
     launcher.report(api_ic, ConversationExecutionStatus.FINISHED)
     await ended.wait()
-    assert first.store.get(API) is not None
+    assert has_place(first, API)
 
     second = await again(repo, launcher)
     await second.resume()
@@ -308,26 +319,28 @@ async def test_a_replacement_cut_off_by_a_crash_is_finished_once(
     assert ic(second, DB) == db_ic
     assert node(second, "root").pending_split is None
     started_as = [start.title for start in launcher.derived]
-    assert started_as.count("Services (IC)") == 1
+    assert started_as.count("Services · Checkout (IC)") == 1
     assert UUID(str(db_ic)) not in launcher.deleted
     await second.aclose()
 
 
-async def test_an_approval_the_saved_tree_does_not_have_is_dropped_and_given_again(
+async def test_an_approval_the_kept_session_does_not_have_is_dropped_and_given_again(
     repo: Path, launcher: FakeLauncher
 ):
     first = await started(repo, launcher)
     await split_root(first)
     await use(first, ic(first), MsgManagerTool, SERVICES)
-    proposed = run_git(repo, "rev-parse", "refs/agents/org").strip()
+    proposed = kept_sessions(first.store)
     ended = end_server_at(launcher, "stop")
     await cut_off(
         launcher, ended, use(first, manager(first), ApproveTeamsTool, APPROVE)
     )
-    # Nothing of the first server may save the tree after this.
+    # Nothing of the first server may save the session after this.
     await first.aclose()
-    # The server ended before it saved the tree with the approval in it.
-    run_git(repo, "update-ref", "refs/agents/org", proposed)
+    # The server ended before it saved the session with the approval in it.
+    run = RunState(repo / ".git" / "director" / "state.db")
+    run.replace_marks(SESSION, proposed)
+    run.close()
 
     second = await again(repo, launcher)
     await second.resume()
@@ -377,13 +390,16 @@ async def test_a_sub_team_is_kept_by_its_name_or_its_node_id(
         service,
         ic(service),
         MsgManagerTool,
-        proposing(mobile, keep=[API, "Web"]),
+        proposing(mobile, keep=[node(service, API).id, "Web"]),
     )
 
     assert refused.is_error and "'Web' is neither replaced" in refused.text
     proposal = node(service, "root").pending_split
     assert not taken.is_error and proposal is not None
-    assert (proposal.replaces, proposal.keeps) == ([], [API, "apps.web"])
+    assert (proposal.replaces, proposal.keeps) == (
+        [],
+        [node(service, API).id, node(service, "apps.web").id],
+    )
 
 
 @pytest.fixture
@@ -401,8 +417,8 @@ async def test_approved_teams_are_set_up_and_start_nothing(
     await use(service, ic(service), MsgManagerTool, SPLIT)
     answer = await use(service, manager(service), ApproveTeamsTool, APPROVE)
 
-    teams = service.store.children("root")
-    assert [(team.id, team.agents, team.status) for team in teams] == [
+    teams = sub_teams(service)
+    assert [(team_id_of(team), team.agents, team.status) for team in teams] == [
         (API, [], "idle"),
         ("apps.web", [], "idle"),
     ]
@@ -507,7 +523,7 @@ async def test_a_team_starts_with_the_first_message_from_the_ic_above(
     assert "starts with what you wrote as its task" in first.text
     assert "starts with" not in second.text
     [start] = launcher.derived[1:]
-    assert start.title == "API (IC)"
+    assert start.title == "API · Checkout (IC)"
     # What the team is for, then what it was started with.
     assert start.task.index("Serve the checkout API") < start.task.index(
         "Build POST /checkout first."
@@ -516,20 +532,26 @@ async def test_a_team_starts_with_the_first_message_from_the_ic_above(
     assert node(service, "apps.web").agents == []
 
 
-async def test_a_team_starts_with_the_first_message_from_the_human(
+async def test_a_message_from_the_human_starts_the_team_in_a_session_of_its_own(
     fresh: DirectorService, launcher: FakeLauncher
 ):
     service = fresh
     await use(service, ic(service), MsgManagerTool, SPLIT)
     await use(service, manager(service), ApproveTeamsTool, APPROVE)
+    await landed(service)
+    before = len(launcher.derived)
 
-    await service.route_message(
+    routed = await service.route_message(
         RouteMessageRequest(text="Start with the cart page.", path="apps/web")
     )
     await service.settled()
 
-    [start] = launcher.derived[1:]
-    assert start.title == "Web (IC)" and "Start with the cart page." in start.task
+    [start] = launcher.derived[before:]
+    assert start.title.startswith("Web · ") and start.title.endswith("(IC)")
+    assert "Start with the cart page." in start.task
+    # The team the first session set up and never started stays as it was.
+    assert routed.node_id != node(service, "apps.web").id
+    assert node(service, "apps.web").agents == []
 
 
 async def test_a_team_given_no_task_owes_nothing(

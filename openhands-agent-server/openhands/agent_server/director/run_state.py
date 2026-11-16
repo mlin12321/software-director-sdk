@@ -31,6 +31,7 @@ TOLD = "told"  # conversation id -> the context its agent was last told
 HANDING = "handing"  # node id -> what its hand-over conversation has done
 SESSION = "session"  # session id -> the session and what it has at its teams
 JOINED = "joined"  # conversation id, the human has written in it
+REPORTS = "reports"  # node id of a session's team -> what its agents recorded
 DRAFT = "draft"  # node id of a session's team -> the spec it wrote there
 
 _TABLES = """

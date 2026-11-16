@@ -2,15 +2,21 @@
 
 import asyncio
 import logging
+from itertools import count
 from pathlib import Path
 
 from openhands.agent_server.director import routing
 from openhands.agent_server.director.boundary import owns
 from openhands.agent_server.director.git import GitError, git
 from openhands.agent_server.director.models import OrgNode
-from openhands.agent_server.director.org_store import AGENT_LOST
+from openhands.agent_server.director.org_store import (
+    AGENT_LOST,
+    reviews_only,
+    session_id_of,
+)
 from openhands.agent_server.director.prompts import misrouted_notice
 from openhands.agent_server.director.routing import Card, Choice
+from openhands.agent_server.director.service.state import team_of
 from openhands.agent_server.director.service.teams import Teams
 from openhands.sdk.errors import Invalid
 
@@ -62,7 +68,14 @@ class Requests(Teams):
                 nothing about whose the request is.
         """
         store = self.store
-        # A session takes what the human writes to it and no request more.
+        # What the human asks opens a session of its own, which any team
+        # can have. What a team asks stays in its session: only a team
+        # whose place there can take a request now is asked.
+        within = session_id_of(asker) if asker else ""
+
+        def place(node: OrgNode) -> OrgNode | None:
+            return store.instance(node.id, within) if asker else node
+
         nodes = store.teams()
         parents = {node.id: node.parent_id for node in nodes}
         below = [
@@ -71,7 +84,11 @@ class Requests(Teams):
             if node.id == start.id
             or any(above.id == start.id for above in store.ancestors(node.id))
         ]
-        takes = {node.id for node in below if takes_requests(node)} | {start.id}
+        takes = {
+            node.id
+            for node in below
+            if asker is None or ((at := place(node)) and takes_requests(at))
+        } | {start.id}
         if len(takes) == 1:
             return Choice(start.id, "top", False, "no team below can take it")
         root = store.get(store.root_id) if store.root_id else None
@@ -87,14 +104,20 @@ class Requests(Teams):
         # same: what is its own then goes to the team above it.
         cards = await asyncio.to_thread(
             self._cards,
-            [node for node in below if node.agents or node.id == start.id],
+            [
+                node
+                for node in below
+                if asker is None
+                or node.id == start.id
+                or ((at := place(node)) and at.agents)
+            ],
             tracked,
         )
         own = (
             {
                 node.id
                 for node in below
-                if routing.on_one_line(node.id, asker.id, parents)
+                if routing.on_one_line(node.id, team_of(asker), parents)
             }
             if asker
             else set()
@@ -186,6 +209,22 @@ class Requests(Teams):
             )
         request = mine[-1]
         self.keep_routed("misrouted", node, request.text, request.chosen_by, why)
+        if reviews_only(above):
+            # Nobody works above the team a session was opened at: the
+            # human, who asked, is told.
+            taken = {escalation.id for escalation in node.escalations}
+            self.store.raise_escalation(
+                node.id,
+                next(name for n in count(1) if (name := f"misrouted-{n}") not in taken),
+                kind="design_decision",
+                title="This request is not this team's",
+                detail=f"{why}\n\nThe request:\n{request.text}",
+            )
+            self._save_soon()
+            return (
+                "The human, who asked, is told that it is not your team's. "
+                "Wait for the answer."
+            )
         self.tell_ic(above.id, misrouted_notice(node, request.text, why))
         return (
             f"Handed to the IC of the team above ({above.title}). It is no "

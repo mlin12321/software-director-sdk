@@ -61,6 +61,7 @@ from openhands.agent_server.director.models import (
     PauseReason,
     RecoveryItem,
     RoutedRequest,
+    SessionTeamInput,
     SplitChild,
     TeamEnforcement,
     TeamMatch,
@@ -72,6 +73,8 @@ from openhands.agent_server.director.org_persistence import (
 )
 from openhands.agent_server.director.org_store import (
     OrgStore,
+    session_id_of,
+    session_team_id,
     team_id_of,
 )
 from openhands.agent_server.director.pods import PodLauncher
@@ -145,6 +148,9 @@ TOOLS_OF: dict[AgentRole, tuple[str, ...]] = {
     ),
 }
 HAND_OVER_TOOLS = ("read_node_context", "hand_over", "write_spec")
+# What an IC has of the director's tools where it only reviews the work of
+# a session.
+REVIEW_TOOLS = ("read_node_context", "report", "review_team")
 DIRECTOR_TOOL_NAMES = tuple(dict.fromkeys((*TOOLS_OF["ic"], *TOOLS_OF["manager"])))
 # How a team that was set up and given no task reads to the IC above.
 NOT_STARTED = "not started"
@@ -217,6 +223,8 @@ PAUSE_LANE = "pause"
 STALL_LANE = "stalls"
 # The steps the director takes for a team's review, in its own lane.
 _REVIEW_STEPS = ("request_review", "accept")
+# The escalation that asks the human to clear the way for a merge.
+MERGE_WAITS = "merge-waits"
 # How many of the director's own model calls run at once.
 MODEL_CALLS_AT_ONCE = 2
 
@@ -260,8 +268,14 @@ def hand_over_of(node: OrgNode) -> HandOverMode | None:
     return None
 
 
-def _agent_title(team: str, role: AgentRole) -> str:
-    return f"{team} ({ROLE_NAMES[role]})"
+def _agent_title(
+    team: str, role: AgentRole, session: str = "", *, review: bool = False
+) -> str:
+    """What an agent's conversation is called. The session is named unless
+    it is called what its team is, and an IC that only reviews it is
+    called its reviewer."""
+    where = f"{team} · {session}" if session and session != team else team
+    return f"{where} ({'Reviewer' if review else ROLE_NAMES[role]})"
 
 
 def _summary_of(text: str) -> str:
@@ -490,10 +504,8 @@ class ServiceState:
 
     def summary(self) -> OrgSummary:
         store = self.store
-        root = store.get(store.root_id) if store.root_id else None
         return OrgSummary(
             root_id=store.root_id,
-            top_conversation_id=agent_conversation(root, "ic") if root else None,
             node_count=len(store),
             repo_path=str(self._repo_dir),
             directory=self._home(),
@@ -520,7 +532,7 @@ class ServiceState:
     def settings_state(self) -> DirectorSettingsState:
         """The settings, with how large the org is now."""
         levels: dict[str, int] = {}
-        for node in self.store.all():
+        for node in self.store.teams():
             levels[node.id] = levels.get(node.parent_id or "", 0) + 1
         return DirectorSettingsState(
             **self.settings.model_dump(),
@@ -1159,18 +1171,18 @@ def _spec_file(directory: str) -> str:
 
 
 def _child_node(taken: set[str], parent: OrgNode, child: SplitChild) -> OrgNodeInput:
-    """The team a split makes of ``child``, under an id that is not in
-    ``taken`` and is added to it."""
+    """The team a split makes of ``child`` in the session of ``parent``,
+    for a team whose id is not in ``taken`` and is added to it."""
     base = ".".join(
         re.sub(r"[^A-Za-z0-9_-]+", "-", segment) for segment in child.path.split("/")
     )
-    node_id, attempt = base, 1
-    while node_id in taken:
+    team_id, attempt = base, 1
+    while team_id in taken:
         attempt += 1
-        node_id = f"{base}-{attempt}"
-    taken.add(node_id)
-    return OrgNodeInput(
-        id=node_id,
+        team_id = f"{base}-{attempt}"
+    taken.add(team_id)
+    made = OrgNodeInput(
+        id=team_id,
         parent_id=parent.id,
         title=child.title,
         boundary=child_boundary(child),
@@ -1183,6 +1195,22 @@ def _child_node(taken: set[str], parent: OrgNode, child: SplitChild) -> OrgNodeI
         headline=provisional_summary(child.task).headline,
         spec_summary=_summary_of(child.task),
     )
+    session = session_id_of(parent)
+    if not session:
+        return made
+    return SessionTeamInput(
+        **made.model_dump(exclude={"id"}),
+        id=session_team_id(team_id, session),
+        session=session,
+        team_id=team_id,
+    )
+
+
+def _unit(kept: dict[str, Any]) -> OrgNodeInput:
+    """A team as it was kept in a plan: of the org, or of a session."""
+    if "session" in kept:
+        return SessionTeamInput.model_validate(kept)
+    return OrgNodeInput.model_validate(kept)
 
 
 def _shared_root(nodes: list[dict[str, Any]]) -> str | None:

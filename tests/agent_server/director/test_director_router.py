@@ -79,7 +79,8 @@ def test_returns_a_node_with_its_ancestors_and_children(client: TestClient):
     assert response.status_code == 200
     body = response.json()
     assert body["node"]["id"] == "a"
-    assert body["node"]["descendant_counts"]["idle"] == 1
+    # The saved tree keeps nothing of the work: every team comes back idle.
+    assert body["node"]["descendant_counts"]["idle"] == 2
     assert [node["id"] for node in body["ancestors"]] == ["root"]
     assert [node["id"] for node in body["children"]] == ["a1", "a2"]
 
@@ -529,7 +530,6 @@ def test_the_summary_says_there_is_no_org_yet_and_where_one_would_work(repo: Pat
     assert response.status_code == 200
     assert response.json() == {
         "root_id": None,
-        "top_conversation_id": None,
         "node_count": 0,
         "repo_path": str(repo),
         "directory": "",
@@ -553,16 +553,21 @@ def test_an_org_cannot_be_started_while_the_director_runs_no_agents(repo: Path):
     assert response.status_code == 503
 
 
-async def test_starting_an_org_returns_its_root_and_only_works_once(running, repo):
+async def test_starting_an_org_returns_its_first_session_and_only_works_once(
+    running, repo
+):
     client, launcher, _ = running
 
     created = await client.post("/api/director/org", json=org_body(repo))
     again = await client.post("/api/director/org", json=org_body(repo))
 
     assert created.status_code == 201
-    root = created.json()
-    assert (root["id"], root["title"]) == ("root", "Checkout")
-    assert [agent["role"] for agent in root["agents"]] == ["ic"]
+    session = created.json()["session"]
+    top = session["teams"][0]
+    assert (top["id"], top["title"]) == (f"root@{session['id']}", "Checkout")
+    assert [(agent["role"], agent["conversation_id"]) for agent in top["agents"]] == [
+        ("ic", created.json()["conversation_id"])
+    ]
     assert launcher.root is not None
     assert again.status_code == 409
     summary = (await client.get("/api/director/org")).json()
@@ -587,24 +592,26 @@ async def test_an_org_is_paused_asked_what_it_holds_and_resumed(running, repo):
     no_org = await client.post("/api/director/org/pause")
     created = await client.post("/api/director/org", json=org_body(repo))
     await service.settled()
-    root_ic = created.json()["agents"][0]["conversation_id"]
+    root_ic = created.json()["conversation_id"]
+    top = created.json()["session"]["teams"][0]
     delivered = len(launcher.messages_to(root_ic))
 
     paused = await client.post("/api/director/org/pause")
-    await client.post("/api/director/org/messages", json={"text": "Add a cart"})
+    asked = await client.post("/api/director/org/messages", json={"text": "Refunds"})
+    service.tell_ic(top["id"], "Add a cart", human=True)
     await service.settled()
     summary = await client.get("/api/director/org")
     recovery = await client.get("/api/director/org/recovery")
 
-    assert no_org.status_code == 409
+    assert (no_org.status_code, asked.status_code) == (409, 409)
     assert paused.status_code == 200 and paused.json()["paused"] == "human"
     assert summary.json()["paused"] == "human"
     assert recovery.json() == {
         "paused": "human",
         "items": [
             {
-                "node_id": "root",
-                "title": created.json()["title"],
+                "node_id": top["id"],
+                "title": top["title"],
                 "kind": "message",
                 "detail": "1 message is delivered.",
             }
@@ -624,8 +631,10 @@ async def test_an_org_is_paused_asked_what_it_holds_and_resumed(running, repo):
 async def test_an_org_is_pushed_pulled_and_its_merge_asked_for(running, repo, tmp_path):
     client, _, service = running
     nothing = await client.post("/api/director/org/push")
-    await client.post("/api/director/org", json=org_body(repo))
+    created = await client.post("/api/director/org", json=org_body(repo))
     await service.settled()
+    session = created.json()["session"]["id"]
+    start_again = f"/api/director/org/sessions/{session}/teams/root/start_again"
     no_remote = await client.post("/api/director/org/pull", json={"remote": "nope"})
     bare = tmp_path / "remote.git"
     run_git(tmp_path, "init", "--quiet", "--bare", str(bare))
@@ -637,8 +646,7 @@ async def test_an_org_is_pushed_pulled_and_its_merge_asked_for(running, repo, tm
     resolve = await client.post("/api/director/org/merge/resolve", json={})
     abort = await client.post("/api/director/org/merge/abort")
     again = await client.post(
-        "/api/director/org/nodes/root/start_again",
-        json={"conversation": org_body(repo)["conversation"]},
+        start_again, json={"conversation": org_body(repo)["conversation"]}
     )
 
     assert nothing.status_code == 409 and no_remote.status_code == 404
@@ -647,18 +655,24 @@ async def test_an_org_is_pushed_pulled_and_its_merge_asked_for(running, repo, tm
     assert merge.status_code == 200 and merge.json() is None
     assert resolve.status_code == 409 and abort.status_code == 409
     assert again.status_code == 409
-    unasked = await client.post("/api/director/org/nodes/root/start_again", json={})
+    unasked = await client.post(start_again, json={})
     assert unasked.status_code == 409
     assert (await client.get("/api/director/org")).json()["merging"] is False
 
 
 async def test_answering_an_escalation_settles_it_and_tells_the_team(running, repo):
     client, launcher, service = running
-    root = (await client.post("/api/director/org", json=org_body(repo))).json()
+    opened = (await client.post("/api/director/org", json=org_body(repo))).json()
+    session = opened["session"]
     service.store.raise_escalation(
-        "root", "jwt", kind="design_decision", title="JWT or opaque tokens?"
+        session["teams"][0]["id"],
+        "jwt",
+        kind="design_decision",
+        title="JWT or opaque tokens?",
     )
-    url = "/api/director/org/nodes/root/escalations/{}/answer"
+    url = (
+        f"/api/director/org/sessions/{session['id']}/teams/root/escalations/{{}}/answer"
+    )
 
     blank = await client.post(url.format("jwt"), json={"answer": ""})
     unknown = await client.post(url.format("nothing"), json={"answer": "Opaque."})
@@ -668,10 +682,10 @@ async def test_answering_an_escalation_settles_it_and_tells_the_team(running, re
     assert (blank.status_code, unknown.status_code) == (422, 404)
     assert answered.status_code == 200
     assert answered.json()["escalations"] == []
-    assert "Opaque." in launcher.messages_to(root["agents"][0]["conversation_id"])[-1]
+    assert "Opaque." in launcher.messages_to(opened["conversation_id"])[-1]
 
 
-async def test_the_first_message_starts_an_org_and_later_ones_find_its_teams(
+async def test_the_first_message_starts_an_org_and_later_ones_open_sessions_in_it(
     running, repo
 ):
     client, launcher, service = running
@@ -684,12 +698,13 @@ async def test_the_first_message_starts_an_org_and_later_ones_find_its_teams(
     await service.settled()
 
     assert first.status_code == 200
-    root = service.store.get("root")
-    assert root is not None and root.title == "Build the checkout flow"
+    [session] = service.sessions()
+    top = session.teams[0]
+    assert top.title == "Build the checkout flow"
     assert first.json() == {
-        "node_id": "root",
+        "node_id": top.id,
         "team": "Build the checkout flow",
-        "conversation_id": agent_conversation(root, "ic"),
+        "conversation_id": agent_conversation(top, "ic"),
         "started_org": True,
         "chosen_by": "path",
         "reason": "",
@@ -701,10 +716,18 @@ async def test_the_first_message_starts_an_org_and_later_ones_find_its_teams(
     )
     await service.settled()
 
-    assert later.json() == {**first.json(), "started_org": False}
-    assert launcher.messages_to(later.json()["conversation_id"])[-1] == (
-        "Add refunds\n\n(The human sent this from services/api.)"
-    )
+    _, opened = service.sessions()
+    place = opened.teams[0]
+    assert (opened.team_id, place.id) == ("root", f"root@{opened.id}")
+    assert later.json() == {
+        **first.json(),
+        "node_id": place.id,
+        "conversation_id": agent_conversation(place, "ic"),
+        "started_org": False,
+    }
+    start = launcher.derived[-1]
+    assert str(start.conversation_id) == later.json()["conversation_id"]
+    assert "Add refunds\n\n(The human sent this from services/api.)" in start.task
 
 
 async def test_a_message_that_cannot_be_routed_is_refused(running, repo):
@@ -820,6 +843,7 @@ def test_the_limits_on_new_teams_are_read_changed_and_kept(saved_tree: Path):
         "manager_check_accepted_reviews": 5,
         "manager_check_ic_setbacks": 3,
         "route_requests": True,
+        "session_worktrees": True,
         "teams": 5,
         "depth": 3,
         "max_concurrent_runs": 7,
@@ -840,11 +864,11 @@ def test_teams_are_searched_by_title_and_directory(client: TestClient):
 
 async def test_a_teams_changes_are_listed_shown_and_edited_by_hand(running, repo):
     client, launcher, service = running
-    root = (await client.post("/api/director/org", json=org_body(repo))).json()
+    opened = (await client.post("/api/director/org", json=org_body(repo))).json()
     await service.settled()
-    ic = root["agents"][0]["conversation_id"]
+    ic = opened["conversation_id"]
     (repo / "README.md").write_text("hello\nfrom the agent\n")
-    url = "/api/director/org/nodes/root"
+    url = f"/api/director/org/nodes/{opened['session']['teams'][0]['id']}"
 
     listed = await client.get(f"{url}/changes")
     sides = await client.get(f"{url}/changes/file", params={"path": "README.md"})

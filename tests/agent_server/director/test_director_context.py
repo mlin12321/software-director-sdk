@@ -12,7 +12,6 @@ from openhands.agent_server.director.context import (
     changed,
     steady,
 )
-from openhands.agent_server.director.models import RouteMessageRequest
 from openhands.agent_server.director.run_state import TOLD
 from openhands.agent_server.director.service import DirectorService
 from openhands.agent_server.director.tools import (
@@ -36,6 +35,7 @@ from tests.agent_server.director.test_director_teams import started
 from tests.agent_server.director.test_director_tools import (
     ic,
     manager,
+    node,
     split_root,
     use,
     woken,
@@ -68,9 +68,10 @@ def update_of(message: str) -> dict[str, Any] | None:
 
 async def tell(service: DirectorService, launcher: FakeLauncher, to: str) -> str:
     """Send the IC of a team a message from the human; what it got."""
-    await service.route_message(RouteMessageRequest(text="Go on.", path=to))
+    team = "apps.web" if to else "root"
+    service.tell_ic(node(service, team).id, "Go on.", human=True)
     await service.settled()
-    return launcher.messages_to(ic(service, "apps.web" if to else "root"))[-1]
+    return launcher.messages_to(ic(service, team))[-1]
 
 
 def test_a_team_that_starts_or_ends_a_turn_has_not_changed():
@@ -155,8 +156,14 @@ async def test_a_briefing_carries_the_teams_whole_context(
     assert "read_node_context` is not needed in normal work" in start.task
     block = start.task[start.task.index("lost track.\n") :]
     rest = json.loads(block[block.index("{") : block.rindex("}") + 1])
-    assert rest["you"] == {"role": "ic", "node_id": "apps.web", "team": "Web"}
-    assert rest["team_above"] == "root" and rest["sub_teams"] == []
+    assert rest["you"] == {
+        "role": "ic",
+        "node_id": node(service, "apps.web").id,
+        "team": "Web",
+        "session": "Checkout",
+    }
+    assert rest["team_above"] == node(service, "root").id
+    assert rest["sub_teams"] == []
     # Said in the briefing's own words above, so not a second time.
     assert "spec" not in rest and "boundary" not in rest
     await service.aclose()
@@ -235,8 +242,8 @@ async def test_reviews_and_escalations_below_come_with_what_wakes_the_ic(
     [to_settle] = told["escalations_for_you_to_settle"]["added"]
     assert to_settle["title"] == "Which router?"
     by_team = {team["node_id"]: team for team in told["sub_teams"]["changed"]}
-    assert by_team["apps.web"]["status"] == "blocked"
-    assert by_team["services.api"]["review"] == "pending"
+    assert by_team[node(service, "apps.web").id]["status"] == "blocked"
+    assert by_team[node(service, "services.api").id]["review"] == "pending"
     # The Web IC raised it itself and is not told so.
     web = await tell(service, launcher, "apps/web")
     assert "escalations_you_raised" not in (update_of(web) or {})
@@ -270,7 +277,7 @@ async def test_an_agent_never_told_its_context_gets_all_of_it_once(
     second = await tell(service, launcher, "")
 
     told = update_of(first)
-    assert told is not None and told["you"]["node_id"] == "root"
+    assert told is not None and told["you"]["node_id"] == node(service, "root").id
     assert "boundary" in told and second == "Go on."
     await service.aclose()
 
@@ -308,8 +315,8 @@ async def test_the_directors_own_notices_bring_what_changed_too(
     told = update_of(approved)
     assert told is not None
     assert [team["node_id"] for team in told["sub_teams"]["added"]] == [
-        "services.api",
-        "apps.web",
+        node(service, "services.api").id,
+        node(service, "apps.web").id,
     ]
     # The teams were given their tasks between the two: the one change.
     assert written.startswith("[director] Your Manager writes:\nCarry on.")
@@ -321,5 +328,8 @@ async def test_the_directors_own_notices_bring_what_changed_too(
     assert changed is not None and list(changed) == ["sub_teams"]
     assert [
         (team["node_id"], team["status"]) for team in changed["sub_teams"]["changed"]
-    ] == [("services.api", "at work"), ("apps.web", "at work")]
+    ] == [
+        (node(service, "services.api").id, "at work"),
+        (node(service, "apps.web").id, "at work"),
+    ]
     await service.aclose()

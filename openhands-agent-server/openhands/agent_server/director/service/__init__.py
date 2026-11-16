@@ -5,7 +5,7 @@ import logging
 import os
 from collections.abc import Awaitable, Callable
 from pathlib import Path
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from openhands.agent_server.director.boundary import (
     hand_over_refusal,
@@ -21,20 +21,19 @@ from openhands.agent_server.director.models import (
     Boundary,
     ChosenBy,
     CreateOrgRequest,
+    OpenedSession,
+    OpenSessionRequest,
     OrgNode,
     OrgNodeInput,
     RoutedMessage,
     RouteMessageRequest,
-    StartAgainRequest,
 )
 from openhands.agent_server.director.org_store import (
     AGENT_LOST,
 )
 from openhands.agent_server.director.pods import PodLauncher
 from openhands.agent_server.director.prompts import (
-    DIRECT_NOTE,
     NEED_WRITE,
-    POD_PROTOCOL,
 )
 from openhands.agent_server.director.recovery import (
     has_work,
@@ -47,21 +46,18 @@ from openhands.agent_server.director.service.state import (
     AGENT_PAUSED,
     DIRECTOR_TOOL_NAMES,
     HAND_OVER_TOOLS,
+    MERGE_WAITS,
     RESTART_NOTE,
     ROOT_ID,
     TOOLS_OF,
-    _agent_title,
-    _base_of,
     _branch_of,
     _checkout_root,
     _is_in,
-    _new_pod,
     _summary_of,
     agent_conversation,
     hand_over_of,
 )
 from openhands.agent_server.director.service.sync import Sync
-from openhands.sdk.conversation.request import AgentLaunchAdditions
 from openhands.sdk.errors import (
     Conflict,
     NotFound,
@@ -69,7 +65,6 @@ from openhands.sdk.errors import (
     Unprocessable,
 )
 from openhands.sdk.event import ActionEvent
-from openhands.sdk.tool.spec import Tool
 
 
 logger = logging.getLogger(__name__)
@@ -171,8 +166,9 @@ class DirectorService(Sync):
                 self._run.close()
                 self._run = None
 
-    async def create_org(self, request: CreateOrgRequest) -> OrgNode:
-        """Start the root team of a new org and brief its IC with the task.
+    async def create_org(self, request: CreateOrgRequest) -> OpenedSession:
+        """Start a new org: its top team, and the session that works on
+        the task, whose IC is the conversation the task came in.
 
         Raises:
             Conflict: The director already has an org, or serves the fixture.
@@ -180,7 +176,7 @@ class DirectorService(Sync):
                 workspace is not in a git repository.
             Unprocessable: The conversation cannot lead an org.
         """
-        launcher = self._require_launcher()
+        self._require_launcher()
         if self._fixture:
             raise Conflict("The director serves a fixture tree; it cannot run an org")
         store = await asyncio.to_thread(lambda: self.store)
@@ -193,55 +189,37 @@ class DirectorService(Sync):
             raise Unprocessable(
                 "An org's agents run in the server's own process, not in Docker"
             )
-
-        ic_id = conversation.conversation_id or uuid4()
         named = provisional_summary(request.task)
         title = request.title or named.title
-        additions = conversation.agent_launch_additions or AgentLaunchAdditions()
-        suffix = "\n\n".join(
-            part
-            for part in (additions.system_message_suffix_append, POD_PROTOCOL)
-            if part
-        )
         async with self._create_lock:
             if store.root_id is not None:
                 raise Conflict("The director already has an org")
             configured, self._repo_dir = self._repo_dir, repository
+            # The top team as the org keeps it: what it is for and where.
+            # Nobody works at it but in a session.
             store.upsert(
                 OrgNodeInput(
                     id=ROOT_ID,
                     parent_id=None,
                     title=title,
                     boundary=Boundary(path="", writable=["**"]),
-                    isolation="worktree" if conversation.worktree else "shared",
-                    worktree_path=str(workspace),
-                    branch="",
-                    agents=_new_pod(ic_id),
+                    isolation="shared",
+                    worktree_path=str(repository),
+                    branch=await asyncio.to_thread(_branch_of, str(repository)),
+                    agents=[],
                     status="idle",
                     headline=named.headline,
                     spec_summary=_summary_of(request.task),
                 )
             )
             try:
-                tool_params = await asyncio.to_thread(self._confine, ROOT_ID, "ic")
-                started = await launcher.start_root(
-                    conversation.model_copy(
-                        update={
-                            "conversation_id": ic_id,
-                            "initial_message": None,
-                            # Named like every other agent of the org.
-                            "autotitle": False,
-                            "agent_launch_additions": additions.model_copy(
-                                update={"system_message_suffix_append": suffix}
-                            ),
-                        }
+                opened = await self.open_session(
+                    OpenSessionRequest(
+                        text=request.task, title=request.title or "", node_id=ROOT_ID
                     ),
-                    [Tool(name=name) for name in TOOLS_OF["ic"]],
-                    title=_agent_title(title, "ic"),
-                    tool_params=tool_params,
-                    adapt_agent=await asyncio.to_thread(
-                        self._adapter, str(ic_id), TOOLS_OF["ic"]
-                    ),
+                    conversation,
+                    # An org without a name is named after its first task.
+                    rename=request.title is None,
                 )
             except BaseException:
                 store.remove(ROOT_ID)
@@ -249,29 +227,26 @@ class DirectorService(Sync):
                 raise
             await asyncio.to_thread(self._remember, repo_path=str(self._repo_dir))
             await asyncio.to_thread(self._working)
-            store.set_agent(
-                ROOT_ID, "ic", kind=started.kind, acp_server=started.acp_server
+        if request.title is None:
+            # The org is named after what its first session is for.
+            top = opened.session.teams[0].id
+            self._enqueue(lambda: self._name_org(top), top)
+        return opened
+
+    async def _name_org(self, top_id: str) -> None:
+        """Give the top team the name a model made of the first task."""
+        top = self.store.get(top_id)
+        if top is not None and self.store.root_id is not None:
+            self.store.update_node(
+                self.store.root_id, title=top.title, headline=top.headline
             )
-            root = store.update_node(
-                ROOT_ID,
-                worktree_path=started.workspace,
-                isolation=started.isolation,
-                branch=await asyncio.to_thread(_branch_of, started.workspace),
-                base_commit=await asyncio.to_thread(_base_of, started.workspace),
-                boundary_enforcement=self._enforcement(started.kind),
-            )
-        # First, so that both agents are told the name the team keeps.
-        self._enqueue(
-            lambda: self._summarize(
-                ROOT_ID, request.task, rename=request.title is None, first=True
-            ),
-            ROOT_ID,
-        )
-        self._begin("brief", ROOT_ID, role="ic", task=request.task)
-        return root
 
     async def route_message(self, request: RouteMessageRequest) -> RoutedMessage:
-        """Hand what the human says to the team nearest to where they say it.
+        """Open a session for what the human asks.
+
+        With ``auto`` the director chooses the team the request belongs to.
+        Without it the request goes to the team nearest to where the human
+        said it, and no further: the human wrote to that team.
 
         Without an org, the message joins the one saved in the repository of
         the conversation it comes with (or above it), and failing that
@@ -280,7 +255,7 @@ class DirectorService(Sync):
         Raises:
             Unprocessable: The path is outside the org's repository, or there
                 is no org and the request does not say how to start one.
-            Conflict: No team of the org can take the message.
+            Conflict: No session can be opened for the message.
             Unavailable: The director is not running.
         """
         self._require_launcher()
@@ -297,13 +272,13 @@ class DirectorService(Sync):
                     self._join, Path(conversation.workspace.working_dir)
                 )
                 if not joined:
-                    root = await self.create_org(
+                    opened = await self.create_org(
                         CreateOrgRequest(task=request.text, conversation=conversation)
                     )
                     return RoutedMessage(
-                        node_id=root.id,
-                        team=root.title,
-                        conversation_id=agent_conversation(root, "ic") or "",
+                        node_id=opened.session.teams[0].id,
+                        team=opened.session.team,
+                        conversation_id=opened.conversation_id,
                         started_org=True,
                     )
                 await self._came_back()
@@ -315,14 +290,6 @@ class DirectorService(Sync):
             )
         )
         node = nearest_team(store.teams(), path, lost=AGENT_LOST)
-        if node is None and request.conversation is not None:
-            # Nobody here can take it: the nearest team whose agents have no
-            # conversation on this server is started again to take it.
-            gone = nearest_team(store.teams(), path, lost="")
-            if gone is not None and gone.status != "done":
-                node = await self.start_again(
-                    gone.id, StartAgainRequest(conversation=request.conversation)
-                )
         if node is None:
             raise Conflict(
                 "No team of the org can take a message about "
@@ -334,27 +301,21 @@ class DirectorService(Sync):
         if request.auto and self.settings.route_requests:
             choice = await self.choose_team(text, node)
             chosen_by, reason = choice.by, choice.reason
-            lower = store.get(choice.node_id)
-            if lower is not None and lower.id != node.id:
-                conversation_id = self.tell_ic(lower.id, text + DIRECT_NOTE, human=True)
-                await asyncio.to_thread(
-                    self.keep_routed, "asked", lower, text, chosen_by, reason
-                )
-                return RoutedMessage(
-                    node_id=lower.id,
-                    team=lower.title,
-                    conversation_id=conversation_id or "",
-                    started_org=False,
-                    chosen_by=chosen_by,
-                    reason=reason,
-                )
-        if path != node.boundary.path:
+            node = store.team(choice.node_id) or node
+        elif path != node.boundary.path:
             text = f"{text}\n\n(The human sent this from {path}.)"
-        conversation_id = self.tell_ic(node.id, text, human=True) or ""
+        opened = await self.open_session(
+            OpenSessionRequest(text=text, node_id=node.id), request.conversation
+        )
+        top = opened.session.teams[0]
+        if chosen_by not in ("path", "top"):
+            await asyncio.to_thread(
+                self.keep_routed, "asked", top, request.text, chosen_by, reason
+            )
         return RoutedMessage(
-            node_id=node.id,
-            team=node.title,
-            conversation_id=conversation_id,
+            node_id=top.id,
+            team=top.title,
+            conversation_id=opened.conversation_id,
             started_org=False,
             chosen_by=chosen_by,
             reason=reason,
@@ -428,6 +389,11 @@ class DirectorService(Sync):
                 f"{escalation.held_by}; it does not wait on the human"
             )
         store.settle_escalation(node_id, escalation_id)
+        if escalation_id == MERGE_WAITS:
+            # The way into the checkout was cleared: the accepted work is
+            # merged now, with nobody asked again.
+            self._begin("accept", node_id, needed_above="", reconciled="")
+            return store.get(node_id) or node
         self.notify(
             agent_conversation(node, escalation.raised_by),
             f"The human answered your escalation {escalation.title!r}:\n{answer}",

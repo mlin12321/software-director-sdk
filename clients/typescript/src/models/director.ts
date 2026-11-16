@@ -260,12 +260,6 @@ export interface DirectorOrgNodeDetail {
 export interface DirectorOrgSummary {
   /** `null` when no org has been started. */
   root_id: DirectorNodeId | null;
-  /**
-   * The conversation of the top team's IC; `null` when there is no org or
-   * that IC has no conversation here. What the human writes there is for the
-   * org as a whole and may be sent with `auto`.
-   */
-  top_conversation_id: string | null;
   node_count: number;
   /**
    * The repository the org works in: the one its first conversation was
@@ -439,14 +433,21 @@ export interface DirectorSessionTeam extends DirectorOrgNode {
   session: string;
   /** The team of the org. */
   team_id: DirectorNodeId;
+  /**
+   * Whether this is the place the session's work is reviewed from: the team
+   * above the one the session was opened at (the top team itself for a
+   * session opened there), whose IC only reviews here.
+   */
+  review_only: boolean;
 }
 
 /**
- * A line of work the human opened at a team, beside the org's own. It is not
- * part of the org tree, which is the org's structure: it has agents and a
- * checkout of its own at the team it was opened at and, once they are given
- * a task in it, at the teams below. Its work is reviewed by the IC of the
- * team above and merged into that team's checkout.
+ * A line of work at a team. All of an org's work is done in sessions: a team
+ * of the org tree is reference only, and a session has agents and a checkout
+ * of its own at the team it was opened at and, once they are given a task
+ * in it, at the teams below. Its work is reviewed by the IC of the team
+ * above in review mode and, once accepted, merged into the repository's
+ * checkout, where it becomes the org's.
  */
 export interface DirectorSession {
   id: string;
@@ -860,6 +861,8 @@ export interface DirectorSettings {
    * may go straight to the team the director chooses.
    */
   route_requests: boolean;
+  /** Whether a session works in a git worktree of its own. */
+  session_worktrees: boolean;
 }
 
 /** The settings, beside what the org has now. */
