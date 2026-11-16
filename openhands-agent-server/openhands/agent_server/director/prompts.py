@@ -12,10 +12,10 @@ from openhands.agent_server.director.models import (
     FormerTeam,
     InheritedSpec,
     OrgChange,
-    OrgNode,
     Report,
     Review,
     ReviewFinding,
+    SessionTeam,
     SplitChild,
     TeamEvent,
     TeamEventKind,
@@ -304,7 +304,7 @@ def _split_effects(children: list[SplitChild], unfinished: dict[str, list[str]])
     return "\n".join(lines)
 
 
-def put_aside_notice(team: OrgNode, files: list[str], ref: str) -> str:
+def put_aside_notice(team: SessionTeam, files: list[str], ref: str) -> str:
     """What an IC is told when changes it made in a started sub-team's
     directory were taken out of its checkout."""
     return (
@@ -414,7 +414,7 @@ def approved_notice(
 
 
 def replaced_job(
-    teams: list[OrgNode],
+    teams: list[SessionTeam],
     children: list[SplitChild],
     former: list[FormerTeam],
     specs: dict[str, str],
@@ -555,7 +555,7 @@ def _of_the_team(
 
 
 def hand_over_brief(
-    node: OrgNode,
+    node: SessionTeam,
     job: str,
     specs: list[InheritedSpec],
     contracts: list[BoundaryContracts],
@@ -591,7 +591,7 @@ def hand_over_brief(
 
 
 def brief(
-    node: OrgNode,
+    node: SessionTeam,
     role: AgentRole,
     task: str,
     specs: list[InheritedSpec],
@@ -634,7 +634,7 @@ def _finding_lines(findings: list[ReviewFinding]) -> list[str]:
     return lines
 
 
-def session_work(team: OrgNode, title: str, request: str) -> str:
+def session_work(team: SessionTeam, title: str, request: str) -> str:
     """What comes before the review request for the work of the session
     titled ``title``, which was opened for ``request``."""
     return (
@@ -650,7 +650,7 @@ def session_work(team: OrgNode, title: str, request: str) -> str:
     )
 
 
-def accept_in_order(team: OrgNode, first: OrgNode) -> str:
+def accept_in_order(team: SessionTeam, first: SessionTeam) -> str:
     """Why work is not accepted while work submitted before it waits."""
     return (
         f"The work of {first.title!r} (node {first.id}) was submitted before "
@@ -662,7 +662,7 @@ def accept_in_order(team: OrgNode, first: OrgNode) -> str:
 
 
 def reconcile_request(
-    team: OrgNode,
+    team: SessionTeam,
     checkout: str,
     tip: str,
     files: list[str],
@@ -720,7 +720,7 @@ def reconcile_request(
     return "\n".join(lines)
 
 
-def org_change_request(team: OrgNode, session: str, change: OrgChange) -> str:
+def org_change_request(team: SessionTeam, session: str, change: OrgChange) -> str:
     """What the Manager of the place a session is reviewed from is told
     when sub-teams of the session wait for it."""
     lines = [
@@ -760,7 +760,7 @@ def teams_settled(above: str, taken: list[str], kept: list[str]) -> str:
     ).strip()
 
 
-def handed_up(sent: OrgNode, text: str, why: str) -> str:
+def handed_up(sent: SessionTeam, text: str, why: str) -> str:
     """What the IC of the team above is started with when the team a
     request was sent to said it is not its own."""
     return (
@@ -773,7 +773,7 @@ def handed_up(sent: OrgNode, text: str, why: str) -> str:
     )
 
 
-def session_brief(team: OrgNode, title: str, others: list[str]) -> str:
+def session_brief(team: SessionTeam, title: str, others: list[str]) -> str:
     """What the IC a session starts with is told after the human's request."""
     beside = (
         f" Other sessions at work on this team's directory: {', '.join(others)}."
@@ -802,24 +802,8 @@ def session_brief(team: OrgNode, title: str, others: list[str]) -> str:
     )
 
 
-def session_closed(title: str, team: str, kept: str | None) -> str:
-    """What the IC that reviewed a session's work is told when the human
-    closes the session."""
-    return (
-        f"The human closed the session {title!r} at {team!r}. Its agents and "
-        "its checkout are gone. What you accepted of its work is in your "
-        "checkout. "
-        + (
-            f"Commits of it that were never merged are kept at {kept}; "
-            "nothing is owed for them."
-            if kept
-            else "It left no commits that were not merged."
-        )
-    )
-
-
 def review_request(
-    team: OrgNode, review: Review, so_far: str = "", asked: list[str] | None = None
+    team: SessionTeam, review: Review, so_far: str = "", asked: list[str] | None = None
 ) -> str:
     """What the IC above is told when a team below submits its work.
 
@@ -883,7 +867,7 @@ def review_request(
     return "\n".join(lines)
 
 
-def asked_by_team(raiser: OrgNode, escalation: Escalation, team_for: str) -> str:
+def asked_by_team(raiser: SessionTeam, escalation: Escalation, team_for: str) -> str:
     """What a team's IC is told when the IC of a team that is not above it
     asks something of it directly."""
     return (
@@ -958,7 +942,7 @@ def many_requests_notice(row: dict[str, Any], table: list[dict[str, Any]]) -> st
     )
 
 
-def misrouted_notice(team: OrgNode, text: str, why: str) -> str:
+def misrouted_notice(team: SessionTeam, text: str, why: str) -> str:
     """What the IC above is told when a team says a request the human's
     words brought it directly is not its own."""
     return (
@@ -987,7 +971,7 @@ def _span(minutes: int) -> str:
     return f"{hours} h {rest} min" if rest else f"{hours} h"
 
 
-def unstarted_notice(team: OrgNode, minutes: int) -> str:
+def unstarted_notice(team: SessionTeam, minutes: int) -> str:
     """What the IC above is told of a team it set up and gave no task."""
     return (
         f"Team {team.title!r} (node {team.id}, {team.boundary.path or '.'}) "
@@ -1000,7 +984,7 @@ def unstarted_notice(team: OrgNode, minutes: int) -> str:
 
 
 def stall_notice(
-    team: OrgNode, minutes: int, *, in_a_turn: bool, account: str | None
+    team: SessionTeam, minutes: int, *, in_a_turn: bool, account: str | None
 ) -> str:
     """What the IC above is told of a team that shows no progress.
 
@@ -1252,7 +1236,7 @@ def event_line(event: TeamEvent) -> str:
 
 def manager_check(
     reason: str,
-    teams: list[OrgNode],
+    teams: list[SessionTeam],
     quiet: dict[str, int],
     blocked: dict[str, int],
     escalations: dict[str, int],
@@ -1386,7 +1370,7 @@ def proposal_facts(
     return "\n".join(["What the runtime knows of them:", *lines])
 
 
-def changes_requested(reviewer: OrgNode, findings: list[ReviewFinding]) -> str:
+def changes_requested(reviewer: SessionTeam, findings: list[ReviewFinding]) -> str:
     """What a team is told when its work was not accepted."""
     return "\n".join(
         [

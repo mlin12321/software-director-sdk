@@ -44,7 +44,7 @@ from openhands.agent_server.director.models import (
     TeamEventKind,
     Thread,
 )
-from openhands.agent_server.director.org_store import reviews_only, session_id_of
+from openhands.agent_server.director.org_store import reviews_only, team_id_of
 from openhands.agent_server.director.prompts import (
     NEEDED_WORTH_SAYING,
     event_line,
@@ -71,7 +71,6 @@ from openhands.agent_server.director.service.state import (
     ServiceState,
     _now,
     _spec_file,
-    team_of,
 )
 from openhands.agent_server.director.split import (
     is_inside,
@@ -104,10 +103,10 @@ class Records(ServiceState):
         self,
         above_id: str | None,
         kind: TeamEventKind,
-        team: OrgNode | None = None,
+        team: SessionTeam | None = None,
         detail: str = "",
         paths: Sequence[str] = (),
-        other: OrgNode | None = None,
+        other: SessionTeam | None = None,
         *,
         other_gone: tuple[str, str] | None = None,
     ) -> None:
@@ -129,12 +128,12 @@ class Records(ServiceState):
             at=_now(),
             kind=kind,
             # The team of the org, whatever session it was the work of.
-            team_id=team_of(team) if team else "",
+            team_id=team.team_id if team else "",
             team=team.title if team else "",
             session=self.store.session_title(team) if team else "",
             detail=detail,
             paths=list(paths),
-            other_id=team_of(other) if other else (other_gone or ("", ""))[0],
+            other_id=other.team_id if other else (other_gone or ("", ""))[0],
             other=other.title if other else (other_gone or ("", ""))[1],
         )
         try:
@@ -142,7 +141,7 @@ class Records(ServiceState):
         except (GitError, OSError):
             logger.warning("Could not record %s for node %s", kind, above_id)
 
-    def record_need(self, team: OrgNode, path: str, how: str) -> None:
+    def record_need(self, team: SessionTeam, path: str, how: str) -> None:
         """Keep that a team needed a file of a team beside it; nothing is
         kept when ``path`` is no such team's. The same file needed the same
         way is kept once. Safe from any thread.
@@ -156,7 +155,7 @@ class Records(ServiceState):
         beside = next(
             (
                 other
-                for other in self.store.children(team.parent_id)
+                for other in self.store.below(team.parent_id)
                 if other.id != team.id and owns(other, path)
             ),
             None,
@@ -167,8 +166,8 @@ class Records(ServiceState):
             kept = False
             for event in self.team_memory.history(team.parent_id):
                 if event.kind == "set_up" and event.team_id in (
-                    team_of(team),
-                    team_of(beside),
+                    team.team_id,
+                    beside.team_id,
                 ):
                     # A new team in that place is counted from its start.
                     kept = False
@@ -178,7 +177,7 @@ class Records(ServiceState):
                         event.other_id,
                         event.paths,
                         event.detail,
-                    ) == (team_of(team), team_of(beside), [path], how)
+                    ) == (team.team_id, beside.team_id, [path], how)
             if not kept:
                 self.record_event(team.parent_id, "needed", team, how, [path], beside)
 
@@ -196,7 +195,7 @@ class Records(ServiceState):
         return routed
 
     def keep_routed(
-        self, kind: str, team: OrgNode, text: str, chosen_by: str, reason: str
+        self, kind: str, team: SessionTeam, text: str, chosen_by: str, reason: str
     ) -> None:
         """Keep a request that went straight to a team, or that the team
         said was not its own: for the whole org, and as an event in the
@@ -221,14 +220,14 @@ class Records(ServiceState):
             text[:ASKED_KEPT],
         )
 
-    def asked_below(self, node: OrgNode) -> list[dict[str, str]]:
+    def asked_below(self, node: SessionTeam) -> list[dict[str, str]]:
         """The latest of what the human asked directly of the teams below
         a team, oldest first."""
         store = self.store
         below = {
             team.id
-            for team in store.all()
-            if any(above.id == node.id for above in store.ancestors(team.id))
+            for team in store.places()
+            if any(above.id == node.id for above in store.above(team.id))
         }
         return [
             {
@@ -241,7 +240,7 @@ class Records(ServiceState):
             if request.kind == "asked" and request.team_id in below
         ][-ASKED_TOLD:]
 
-    def asked_of(self, team: OrgNode) -> list[str]:
+    def asked_of(self, team: SessionTeam) -> list[str]:
         """What the human asked a team directly since its work was last
         accepted, by the order of the record of the team above."""
         if team.parent_id is None:
@@ -266,13 +265,13 @@ class Records(ServiceState):
             >= NEEDED_WORTH_SAYING
         ]
 
-    def _so_far(self, team: OrgNode) -> str:
+    def _so_far(self, team: SessionTeam) -> str:
         """What became of a team's work before, in words, as the team above
         has it on record."""
         if team.parent_id is None:
             return ""
         records = track_records(self.team_memory.history(team.parent_id))
-        own = team_of(team)
+        own = team.team_id
         counted = next((record_line(r) for r in records if r["node_id"] == own), "")
         needed = [
             need_words(pair, own)
@@ -281,7 +280,7 @@ class Records(ServiceState):
         ]
         return "; ".join(part for part in (counted, *needed) if part)
 
-    def facts_of_proposal(self, node: OrgNode, proposal: SplitProposal) -> str:
+    def facts_of_proposal(self, node: SessionTeam, proposal: SplitProposal) -> str:
         """What the director knows of the sub-teams a team's IC proposes:
         how much is in each directory, which were changed together, what
         became of teams that had them before, and what was declined for
@@ -339,7 +338,7 @@ class Records(ServiceState):
             sizes, together, before + declined + needed, proposal.reason
         )
 
-    def _work_accepted(self, team: OrgNode) -> None:
+    def _work_accepted(self, team: SessionTeam) -> None:
         """A team's work was accepted: what its IC escalated on it is
         counted no further, since what it does next is other work."""
         if team.parent_id is None:
@@ -380,31 +379,28 @@ class Records(ServiceState):
         if found is None:
             raise NotFound(f"No agent of the org has conversation {conversation_id}")
         node, role = found
-        above = store.get(node.parent_id) if node.parent_id else None
-        if above is not None and above.id == node.id:
-            above = None
-        near: list[tuple[ConversationRelation, OrgNode]] = [
+        above = store.place(node.parent_id) if node.parent_id else None
+        near: list[tuple[ConversationRelation, SessionTeam]] = [
             *([("above", above)] if above else []),
             ("beside", node),
-            *(("below", team) for team in store.children(node.id)),
-            *(("session", team) for team in store.opened_under(node.id)),
+            *(("below", team) for team in store.below(node.id)),
         ]
         return ConversationPlace(
             conversation_id=conversation_id,
-            node_id=team_of(node),
+            node_id=node.team_id,
             team=node.title,
             role=role,
-            session_id=session_id_of(node),
+            session_id=node.session,
             session=store.session_title(node),
             human_joined=conversation_id in self._runs().marked(JOINED),
             links=[
                 ConversationLink(
                     conversation_id=agent.conversation_id,
                     relation=relation,
-                    node_id=team_of(team),
+                    node_id=team.team_id,
                     team=team.title,
                     role=agent.role,
-                    session_id=session_id_of(team),
+                    session_id=team.session,
                     session=store.session_title(team),
                     status=agent.status,
                 )
@@ -417,7 +413,7 @@ class Records(ServiceState):
             ],
         )
 
-    def threads_of(self, node: OrgNode) -> list[Thread]:
+    def threads_of(self, node: SessionTeam) -> list[Thread]:
         """What the agents of a team have said to Managers and ICs: its own
         two to each other, its Manager and its IC to the ICs directly
         below, and the Manager and the IC above to its IC. Threads nobody
@@ -441,7 +437,7 @@ class Records(ServiceState):
         ]
 
     def context_of(
-        self, node: OrgNode, role: AgentRole, *, in_full: bool = False
+        self, node: SessionTeam, role: AgentRole, *, in_full: bool = False
     ) -> dict[str, Any]:
         """Who an agent is and everything of the org that concerns its
         team. Safe from any thread.
@@ -472,15 +468,15 @@ class Records(ServiceState):
                 ],
             }
             | ({"asked_of_you_directly": True} if escalation.asked_of else {})
-            for other in store.all()
+            for other in store.places()
             for escalation in other.escalations
             if escalation.raised_by == role
             and (escalation.asked_of or escalation.held_by) == node.id
         ]
         others = [
             other
-            for other in store.all()
-            if team_of(other) == team_of(node)
+            for other in store.places()
+            if other.team_id == node.team_id
             and other.id != node.id
             and other.agents
             and not reviews_only(other)
@@ -528,7 +524,7 @@ class Records(ServiceState):
                     "review": child.review.state if child.review else None,
                     "stopped": child.stopped.reason if child.stopped else None,
                 }
-                for child in store.children(node.id)
+                for child in store.below(node.id)
             ],
             "review_of_your_work": node.review.model_dump() if node.review else None,
             "agent_profiles_a_sub_team_may_run_on": self.settings.allowed_profiles,
@@ -552,7 +548,7 @@ class Records(ServiceState):
             context["other_sessions_of_your_team"] = [
                 {
                     "node_id": other.id,
-                    "session": store.session_title(other) or OWN_SESSION,
+                    "session": store.session_title(other),
                     "status": other.status,
                     "headline": other.headline,
                     "review": other.review.state if other.review else None,
@@ -560,19 +556,7 @@ class Records(ServiceState):
                 }
                 for other in others
             ]
-        opened = store.opened_under(node.id)
-        if role == "ic" and opened:
-            context["sessions_whose_work_you_review"] = [
-                {
-                    "node_id": top.id,
-                    "team": top.title,
-                    "session": store.session_title(top),
-                    "status": top.status if top.agents else NOT_STARTED,
-                    "review": top.review.state if top.review else None,
-                }
-                for top in opened
-            ]
-        if role == "ic" and store.children(node.id):
+        if role == "ic" and store.below(node.id):
             context["asked_directly_of_teams_below"] = self.asked_below(node)
             context["what_teams_below_asked_of_each_other_directly"] = requests_between(
                 team_memory.history(node.id)
@@ -638,10 +622,14 @@ class Records(ServiceState):
             before: Only events before this time (ISO 8601).
         """
         team_memory = self.team_memory
+        # A record is the team's, whichever sessions have a place at it.
+        teams: dict[str, str] = {}
+        for node in (*self.store.teams(), *self.store.places()):
+            teams.setdefault(team_id_of(node), node.title)
         events = [
-            HistoryEvent(**event.model_dump(), above_id=node.id, above=node.title)
-            for node in self.store.all()
-            for event in team_memory.history(node.id)
+            HistoryEvent(**event.model_dump(), above_id=team_id, above=title)
+            for team_id, title in teams.items()
+            for event in team_memory.history(team_id)
             if event.kind != "needed" and (before is None or event.at < before)
         ]
         # Times are kept to the second: of events in one second the later
@@ -660,29 +648,30 @@ class Records(ServiceState):
         reports = [
             report
             for role in AGENT_ROLES
-            for report in team_memory.reports(team_of(node), role)
+            for report in team_memory.reports(team_id_of(node), role)
         ]
         return sorted([*reports, *self.own_reports(node)], key=lambda report: report.at)
 
     def own_reports(self, node: OrgNode) -> list[Report]:
-        """What the agents of a session's team recorded since the session's
+        """What the agents of a session's place recorded since the session's
         work was last accepted. It is the session's alone until its work
-        is accepted again, and the team's from then on."""
+        is accepted again, and the team's from then on. Nothing for a team
+        of the org."""
         kept = self._runs().marked(REPORTS).get(node.id)
         return _REPORTS.validate_json(kept) if kept else []
 
-    def _keep_report(self, node: OrgNode, report: Report) -> None:
+    def _keep_report(self, node: SessionTeam, report: Report) -> None:
         reports = [*self.own_reports(node), report]
         self._runs().mark(REPORTS, node.id, _REPORTS.dump_json(reports).decode())
 
     def _works_above(self, node: OrgNode) -> OrgNode | None:
-        """The team above ``node`` that works: nobody does at the place a
-        session's work is reviewed from."""
+        """What is above ``node``, a team of the org or a place: nobody
+        stands at the place a session's work is reviewed from."""
         above = self.store.get(node.parent_id) if node.parent_id else None
         return None if above is None or reviews_only(above) else above
 
     def _land_reports(
-        self, top: OrgNode, only: set[str] | None = None
+        self, top: SessionTeam, only: set[str] | None = None
     ) -> list[tuple[str, AgentRole]]:
         """Add what a session's agents recorded to the records of their
         teams, now that its work is accepted. The other sessions at those
@@ -691,20 +680,20 @@ class Records(ServiceState):
         Returns:
             The team and the role of each record that grew.
         """
-        session = session_id_of(top)
+        session = top.session
         team_memory = self._memory()
         run = self._runs()
         grown: list[tuple[str, AgentRole]] = []
         waits = self._waits(top)
-        for team in self.store.session(session) if session else []:
+        for team in self.store.session(session):
             if team.team_id in waits or (only is not None and team.team_id not in only):
                 continue
             # What a team the org no longer has reported is dropped with it.
-            kept = self.store.team(team_of(team)) is not None
+            kept = self.store.team(team.team_id) is not None
             for report in self.own_reports(team) if kept else []:
-                team_memory.append_report(team_of(team), report.role, report)
-                if (team_of(team), report.role) not in grown:
-                    grown.append((team_of(team), report.role))
+                team_memory.append_report(team.team_id, report.role, report)
+                if (team.team_id, report.role) not in grown:
+                    grown.append((team.team_id, report.role))
             run.unmark(REPORTS, team.id)
         return grown
 
@@ -753,35 +742,28 @@ class Records(ServiceState):
             The spec and the team's spec it was written over, None when
             the team had none; None when the session wrote no spec there.
         """
-        if not session_id_of(node):
-            return None
         kept = self._runs().marked(DRAFT).get(node.id)
         if kept is None:
             return None
         draft = json.loads(kept)
         return draft["spec"], draft["over"]
 
-    def write_spec(self, node: OrgNode, content: str) -> None:
-        """Replace the spec of a team's directory. One a session writes is
-        kept for that session alone until its work is accepted."""
+    def write_spec(self, node: SessionTeam, content: str) -> None:
+        """Write the spec of a place's directory. It is kept for the
+        session alone until its work is accepted."""
         path = node.boundary.path
-        if not session_id_of(node):
-            self.team_memory.write(path, SPEC_FILE, content)
-            return
         earlier = self.spec_draft(node)
         over = earlier[1] if earlier else self.team_memory.read(_spec_file(path))
         self._runs().mark(DRAFT, node.id, json.dumps({"spec": content, "over": over}))
 
-    def specs_to_reconcile(self, top: OrgNode) -> list[tuple[str, str, str]]:
+    def specs_to_reconcile(self, top: SessionTeam) -> list[tuple[str, str, str]]:
         """The specs a session wrote while the team's spec in the same
         directory was changed by someone else.
 
         Returns:
             For each, the directory, the team's spec now and the session's.
         """
-        session = session_id_of(top)
-        if not session:
-            return []
+        session = top.session
         team_memory = self._memory()
         found = []
         for team in self.store.session(session):
@@ -793,15 +775,15 @@ class Records(ServiceState):
                 found.append((team.boundary.path, now or "", draft[0]))
         return found
 
-    def _waits(self, top: OrgNode) -> set[str]:
+    def _waits(self, top: SessionTeam) -> set[str]:
         """The teams of a session that wait to be settled before they are
         the org's."""
-        review = self.store.get(top.parent_id or "")
-        if not isinstance(review, SessionTeam) or review.org_change is None:
+        review = self.store.place(top.parent_id or "")
+        if review is None or review.org_change is None:
             return set()
         return {team.team_id for team in review.org_change.teams}
 
-    def _land_specs(self, top: OrgNode, only: set[str] | None = None) -> None:
+    def _land_specs(self, top: SessionTeam, only: set[str] | None = None) -> None:
         """Make the specs a session wrote the specs of its teams, now that
         its work is accepted. What it wrote for a team that waits to be
         settled is kept with the session until then.
@@ -809,9 +791,7 @@ class Records(ServiceState):
         Args:
             only: The teams that were settled, when it is those alone.
         """
-        session = session_id_of(top)
-        if not session:
-            return
+        session = top.session
         team_memory = self._memory()
         run = self._runs()
         waits = self._waits(top)
@@ -830,11 +810,11 @@ class Records(ServiceState):
             path = team.boundary.path
             if team_memory.read(_spec_file(path)) != draft[0]:
                 team_memory.write(path, SPEC_FILE, draft[0])
-            self.store.update_node(
+            self.store.update_team(
                 team.team_id, spec_summary=team.spec_summary, old_specs=[]
             )
 
-    def _specs_left_in(self, path: str, removed: list[OrgNode]) -> list[OldSpec]:
+    def _specs_left_in(self, path: str, removed: list[SessionTeam]) -> list[OldSpec]:
         """The specs a team that is given ``path`` finds there: the one of
         the directory itself and those of the ``removed`` teams whose
         directories hold it or lie in it. None of them is its own."""
@@ -873,7 +853,9 @@ class Records(ServiceState):
             if directory in drafted or team_memory.read(_spec_file(directory))
         ]
 
-    def _record_contracts(self, node: OrgNode, contracts: str, replace: bool) -> None:
+    def _record_contracts(
+        self, node: SessionTeam, contracts: str, replace: bool
+    ) -> None:
         """Add the contracts of a split to those of the node's boundary,
         or put them in their place when the split replaced teams."""
         team_memory = self._memory()

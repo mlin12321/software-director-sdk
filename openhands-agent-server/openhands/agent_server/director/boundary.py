@@ -136,16 +136,13 @@ def _may_take(node: OrgNode, path: str) -> bool:
     return covers(node.boundary.writable) and not covers(node.boundary.readonly)
 
 
-def nearest_team(nodes: Iterable[OrgNode], path: str, *, lost: str) -> OrgNode | None:
+def nearest_team(nodes: Iterable[OrgNode], path: str) -> OrgNode | None:
     """The team a request made in the repo-relative directory ``path`` goes to.
 
     The search starts at ``path`` and moves up one directory at a time to the
-    repository root. It stops at the first directory a team owns whose IC is
-    running and which may write ``path``; a team that can only read it is
-    passed over for the one above.
-
-    Args:
-        lost: The status of an agent whose conversation is gone.
+    repository root. It stops at the first directory a team owns which may
+    write ``path``; a team that can only read it is passed over for the one
+    above.
     """
     by_directory: dict[str, list[OrgNode]] = {}
     for node in nodes:
@@ -153,11 +150,7 @@ def nearest_team(nodes: Iterable[OrgNode], path: str, *, lost: str) -> OrgNode |
     directory = path
     while True:
         for node in by_directory.get(directory, ()):
-            ic = next((agent for agent in node.agents if agent.role == "ic"), None)
-            # A team that was set up and not started yet has no IC; what
-            # is sent to it starts one.
-            takes = ic is None or (ic.conversation_id is not None and ic.status != lost)
-            if takes and _may_take(node, path):
+            if _may_take(node, path):
                 return node
         if not directory:
             return None

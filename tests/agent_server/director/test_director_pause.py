@@ -37,6 +37,7 @@ from openhands.sdk.conversation.state import ConversationExecutionStatus
 from tests.agent_server.director.conftest import (
     FakeLauncher,
     make_node,
+    open_session_in,
     run_git,
     tasked,
 )
@@ -218,10 +219,10 @@ async def test_a_server_stopped_while_teams_wait_starts_them_in_order_once_resum
     await use(first, ic(first), MsgManagerTool, split("a", 3))
     await use(first, manager(first), ApproveTeamsTool, APPROVE)
     top = place(first)
-    for team in first.store.children(top):
+    for team in first.store.below(top):
         first.tell_ic(team.id, "Begin.")
     await eventually(
-        lambda: sum(team.waiting_to_start for team in first.store.children(top)) == 3
+        lambda: sum(team.waiting_to_start for team in first.store.below(top)) == 3
     )
     await first.aclose()
 
@@ -239,13 +240,13 @@ async def test_a_server_stopped_while_teams_wait_starts_them_in_order_once_resum
     # A team that has not been started yet has lost nothing.
     assert {kind for _, kind in kinds(left)} == {"start"}
     assert {
-        agent.status for team in second.store.children(top) for agent in team.agents
+        agent.status for team in second.store.below(top) for agent in team.agents
     } == {"idle"}
 
     await second.resume()
     await second.settled()
 
-    teams = second.store.children(top)
+    teams = second.store.below(top)
     assert [team_id_of(team) for team in teams] == ["a.t0", "a.t1", "a.t2"]
     assert node(second, "root").pending_split is None
     starts = [str(start.conversation_id) for start in launcher.derived[1:]]
@@ -309,7 +310,7 @@ async def test_a_prune_cut_off_by_a_crash_is_finished_and_recorded_once(
     await second.resume()
     await second.settled()
 
-    assert second.store.get(api) is None
+    assert second.store.place(api) is None
     assert len(set(launcher.deleted)) == 2
     kept = run_git(repo, "for-each-ref", "--format=%(refname)", "refs/agents/pruned")
     assert len(kept.split()) == 1
@@ -591,7 +592,7 @@ async def test_a_sessions_run_state_is_kept_when_its_team_changed_in_the_org(
     await first.aclose()
     board, pulled = create_org_board(repo), OrgStore()
     load_org(board, pulled)
-    pulled.update_node("root", branch="someone-elses")
+    pulled.update_team("root", headline="Changed elsewhere")
     save_org(board, pulled)
     before = len(launcher.sent)
 
@@ -640,24 +641,24 @@ def test_a_worktree_that_is_gone_is_made_again_from_its_branch(repo: Path):
     run_git(worktree, "add", "api.py")
     run_git(worktree, "commit", "--quiet", "-m", "api")
     run_git(repo, "worktree", "remove", "--force", str(worktree))
-    kept = make_node("api", "root").model_copy(
-        update={"worktree_path": str(worktree), "branch": "team/api"}
-    )
-    gone = make_node("web", "root").model_copy(
-        update={"worktree_path": f"{worktree}-web", "branch": "team/web"}
-    )
-    root = make_node("root", None).model_copy(
-        update={"isolation": "shared", "worktree_path": str(repo)}
-    )
     store = OrgStore()
-    store.replace_all([root, kept, gone])
+    store.replace_all(
+        [
+            make_node("root", None, path=""),
+            make_node("api", "root"),
+            make_node("web", "root"),
+        ]
+    )
+    open_session_in(store, checkout=str(repo))
+    store.update_place("api@s", worktree_path=str(worktree), branch="team/api")
+    store.update_place("web@s", worktree_path=f"{worktree}-web", branch="team/web")
 
     told = describe(RunState(None), store, {}, repo)
-    restore_worktrees(repo, store.all(), "")
+    restore_worktrees(repo, store.places(), "")
 
     assert [(item.node_id, item.kind) for item in told] == [
-        ("api", "continue"),
-        ("web", "cannot_resume"),
+        ("api@s", "continue"),
+        ("web@s", "cannot_resume"),
     ]
     assert (worktree / "api.py").read_text() == "ok\n"
     assert run_git(worktree, "rev-parse", "--abbrev-ref", "HEAD").strip() == "team/api"

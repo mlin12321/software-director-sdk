@@ -9,24 +9,25 @@ from openhands.agent_server.director.changes import (
     team_changes,
     write_by_hand,
 )
-from openhands.agent_server.director.models import Boundary, OrgNode
+from openhands.agent_server.director.models import Boundary, SessionTeam
 from openhands.sdk.errors import Forbidden, Invalid, NotFound
-from tests.agent_server.director.conftest import make_node, run_git
+from tests.agent_server.director.conftest import make_node, make_place, run_git
 
 
-def team(repo: Path, path: str, *, readonly: list[str] | None = None) -> OrgNode:
-    """A team that owns ``path`` of ``repo`` and started at its HEAD."""
-    given = make_node(path or "root", None, path=path).model_dump()
-    given.update(
-        boundary=Boundary(
-            path=path,
-            writable=[f"{path}/**" if path else "**"],
-            readonly=readonly or [],
-        ),
-        worktree_path=str(repo),
+def team(repo: Path, path: str, *, readonly: list[str] | None = None) -> SessionTeam:
+    """What a session has at the team that owns ``path`` of ``repo``, started
+    at its HEAD."""
+    boundary = Boundary(
+        path=path, writable=[f"{path}/**" if path else "**"], readonly=readonly or []
+    )
+    place = make_place(
+        make_node(path or "root", None, path=path), "s", None, checkout=str(repo)
+    )
+    return SessionTeam(
+        **place.model_dump(exclude={"boundary", "base_commit"}),
+        boundary=boundary,
         base_commit=run_git(repo, "rev-parse", "HEAD").strip(),
     )
-    return OrgNode(**given)
 
 
 def commit(repo: Path, path: str, text: str) -> None:

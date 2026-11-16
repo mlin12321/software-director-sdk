@@ -356,7 +356,7 @@ async def test_a_stopped_team_does_not_stall_or_hold_back_reviews_and_is_pruned(
     )
     await service.settled()
 
-    assert not pruned.is_error and service.store.get(API) is None
+    assert not pruned.is_error and service.store.place(API) is None
     assert "pruned the team 'API'" in launcher.messages_to(ic(service))[-1]
 
 
@@ -372,7 +372,7 @@ async def test_teams_that_take_a_stopped_teams_place_replace_it(
     await tasked(service)
     await service.settled()
 
-    assert service.store.get(API) is None
+    assert service.store.place(API) is None
     replacement = node(service, "services")
     assert replacement.stopped is None and replacement.status != "blocked"
 

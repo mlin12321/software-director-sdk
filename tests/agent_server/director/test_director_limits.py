@@ -2,7 +2,6 @@
 
 import asyncio
 import json
-import time
 from collections.abc import AsyncIterator
 from pathlib import Path
 
@@ -13,7 +12,6 @@ from openhands.agent_server.director.models import (
     DirectorSettingsUpdate,
     SplitChild,
 )
-from openhands.agent_server.director.org_store import OrgStore
 from openhands.agent_server.director.service import DirectorService
 from openhands.agent_server.director.tools import (
     ApproveTeamsTool,
@@ -29,7 +27,6 @@ from openhands.agent_server.director.tools.definition import (
 from openhands.sdk.conversation.state import ConversationExecutionStatus
 from tests.agent_server.director.conftest import (
     FakeLauncher,
-    make_node,
     root_conversation,
     run_git,
     tasked,
@@ -280,12 +277,11 @@ async def test_teams_wait_for_a_free_run_and_start_when_one_ends(
     await use(service, ic(service), MsgManagerTool, split("a", 2))
     await use(service, manager(service), ApproveTeamsTool, APPROVE)
     top = node(service, "root").id
-    for team in service.store.children(top):
+    for team in service.store.below(top):
         service.tell_ic(team.id, "Begin.")
     await eventually(
         lambda: (
-            [team.waiting_to_start for team in service.store.children(top)]
-            == [True, True]
+            [team.waiting_to_start for team in service.store.below(top)] == [True, True]
         )
     )
     assert len(launcher.derived) == 1
@@ -296,38 +292,7 @@ async def test_teams_wait_for_a_free_run_and_start_when_one_ends(
     launcher.report(root_ic, ConversationExecutionStatus.IDLE)
     await service.settled()
 
-    teams = service.store.children(top)
+    teams = service.store.below(top)
     assert [team.waiting_to_start for team in teams] == [False, False]
     assert len(launcher.derived) == 3 and node(service, "root").pending_split is None
     await service.aclose()
-
-
-def test_a_thousand_agents_changing_status_cost_little():
-    store = OrgStore()
-    nodes = [make_node("root", None, path="")]
-    for a in range(10):
-        nodes.append(make_node(f"d{a}", "root", path=f"d{a}"))
-        for b in range(7):
-            nodes.append(make_node(f"d{a}.s{b}", f"d{a}", path=f"d{a}/s{b}"))
-            for c in range(6):
-                nodes.append(
-                    make_node(f"d{a}.s{b}.m{c}", f"d{a}.s{b}", path=f"d{a}/s{b}/m{c}")
-                )
-    store.replace_all(nodes)
-    seen: list[str] = []
-    for focus in ("root", "d3", "d3.s2"):
-        store.subscribe(focus, lambda event: seen.append(event.type))
-    store.subscribe("root", lambda event: seen.append(event.type), full=True)
-    leaves = [item.id for item in nodes if item.id.count(".") == 2]
-    assert len(nodes) == 501
-
-    began = time.perf_counter()
-    for turn in range(10):
-        for leaf in leaves:
-            store.update_node(leaf, status="working" if turn % 2 == 0 else "idle")
-    spent = time.perf_counter() - began
-
-    assert len(seen) > 4200 and "escalations" not in seen
-    # 4,200 changes; about 1 s on a laptop. The bound only catches a change
-    # that makes each one cost the whole tree.
-    assert spent < 15

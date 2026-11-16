@@ -21,11 +21,11 @@ from openhands.agent_server.director.models import (
     MemorySync,
     OrgConflict,
     OrgMerge,
-    OrgNode,
     OrgNodeInput,
     OrgSync,
     Recovery,
     ResolveMergeRequest,
+    SessionTeam,
     Side,
     StartAgainRequest,
     SyncResult,
@@ -34,7 +34,6 @@ from openhands.agent_server.director.org_merge import (
     Nodes,
     by_id,
     merge_orgs,
-    rehomed,
 )
 from openhands.agent_server.director.org_persistence import (
     create_org_board,
@@ -47,7 +46,6 @@ from openhands.agent_server.director.org_store import (
     AGENT_LOST,
     OrgStore,
     reviews_only,
-    session_id_of,
 )
 from openhands.agent_server.director.prompts import (
     POD_PROTOCOL,
@@ -55,7 +53,6 @@ from openhands.agent_server.director.prompts import (
 from openhands.agent_server.director.recovery import (
     STARTING,
     describe,
-    fingerprint,
     has_work,
     put_aside_stale,
     restore_worktrees,
@@ -63,7 +60,6 @@ from openhands.agent_server.director.recovery import (
 from openhands.agent_server.director.run_state import (
     HELD,
     RUNNING,
-    TEAM,
     WAITING,
 )
 from openhands.agent_server.director.service.sessions import Sessions
@@ -71,14 +67,12 @@ from openhands.agent_server.director.service.state import (
     _MERGE_ATTEMPTS,
     AGENT_PAUSED,
     ORG_LANE,
-    OTHER_WORK_NOTE,
     PAUSE_LANE,
     RESTART_NOTE,
     TOOLS_OF,
     _agent_title,
     _lane_for,
     _new_pod,
-    _shared_root,
     agent_conversation,
     apart,
     hand_over_of,
@@ -140,7 +134,7 @@ class Sync(Sessions):
         run = self._runs()
         await asyncio.to_thread(self._put_aside_stale)
         await asyncio.to_thread(
-            restore_worktrees, self._repo_dir, store.all(), self._home()
+            restore_worktrees, self._repo_dir, store.places(), self._home()
         )
         dropped = self._dropped()
         was_running = run.marked(RUNNING)
@@ -173,7 +167,7 @@ class Sync(Sessions):
                 held.node_id or ORG_LANE,
             )
         for node_id in run.marked(HELD):
-            submitted = store.get(node_id)
+            submitted = store.place(node_id)
             self.release_reviews(submitted.parent_id if submitted else None)
         for conversation_id, note in again.items():
             self._enqueue(
@@ -195,7 +189,7 @@ class Sync(Sessions):
             await launcher.statuses(
                 [
                     UUID(conversation_id)
-                    for node in store.all()
+                    for node in store.places()
                     for agent in node.agents
                     for conversation_id in (
                         agent.conversation_id,
@@ -280,12 +274,11 @@ class Sync(Sessions):
                         f"{remote} has changes of the org that are not here. "
                         "Pull first."
                     )
-                branches = org_sync.push(repo, remote, store.all())
+                org_sync.push(repo, remote)
                 return OrgSync(
                     remote=remote,
                     result="pushed",
                     head=create_org_board(repo).head(),
-                    branches=branches,
                 )
 
             return await asyncio.to_thread(push)
@@ -351,10 +344,10 @@ class Sync(Sessions):
             Invalid: The path does not name a file that can be committed.
         """
         store = await asyncio.to_thread(lambda: self.store)
-        node = store.get(node_id)
+        node = store.place(node_id)
         if node is None:
             raise NotFound(f"Unknown node: {node_id}")
-        sub_teams = store.children(node_id)
+        sub_teams = store.below(node_id)
         require_editable(node, sub_teams, path)
         agents = [
             UUID(agent.conversation_id)
@@ -380,7 +373,9 @@ class Sync(Sessions):
             )
         return edit
 
-    async def start_again(self, node_id: str, request: StartAgainRequest) -> OrgNode:
+    async def start_again(
+        self, node_id: str, request: StartAgainRequest
+    ) -> SessionTeam:
         """Start afresh a team whose agents have no conversation on this
         server, on the work its branch has.
 
@@ -398,12 +393,13 @@ class Sync(Sessions):
         """
         launcher = self._require_launcher()
         store = await asyncio.to_thread(lambda: self.store)
-        node = store.get(node_id)
-        if node is None:
-            raise NotFound(f"There is no team {node_id}")
-        if not session_id_of(node) or reviews_only(node):
+        node = store.place(node_id)
+        if node is None or reviews_only(node):
+            team = node or store.team(node_id)
+            if team is None:
+                raise NotFound(f"There is no team {node_id}")
             raise Conflict(
-                f"Nobody works at {node.title!r} itself: open a session there."
+                f"Nobody works at {team.title!r} itself: open a session there."
             )
         if node.status == "done":
             raise Conflict(f"Team {node.title} is done")
@@ -411,7 +407,7 @@ class Sync(Sessions):
         if ic is not None and await launcher.started(UUID(ic)) is not None:
             raise Conflict(f"The IC of team {node.title} has a conversation here")
         conversation = request.conversation
-        above = store.get(node.parent_id) if node.parent_id else None
+        above = store.place(node.parent_id) if node.parent_id else None
         # A session's IC that never started has no checkout yet: it gets
         # one of its own, never the one of the team it works beside.
         own_checkout = not (
@@ -436,7 +432,7 @@ class Sync(Sessions):
         ic_id = uuid4()
         task = await asyncio.to_thread(self._task_of, node)
         if conversation is None:
-            store.update_node(node_id, agents=_new_pod(ic_id), status="idle")
+            store.update_place(node_id, agents=_new_pod(ic_id), status="idle")
             self._begin(
                 "start_team",
                 node_id,
@@ -446,14 +442,14 @@ class Sync(Sessions):
                 if own_checkout or self._in_place(node)
                 else None,
             )
-            return store.get(node_id) or node
+            return store.place(node_id) or node
         additions = conversation.agent_launch_additions or AgentLaunchAdditions()
         suffix = "\n\n".join(
             part
             for part in (additions.system_message_suffix_append, POD_PROTOCOL)
             if part
         )
-        store.update_node(node_id, agents=_new_pod(ic_id), status="idle")
+        store.update_place(node_id, agents=_new_pod(ic_id), status="idle")
         try:
             started = await launcher.start_root(
                 conversation.model_copy(
@@ -478,11 +474,11 @@ class Sync(Sessions):
                 ),
             )
         except BaseException:
-            store.update_node(node_id, agents=node.agents, status=node.status)
+            store.update_place(node_id, agents=node.agents, status=node.status)
             raise
         store.set_agent(node_id, "ic", kind=started.kind, acp_server=started.acp_server)
         self._begin("brief", node_id, role="ic", task=task)
-        return store.get(node_id) or node
+        return store.place(node_id) or node
 
     async def _after(self, lane: str) -> None:
         """Wait until what ``lane`` was asked to do so far is done."""
@@ -503,13 +499,6 @@ class Sync(Sessions):
             board = create_org_board(repo)
             if not board.move_to(theirs):
                 raise Conflict("The org was changed meanwhile. Pull once more.")
-            nodes = saved_nodes(board, theirs)
-            here = rehomed(nodes, {}, _shared_root(nodes), str(repo))
-            if here != nodes:
-                board.land(
-                    [org_file(here)],
-                    f"org: at home in {repo.name}",
-                )
             pulled = self._pull_memory(repo, remote, ())
             self._join(repo)
             return OrgSync(
@@ -517,7 +506,6 @@ class Sync(Sessions):
                 result="fast_forward",
                 head=board.head(),
                 memory=pulled,
-                branches=org_sync.take_in_branches(repo, remote, self.store.all()),
             )
 
         outcome = await asyncio.to_thread(take)
@@ -533,17 +521,6 @@ class Sync(Sessions):
             return outcome
         self._set_merge(None)
         await self._resync()
-        store = self.store
-        for branch in outcome.branches:
-            node = store.get(branch.node_id)
-            ic = agent_conversation(node, "ic") if node else None
-            if branch.result == "diverged" and ic is not None and branch.ref:
-                self._post(
-                    ic,
-                    OTHER_WORK_NOTE.format(
-                        branch=branch.branch, remote=outcome.remote, ref=branch.ref
-                    ),
-                )
         if state["resume"]:
             await self.resume()
         return outcome
@@ -595,11 +572,9 @@ class Sync(Sessions):
                 return OrgSync(remote=remote, result="up_to_date", head=head)
             result: SyncResult = "up_to_date"
             if merged is not None and theirs is not None:
-                nodes = rehomed(
-                    merged.nodes, mine, _shared_root(list(other.values())), str(repo)
-                )
-                if by_id(nodes) == other:
-                    landed, result = board.move_to(theirs), "fast_forward"
+                nodes = merged.nodes
+                if by_id(nodes) == other and board.move_to(theirs):
+                    landed, result = True, "fast_forward"
                 else:
                     landed = board.land(
                         [org_file(nodes)],
@@ -609,13 +584,7 @@ class Sync(Sessions):
                     result = "merged"
                 if not landed:
                     continue
-                before = {node.id: fingerprint(node) for node in store.all()}
                 self._apply(store, nodes)
-                run = self._runs()
-                # What the run state was written for, so that what the merge
-                # changed under it is found.
-                run.replace_marks(TEAM, before)
-                run.put("org_commit", head)
             break
         else:
             raise Conflict("The org kept changing while it was merged. Pull once more.")
@@ -623,7 +592,6 @@ class Sync(Sessions):
         synced = self._pull_memory(repo, remote, taken)
         if result == "up_to_date" and synced is not None and synced.changed:
             result = "merged"
-        branches = org_sync.take_in_branches(repo, remote, store.all())
         already = len(self._dropped())
         self._put_aside_stale()
         self._save_tree(store)
@@ -632,7 +600,6 @@ class Sync(Sessions):
             result=result,
             head=board.head(),
             memory=synced,
-            branches=branches,
             put_aside=self._dropped()[already:],
         )
 
@@ -659,7 +626,7 @@ class Sync(Sessions):
         # Only the org's own teams: what a session has stays as it is.
         for node in store.teams():
             moved = node.id in wanted and wanted[node.id]["parent_id"] != node.parent_id
-            if (node.id not in wanted or moved) and store.get(node.id) is not None:
+            if (node.id not in wanted or moved) and store.team(node.id) is not None:
                 store.remove(node.id)
         current = by_id(stored_nodes(store))
         for node in nodes:
@@ -668,10 +635,7 @@ class Sync(Sessions):
 
     def _put_aside_stale(self) -> None:
         run = self._runs()
-        head = create_org_board(self._repo_dir).head()
-        dropped = put_aside_stale(
-            run, self.store, instance=self._instance(), org_commit=head
-        )
+        dropped = put_aside_stale(run, self.store, instance=self._instance())
         if run.get("paused") is None:
             # Nothing that was left is this server's to take up.
             self._paused = None
@@ -711,7 +675,7 @@ class Sync(Sessions):
         launcher = self._require_launcher()
         agents: list[tuple[str, AgentRole, UUID]] = [
             (node.id, agent.role, UUID(agent.conversation_id))
-            for node in store.all()
+            for node in store.places()
             for agent in node.agents
             if agent.conversation_id is not None
         ]
@@ -728,7 +692,7 @@ class Sync(Sessions):
         # An IC in hand-over mode is paused in that conversation too.
         modes = [
             (node.id, mode)
-            for node in store.all()
+            for node in store.places()
             if (mode := hand_over_of(node)) is not None
         ]
         running = await launcher.statuses(
@@ -799,7 +763,7 @@ class Sync(Sessions):
         store = self.store
         agents: list[tuple[str, AgentRole, UUID]] = [
             (node.id, agent.role, UUID(agent.conversation_id))
-            for node in store.all()
+            for node in store.places()
             for agent in node.agents
             if agent.conversation_id is not None
         ]
@@ -837,7 +801,7 @@ class Sync(Sessions):
         store = self.store
         modes = [
             (node.id, mode)
-            for node in store.all()
+            for node in store.places()
             if (mode := hand_over_of(node)) is not None
         ]
         if not modes:

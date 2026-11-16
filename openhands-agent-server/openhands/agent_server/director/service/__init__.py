@@ -23,13 +23,12 @@ from openhands.agent_server.director.models import (
     CreateOrgRequest,
     OpenedSession,
     OpenSessionRequest,
-    OrgNode,
     OrgNodeInput,
     RoutedMessage,
     RouteMessageRequest,
+    SessionTeam,
 )
 from openhands.agent_server.director.org_store import (
-    AGENT_LOST,
     reviews_only,
 )
 from openhands.agent_server.director.pods import PodLauncher
@@ -51,7 +50,6 @@ from openhands.agent_server.director.service.state import (
     RESTART_NOTE,
     ROOT_ID,
     TOOLS_OF,
-    _branch_of,
     _checkout_root,
     _is_in,
     _summary_of,
@@ -203,10 +201,6 @@ class DirectorService(Sync):
                     title=title,
                     boundary=Boundary(path="", writable=["**"]),
                     isolation="shared",
-                    worktree_path=str(repository),
-                    branch=await asyncio.to_thread(_branch_of, str(repository)),
-                    agents=[],
-                    status="idle",
                     headline=named.headline,
                     spec_summary=_summary_of(request.task),
                 )
@@ -234,9 +228,9 @@ class DirectorService(Sync):
 
     async def _name_org(self, top_id: str) -> None:
         """Give the top team the name a model made of the first task."""
-        top = self.store.get(top_id)
+        top = self.store.place(top_id)
         if top is not None and self.store.root_id is not None:
-            self.store.update_node(
+            self.store.update_team(
                 self.store.root_id, title=top.title, headline=top.headline
             )
 
@@ -329,7 +323,7 @@ class DirectorService(Sync):
                 else self._repo_relative(request.path)
             )
         )
-        node = nearest_team(store.teams(), path, lost=AGENT_LOST)
+        node = nearest_team(store.teams(), path)
         if node is None:
             raise Conflict(
                 "No team of the org can take a message about "
@@ -380,7 +374,7 @@ class DirectorService(Sync):
         node, role = found
         # A team that has not started holds no one out of its directory:
         # the IC above may finish what it has there.
-        sub_teams = [team for team in store.children(node.id) if team.agents]
+        sub_teams = [team for team in store.below(node.id) if team.agents]
         top = _checkout_root(node.worktree_path)
         for named in paths:
             target = Path(os.path.realpath(Path(node.worktree_path) / named))
@@ -402,7 +396,7 @@ class DirectorService(Sync):
 
     def answer_escalation(
         self, node_id: str, escalation_id: str, answer: str
-    ) -> OrgNode:
+    ) -> SessionTeam:
         """Settle an escalation that waits on the human with their answer.
 
         The answer goes to the agent that raised it.
@@ -414,7 +408,7 @@ class DirectorService(Sync):
         """
         self._require_launcher()
         store = self.store
-        node = store.get(node_id)
+        node = store.place(node_id)
         escalation = next(
             (e for e in node.escalations if e.id == escalation_id)
             if node
@@ -433,13 +427,13 @@ class DirectorService(Sync):
             # The way into the checkout was cleared: the accepted work is
             # merged now, with nobody asked again.
             self._begin("accept", node_id, needed_above="", reconciled="")
-            return store.get(node_id) or node
+            return store.place(node_id) or node
         self.notify(
             agent_conversation(node, escalation.raised_by),
             f"The human answered your escalation {escalation.title!r}:\n{answer}",
             at_once=True,
         )
-        return store.get(node_id) or node
+        return store.place(node_id) or node
 
     def _steps(self) -> dict[str, Callable[[Intent], Awaitable[None]]]:
         return {

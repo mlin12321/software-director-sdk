@@ -49,7 +49,6 @@ PauseReason = Literal["human", "shutdown", "crash"]
 Side = Literal["mine", "theirs"]
 ConflictKind = Literal["field", "team", "file"]
 SyncResult = Literal["up_to_date", "fast_forward", "merged", "conflicts", "pushed"]
-BranchResult = Literal["created", "fast_forwarded", "diverged", "pushed"]
 
 RecoveryKind = Literal[
     "run_again", "start", "continue", "message", "dropped", "cannot_resume"
@@ -323,10 +322,6 @@ class OrgNodeInput(BaseModel):
             "'shared': it works in its parent's directory."
         )
     )
-    worktree_path: str
-    branch: str
-    agents: list[AgentRef] = Field(default_factory=list)
-    status: NodeStatus
     headline: str = Field(
         default="",
         description=(
@@ -335,37 +330,6 @@ class OrgNodeInput(BaseModel):
         ),
     )
     spec_summary: str = ""
-    escalations: list[Escalation] = Field(
-        default_factory=list,
-        description=(
-            "Open escalations this node raised, oldest first, wherever in the "
-            "chain above they are held."
-        ),
-    )
-    pending_split: SplitProposal | None = Field(
-        default=None,
-        description="A split of this node's boundary that is not carried out yet.",
-    )
-    base_commit: str = Field(
-        default="",
-        description=(
-            "The commit the team's work is compared with when it is reviewed: "
-            "where its checkout was when the team started, or when its work "
-            "was last accepted."
-        ),
-    )
-    review: Review | None = Field(
-        default=None,
-        description="The review of what the team last submitted.",
-    )
-    stopped: Stopped | None = Field(
-        default=None,
-        description=(
-            "Set while the IC of the team above has stopped the team: its "
-            "agents and those of every team below it are at rest and "
-            "nothing is sent to them."
-        ),
-    )
     old_specs: list[OldSpec] = Field(
         default_factory=list,
         description=(
@@ -378,18 +342,6 @@ class OrgNodeInput(BaseModel):
         description=(
             "The agent profile the team's agents were started from; None "
             "when they were derived from the team above."
-        ),
-    )
-    boundary_enforcement: TeamEnforcement | None = Field(
-        default=None,
-        description="How this team is held to its boundary; None until its IC ran.",
-    )
-    waiting_to_start: bool = Field(
-        default=False,
-        description=(
-            "An agent of the team could not be started yet because the "
-            "server runs as many conversations as it may; it starts when "
-            "one of them ends."
         ),
     )
 
@@ -988,26 +940,6 @@ class OrgMerge(BaseModel):
     conflicts: list[OrgConflict]
 
 
-class BranchSync(BaseModel):
-    """What a pull or a push did with the branch of one team's work."""
-
-    node_id: str
-    title: str
-    branch: str
-    result: BranchResult = Field(
-        description=(
-            "`created`: the branch was not here and now is. `fast_forwarded`: "
-            "it took in the other side's commits. `diverged`: both sides have "
-            "commits the other lacks; on a pull the remote's are kept at "
-            "`ref` and the team's IC is told to merge them, on a push the "
-            "branch was not pushed. `pushed`: the remote now has it."
-        )
-    )
-    ref: str | None = Field(
-        default=None, description="Where the remote's commits are kept, if diverged."
-    )
-
-
 class OrgSyncRequest(BaseModel):
     """Which remote to exchange the org with."""
 
@@ -1032,9 +964,6 @@ class OrgSync(BaseModel):
     )
     memory: MemorySync | None = Field(
         default=None, description="What happened to specs, contracts and reports."
-    )
-    branches: list[BranchSync] = Field(
-        default_factory=list, description="The teams' branches that changed."
     )
     put_aside: list[RecoveryItem] = Field(
         default_factory=list,
@@ -1254,6 +1183,53 @@ class SessionTeamInput(OrgNodeInput):
     """
 
     session: str = Field(description="The session it belongs to.")
+    worktree_path: str
+    branch: str
+    agents: list[AgentRef] = Field(default_factory=list)
+    status: NodeStatus
+    escalations: list[Escalation] = Field(
+        default_factory=list,
+        description=(
+            "Open escalations this node raised, oldest first, wherever in the "
+            "chain above they are held."
+        ),
+    )
+    pending_split: SplitProposal | None = Field(
+        default=None,
+        description="A split of this node's boundary that is not carried out yet.",
+    )
+    base_commit: str = Field(
+        default="",
+        description=(
+            "The commit the team's work is compared with when it is reviewed: "
+            "where its checkout was when the team started, or when its work "
+            "was last accepted."
+        ),
+    )
+    review: Review | None = Field(
+        default=None,
+        description="The review of what the team last submitted.",
+    )
+    stopped: Stopped | None = Field(
+        default=None,
+        description=(
+            "Set while the IC of the team above has stopped the team: its "
+            "agents and those of every team below it are at rest and "
+            "nothing is sent to them."
+        ),
+    )
+    boundary_enforcement: TeamEnforcement | None = Field(
+        default=None,
+        description="How this team is held to its boundary; None until its IC ran.",
+    )
+    waiting_to_start: bool = Field(
+        default=False,
+        description=(
+            "An agent of the team could not be started yet because the "
+            "server runs as many conversations as it may; it starts when "
+            "one of them ends."
+        ),
+    )
     team_id: str = Field(description="The team of the org it is the work of.")
     review_only: bool = Field(
         default=False,

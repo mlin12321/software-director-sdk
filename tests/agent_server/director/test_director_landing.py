@@ -93,12 +93,9 @@ async def test_the_org_has_a_sessions_sub_teams_once_its_work_is_accepted(
         "services.api",
         "apps.web",
     ]
-    assert [
-        (team.id, team.agents) for team in service.store.teams() if team.agents
-    ] == []
     review = node(service, "root").review
     assert review is not None and review.state == "accepted"
-    assert service.store.get(review_place_of(service)) is not None
+    assert service.store.place(review_place_of(service)) is not None
 
 
 async def test_what_a_session_records_is_the_teams_once_its_work_is_accepted(
@@ -126,7 +123,7 @@ def own_worktree(service: DirectorService, repo: Path, tmp_path: Path) -> Path:
     run_git(repo, "worktree", "add", "--quiet", "-b", "session", str(worktree))
     for place in service.store.session(session_id_of(node(service, "root"))):
         if not place.review_only:
-            service.store.update_node(
+            service.store.update_place(
                 place.id, worktree_path=str(worktree), branch="session"
             )
     return worktree
@@ -278,7 +275,7 @@ async def test_work_is_accepted_and_a_team_the_org_lost_meanwhile_stays_gone(
     # it has of the org's teams is dropped; its code is merged all the same.
     assert "Accepting the work of 'API'" in accepted.text
     assert service.store.team("services.api") is None
-    place = service.store.get(top)
+    place = service.store.place(top)
     assert place is not None and place.review is not None
     assert place.review.state == "accepted"
     assert service.own_reports(place) == []
@@ -290,7 +287,7 @@ JOBS = "services.api.jobs"
 def sets_up_jobs(service: DirectorService, top: str, path: str = "services/api/jobs"):
     """Have a session set up a team for a directory under the team it was
     opened at."""
-    place = service.store.get(top)
+    place = service.store.place(top)
     assert isinstance(place, SessionTeam)
     service.store.upsert(
         SessionTeamInput(
@@ -312,12 +309,9 @@ def org_gains(service: DirectorService, team_id: str, path: str) -> None:
     assert api is not None
     service.store.upsert(
         OrgNodeInput(
-            **api.model_dump(
-                include={"title", "isolation", "worktree_path", "branch", "status"}
-            ),
+            **api.model_dump(include={"title", "isolation"}),
             id=team_id,
             parent_id=api.id,
-            agents=[],
             boundary=api.boundary.model_copy(update={"path": path}),
         )
     )
@@ -325,13 +319,13 @@ def org_gains(service: DirectorService, team_id: str, path: str) -> None:
 
 def waiting(service: DirectorService, top: str) -> list[str]:
     """The teams of a session that wait to be settled."""
-    place = service.store.get(review_place_of(service, top))
+    place = service.store.place(review_place_of(service, top))
     assert isinstance(place, SessionTeam)
     return [team.team_id for team in place.org_change.teams] if place.org_change else []
 
 
 def review_manager(service: DirectorService, top: str) -> str | None:
-    place = service.store.get(review_place_of(service, top))
+    place = service.store.place(review_place_of(service, top))
     assert place is not None
     return agent_conversation(place, "manager")
 
@@ -386,7 +380,7 @@ async def test_a_team_both_made_something_else_of_waits_for_the_manager_above(
     sets_up_jobs(service, top)
     org_gains(service, JOBS, "services/api/workers")
     commit(repo, "services/api/refunds.py", "refunds = True\n")
-    place = service.store.get(f"{JOBS}@{top.split('@')[1]}")
+    place = service.store.place(f"{JOBS}@{top.split('@')[1]}")
     assert place is not None
     service.write_spec(place, "Run the refund jobs.")
 
@@ -454,5 +448,5 @@ async def test_a_team_set_up_under_one_the_org_lost_waits_and_brings_it_back(
     )
 
     back = service.store.team("services.api")
-    assert back is not None and (back.parent_id, back.agents) == ("root", [])
+    assert back is not None and back.parent_id == "root"
     assert path_of(service, JOBS) == "services/api/jobs"

@@ -6,6 +6,7 @@ team memory that applies to each node. State lives in ``director/``.
 
 import asyncio
 from collections.abc import AsyncIterator
+from pathlib import Path
 from typing import Annotated, Any
 from uuid import UUID
 
@@ -127,11 +128,19 @@ def _require_node(service: DirectorService, node_id: str) -> OrgNode:
     return node
 
 
-def _require_place(service: DirectorService, node_id: str) -> OrgNode:
-    """A node of the org tree, or what a session has at a team, by its id."""
+def _require_any(service: DirectorService, node_id: str) -> OrgNode:
+    """A node of the org tree, or a place of a session, by its id."""
     node = service.store.get(node_id)
     if node is None:
         raise NotFound(f"Unknown node: {node_id}")
+    return node
+
+
+def _require_place(service: DirectorService, node_id: str) -> SessionTeam:
+    """A place of a session: where a team is worked on."""
+    node = service.store.place(node_id)
+    if node is None:
+        raise NotFound(f"Nobody works at {node_id}: name a team of a session")
     return node
 
 
@@ -460,8 +469,8 @@ def get_org_node(
     node = _require_node(service, node_id)
     return OrgNodeDetail(
         node=node,
-        ancestors=service.store.ancestors(node_id),
-        children=service.store.children(node_id),
+        ancestors=service.store.teams_above(node_id),
+        children=service.store.sub_teams(node_id),
     )
 
 
@@ -649,7 +658,7 @@ def get_node_memory(
     """Get what a node works to: the spec of its boundary, the contracts
     between its sub-teams and the ones the team above set for it, and
     what its two agents reported."""
-    node = _require_place(service, node_id)
+    node = _require_any(service, node_id)
     above = service._works_above(node)
     _, contracts = service.team_memory.applies_to(
         node.boundary.path, above.boundary.path if above else None
@@ -677,7 +686,12 @@ def get_node_messages(
     """Get what a node's agents have said to Managers and ICs: its IC and
     its Manager to each other, its Manager to the ICs directly below, and
     the Manager above to its IC."""
-    return service.threads_of(_require_place(service, node_id))
+    place = service.store.place(node_id)
+    if place is None:
+        # Nobody works at a team of the org itself, so nothing was said there.
+        _require_node(service, node_id)
+        return []
+    return service.threads_of(place)
 
 
 @director_router.get(
@@ -691,11 +705,17 @@ def get_node_ownership(
     """Get which direct report owns each file of a node's boundary, and the
     files where the committed work of two of these teams does not merge.
 
-    The files are those of the node's own checkout. A team that works in a
-    git worktree of its own is compared by the tip of that worktree.
+    For a team of the org the files are those of the repository's checkout.
+    For a place of a session they are those of its own checkout, and a
+    place below it that works in a git worktree of its own is compared by
+    the tip of that worktree.
     """
+    store = service.store
+    place = store.place(node_id)
+    if place is not None:
+        return node_ownership(place, store.below(node_id), Path(place.worktree_path))
     node = _require_node(service, node_id)
-    return node_ownership(node, service.store.children(node_id))
+    return node_ownership(node, store.sub_teams(node_id), service.repo_dir)
 
 
 _NO_CHECKOUT: dict[type[DomainError], str] = {

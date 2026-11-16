@@ -5,16 +5,14 @@ from uuid import UUID
 
 import pytest
 
-from openhands.agent_server.director import org_sync
 from openhands.agent_server.director.git_store import SPEC_FILE
 from openhands.agent_server.director.models import (
     OrgNode,
-    OrgNodeInput,
     ResolveMergeRequest,
     RouteMessageRequest,
     StartAgainRequest,
 )
-from openhands.agent_server.director.org_merge import by_id, merge_orgs, rehomed
+from openhands.agent_server.director.org_merge import by_id, merge_orgs
 from openhands.agent_server.director.org_persistence import create_org_board
 from openhands.agent_server.director.org_store import AGENT_LOST, team_id_of
 from openhands.agent_server.director.service import DirectorService
@@ -53,7 +51,7 @@ def without(nodes: dict[str, dict], *gone: str) -> dict[str, dict]:
 
 def test_changes_to_different_teams_and_fields_are_all_kept():
     mine = tree(("a", "headline", "A moved on"), ("b", "title", "Billing"))
-    theirs = tree(("b", "headline", "B moved on"), ("root", "status", "done"))
+    theirs = tree(("b", "headline", "B moved on"), ("root", "headline", "Done"))
 
     merged = merge_orgs(tree(), mine, theirs, {})
 
@@ -62,7 +60,7 @@ def test_changes_to_different_teams_and_fields_are_all_kept():
         ("a", "headline", "A moved on"),
         ("b", "title", "Billing"),
         ("b", "headline", "B moved on"),
-        ("root", "status", "done"),
+        ("root", "headline", "Done"),
     )
 
 
@@ -139,31 +137,6 @@ def test_teams_added_on_either_side_are_kept():
     assert set(by_id(merged.nodes)) == {"root", "a", "b", "c", "d"}
 
 
-def test_where_a_team_runs_is_never_taken_from_the_other_side():
-    theirs = tree(("a", "worktree_path", "/elsewhere/a"), ("a", "agents", []))
-    mine = tree(("a", "headline", "Mine"))
-
-    merged = merge_orgs(tree(), mine, theirs, {})
-
-    assert merged.conflicts == [] and by_id(merged.nodes) == mine
-
-
-def test_teams_from_another_machine_are_pointed_at_this_repository():
-    nodes = [
-        {**make_node("root", None, path="").model_dump(), "worktree_path": "/there"},
-        {**make_node("a", "root").model_dump(), "worktree_path": "/there/a"},
-        {**make_node("b", "root").model_dump(), "worktree_path": "/tmp/trees/b"},
-    ]
-
-    here = by_id(rehomed(nodes, {}, "/there", "/here"))
-    known = by_id(rehomed(nodes, by_id(nodes), "/there", "/here"))
-
-    assert here["root"]["worktree_path"] == "/here"
-    assert here["a"]["worktree_path"] == "/here/a"
-    assert here["b"]["worktree_path"] == "/tmp/trees/b"
-    assert known == by_id(nodes)
-
-
 @pytest.fixture
 def launcher() -> FakeLauncher:
     return FakeLauncher()
@@ -217,7 +190,7 @@ def team(service: DirectorService, team_id: str) -> OrgNode:
 
 
 def change(service: DirectorService, node_id: str, **fields: object) -> None:
-    service.store.update_node(node_id, **fields)
+    service.store.update_team(node_id, **fields)
 
 
 async def test_a_pushed_org_is_whole_in_another_clone_except_for_its_sessions(
@@ -229,20 +202,19 @@ async def test_a_pushed_org_is_whole_in_another_clone_except_for_its_sessions(
     await landed(here)
 
     pushed = await here.push_org("origin")
-    there, clone = await elsewhere(remote, tmp_path)
+    there, _ = await elsewhere(remote, tmp_path)
     pulled = await there.pull_org("origin")
     await there.settled()
 
     assert pushed.result == "pushed" and pulled.result == "fast_forward"
-    assert [found.id for found in there.store.all()] == ["root", API, WEB]
+    assert [found.id for found in there.store.teams()] == ["root", API, WEB]
     assert team(there, API).title == "API" and team(there, API).spec_summary
     [carried] = there.reports_of(team(there, API))
     assert carried.text == "Never log card numbers"
     assert there.team_memory.applies_to("services/api", "")[1]
-    assert team(there, "root").worktree_path == str(clone)
     # Who works on it is the first machine's alone.
     assert there.store.sessions() == [] and len(here.store.sessions()) == 1
-    assert [found.agents for found in there.store.all()] == [[], [], []]
+    assert there.store.places() == []
     assert there.summary().paused is None and here.summary().paused is None
     await here.aclose()
     await there.aclose()
@@ -272,9 +244,9 @@ async def test_what_each_side_changed_is_merged_and_goes_back_with_the_next_push
         assert team(side, WEB).headline == "Web has its pages"
     assert back.result in ("merged", "fast_forward")
     # The session that works here is as it was.
-    assert ic(here, API) == mine and team(here, "root").worktree_path == str(repo)
+    assert ic(here, API) == mine
     assert merged.head is not None
-    clone = Path(team(there, "root").worktree_path)
+    clone = there.repo_dir
     commit, *parents = run_git(
         clone, "rev-list", "--parents", "-n", "1", merged.head
     ).split()
@@ -513,7 +485,7 @@ async def test_a_message_with_a_conversation_opens_a_session_in_a_pulled_org(
     repo: Path, launcher: FakeLauncher, remote: Path, tmp_path: Path
 ):
     here, there = await an_org_on_two_machines(repo, launcher, remote, tmp_path)
-    clone = Path(team(there, "root").worktree_path)
+    clone = there.repo_dir
     fake = there._require_launcher()
     assert isinstance(fake, FakeLauncher)
 
@@ -534,59 +506,5 @@ async def test_a_message_with_a_conversation_opens_a_session_in_a_pulled_org(
     assert routed.conversation_id == str(fake.root.conversation_id)
     assert routed.conversation_id == ic(there, routed.node_id)
     assert "Add a health check" in fake.messages_to(routed.conversation_id)[-1]
-    assert [found.agents for found in there.store.teams()] == [[], [], []]
     await here.aclose()
     await there.aclose()
-
-
-def team_with_branch(repo: Path, branch: str) -> OrgNodeInput:
-    return make_node("a", "root").model_copy(
-        update={"branch": branch, "worktree_path": str(repo / "nowhere")}
-    )
-
-
-def commit_on(repo: Path, branch: str, file: str) -> str:
-    exists = branch in run_git(repo, "branch", "--list", branch)
-    run_git(repo, "checkout", "--quiet", *([] if exists else ["-b"]), branch)
-    (repo / file).write_text(f"{file}\n")
-    run_git(repo, "add", file)
-    run_git(repo, "commit", "--quiet", "-m", f"add {file}")
-    head = run_git(repo, "rev-parse", "HEAD").strip()
-    run_git(repo, "checkout", "--quiet", "main")
-    return head
-
-
-def test_a_teams_branch_travels_and_a_diverged_one_is_kept_beside(
-    repo: Path, remote: Path, tmp_path: Path
-):
-    team = OrgNode(**team_with_branch(repo, "team-a").model_dump())
-    first = commit_on(repo, "team-a", "one.txt")
-    clone = tmp_path / "clone"
-    run_git(tmp_path, "clone", "--quiet", str(remote), str(clone))
-    run_git(clone, "config", "user.name", "Test")
-    run_git(clone, "config", "user.email", "test@example.invalid")
-
-    pushed = org_sync.push(repo, "origin", [team])
-    org_sync.fetch(clone, "origin")
-    created = org_sync.take_in_branches(clone, "origin", [team])
-    second = commit_on(repo, "team-a", "two.txt")
-    org_sync.push(repo, "origin", [team])
-    org_sync.fetch(clone, "origin")
-    forwarded = org_sync.take_in_branches(clone, "origin", [team])
-    commit_on(clone, "team-a", "theirs.txt")
-    third = commit_on(repo, "team-a", "three.txt")
-    org_sync.push(repo, "origin", [team])
-    org_sync.fetch(clone, "origin")
-    diverged = org_sync.take_in_branches(clone, "origin", [team])
-    refused = org_sync.push(clone, "origin", [team])
-
-    assert [branch.result for branch in pushed] == ["pushed"]
-    assert [branch.result for branch in created] == ["created"]
-    assert [branch.result for branch in forwarded] == ["fast_forwarded"]
-    assert first != second
-    (kept,) = diverged
-    assert (kept.result, kept.ref) == ("diverged", "refs/agents/teams/a")
-    assert run_git(clone, "rev-parse", "refs/agents/teams/a").strip() == third
-    assert "theirs.txt" in run_git(clone, "ls-tree", "--name-only", "team-a")
-    assert [branch.result for branch in refused] == ["diverged"]
-    assert run_git(remote, "for-each-ref", "refs/heads").count("team-a") == 0

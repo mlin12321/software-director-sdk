@@ -15,7 +15,7 @@ from openhands.agent_server.config import Config
 from openhands.agent_server.director.git import git_version
 from openhands.agent_server.director.git_store import GitStore
 from openhands.agent_server.director.models import (
-    AgentRef,
+    OrgNodeInput,
     Report,
     TeamEvent,
     ThreadMessage,
@@ -33,8 +33,8 @@ from openhands.sdk.conversation.state import ConversationExecutionStatus
 from openhands.sdk.errors import NotFound
 from tests.agent_server.director.conftest import (
     FakeLauncher,
-    make_escalation,
     make_node,
+    open_session_in,
     root_conversation,
     run_git,
     small_tree,
@@ -79,8 +79,6 @@ def test_returns_a_node_with_its_ancestors_and_children(client: TestClient):
     assert response.status_code == 200
     body = response.json()
     assert body["node"]["id"] == "a"
-    # The saved tree keeps nothing of the work: every team comes back idle.
-    assert body["node"]["descendant_counts"]["idle"] == 2
     assert [node["id"] for node in body["ancestors"]] == ["root"]
     assert [node["id"] for node in body["children"]] == ["a1", "a2"]
 
@@ -140,13 +138,7 @@ def test_ownership_lists_a_nodes_files_by_the_report_that_owns_them(repo: Path):
     (repo / "svc" / "a" / "app.py").write_text("a\n")
     store = OrgStore()
     store.replace_all(
-        [
-            node.model_copy(update={"worktree_path": str(repo)})
-            for node in (
-                make_node("root", None, path=""),
-                make_node("a", "root", path="svc/a"),
-            )
-        ]
+        [make_node("root", None, path=""), make_node("a", "root", path="svc/a")]
     )
     save_org(create_org_board(repo), store)
 
@@ -161,7 +153,7 @@ def test_ownership_lists_a_nodes_files_by_the_report_that_owns_them(repo: Path):
                 "title": "a",
                 "path": "svc/a",
                 "isolation": "worktree",
-                "branch": "main",
+                "branch": "",
             }
         ],
         "files": [
@@ -169,9 +161,14 @@ def test_ownership_lists_a_nodes_files_by_the_report_that_owns_them(repo: Path):
             {"path": "svc/a/app.py", "owner": "a"},
         ],
         "truncated": False,
+        # Nobody works at a team of the org, so no work can collide there.
         "collisions": [],
-        "collisions_checked": True,
+        "collisions_checked": False,
     }
+
+
+def renamed(team: OrgNodeInput, title: str) -> OrgNodeInput:
+    return team.model_copy(update={"title": title})
 
 
 class TestTeamMemory:
@@ -180,13 +177,6 @@ class TestTeamMemory:
     ):
         store = OrgStore()
         store.replace_all(small_tree())
-        store.update_node(
-            "a",
-            agents=[
-                AgentRef(role="ic", status="idle", conversation_id="ic-of-a"),
-                AgentRef(role="manager", status="idle", conversation_id="manager-of-a"),
-            ],
-        )
         save_org(create_org_board(repo), store)
         board = GitStore(repo)
         board.write("", "spec.md", "root spec")
@@ -220,58 +210,40 @@ class TestTeamMemory:
             "history": [],
         }
 
-    def test_returns_the_threads_the_nodes_agents_take_part_in(self, repo: Path):
-        store = OrgStore()
-        store.replace_all(small_tree())
-        save_org(create_org_board(repo), store)
-        board = GitStore(repo)
+    async def test_returns_the_threads_a_places_agents_take_part_in(
+        self, running, repo: Path
+    ):
+        client, _, service = running
+        opened = (await client.post("/api/director/org", json=org_body(repo))).json()
+        await service.settled()
+        top = opened["session"]["teams"][0]["id"]
         asked = ThreadMessage(
             at="2026-11-01T00:00:00+00:00", sender="ic", text="Split?"
         )
         told = ThreadMessage(
             at="2026-11-02T00:00:00+00:00", sender="manager", text="Status?"
         )
-        board.append_message("a", "a", asked)
-        board.append_message("root", "a", told)
-        board.append_message("a", "a1", told)
-        board.append_message("root", "b", told)
-        hint = ThreadMessage(
-            at="2026-11-03T00:00:00+00:00", sender="ic", text="Mind the schema."
-        )
-        board.append_message("root", "a", hint, ic_to_ic=True)
+        board = GitStore(repo)
+        board.append_message(top, top, asked)
+        board.append_message(top, "below@other", told)
+        board.append_message("above@other", "below@other", told)
 
-        client = make_client(repo)
-        response = client.get("/api/director/org/nodes/a/messages")
+        response = await client.get(f"/api/director/org/nodes/{top}/messages")
+        at_the_team = await client.get("/api/director/org/nodes/root/messages")
+        missing = await client.get("/api/director/org/nodes/missing/messages")
 
         assert response.status_code == 200
         assert response.json() == [
             {
-                "manager_node_id": "a",
-                "ic_node_id": "a",
+                "manager_node_id": top,
+                "ic_node_id": top,
                 "ic_to_ic": False,
                 "messages": [asked.model_dump()],
             },
-            {
-                "manager_node_id": "a",
-                "ic_node_id": "a1",
-                "ic_to_ic": False,
-                "messages": [told.model_dump()],
-            },
-            {
-                "manager_node_id": "root",
-                "ic_node_id": "a",
-                "ic_to_ic": False,
-                "messages": [told.model_dump()],
-            },
-            {
-                "manager_node_id": "root",
-                "ic_node_id": "a",
-                "ic_to_ic": True,
-                "messages": [hint.model_dump()],
-            },
         ]
-        assert client.get("/api/director/org/nodes/a2/messages").json() == []
-        assert client.get("/api/director/org/nodes/missing/messages").status_code == 404
+        # Nobody works at a team of the org itself, so nothing was said there.
+        assert at_the_team.json() == []
+        assert missing.status_code == 404
 
 
 class TestTreeStream:
@@ -324,34 +296,31 @@ class TestTreeStream:
 
         name, snapshot = await self.next_event(body)
         await asyncio.to_thread(
-            service.store.upsert, make_node("b", "root", status="blocked")
+            service.store.upsert, renamed(make_node("b", "root"), "Billing")
         )
         _, upsert = await self.next_event(body)
-        _, rollup = await self.next_event(body)
         await asyncio.to_thread(service.store.remove, "b")
         _, removed = await self.next_event(body)
+        _, above = await self.next_event(body)
 
         assert name == "snapshot"
         assert snapshot["focus_id"] == "root"
         assert [node["id"] for node in snapshot["nodes"]] == ["root", "a", "b"]
-        assert (upsert["type"], upsert["node"]["status"]) == (
-            "node_upsert",
-            "blocked",
-        )
-        assert rollup["node"]["id"] == "root"
+        assert (upsert["type"], upsert["node"]["title"]) == ("node_upsert", "Billing")
         assert removed == {"type": "node_removed", "id": "b"}
+        assert (above["node"]["id"], above["node"]["child_ids"]) == ("root", ["a"])
 
     async def test_follows_only_the_requested_node(self, service: DirectorService):
         body = await self.open_stream(service, "b")
 
         _, snapshot = await self.next_event(body)
-        service.store.upsert(make_node("a1", "a", status="working"))
-        service.store.upsert(make_node("b", "root", status="working"))
+        service.store.upsert(renamed(make_node("a1", "a"), "One"))
+        service.store.upsert(renamed(make_node("b", "root"), "Billing"))
         _, first_change = await self.next_event(body)
 
         assert [node["id"] for node in snapshot["nodes"]] == ["root", "b"]
-        # The change to a1 only reaches this viewer as root's new rollup.
-        assert first_change["node"]["id"] == "root"
+        # The change to a1 does not reach this viewer.
+        assert first_change["node"]["id"] == "b"
 
     async def test_follows_the_reports_of_expanded_nodes(
         self, service: DirectorService
@@ -359,7 +328,7 @@ class TestTreeStream:
         body = await self.open_stream(service, expanded=["a", "missing"])
 
         _, snapshot = await self.next_event(body)
-        service.store.upsert(make_node("a1", "a", status="working"))
+        service.store.upsert(renamed(make_node("a1", "a"), "One"))
         _, change = await self.next_event(body)
 
         assert [node["id"] for node in snapshot["nodes"]] == [
@@ -386,43 +355,22 @@ class TestTreeStream:
     async def test_sends_what_waits_on_the_human_and_each_change_to_it(
         self, service: DirectorService
     ):
-        service.store.upsert(
-            make_node(
-                "a1",
-                "a",
-                escalations=[make_escalation("jwt", passed_up_by=("a", "root"))],
-            )
-        )
+        store = service.store
+        top = open_session_in(store, "a", "s1")
+        store.raise_escalation(top.id, "jwt", kind="design_decision", title="jwt")
         body = await self.open_stream(service)
 
         _, snapshot = await self.next_event(body)
-        # a1 is outside this viewer's nodes; only the escalation reaches it.
-        service.store.upsert(make_node("a1", "a"))
-        events = [await self.next_event(body) for _ in range(3)]
+        store.settle_escalation(top.id, "jwt")
+        events = [await self.next_event(body) for _ in range(2)]
 
-        assert snapshot["escalations"] == [
-            {
-                "node_id": "a1",
-                "session_id": "",
-                "session": "",
-                "escalation": make_escalation(
-                    "jwt", passed_up_by=("a", "root")
-                ).model_dump(),
-                "path": [
-                    {"id": "root", "title": "root"},
-                    {"id": "a", "title": "a"},
-                    {"id": "a1", "title": "a1"},
-                ],
-            }
-        ]
-        assert [node["escalation_count"] for node in snapshot["nodes"]] == [1, 1, 0]
-        # a's and root's rollups, then the now-empty list.
-        assert [name for name, _ in events] == [
-            "node_upsert",
-            "node_upsert",
-            "escalations",
-        ]
-        assert events[-1][1] == {"type": "escalations", "escalations": []}
+        [waiting] = snapshot["escalations"]
+        assert (waiting["node_id"], waiting["session_id"]) == ("a", "s1")
+        assert waiting["escalation"]["id"] == "jwt"
+        assert [step["title"] for step in waiting["path"]] == ["a"]
+        # Nothing of the session is a node of the tree.
+        assert [node["id"] for node in snapshot["nodes"]] == ["root", "a", "b"]
+        assert ("escalations", {"type": "escalations", "escalations": []}) in events
 
     async def test_says_when_the_org_is_paused_and_when_it_runs_again(
         self, service: DirectorService
@@ -460,13 +408,12 @@ class TestTreeStream:
 
         await body.aclose()  # type: ignore[attr-defined]
         service.store.subscribe("root", delivered.append)
-        service.store.upsert(make_node("b", "root", status="blocked"))
+        service.store.upsert(renamed(make_node("b", "root"), "Billing"))
 
         # The store has exactly the open stream and this test's listener left.
         assert len(service.store._listeners) == 2
         assert (await self.next_event(other))[0] == "node_upsert"
-        # b itself, then root's changed rollup.
-        assert len(delivered) == 2
+        assert len(delivered) == 1
 
     async def test_an_empty_tree_or_unknown_node_is_refused_before_streaming(
         self, tmp_path: Path, service: DirectorService

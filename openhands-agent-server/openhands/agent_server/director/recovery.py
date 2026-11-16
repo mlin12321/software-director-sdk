@@ -6,7 +6,6 @@ or the repository is copied to another machine. What no longer fits is put
 aside and named, never applied.
 """
 
-import json
 import logging
 from collections.abc import Iterable, Mapping
 from pathlib import Path
@@ -16,15 +15,14 @@ from openhands.agent_server.director.git import GitError, git
 from openhands.agent_server.director.models import (
     ROLE_NAMES,
     AgentRole,
-    OrgNode,
     RecoveryItem,
     RecoveryKind,
+    SessionTeam,
 )
 from openhands.agent_server.director.org_store import OrgStore
 from openhands.agent_server.director.run_state import (
     HELD,
     RUNNING,
-    TEAM,
     WAITING,
     Intent,
     RunState,
@@ -51,26 +49,18 @@ _WHAT: dict[str, str] = {
 }
 
 
-def fingerprint(node: OrgNode) -> str:
-    """What a team is made of, as far as its run state depends on it."""
-    return json.dumps(
-        [node.parent_id, [agent.conversation_id for agent in node.agents], node.branch]
-    )
-
-
 def has_work(run: RunState) -> bool:
     """Whether anything was left unfinished."""
     return bool(run.marked(RUNNING) or run.open_intents() or run.held())
 
 
 def put_aside_stale(
-    run: RunState, store: OrgStore, *, instance: str, org_commit: str | None
+    run: RunState, store: OrgStore, *, instance: str
 ) -> list[RecoveryItem]:
-    """Drop the run state that no longer fits the tree.
+    """Drop the run state that no longer fits the sessions.
 
     Args:
         instance: Names the server this director runs in.
-        org_commit: The commit the tree was loaded from.
 
     Returns:
         What was dropped, and why.
@@ -86,16 +76,7 @@ def put_aside_stale(
                 "server, so none of it was used.",
             )
         ]
-    nodes = {node.id: node for node in store.all()}
-    stale: dict[str, str] = {}
-    saved_at = run.get("org_commit")
-    if saved_at is not None and saved_at != org_commit:
-        for node_id, kept in run.marked(TEAM).items():
-            node = nodes.get(node_id)
-            if node is None:
-                stale[node_id] = "the team is no longer in the org"
-            elif fingerprint(node) != kept:
-                stale[node_id] = "the team was changed since"
+    nodes = {node.id: node for node in store.places()}
     # An IC's hand-over conversation is held and run again as its own is.
     agents = {
         conversation_id
@@ -109,7 +90,7 @@ def put_aside_stale(
     }
     dropped: list[RecoveryItem] = []
     for intent in run.open_intents():
-        why = stale.get(intent.node_id) or _unfit(intent, nodes)
+        why = _unfit(intent, nodes)
         if why is not None:
             run.finish(intent.id)
             dropped.append(
@@ -121,9 +102,11 @@ def put_aside_stale(
                 )
             )
     for message in run.held():
-        why = stale.get(message.node_id)
-        if why is None and message.conversation_id not in agents:
-            why = "its agent is no longer in the org"
+        why = (
+            None
+            if message.conversation_id in agents
+            else "its agent is no longer in the org"
+        )
         if why is not None:
             run.delivered(message.seq)
             dropped.append(
@@ -135,11 +118,11 @@ def put_aside_stale(
                 )
             )
     for conversation_id, node_id in run.marked(RUNNING).items():
-        if node_id in stale or conversation_id not in agents:
+        if conversation_id not in agents:
             run.unmark(RUNNING, conversation_id)
     for kind in (WAITING, HELD):
         for node_id in run.marked(kind):
-            if node_id in stale or node_id not in nodes:
+            if node_id not in nodes:
                 run.unmark(kind, node_id)
     return dropped
 
@@ -151,7 +134,7 @@ def describe(
     repo_dir: Path,
 ) -> list[RecoveryItem]:
     """What resuming the org does, and what it cannot do."""
-    nodes = {node.id: node for node in store.all()}
+    nodes = {node.id: node for node in store.places()}
     items: list[RecoveryItem] = []
     for conversation_id, node_id in run.marked(RUNNING).items():
         node = nodes.get(node_id)
@@ -259,10 +242,10 @@ def describe(
     return items
 
 
-def missing_worktrees(nodes: Iterable[OrgNode]) -> list[OrgNode]:
+def missing_worktrees(nodes: Iterable[SessionTeam]) -> list[SessionTeam]:
     """The teams whose own worktree is not on disk, parents first."""
     seen: set[str] = set()
-    missing: list[OrgNode] = []
+    missing: list[SessionTeam] = []
     for node in nodes:
         path = node.worktree_path
         if node.isolation != "worktree" or path in seen:
@@ -273,7 +256,9 @@ def missing_worktrees(nodes: Iterable[OrgNode]) -> list[OrgNode]:
     return missing
 
 
-def restore_worktrees(repo_dir: Path, nodes: Iterable[OrgNode], within: str) -> None:
+def restore_worktrees(
+    repo_dir: Path, nodes: Iterable[SessionTeam], within: str
+) -> None:
     """Make the worktrees that are gone again, each from its team's branch.
 
     Args:
@@ -305,7 +290,7 @@ def _has_branch(repo_dir: Path, branch: str) -> bool:
     return True
 
 
-def _unfit(intent: Intent, nodes: Mapping[str, OrgNode]) -> str | None:
+def _unfit(intent: Intent, nodes: Mapping[str, SessionTeam]) -> str | None:
     """Why a step that was begun can no longer be finished, if it cannot."""
     node = nodes.get(intent.node_id)
     if node is None:
@@ -327,7 +312,7 @@ def _unfit(intent: Intent, nodes: Mapping[str, OrgNode]) -> str | None:
 
 
 def _item(
-    node: OrgNode | None, kind: RecoveryKind, detail: str, *, node_id: str = ""
+    node: SessionTeam | None, kind: RecoveryKind, detail: str, *, node_id: str = ""
 ) -> RecoveryItem:
     return RecoveryItem(
         node_id=node.id if node else node_id,

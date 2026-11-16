@@ -80,7 +80,7 @@ async def test_starting_an_org_runs_a_root_team_briefed_with_the_task(
 
     root = service.store.team("root")
     assert root is not None
-    assert (root.parent_id, root.title, root.agents) == (None, "Checkout", [])
+    assert (root.parent_id, root.title) == (None, "Checkout")
     assert root.boundary.path == ""
     assert root.spec_summary == "Build the checkout flow"
     # Its agents are at its place in the session the task opened.
@@ -397,7 +397,7 @@ async def test_the_humans_answer_reaches_the_team_that_raised_the_escalation(
     await service.settled()
 
     assert answered.escalations == []
-    assert service.store.escalations(top) == []
+    assert service.store.escalations() == []
     answer = launcher.messages_to(opened.conversation_id)[-1]
     assert "JWT or opaque tokens?" in answer and "Opaque tokens." in answer
 
@@ -755,7 +755,7 @@ async def test_a_message_opens_a_session_at_the_nearest_team_above_where_it_was_
     await service.settled()
     await split_root(service, API, WEB)
     await landed(service)
-    first = {place.id for place in service.store.all()}
+    first = {place.id for place in service.store.places()}
 
     async def send(path: str | None) -> tuple[str, bool, str]:
         routed = await service.route_message(

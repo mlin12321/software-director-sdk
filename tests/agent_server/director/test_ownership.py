@@ -9,26 +9,38 @@ from openhands.agent_server.director.models import (
     AgentRef,
     Boundary,
     OrgNode,
-    StatusCounts,
+    SessionTeam,
 )
 from openhands.agent_server.director.ownership import node_ownership
 from tests.agent_server.director.conftest import run_git
 
 
-def team(node_id: str, path: str, checkout: Path, parent: str | None = "root"):
-    return OrgNode(
+def team(
+    node_id: str, path: str, checkout: Path, parent: str | None = "root"
+) -> SessionTeam:
+    """What a session has at a team, at work in ``checkout``."""
+    return SessionTeam(
         id=node_id,
         parent_id=parent,
-        child_ids=[],
         title=node_id.upper(),
         boundary=Boundary(path=path),
         isolation="shared",
+        session="s",
+        team_id=node_id,
         worktree_path=str(checkout),
         branch="main",
         agents=[AgentRef(role="ic", status="idle")],
         status="idle",
-        descendant_counts=StatusCounts(),
-        escalation_count=0,
+    )
+
+
+def tree_team(node_id: str, path: str, parent: str | None = "root") -> OrgNode:
+    return OrgNode(
+        id=node_id,
+        parent_id=parent,
+        title=node_id.upper(),
+        boundary=Boundary(path=path),
+        isolation="shared",
     )
 
 
@@ -61,7 +73,7 @@ def test_each_file_belongs_to_the_report_whose_directory_it_is_in(org: Path):
     root = team("root", "", org, parent=None)
     reports = [team("api", "svc/api", org), team("web", "svc/web", org)]
 
-    found = node_ownership(root, reports)
+    found = node_ownership(root, reports, org)
 
     assert {file.path: file.owner for file in found.files} == {
         ".gitignore": None,
@@ -83,10 +95,30 @@ def test_each_file_belongs_to_the_report_whose_directory_it_is_in(org: Path):
     )
 
 
+def test_teams_of_the_tree_own_files_and_have_no_work_to_collide(org: Path):
+    root = tree_team("root", "", parent=None)
+    reports = [tree_team("api", "svc/api"), tree_team("web", "svc/web")]
+
+    found = node_ownership(root, reports, org)
+
+    assert {file.path: file.owner for file in found.files} == {
+        "README.md": None,
+        "shared.txt": None,
+        "svc/api/app.py": "api",
+        "svc/api/db/schema.sql": "api",
+        "svc/web/index.html": "web",
+    }
+    assert [(owner.node_id, owner.branch) for owner in found.owners] == [
+        ("api", ""),
+        ("web", ""),
+    ]
+    assert (found.collisions, found.collisions_checked) == ([], False)
+
+
 def test_only_the_files_of_the_nodes_own_boundary_are_listed(org: Path):
     api = team("api", "svc/api", org)
 
-    found = node_ownership(api, [team("db", "svc/api/db", org, parent="api")])
+    found = node_ownership(api, [team("db", "svc/api/db", org, parent="api")], org)
 
     assert [(file.path, file.owner) for file in found.files] == [
         ("svc/api/app.py", None),
@@ -97,7 +129,7 @@ def test_only_the_files_of_the_nodes_own_boundary_are_listed(org: Path):
 def test_a_long_listing_is_cut_and_says_so(org: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(ownership, "MAX_FILES", 2)
 
-    found = node_ownership(team("root", "", org, parent=None), [])
+    found = node_ownership(team("root", "", org, parent=None), [], org)
 
     assert [file.path for file in found.files] == ["README.md", "shared.txt"]
     assert found.truncated
@@ -114,7 +146,7 @@ def test_work_committed_in_two_checkouts_that_does_not_merge_is_a_collision(
     commit(web, "svc/web/index.html", "web v2\n")
     reports = [team("api", "svc/api", api), team("web", "svc/web", web)]
 
-    found = node_ownership(team("root", "", org, parent=None), reports)
+    found = node_ownership(team("root", "", org, parent=None), reports, org)
 
     assert [(clash.path, clash.node_ids) for clash in found.collisions] == [
         ("shared.txt", ["root", "api", "web"])
@@ -131,7 +163,7 @@ def test_changes_that_merge_and_uncommitted_ones_are_not_collisions(
     (org / "README.md").write_text("uncommitted in the other\n")
 
     found = node_ownership(
-        team("root", "", org, parent=None), [team("api", "svc/api", api)]
+        team("root", "", org, parent=None), [team("api", "svc/api", api)], org
     )
 
     assert found.collisions == [] and found.collisions_checked
@@ -142,15 +174,16 @@ def test_an_old_git_lists_the_files_and_says_it_did_not_look_for_collisions(
 ):
     monkeypatch.setattr(ownership, "git_version", lambda _: (2, 30))
 
-    found = node_ownership(team("root", "", org, parent=None), [])
+    found = node_ownership(team("root", "", org, parent=None), [], org)
 
     assert found.files and not found.collisions_checked
 
 
 def test_a_checkout_that_is_gone_gives_an_empty_map(tmp_path: Path):
-    gone = team("root", "", tmp_path / "nowhere", parent=None)
+    nowhere = tmp_path / "nowhere"
+    gone = team("root", "", nowhere, parent=None)
 
-    found = node_ownership(gone, [team("api", "svc/api", tmp_path / "nowhere")])
+    found = node_ownership(gone, [team("api", "svc/api", nowhere)], nowhere)
 
     assert (found.files, found.collisions, found.collisions_checked) == ([], [], False)
     assert [owner.node_id for owner in found.owners] == ["api"]

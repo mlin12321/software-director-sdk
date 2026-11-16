@@ -34,39 +34,10 @@ def create_org_board(repo_dir: Path) -> GitStore:
     return GitStore(repo_dir, ref=ORG_REF)
 
 
-def persisted(node: OrgNodeInput) -> dict[str, Any]:
-    """A node without what its agents' conversations determine.
-
-    Whether an agent is running changes many times a minute and is read back
-    from the conversations on load, so it is not worth a commit each time.
-    """
-    data = node.model_dump(
-        exclude={"child_ids", "descendant_counts", "escalation_count"}
-    )
-    for agent in data["agents"]:
-        agent["status"] = "idle"
-    if data["status"] == "working":
-        data["status"] = "idle"
-    data["waiting_to_start"] = False
-    return data
-
-
-# What a team has only where it is worked on, which is in a session.
-_WORK = {
-    "agents": [],
-    "status": "idle",
-    "escalations": [],
-    "pending_split": None,
-    "review": None,
-    "stopped": None,
-    "waiting_to_start": False,
-}
-
-
 def reference(node: OrgNodeInput) -> dict[str, Any]:
-    """A team of the org as it is kept: what a new agent is briefed from,
-    and nothing of the work, which is done in sessions."""
-    return persisted(node) | _WORK
+    """A team of the org as it is kept: what a new agent is briefed from.
+    Nothing of the work, which is done in sessions and kept with them."""
+    return node.model_dump(include=set(OrgNodeInput.model_fields))
 
 
 def org_file(nodes: list[dict[str, Any]]) -> StoreChange:

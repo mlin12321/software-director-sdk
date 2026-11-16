@@ -22,9 +22,16 @@ from openhands.agent_server.director.models import (
     EscalationHandoff,
     EscalationKind,
     IsolationMode,
-    NodeStatus,
     OrgNodeInput,
+    SessionInput,
+    SessionTeam,
+    SessionTeamInput,
     SplitChild,
+)
+from openhands.agent_server.director.org_store import (
+    OrgStore,
+    review_place_id,
+    session_team_id,
 )
 from openhands.agent_server.director.pods import StartedAgent
 from openhands.agent_server.director.service import DirectorService
@@ -81,24 +88,15 @@ def submodule(repo: Path, tmp_path: Path) -> Path:
 
 
 def make_node(
-    node_id: str,
-    parent_id: str | None,
-    *,
-    status: NodeStatus = "working",
-    path: str | None = None,
-    escalations: list[Escalation] | None = None,
+    node_id: str, parent_id: str | None, *, path: str | None = None
 ) -> OrgNodeInput:
+    """A team of the org tree."""
     return OrgNodeInput(
         id=node_id,
         parent_id=parent_id,
         title=node_id,
         boundary=Boundary(path=node_id if path is None else path),
         isolation="worktree",
-        worktree_path=".",
-        branch="main",
-        agents=[AgentRef(role="ic", status="idle")],
-        status=status,
-        escalations=escalations or [],
     )
 
 
@@ -161,11 +159,90 @@ def small_tree() -> list[OrgNodeInput]:
     """root -> (a -> (a1, a2), b)."""
     return [
         make_node("root", None, path=""),
-        make_node("a", "root", status="blocked", path="svc/a"),
-        make_node("b", "root", status="done", path="svc/b"),
-        make_node("a1", "a", status="done", path="svc/a/one"),
-        make_node("a2", "a", status="idle", path="svc/a/two"),
+        make_node("a", "root", path="svc/a"),
+        make_node("b", "root", path="svc/b"),
+        make_node("a1", "a", path="svc/a/one"),
+        make_node("a2", "a", path="svc/a/two"),
     ]
+
+
+def make_place(
+    team: OrgNodeInput,
+    session_id: str,
+    parent_id: str | None,
+    *,
+    checkout: str = ".",
+    review_only: bool = False,
+    agents: Sequence[AgentRef] | None = None,
+    escalations: Sequence[Escalation] = (),
+) -> SessionTeamInput:
+    """What the session ``session_id`` has at ``team``, below the place
+    ``parent_id``: an idle IC unless ``agents`` says otherwise, and nobody
+    at the place the session is reviewed from."""
+    standing = [] if review_only else [AgentRef(role="ic", status="idle")]
+    return SessionTeamInput(
+        id=(review_place_id if review_only else session_team_id)(team.id, session_id),
+        parent_id=parent_id,
+        title=team.title,
+        boundary=team.boundary,
+        isolation=team.isolation,
+        session=session_id,
+        team_id=team.id,
+        review_only=review_only,
+        worktree_path=checkout,
+        branch="main",
+        agents=list(standing if agents is None else agents),
+        status="idle",
+        escalations=list(escalations),
+    )
+
+
+def session_places(
+    teams: Sequence[OrgNodeInput],
+    team_id: str,
+    session_id: str,
+    *,
+    checkout: str = ".",
+) -> tuple[SessionInput, list[SessionTeamInput]]:
+    """A session opened at ``team_id`` of the tree ``teams`` (parents before
+    children): the place it is reviewed from, the place it is opened at and
+    a place at every team below, in that order."""
+    by_id = {team.id: team for team in teams}
+    top = by_id[team_id]
+    above_id = top.parent_id or top.id
+    session = SessionInput(
+        id=session_id, title=session_id, team_id=team_id, above_id=above_id
+    )
+    review = make_place(
+        by_id[above_id], session_id, None, checkout=checkout, review_only=True
+    )
+    places = [review, make_place(top, session_id, review.id, checkout=checkout)]
+    inside = {team_id}
+    for team in teams:
+        if team.parent_id is not None and team.parent_id in inside:
+            inside.add(team.id)
+            above = session_team_id(team.parent_id, session_id)
+            places.append(make_place(team, session_id, above, checkout=checkout))
+    return session, places
+
+
+def open_session_in(
+    store: OrgStore,
+    team_id: str = "root",
+    session_id: str = "s",
+    *,
+    checkout: str = ".",
+) -> SessionTeam:
+    """Open a session at a team of the store's tree, with a place at that
+    team and at every team below it.
+
+    Returns:
+        The place the session was opened at.
+    """
+    session, places = session_places(
+        store.teams(), team_id, session_id, checkout=checkout
+    )
+    return store.open_session(session, places)
 
 
 @dataclass
@@ -458,7 +535,7 @@ def root_conversation(workspace: Path) -> StartConversationRequest:
 
 async def tasked(service: DirectorService) -> None:
     """Give every team that was only set up its first message, which starts it."""
-    for team in service.store.all():
+    for team in service.store.places():
         if not team.agents:
             service.tell_ic(team.id, "Begin.")
     await service.settled()
