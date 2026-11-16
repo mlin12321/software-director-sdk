@@ -464,6 +464,7 @@ TeamEventKind = Literal[
     "set_up",
     "accepted",
     "sent_back",
+    "reconciled",
     "stalled",
     "stopped",
     "replaced",

@@ -13,7 +13,6 @@ from uuid import UUID, uuid4
 
 from openhands.agent_server.director.boundary import owns
 from openhands.agent_server.director.git import uncommitted
-from openhands.agent_server.director.git_store import SPEC_FILE
 from openhands.agent_server.director.models import (
     ROLE_NAMES,
     AgentRole,
@@ -102,7 +101,7 @@ def write_spec(service: DirectorService, caller: Caller, content: str) -> str:
     if not content.strip():
         raise Invalid("A spec cannot be empty")
     path = caller.node.boundary.path
-    service.team_memory.write(path, SPEC_FILE, content)
+    service.write_spec(caller.node, content)
     summary = content.strip().splitlines()[0].lstrip("# ").strip()[:200]
     # With a spec of its own, what teams before it left is no longer its guide.
     service.store.update_node(caller.node.id, spec_summary=summary, old_specs=[])
@@ -501,6 +500,7 @@ def review_team(
     decision: Literal["accept", "reject"],
     findings: list[ReviewFinding],
     needed_above: str,
+    reconciled: str = "",
 ) -> str:
     """Accept the work a team directly below submitted, or send it back."""
     _only(caller, "ic", "review the work of a team")
@@ -514,7 +514,8 @@ def review_team(
             raise Invalid("Say what must change before you can accept the work")
         service.request_changes(node_id, findings)
         return f"Sent back to {team.title!r} with what must change."
-    service.accept_review(node_id, needed_above.strip())
+    service.check_accept(node_id, reconciled.strip())
+    service.accept_review(node_id, needed_above.strip(), reconciled.strip())
     return (
         f"Accepting the work of {team.title!r}. You are told if it cannot be "
         "brought into your checkout."

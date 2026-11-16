@@ -17,6 +17,7 @@ from openhands.agent_server.director.git import (
 )
 from openhands.agent_server.director.git_store import (
     CONTRACTS_FILE,
+    SPEC_FILE,
     GitStore,
     normalize_store_path,
 )
@@ -52,6 +53,7 @@ from openhands.agent_server.director.prompts import (
 )
 from openhands.agent_server.director.run_state import (
     CHECKS,
+    DRAFT,
     JOINED,
 )
 from openhands.agent_server.director.service.state import (
@@ -654,6 +656,13 @@ class Records(ServiceState):
         left in its directory, which are old."""
         team_memory = self._memory()
         specs, _ = team_memory.applies_to(node.boundary.path, None)
+        draft = self.spec_draft(node)
+        if draft is not None:
+            own = normalize_store_path(node.boundary.path)
+            specs = [
+                InheritedSpec(path=own, spec=draft[0], readonly=False),
+                *(spec for spec in specs if spec.path != own),
+            ]
         left = {old.path: old for old in node.old_specs}
         found = [
             spec.model_copy(
@@ -678,6 +687,75 @@ class Records(ServiceState):
                     )
                 )
         return found
+
+    def spec_draft(self, node: OrgNode) -> tuple[str, str | None] | None:
+        """The spec a session wrote for one of its teams, which is its own
+        until its work is accepted.
+
+        Returns:
+            The spec and the team's spec it was written over, None when
+            the team had none; None when the session wrote no spec there.
+        """
+        if not session_id_of(node):
+            return None
+        kept = self._runs().marked(DRAFT).get(node.id)
+        if kept is None:
+            return None
+        draft = json.loads(kept)
+        return draft["spec"], draft["over"]
+
+    def write_spec(self, node: OrgNode, content: str) -> None:
+        """Replace the spec of a team's directory. One a session writes is
+        kept for that session alone until its work is accepted."""
+        path = node.boundary.path
+        if not session_id_of(node):
+            self.team_memory.write(path, SPEC_FILE, content)
+            return
+        earlier = self.spec_draft(node)
+        over = earlier[1] if earlier else self.team_memory.read(_spec_file(path))
+        self._runs().mark(DRAFT, node.id, json.dumps({"spec": content, "over": over}))
+
+    def specs_to_reconcile(self, top: OrgNode) -> list[tuple[str, str, str]]:
+        """The specs a session wrote while the team's spec in the same
+        directory was changed by someone else.
+
+        Returns:
+            For each, the directory, the team's spec now and the session's.
+        """
+        session = session_id_of(top)
+        if not session:
+            return []
+        team_memory = self._memory()
+        found = []
+        for team in self.store.session(session):
+            draft = self.spec_draft(team)
+            if draft is None:
+                continue
+            now = team_memory.read(_spec_file(team.boundary.path))
+            if now != draft[1] and now != draft[0]:
+                found.append((team.boundary.path, now or "", draft[0]))
+        return found
+
+    def _land_specs(self, top: OrgNode) -> None:
+        """Make the specs a session wrote the specs of its teams, now that
+        its work is accepted."""
+        session = session_id_of(top)
+        if not session:
+            return
+        team_memory = self._memory()
+        run = self._runs()
+        for team in self.store.session(session):
+            draft = self.spec_draft(team)
+            if draft is None:
+                continue
+            path = team.boundary.path
+            if team_memory.read(_spec_file(path)) != draft[0]:
+                team_memory.write(path, SPEC_FILE, draft[0])
+            if self.store.team(team.team_id) is not None:
+                self.store.update_node(
+                    team.team_id, spec_summary=team.spec_summary, old_specs=[]
+                )
+            run.unmark(DRAFT, team.id)
 
     def _specs_left_in(self, path: str, removed: list[OrgNode]) -> list[OldSpec]:
         """The specs a team that is given ``path`` finds there: the one of

@@ -628,6 +628,7 @@ export type DirectorTeamEventKind =
   | 'set_up'
   | 'accepted'
   | 'sent_back'
+  | 'reconciled'
   | 'stalled'
   | 'stopped'
   | 'replaced'

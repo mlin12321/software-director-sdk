@@ -619,8 +619,79 @@ def session_work(team: OrgNode, title: str) -> str:
         "judge its work by what the human asked and by the team's spec. "
         "Accepting it merges it into your checkout, where it meets whatever "
         "was delivered there meanwhile; if the two do not merge, it goes "
-        "back to the session to resolve.\n\n"
+        "back to the session to resolve. A spec it wrote is its own until "
+        "you accept its work and the team's from then on.\n\n"
     )
+
+
+def accept_in_order(team: OrgNode, first: OrgNode) -> str:
+    """Why work is not accepted while work submitted before it waits."""
+    return (
+        f"The work of {first.title!r} (node {first.id}) was submitted before "
+        f"that of {team.title!r} and still waits for your review. Work is "
+        "accepted in the order it was submitted, so that each is checked "
+        "against what was merged before it: accept that one or send it back "
+        "first."
+    )
+
+
+def reconcile_request(
+    team: OrgNode,
+    checkout: str,
+    tip: str,
+    files: list[str],
+    landed: list[str],
+    specs: list[tuple[str, str, str]],
+) -> str:
+    """What a reviewing IC is told when work it accepts meets other work.
+
+    Args:
+        checkout: The reviewer's checkout.
+        tip: The last commit of the work.
+        files: The files changed both by it and in the reviewer's checkout
+            since it began.
+        landed: The teams whose work was merged there meanwhile.
+        specs: For each spec it wrote while the team's spec changed: the
+            directory, the team's spec now and the one it wrote.
+    """
+    lines = [
+        f"Not merged yet: the work of {team.title!r} (node {team.id}) meets "
+        "work that came into your checkout since it began"
+        + (f" (merged meanwhile: {', '.join(landed)})." if landed else "."),
+    ]
+    if files:
+        lines += [
+            "",
+            "Both changed these files. git reports only lines that cannot "
+            "be merged; where they can, one may still have undone or "
+            "contradicted the other:",
+            *(f"- {path}" for path in files[:40]),
+            *([f"- and {len(files) - 40} more"] if len(files) > 40 else []),
+            "",
+            f"Read both, in {checkout}:",
+            f"  git diff {tip}...HEAD -- <file>   (what changed in your checkout)",
+            f"  git diff HEAD...{tip} -- <file>   (what {team.title} changed)",
+        ]
+    for directory, theirs, written in specs:
+        lines += [
+            "",
+            f"It wrote a spec for {directory or 'the repository'} while the "
+            "team's spec there was changed by someone else. Accepting puts "
+            "its spec in place of the team's.",
+            "The team's spec now:",
+            theirs or "(none)",
+            "The spec it wrote:",
+            written,
+        ]
+    lines += [
+        "",
+        "Decide what holds. If its work must change, reject it with what "
+        "must change. If what is already in your checkout must change, "
+        "change it or give that team the task. Then accept again with "
+        "`review_team` and say in `reconciled` what you decided; without "
+        "that it is not merged.",
+    ]
+    return "\n".join(lines)
 
 
 def session_brief(team: OrgNode, title: str, above: OrgNode, others: list[str]) -> str:
@@ -638,16 +709,20 @@ def session_brief(team: OrgNode, title: str, above: OrgNode, others: list[str]) 
         f"{above.title!r}.{beside} Each works on the same directory in its "
         "own checkout; `other_sessions_of_your_team` in your context names "
         "them, and the team's reports are shared, so record with `report` "
-        "what the others must know. The team's spec is one for all of you: "
-        "rewrite it only where your request changes it. The sub-teams you "
+        "what the others must know. You start from the team's spec. A spec "
+        "you write with `write_spec` is your session's alone until your "
+        "work is accepted, and the team's from then on: rewrite it only "
+        "where your request changes it. The sub-teams you "
         "see are the team's, "
         "there once more for this session and not started: one starts when "
         "you give it a task with `msg_team`. Sub-teams cannot be proposed, "
         "replaced or pruned inside a session. When the request is done, "
         f"commit and call `submit_review`: the IC of {above.title!r} reviews "
-        "it and it is merged into that team's checkout. If it does not "
-        "merge with what was delivered there meanwhile, it comes back to "
-        "you: merge that team's branch into yours, resolve and submit again."
+        "it and it is merged into that team's checkout. You need not keep "
+        "up with that checkout while you work: what your work meets there "
+        "is settled when it is merged. If it does not merge with what was "
+        "delivered there meanwhile, it comes back to you: merge that "
+        "team's branch into yours, resolve and submit again."
     )
 
 
@@ -909,6 +984,7 @@ _EVENT_WORDS: dict[TeamEventKind, str] = {
     "set_up": "set up",
     "accepted": "work accepted",
     "sent_back": "work sent back",
+    "reconciled": "work reconciled with what was merged meanwhile",
     "stalled": "showed no progress",
     "stopped": "stopped by the IC",
     "replaced": "replaced",
