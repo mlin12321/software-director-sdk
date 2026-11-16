@@ -6,24 +6,25 @@ import pytest
 
 from openhands.agent_server.director.models import (
     DirectorSettingsUpdate,
+    RoutedMessage,
     RouteMessageRequest,
     SplitChild,
 )
-from openhands.agent_server.director.prompts import DIRECT_NOTE
+from openhands.agent_server.director.org_store import team_id_of
 from openhands.agent_server.director.routing import USAGE_ID
 from openhands.agent_server.director.service import DirectorService
+from openhands.agent_server.director.service.state import agent_conversation
 from openhands.agent_server.director.tools import (
     RaiseEscalationTool,
-    ReviewTeamTool,
     SubmitReviewTool,
     WriteSpecTool,
 )
 from openhands.agent_server.director.tools.definition import (
     RaiseEscalationAction,
-    ReviewTeamAction,
     WriteSpecAction,
 )
 from tests.agent_server.director.conftest import FakeLauncher, run_git
+from tests.agent_server.director.test_director_landing import landed
 from tests.agent_server.director.test_director_limits import started
 from tests.agent_server.director.test_director_review import DONE
 from tests.agent_server.director.test_director_teams import (
@@ -31,7 +32,14 @@ from tests.agent_server.director.test_director_teams import (
     DB,
     propose_and_approve,
 )
-from tests.agent_server.director.test_director_tools import ic, split_root, use
+from tests.agent_server.director.test_director_tools import (
+    ic,
+    node,
+    review_place_of,
+    reviewer,
+    split_root,
+    use,
+)
 
 
 WEB = "apps.web"
@@ -49,7 +57,7 @@ def launcher() -> FakeLauncher:
 
 @pytest.fixture
 async def service(repo: Path, launcher: FakeLauncher):
-    """An org of API (with DB below it) and Web, every team started."""
+    """An org of API (with DB below it) and Web."""
     service = await started(repo, launcher)
     await split_root(service)
     await propose_and_approve(
@@ -57,6 +65,7 @@ async def service(repo: Path, launcher: FakeLauncher):
         API,
         SplitChild(title="DB", path="services/api/db", task="Own the schema"),
     )
+    await landed(service)
     yield service
     await service.aclose()
 
@@ -71,12 +80,27 @@ def files(repo: Path) -> Path:
     return repo
 
 
-async def ask(service: DirectorService, text: str, **rest):
+async def ask(service: DirectorService, text: str, **rest) -> RoutedMessage:
     sent = await service.route_message(
         RouteMessageRequest(text=text, auto=True, **rest)
     )
     await service.settled()
     return sent
+
+
+def briefing(launcher: FakeLauncher, conversation_id: str | None) -> str:
+    """What the IC of a session was started with."""
+    [start] = [
+        start
+        for start in launcher.derived
+        if str(start.conversation_id) == conversation_id
+    ]
+    return start.task
+
+
+def team_of(service: DirectorService, sent: RoutedMessage) -> str:
+    """The team of the org the session for a request was opened at."""
+    return team_id_of(node(service, sent.node_id))
 
 
 async def test_a_request_the_model_is_sure_of_goes_straight_to_that_team(
@@ -87,13 +111,11 @@ async def test_a_request_the_model_is_sure_of_goes_straight_to_that_team(
 
     sent = await ask(service, "Add an index on orders.")
 
-    assert (sent.node_id, sent.team, sent.chosen_by) == (DB, "DB", "model")
+    assert (team_of(service, sent), sent.team, sent.chosen_by) == (DB, "DB", "model")
     assert sent.reason == "It is about the schema."
-    assert service.summary().top_conversation_id == ic(service)
-    assert sent.conversation_id == ic(service, DB)
-    assert launcher.messages_to(ic(service, DB))[-1] == (
-        f"Add an index on orders.{DIRECT_NOTE}"
-    )
+    # It is a session of its own there, beside the one that has the team.
+    assert sent.conversation_id == ic(service, sent.node_id) != ic(service, DB)
+    assert "Add an index on orders." in briefing(launcher, sent.conversation_id)
     # Nobody above was woken for it.
     assert len(launcher.messages_to(ic(service))) == to_root
     # Asked twice, the teams of each level in the opposite order.
@@ -102,41 +124,28 @@ async def test_a_request_the_model_is_sure_of_goes_straight_to_that_team(
     assert second.index(f"id: {WEB}") < second.index(f"id: {API}")
 
 
-async def test_the_ics_above_are_told_of_it_in_their_context_and_at_review(
+async def test_it_is_on_the_record_of_the_team_above_and_told_to_its_reviewer(
     service: DirectorService, launcher: FakeLauncher
 ):
     launcher.answers[USAGE_ID] = TO_DB
 
-    await ask(service, "Add an index on orders.")
+    sent = await ask(service, "Add an index on orders.")
 
-    for above in ("root", API):
-        team = service.store.get(above)
-        assert team is not None
-        [asked] = service.context_of(team, "ic")["asked_directly_of_teams_below"]
-        assert (asked["node_id"], asked["text"]) == (DB, "Add an index on orders.")
     [event] = [e for e in service.team_memory.history(API) if e.kind == "asked"]
     assert (event.team_id, event.detail) == (DB, "Add an index on orders.")
-    # It rides the next message the IC above gets anyway.
-    service.tell_ic(API, "Anything new?")
-    await service.settled()
-    assert "asked_directly_of_teams_below" in launcher.messages_to(ic(service, API))[-1]
-
-    await use(service, ic(service, DB), SubmitReviewTool, DONE)
-
-    request = launcher.messages_to(ic(service, API))[-1]
-    assert "The human asked this team directly, not through you" in request
-    assert "- Add an index on orders." in request
-
-    await use(
-        service,
-        ic(service, API),
-        ReviewTeamTool,
-        ReviewTeamAction(node_id=DB, decision="accept"),
+    [kept] = service.routed_requests()
+    assert (kept.team, kept.text, kept.chosen_by) == (
+        "DB",
+        "Add an index on orders.",
+        "model",
     )
-    await use(service, ic(service, DB), SubmitReviewTool, DONE)
 
-    # What was asked before the accepted work is not told again.
-    assert "The human asked" not in launcher.messages_to(ic(service, API))[-1]
+    await use(service, sent.conversation_id, SubmitReviewTool, DONE)
+
+    # The IC of the team above reviews it, and reads what the human asked.
+    asked = reviewer(service, sent.node_id)
+    assert team_id_of(node(service, review_place_of(service, sent.node_id))) == API
+    assert "Add an index on orders." in briefing(launcher, asked)
 
 
 async def test_answers_that_differ_leave_the_request_with_the_top_team(
@@ -146,9 +155,8 @@ async def test_answers_that_differ_leave_the_request_with_the_top_team(
 
     sent = await ask(service, "Make checkout faster.")
 
-    assert (sent.node_id, sent.chosen_by) == ("root", "top")
-    assert launcher.messages_to(ic(service))[-1].startswith("Make checkout faster.")
-    assert DIRECT_NOTE not in launcher.messages_to(ic(service))[-1]
+    assert (team_of(service, sent), sent.chosen_by) == ("root", "top")
+    assert "Make checkout faster." in briefing(launcher, sent.conversation_id)
     assert service.routed_requests() == []
 
 
@@ -157,7 +165,7 @@ async def test_named_files_decide_when_no_model_answers(
 ):
     sent = await ask(service, "Rename the handler in services/api/checkout.py")
 
-    assert (sent.node_id, sent.chosen_by) == (API, "named")
+    assert (team_of(service, sent), sent.chosen_by) == (API, "named")
 
 
 async def test_a_named_file_of_another_team_makes_the_models_choice_unsure(
@@ -167,7 +175,7 @@ async def test_a_named_file_of_another_team_makes_the_models_choice_unsure(
 
     sent = await ask(service, "Do not touch schema.sql, fix the cart page.")
 
-    assert (sent.node_id, sent.chosen_by) == ("root", "top")
+    assert (team_of(service, sent), sent.chosen_by) == ("root", "top")
 
 
 async def test_a_request_from_a_directory_moves_down_from_its_team_only(
@@ -178,19 +186,25 @@ async def test_a_request_from_a_directory_moves_down_from_its_team_only(
     down = await ask(service, "Add an index.", path="services/api")
     beside = await ask(service, "Fix the cart.", path="services/api")
 
-    assert (down.node_id, down.chosen_by) == (DB, "model")
-    assert (beside.node_id, beside.chosen_by) == (API, "top")
+    assert (team_of(service, down), down.chosen_by) == (DB, "model")
+    assert (team_of(service, beside), beside.chosen_by) == (API, "top")
 
 
-async def test_a_team_whose_work_waits_for_review_is_passed_over(
+async def test_a_request_for_a_team_whose_work_waits_for_review_is_kept_apart(
     service: DirectorService, launcher: FakeLauncher
 ):
     launcher.answers[USAGE_ID] = TO_DB
     await use(service, ic(service, DB), SubmitReviewTool, DONE)
+    heard = len(launcher.messages_to(ic(service, DB)))
 
     sent = await ask(service, "Add an index on orders.")
 
-    assert (sent.node_id, sent.chosen_by) == (API, "model")
+    # The session for it has a checkout of its own: what is being reviewed
+    # does not change under its reviewer.
+    assert (team_of(service, sent), sent.chosen_by) == (DB, "model")
+    waiting = node(service, DB).review
+    assert waiting is not None and waiting.state == "pending"
+    assert len(launcher.messages_to(ic(service, DB))) == heard
 
 
 async def test_nothing_is_chosen_while_the_org_has_routing_off_or_unasked(
@@ -202,8 +216,8 @@ async def test_nothing_is_chosen_while_the_org_has_routing_off_or_unasked(
     service.update_settings(DirectorSettingsUpdate(route_requests=False))
     off = await ask(service, "Add an index.")
 
-    assert (unasked.node_id, unasked.chosen_by) == ("root", "path")
-    assert (off.node_id, off.chosen_by) == ("root", "path")
+    assert (team_of(service, unasked), unasked.chosen_by) == ("root", "path")
+    assert (team_of(service, off), off.chosen_by) == ("root", "path")
     assert launcher.asked == []
 
 
@@ -211,26 +225,81 @@ async def test_a_team_hands_back_what_is_not_its_own_and_the_model_is_told(
     service: DirectorService, launcher: FakeLauncher
 ):
     launcher.answers[USAGE_ID] = TO_DB
-    await ask(service, "Make the cart page faster.")
+    sent = await ask(service, "Make the cart page faster.")
+    asked = sent.conversation_id
 
-    handed = await use(service, ic(service, DB), RaiseEscalationTool, NOT_MINE)
-    again = await use(service, ic(service, DB), RaiseEscalationTool, NOT_MINE)
+    [opened] = [
+        session for session in service.store.sessions() if session.team_id == DB
+    ]
+    checkout = node(service, sent.node_id).worktree_path
 
+    handed = await use(service, asked, RaiseEscalationTool, NOT_MINE)
+    again = await use(service, asked, RaiseEscalationTool, NOT_MINE)
+    await service.settled()
+
+    assert not handed.is_error
     assert "Handed to the IC of the team above (API)" in handed.text
     assert again.is_error and "Nothing was sent to your team directly" in again.text
-    told = launcher.messages_to(ic(service, API))[-1]
-    assert "says it is not that team's: This is the cart page: Web has it." in told
-    assert "The human wrote:\nMake the cart page faster." in told
-    db = service.store.get(DB)
-    assert db is not None and db.escalations == []
-    assert [e.kind for e in service.team_memory.history(API)][-2:] == [
-        "asked",
-        "misrouted",
+    # Nobody works above the team a session was opened at, so the session
+    # itself goes one team up the org: the human is not asked and no other
+    # session is opened.
+    sessions = len(service.store.sessions())
+    [lifted] = [
+        session for session in service.store.sessions() if session.id == opened.id
     ]
+    assert (lifted.team_id, lifted.above_id) == (API, "root")
+    top = lifted.teams[0]
+    assert team_id_of(top) == API and top.worktree_path == checkout
+    at_db = node(service, sent.node_id)
+    assert (at_db.parent_id, at_db.escalations) == (top.id, [])
+    assert agent_conversation(at_db, "ic") == asked
+    # It is reviewed from the top now.
+    assert {team_id_of(place) for place in lifted.teams} == {API, DB, "root"}
+    assert [place.id for place in lifted.teams if place.review_only] == [
+        f"root@{opened.id}@review"
+    ]
+    taken = briefing(launcher, lifted.conversation_id)
+    assert "Make the cart page faster." in taken
+    assert "whose IC said it is not that team's" in taken
+    assert lifted.conversation_id != asked
+
+    # It goes on up while each team says the same, and to the human from
+    # the top.
+    await use(service, lifted.conversation_id, RaiseEscalationTool, NOT_MINE)
+    await service.settled()
+    [at_top] = [
+        session for session in service.store.sessions() if session.id == opened.id
+    ]
+    assert (at_top.team_id, at_top.above_id) == ("root", "root")
+    # The session has the top team's other sub-teams too.
+    assert {team_id_of(place) for place in at_top.teams} == {"root", API, DB, WEB}
+    assert node(service, f"{WEB}@{opened.id}").parent_id == at_top.teams[0].id
+    assert len(service.store.sessions()) == sessions
+    last = await use(service, at_top.conversation_id, RaiseEscalationTool, NOT_MINE)
+    assert "The human, who asked, is told" in last.text
+    [told] = node(service, at_top.teams[0].id).escalations
+    assert told.held_by is None and "Make the cart page faster." in told.detail
 
     await ask(service, "Make the cart page lighter.")
 
     assert "- Make the cart page faster. (not for 'DB')" in launcher.asked[-1][3]
+
+
+async def test_a_session_whose_work_is_in_review_stays_where_it_was_opened(
+    service: DirectorService, launcher: FakeLauncher
+):
+    launcher.answers[USAGE_ID] = TO_DB
+    sent = await ask(service, "Make the cart page faster.")
+    await use(service, sent.conversation_id, SubmitReviewTool, DONE)
+
+    handed = await use(service, sent.conversation_id, RaiseEscalationTool, NOT_MINE)
+
+    # Its reviewer reads the work already: the human, who asked, is told.
+    assert "The human, who asked, is told" in handed.text
+    at_db = node(service, sent.node_id)
+    assert service.store.opens_session(at_db)
+    [told] = at_db.escalations
+    assert told.held_by is None
 
 
 async def test_a_teams_card_holds_nothing_the_team_wrote_itself(

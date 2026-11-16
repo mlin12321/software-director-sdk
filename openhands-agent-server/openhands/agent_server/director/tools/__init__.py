@@ -17,6 +17,7 @@ from openhands.agent_server.director.tools.definition import (
     ReportTool,
     ResolveEscalationTool,
     ReviewTeamTool,
+    SettleTeamsTool,
     StopTeamTool,
     SubmitReviewTool,
     WriteSpecTool,
@@ -25,6 +26,7 @@ from openhands.agent_server.director.tools.definition import (
 
 __all__ = [
     "ApproveTeamsTool",
+    "SettleTeamsTool",
     "DeclineTeamsTool",
     "HandOverTool",
     "MsgIcTool",

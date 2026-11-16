@@ -9,7 +9,6 @@ import type {
   DirectorNodeOwnership,
   DirectorNodeId,
   DirectorOrgEvent,
-  DirectorOrgNode,
   DirectorOrgNodeDetail,
   DirectorOrgSummary,
   DirectorOpenedSession,
@@ -76,6 +75,14 @@ export interface RouteMessageRequest {
    * it is sure, and not at all while the org's `route_requests` is off.
    */
   auto?: boolean;
+  /**
+   * The session the human says it in, when the message continues that
+   * session's conversation and begins no new one. It goes to the IC of one
+   * of the session's own teams, those it set up itself included: the team it
+   * was opened at unless the director is sure of one below. `path`, `auto`
+   * and `conversation` are ignored.
+   */
+  session_id?: string;
   /**
    * How to start the root team's IC when there is no org yet. If the git
    * repository of its workspace already has a saved org, that org is taken
@@ -167,16 +174,22 @@ export class DirectorClient {
   }
 
   /**
-   * Start an org and brief the IC of its root team with the task.
+   * Start an org: its top team, and the session that works on the task.
+   * Nobody works at a team of the org itself; the given conversation is the
+   * IC of the first session.
    *
-   * @returns The root node. Follow the org with `streamOrgTree`.
+   * @returns The session that was opened. Follow the org with
+   *   `streamOrgTree`.
    * @throws HttpError 409 when the director already has an org; 422 when the
    *   conversation cannot lead one (workspace outside the director's
    *   directory, Docker runtime, ACP agent); 503 when the directory is not a
    *   git repository.
    */
-  async createOrg(request: CreateOrgRequest): Promise<DirectorOrgNode> {
-    const response = await this.client.post<DirectorOrgNode>(`${DIRECTOR_PATH}/org`, request);
+  async createOrg(request: CreateOrgRequest): Promise<DirectorOpenedSession> {
+    const response = await this.client.post<DirectorOpenedSession>(
+      `${DIRECTOR_PATH}/org`,
+      request
+    );
     return response.data;
   }
 
@@ -284,26 +297,6 @@ export class DirectorClient {
   async joinConversation(conversationId: string): Promise<DirectorConversationPlace> {
     const response = await this.client.post<DirectorConversationPlace>(
       `${DIRECTOR_PATH}/org/conversations/${encodeURIComponent(conversationId)}/joined`
-    );
-    return response.data;
-  }
-
-  /**
-   * Answer an escalation that waits on the human, which settles it. The
-   * answer is sent to the IC of the team that raised it.
-   *
-   * @param nodeId The node that raised the escalation.
-   * @returns That node after the change.
-   * @throws HttpError 409 when the escalation is still held by a team.
-   */
-  async answerEscalation(
-    nodeId: DirectorNodeId,
-    escalationId: string,
-    answer: string
-  ): Promise<DirectorOrgNode> {
-    const response = await this.client.post<DirectorOrgNode>(
-      nodePath(nodeId, `escalations/${encodeURIComponent(escalationId)}/answer`),
-      { answer }
     );
     return response.data;
   }
@@ -455,16 +448,19 @@ export class DirectorClient {
   }
 
   /**
-   * Start afresh a team whose agents have no conversation on this server, on
-   * the work its branch has. Its IC starts like the IC of the team above, or
-   * from the team's own agent profile.
+   * Start afresh what a session has at a team when its agents have no
+   * conversation on this server, on the work its branch has.
    *
-   * @throws HttpError 404 when there is no such team, 409 when it is done,
-   *   its IC has a conversation here, or the team above has no IC here.
+   * @param nodeId The team of the org.
+   * @throws HttpError 404 when the session has no such team, 409 when it is
+   *   done, its IC has a conversation here, or no conversation of the org
+   *   runs here to start it from.
    */
-  async startAgain(nodeId: DirectorNodeId): Promise<DirectorOrgNode> {
-    const response = await this.client.post<DirectorOrgNode>(
-      `${DIRECTOR_PATH}/org/nodes/${encodeURIComponent(nodeId)}/start_again`,
+  async startAgain(sessionId: string, nodeId: DirectorNodeId): Promise<DirectorSessionTeam> {
+    const response = await this.client.post<DirectorSessionTeam>(
+      `${DIRECTOR_PATH}/org/sessions/${encodeURIComponent(sessionId)}/teams/${encodeURIComponent(
+        nodeId
+      )}/start_again`,
       {}
     );
     return response.data;

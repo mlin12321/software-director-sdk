@@ -39,6 +39,7 @@ from tests.agent_server.director.test_director_tools import (
     manager,
     node,
     proposing,
+    reviewer,
     split_root,
     use,
     woken,
@@ -465,7 +466,9 @@ def in_own_worktree(
     worktree = tmp_path / name
     run_git(repo, "worktree", "add", "--quiet", "-b", name, str(worktree))
     for team in teams:
-        service.store.update_node(team, worktree_path=str(worktree), branch=name)
+        service.store.update_node(
+            node(service, team).id, worktree_path=str(worktree), branch=name
+        )
     return worktree
 
 
@@ -543,7 +546,7 @@ async def test_what_the_ic_above_wrote_in_a_started_teams_directory_is_put_aside
     assert run_git(repo, "show", f"{kept}:apps/web/page.tsx") == "in the way\n"
 
 
-async def test_the_top_team_is_done_once_it_submits_and_hears_its_own_findings(
+async def test_the_top_team_is_done_once_it_submits_and_its_reviewer_gets_the_findings(
     service: DirectorService, launcher: FakeLauncher, repo: Path
 ):
     launcher.agent_answers = {
@@ -555,8 +558,10 @@ async def test_the_top_team_is_done_once_it_submits_and_hears_its_own_findings(
 
     root = node(service, "root")
     assert not done.is_error and root.status == "done"
-    assert root.review is not None and root.review.state == "unreviewed"
-    assert "Returns a string." in launcher.messages_to(ic(service))[-1]
+    assert root.review is not None and root.review.state == "pending"
+    start = launcher.derived[-1]
+    assert str(start.conversation_id) == reviewer(service)
+    assert "Returns a string." in start.task
 
 
 SCHEMA = "services.api.schema"
@@ -588,7 +593,7 @@ async def test_accepted_work_goes_on_up_unreviewed_when_the_ic_changed_nothing(
     assert node(service, "root").review is None
 
 
-async def test_the_top_team_is_told_when_all_below_is_accepted_and_submits_itself(
+async def test_a_top_team_that_changed_nothing_is_accepted_when_all_below_is(
     service: DirectorService, launcher: FakeLauncher, repo: Path
 ):
     await split_root(service)
@@ -599,10 +604,17 @@ async def test_the_top_team_is_told_when_all_below_is_accepted_and_submits_itsel
 
     await schema_is_accepted(service, repo)
 
-    told = launcher.messages_to(ic(service))[-1]
-    assert "all your sub-teams is accepted" in told and "submit_review" in told
     root = node(service, "root")
-    assert root.review is None and root.status != "done"
+    assert root.review is not None and root.review.state == "accepted"
+    assert root.review.passed_up and root.status == "done"
+    # Each change was reviewed once already: nobody is asked again.
+    assert reviewer(service) is None
+    assert [team.id for team in service.store.teams()] == [
+        "root",
+        "services.api",
+        "apps.web",
+        SCHEMA,
+    ]
 
 
 @pytest.mark.parametrize("committed", [True, False])

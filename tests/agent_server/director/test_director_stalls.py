@@ -283,7 +283,10 @@ async def test_an_ic_writes_to_the_ic_of_a_team_below_and_to_no_other(
     assert "Use the orders table that exists." in told
     for team in ("root", API):
         [thread] = [t for t in service.threads_of(node(service, team)) if t.ic_to_ic]
-        assert (thread.manager_node_id, thread.ic_node_id) == ("root", API)
+        assert (thread.manager_node_id, thread.ic_node_id) == (
+            node(service, "root").id,
+            node(service, API).id,
+        )
         assert [message.text for message in thread.messages] == [hint.text]
     assert not any(t.ic_to_ic for t in service.threads_of(node(service, WEB)))
 
@@ -435,7 +438,7 @@ async def test_a_team_set_up_and_given_no_task_is_told_to_the_ic_above(
     service = await started(repo, launcher, clock=clock, stall_poll=3600)
     await use(service, ic(service), MsgManagerTool, SPLIT)
     await use(service, manager(service), ApproveTeamsTool, APPROVE)
-    service.tell_ic(WEB, "Begin.")
+    service.tell_ic(node(service, WEB).id, "Begin.")
     await service.settled()
 
     await looked(service)
@@ -448,7 +451,8 @@ async def test_a_team_set_up_and_given_no_task_is_told_to_the_ic_above(
         if "has been given no task" in text
     ]
     assert len(told) == 1
-    assert "Team 'API' (node services.api, services/api) was set up 2 h ago" in told[0]
+    api = node(service, API).id
+    assert f"Team 'API' (node {api}, services/api) was set up 2 h ago" in told[0]
     assert "`msg_team`" in told[0] and "pruned" in told[0]
     # Nobody is there to ask, and it is not counted as work that stalled.
     assert not any("Team 'API'" in text for text in notices(service, launcher))
@@ -465,7 +469,7 @@ async def test_a_team_set_up_and_given_no_task_is_told_to_the_ic_above(
     await service.resume()
     clock.passes(240)
     await looked(service)
-    service.tell_ic(API, "Begin.")
+    service.tell_ic(api, "Begin.")
     await service.settled()
     clock.passes(120)
     await looked(service)

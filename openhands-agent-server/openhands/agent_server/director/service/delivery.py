@@ -25,6 +25,8 @@ from openhands.agent_server.director.models import (
 )
 from openhands.agent_server.director.org_store import (
     AGENT_LOST,
+    reviews_only,
+    session_id_of,
 )
 from openhands.agent_server.director.prompts import (
     from_director,
@@ -91,16 +93,24 @@ class Delivery(Records):
         if not text:
             raise Invalid("A report cannot be empty")
         node_id = team_of(node)
-        reports = self._memory().append_report(
-            node_id,
-            role,
-            Report(
-                at=_instant(),
-                role=role,
-                text=text,
-                session=self.store.session_title(node),
-            ),
+        report = Report(
+            at=_instant(),
+            role=role,
+            text=text,
+            session=self.store.session_title(node),
         )
+        if session_id_of(node) and not reviews_only(node):
+            # Its session's alone until the session's work is accepted.
+            self._keep_report(node, report)
+            return
+        reports = self._memory().append_report(node_id, role, report)
+        if compaction.due(reports, self.settings.report_compaction_chars):
+            self._enqueue(lambda: self._compact(node_id, role), MODELS_LANE)
+
+    def reports_grew(self, node_id: str, role: AgentRole) -> None:
+        """Compact what one agent of a team recorded, if it has grown past
+        what the org set. Safe from any thread."""
+        reports = self._memory().reports(node_id, role)
         if compaction.due(reports, self.settings.report_compaction_chars):
             self._enqueue(lambda: self._compact(node_id, role), MODELS_LANE)
 
@@ -374,9 +384,10 @@ class Delivery(Records):
 
     def _asker(self) -> str | None:
         """The conversation the director's own model calls are made from."""
-        store = self._store
-        root = store.get(store.root_id) if store and store.root_id else None
-        return agent_conversation(root, "ic") if root else None
+        # Nobody works at the top team itself: the IC a session started
+        # with, oldest first.
+        sessions = self._store.sessions() if self._store else []
+        return next((s.conversation_id for s in sessions if s.conversation_id), None)
 
     async def _compact(self, node_id: str, role: AgentRole) -> None:
         """Have a model rewrite one agent's reports shorter, if they are
@@ -458,10 +469,15 @@ class Delivery(Records):
             return
         if not rename:
             return
+        if store.opens_session(node):
+            # A session the human gave no name is called what it is for.
+            store.rename_session(session_id_of(node), summary.title)
         for agent in node.agents:
             if agent.conversation_id is not None:
                 with suppress(NotFound):
                     await launcher.rename(
                         UUID(agent.conversation_id),
-                        _agent_title(summary.title, agent.role),
+                        _agent_title(
+                            summary.title, agent.role, store.session_title(node)
+                        ),
                     )

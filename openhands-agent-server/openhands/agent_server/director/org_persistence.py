@@ -51,6 +51,24 @@ def persisted(node: OrgNodeInput) -> dict[str, Any]:
     return data
 
 
+# What a team has only where it is worked on, which is in a session.
+_WORK = {
+    "agents": [],
+    "status": "idle",
+    "escalations": [],
+    "pending_split": None,
+    "review": None,
+    "stopped": None,
+    "waiting_to_start": False,
+}
+
+
+def reference(node: OrgNodeInput) -> dict[str, Any]:
+    """A team of the org as it is kept: what a new agent is briefed from,
+    and nothing of the work, which is done in sessions."""
+    return persisted(node) | _WORK
+
+
 def org_file(nodes: list[dict[str, Any]]) -> StoreChange:
     """The file that holds a tree of saved nodes."""
     content = json.dumps({"version": _VERSION, "nodes": nodes}, indent=2) + "\n"
@@ -71,12 +89,12 @@ def saved_nodes(board: GitStore, commit: str | None) -> list[dict[str, Any]]:
         raise ValueError(
             f"Unrecognized org tree version {saved.version} in {board.ref}"
         )
-    return [persisted(node) for node in saved.nodes]
+    return [reference(node) for node in saved.nodes]
 
 
 def stored_nodes(store: OrgStore) -> list[dict[str, Any]]:
     """The nodes of ``store`` as they are saved."""
-    return [persisted(node) for node in store.teams()]
+    return [reference(node) for node in store.teams()]
 
 
 def save_org(board: GitStore, store: OrgStore) -> None:

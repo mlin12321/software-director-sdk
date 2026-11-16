@@ -91,6 +91,23 @@ class ApproveTeamsAction(Action):
     """Approve the sub-teams your IC proposed, as written."""
 
 
+class SettleTeamsAction(Action):
+    """Settle the sub-teams of a session that wait for you."""
+
+    org_teams: list[str] = Field(
+        default_factory=list,
+        description=(
+            "The ids of the waiting teams for which what the org has now "
+            "holds. Every other waiting team becomes what the session made "
+            "of it. Empty to take all from the session."
+        ),
+    )
+    note: str = Field(
+        default="",
+        description="Why, in a sentence or two; the session's IC is told.",
+    )
+
+
 class DeclineTeamsAction(Action):
     """Decline the sub-teams your IC proposed."""
 
@@ -419,6 +436,25 @@ class ApproveTeamsTool(_DirectorTool[ApproveTeamsAction]):
         )
 
 
+class SettleTeamsTool(_DirectorTool[SettleTeamsAction]):
+    summary = (
+        "Manager in review mode only. Settle, team by team, the sub-teams "
+        "of an accepted session that the org made something else of while "
+        "it worked: the org's stay for the teams you name, and the others "
+        "become what the session made of them."
+    )
+
+    @classmethod
+    def action(cls):
+        return SettleTeamsAction
+
+    @classmethod
+    def act(cls):
+        return lambda service, caller, action: pod_actions.settle_teams(
+            service, caller, action.org_teams, action.note
+        )
+
+
 class DeclineTeamsTool(_DirectorTool[DeclineTeamsAction]):
     summary = (
         "Manager only. Decline the sub-teams your IC proposed, saying why. "
@@ -585,6 +621,7 @@ register_tool(MsgTeamTool.name, MsgTeamTool)
 register_tool(StopTeamTool.name, StopTeamTool)
 register_tool(ApproveTeamsTool.name, ApproveTeamsTool)
 register_tool(DeclineTeamsTool.name, DeclineTeamsTool)
+register_tool(SettleTeamsTool.name, SettleTeamsTool)
 register_tool(RaiseEscalationTool.name, RaiseEscalationTool)
 register_tool(ResolveEscalationTool.name, ResolveEscalationTool)
 register_tool(SubmitReviewTool.name, SubmitReviewTool)
@@ -605,6 +642,7 @@ DIRECTOR_TOOLS: dict[str, type[_DirectorTool]] = {
         StopTeamTool,
         ApproveTeamsTool,
         DeclineTeamsTool,
+        SettleTeamsTool,
         RaiseEscalationTool,
         ResolveEscalationTool,
         SubmitReviewTool,

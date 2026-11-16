@@ -7,6 +7,7 @@ while keeping the LLM deterministic via monkeypatching.
 import io
 import json
 import os
+import re
 import sys
 import tempfile
 import textwrap
@@ -3511,19 +3512,25 @@ def _scripted_org_llm(
     monkeypatch: pytest.MonkeyPatch,
     api_ic: list[tuple[str, dict]] | None = None,
     web_ic: list[tuple[str, dict]] | None = None,
+    top_ic: list[tuple[str, dict]] | None = None,
+    tasked: tuple[str, ...] = ("services.api", "apps.web"),
 ) -> None:
     """Agents of an org that split the root once: the IC proposes when it is
     briefed, its Manager approves when it is told, the IC then gives each
     team its task, and everyone else just replies.
 
     The top IC accepts every team it is asked to review, and tells its Manager
-    of what the API team escalates; the Manager then removes that team.
+    of what the API team escalates; the Manager then removes that team, and
+    the top IC submits the work that is left. The IC of a session opened
+    later to add refunds just replies.
 
     Args:
         api_ic: Tool calls the IC of the API sub-team makes, one per turn.
         web_ic: The same for the IC of the Web sub-team.
+        top_ic: The same for the IC of the top team, in place of its proposal.
+        tasked: The sub-teams the top IC gives a task, which starts them.
     """
-    scripted = {"API": api_ic or [], "Web": web_ic or []}
+    scripted = {"API": api_ic or [], "Web": web_ic or [], "Checkout": top_ic or []}
 
     def tool_call(name: str, arguments: dict) -> dict:
         return {
@@ -3564,35 +3571,37 @@ def _scripted_org_llm(
                 "role": "assistant",
                 "content": "Title: Checkout\nHeadline: Builds the checkout flow.",
             }
+        later = any("Add refunds" in text_of(m) for m in messages)
         for team, calls in scripted.items():
+            if later:
+                break
             if any(f"the IC of the team {team!r}" in text_of(m) for m in messages):
                 done = sum(message.role == "tool" for message in messages)
                 if done < len(calls):
                     return tool_call(*calls[done])
         if any("your Manager approved your sub-teams" in text_of(m) for m in messages):
             # Approved teams wait for their task; one call a turn.
-            tasked = sum(
+            given = sum(
                 call.name == "msg_team"
                 for message in messages
                 for call in message.tool_calls or []
             )
-            if tasked < 2:
-                team = ("services.api", "apps.web")[tasked]
-                return tool_call("msg_team", {"team": team, "text": "Begin."})
+            if given < len(tasked):
+                return tool_call("msg_team", {"team": tasked[given], "text": "Begin."})
         asked = [at for at, m in enumerate(messages) if "Review mode." in text_of(m)]
         if asked:
             # One call a turn: the teams of the request, in its order.
             request = text_of(messages[asked[-1]])
-            waiting = [
-                node_id
-                for node_id in ("services.api", "apps.web")
-                if f"`review_team` for node {node_id}:" in request
-            ]
+            waiting = re.findall(r"`review_team` for node (\S+):", request)
             reviewed = sum(m.role == "tool" for m in messages[asked[-1] :])
             if reviewed < len(waiting):
                 return tool_call(
                     "review_team", {"node_id": waiting[reviewed], "decision": "accept"}
                 )
+        if last.role == "user" and "in hand-over mode" in text:
+            return {"role": "assistant", "content": "Nothing to pass on."}
+        if last.role == "user" and "Your hand-over mode has ended" in text:
+            return tool_call("submit_review", {"summary": "Shown, not served."})
         if last.role == "user" and "You are the IC of the team 'Checkout'" in text:
             return tool_call(
                 "msg_manager",
@@ -3648,6 +3657,13 @@ def _scripted_org_llm(
     monkeypatch.setattr(LLM, "acompletion", fake_acompletion, raising=True)
 
 
+def _work_places(client: httpx.Client, session_id: str) -> dict[str, dict]:
+    """What a session has at each team it works at, by the team's id."""
+    response = client.get(f"/api/director/org/sessions/{session_id}")
+    teams = response.json()["teams"] if response.status_code == 200 else []
+    return {team["team_id"]: team for team in teams if not team["review_only"]}
+
+
 def test_director_runs_an_org_whose_root_splits_into_sub_teams(
     server_env, monkeypatch: pytest.MonkeyPatch
 ):
@@ -3678,52 +3694,70 @@ def test_director_runs_an_org_whose_root_splits_into_sub_teams(
             },
         )
         assert created.status_code == 201, created.text
-        root = created.json()
+        opened = created.json()
+        session_id = opened["session"]["id"]
 
         deadline = time.time() + 30
-        detail = client.get("/api/director/org/nodes/root").json()
+        places = _work_places(client, session_id)
         while time.time() < deadline and (
-            len(detail["children"]) < 2
-            or detail["node"]["pending_split"]
-            or not all(child["agents"] for child in detail["children"])
+            len(places) < 3
+            or places["root"]["pending_split"]
+            or not all(place["agents"] for place in places.values())
         ):
             time.sleep(0.2)
-            detail = client.get("/api/director/org/nodes/root").json()
+            places = _work_places(client, session_id)
 
         assert (before["root_id"], before["is_git_repository"]) == (None, True)
-        assert [child["id"] for child in detail["children"]] == [
-            "services.api",
-            "apps.web",
+        assert list(places) == ["root", "services.api", "apps.web"]
+        top = places["root"]
+        assert top["id"] == f"root@{session_id}"
+        assert top["child_ids"] == [
+            f"services.api@{session_id}",
+            f"apps.web@{session_id}",
         ]
-        assert detail["node"]["pending_split"] is None
-        threads = client.get("/api/director/org/nodes/root/messages").json()
+        assert top["pending_split"] is None
+        # The org has a session's sub-teams once its work is accepted, and
+        # its teams have no agents: those are the session's.
+        tree = client.get("/api/director/org/nodes/root").json()
+        assert (tree["children"], tree["node"]["agents"]) == ([], [])
+        threads = client.get(f"/api/director/org/nodes/{top['id']}/messages").json()
         # The IC gave each team its task in a thread with that team.
         assert sum(thread["ic_to_ic"] for thread in threads) == 2
         [thread] = [thread for thread in threads if not thread["ic_to_ic"]]
-        assert (thread["manager_node_id"], thread["ic_node_id"]) == ("root", "root")
+        assert (thread["manager_node_id"], thread["ic_node_id"]) == (
+            top["id"],
+            top["id"],
+        )
         [proposal] = thread["messages"]
         assert proposal["sender"] == "ic" and "```teams" in proposal["text"]
         # A team starts with its IC; its Manager came with the proposal.
-        assert [agent["role"] for agent in root["agents"]] == ["ic"]
-        root_ic, root_manager = (
-            agent["conversation_id"] for agent in detail["node"]["agents"]
+        [first] = opened["session"]["teams"][0]["agents"]
+        assert (first["role"], first["conversation_id"]) == (
+            "ic",
+            opened["conversation_id"],
         )
+        root_ic, root_manager = (agent["conversation_id"] for agent in top["agents"])
+        assert root_ic == opened["conversation_id"]
         manager = client.get(f"/api/conversations/{root_manager}").json()
         assert manager["parent_conversation_id"] == root_ic
         assert [
             client.get(f"/api/conversations/{root_ic}").json()["title"],
             manager["title"],
         ] == ["Checkout (IC)", "Checkout (Manager)"]
-        for child in detail["children"]:
-            [child_ic] = (agent["conversation_id"] for agent in child["agents"])
+        for team_id in ("services.api", "apps.web"):
+            [child_ic] = (
+                agent["conversation_id"] for agent in places[team_id]["agents"]
+            )
             ic = client.get(f"/api/conversations/{child_ic}")
             # A team's IC is on the node a moment before its conversation is.
             while ic.status_code == 404 and time.time() < deadline:
                 time.sleep(0.2)
                 ic = client.get(f"/api/conversations/{child_ic}")
-            assert ic.status_code == 200, child
+            assert ic.status_code == 200, team_id
             assert ic.json()["parent_conversation_id"] == root_ic
-        specs = client.get("/api/director/org/nodes/services.api/memory").json()
+        specs = client.get(
+            f"/api/director/org/nodes/services.api@{session_id}/memory"
+        ).json()
         assert specs["specs"] == []
         assert "POST /checkout" in specs["contracts"][0]["contracts"]
         # Everything the org keeps is in hidden refs, not in the working tree.
@@ -3733,7 +3767,12 @@ def test_director_runs_an_org_whose_root_splits_into_sub_teams(
 def test_director_holds_a_paused_org_and_takes_it_up_again(
     server_env, monkeypatch: pytest.MonkeyPatch
 ):
-    _scripted_org_llm(monkeypatch)
+    _scripted_org_llm(
+        monkeypatch,
+        top_ic=[
+            ("raise_escalation", {"category": "design_decision", "title": "REST?"})
+        ],
+    )
     repo = server_env["workspace_path"]
     run_git_command(["git", "init", "-b", "main"], repo)
     run_git_command(
@@ -3760,7 +3799,8 @@ def test_director_holds_a_paused_org_and_takes_it_up_again(
             },
         )
         assert created.status_code == 201, created.text
-        root_ic = created.json()["agents"][0]["conversation_id"]
+        root_ic = created.json()["conversation_id"]
+        session_id = created.json()["session"]["id"]
 
         def said_to_the_ic() -> list[str]:
             events = client.get(
@@ -3773,24 +3813,58 @@ def test_director_holds_a_paused_org_and_takes_it_up_again(
                 for content in event["llm_message"]["content"]
             ]
 
+        def told_the_answer() -> bool:
+            return any("Use REST." in text for text in said_to_the_ic())
+
+        def waiting() -> list[dict]:
+            top = _work_places(client, session_id).get("root", {})
+            return [
+                escalation
+                for escalation in top.get("escalations", [])
+                if escalation["held_by"] is None
+            ]
+
+        deadline = time.time() + 30
+        while time.time() < deadline and not waiting():
+            time.sleep(0.2)
+        [asked] = waiting()
+
         paused = client.post("/api/director/org/pause")
         sent = client.post("/api/director/org/messages", json={"text": "Add a cart"})
+        answered = client.post(
+            f"/api/director/org/sessions/{session_id}/teams/root"
+            f"/escalations/{asked['id']}/answer",
+            json={"answer": "Use REST."},
+        )
         held = client.get("/api/director/org/recovery").json()
         time.sleep(1)
-        before = said_to_the_ic()
+        before = told_the_answer()
         resumed = client.post("/api/director/org/resume")
         deadline = time.time() + 30
-        while time.time() < deadline and "Add a cart" not in said_to_the_ic():
+        while time.time() < deadline and not told_the_answer():
             time.sleep(0.2)
 
         assert refused.status_code == 409, refused.text
         assert paused.status_code == 200 and paused.json()["paused"] == "human"
-        assert sent.status_code == 200, sent.text
+        # A paused org opens no session, and holds what is said to its agents.
+        assert sent.status_code == 409, sent.text
+        assert answered.status_code == 200, answered.text
+        assert answered.json()["escalations"] == []
         assert held["messages_held"] >= 1
-        assert "Add a cart" not in before
+        assert not before
         assert resumed.status_code == 200 and resumed.json()["paused"] is None
-        assert "Add a cart" in said_to_the_ic()
+        assert told_the_answer()
         assert client.get("/api/director/org").json()["paused"] is None
+        # What is said in a session goes on in it and opens no other.
+        said = client.post(
+            "/api/director/org/messages",
+            json={"text": "And a wishlist.", "session_id": session_id},
+        )
+        assert said.status_code == 200, said.text
+        assert said.json()["conversation_id"] == created.json()["conversation_id"]
+        assert [
+            found["id"] for found in client.get("/api/director/org/sessions").json()
+        ] == [session_id]
     # What the director was in the middle of is beside the repository, never
     # in it.
     assert (repo / ".git" / "director" / "state.db").is_file()
@@ -3830,10 +3904,10 @@ def test_director_has_submitted_work_reviewed_once_all_teams_submitted(
             },
         )
         assert created.status_code == 201, created.text
+        session_id = created.json()["session"]["id"]
 
         def api() -> dict:
-            response = client.get("/api/director/org/nodes/services.api")
-            return response.json()["node"] if response.status_code == 200 else {}
+            return _work_places(client, session_id).get("services.api", {})
 
         states: list[str] = []
         deadline = time.time() + 30
@@ -3850,6 +3924,23 @@ def test_director_has_submitted_work_reviewed_once_all_teams_submitted(
         assert node["base_commit"] == run_git_command(
             ["git", "rev-parse", "HEAD"], repo
         )
+
+        # Their accepted work is the whole of the session's, so it goes up
+        # as it is and the org has the session's teams from then on.
+        def teams() -> list[dict]:
+            return client.get("/api/director/org/nodes/root").json()["children"]
+
+        while time.time() < deadline and len(teams()) < 2:
+            time.sleep(0.05)
+        assert [(team["id"], team["agents"]) for team in teams()] == [
+            ("services.api", []),
+            ("apps.web", []),
+        ]
+        top = _work_places(client, session_id)["root"]
+        assert (top["review"]["state"], top["review"]["passed_up"]) == (
+            "accepted",
+            True,
+        )
         pulled = client.post("/api/director/org/memory/pull")
         assert pulled.status_code == 404, pulled.text
 
@@ -3858,7 +3949,11 @@ def test_director_opens_a_session_beside_a_team_and_closes_it(
     server_env, monkeypatch: pytest.MonkeyPatch
 ):
     repo = server_env["workspace_path"]
-    _scripted_org_llm(monkeypatch)
+    _scripted_org_llm(
+        monkeypatch,
+        api_ic=[("submit_review", {"summary": "Served."})],
+        tasked=("services.api",),
+    )
     run_git_command(["git", "init", "-b", "main"], repo)
     run_git_command(
         ["git", "-c", "user.name=T", "-c", "user.email=t@example.com", "commit"]
@@ -3883,6 +3978,7 @@ def test_director_opens_a_session_beside_a_team_and_closes_it(
             },
         )
         assert created.status_code == 201, created.text
+        first = created.json()["session"]["id"]
 
         def node(node_id: str) -> dict:
             response = client.get(f"/api/director/org/nodes/{node_id}")
@@ -3893,7 +3989,9 @@ def test_director_opens_a_session_beside_a_team_and_closes_it(
             while time.time() < deadline and not reached():
                 time.sleep(0.05)
 
-        until(lambda: node("services.api").get("agents"))
+        # The org has the teams of its first session once their work is
+        # accepted, and a session can be opened at one of them from then on.
+        until(lambda: node("services.api"))
         unknown = client.post(
             "/api/director/org/sessions", json={"text": "x", "node_id": "no.such"}
         )
@@ -3936,9 +4034,8 @@ def test_director_opens_a_session_beside_a_team_and_closes_it(
         )
         assert "Add refunds to the API." in said and "session 'Refunds'" in said
         listed = client.get("/api/director/org/sessions").json()
-        assert [found["id"] for found in listed] == [session["id"]]
-        # The human wrote in its conversation, so it is listed with theirs,
-        # and it links to the conversation of the IC that reviews it.
+        assert [found["id"] for found in listed] == [first, session["id"]]
+        # The human wrote in its conversation, so it is listed with theirs.
         talk = opened.json()["conversation_id"]
         until(
             lambda: (
@@ -3952,11 +4049,8 @@ def test_director_opens_a_session_beside_a_team_and_closes_it(
             "Refunds",
             True,
         )
-        assert place["links"][0]["relation"] == "above"
-        assert (
-            place["links"][0]["conversation_id"]
-            == node("root")["agents"][0]["conversation_id"]
-        )
+        # Its reviewer is started when it submits, so nobody is above it yet.
+        assert place["links"] == []
         again_joined = client.post(f"/api/director/org/conversations/{talk}/joined")
         assert again_joined.status_code == 200, again_joined.text
         missing = "00000000-0000-0000-0000-000000000000"
@@ -3977,10 +4071,12 @@ def test_director_opens_a_session_beside_a_team_and_closes_it(
 
         assert closed.status_code == 202, closed.text
         assert again.status_code == 404, again.text
-        assert client.get("/api/director/org/sessions").json() == []
+        assert [
+            found["id"] for found in client.get("/api/director/org/sessions").json()
+        ] == [first]
         until(lambda: not worktree.exists(), 10)
         assert not worktree.exists()
-        assert node("services.api")["agents"]
+        assert _work_places(client, first)["services.api"]["agents"]
 
 
 def test_director_prunes_a_blocked_team_and_maps_who_owns_what(
@@ -3995,6 +4091,7 @@ def test_director_prunes_a_blocked_team_and_maps_who_owns_what(
                 {"category": "critical_issue", "title": "Too much for one team"},
             )
         ],
+        web_ic=[("submit_review", {"summary": "Shown."})],
     )
     run_git_command(["git", "init", "-b", "main"], repo)
     for path in ("services/api/app.py", "apps/web/index.html"):
@@ -4024,8 +4121,12 @@ def test_director_prunes_a_blocked_team_and_maps_who_owns_what(
             },
         )
         assert created.status_code == 201, created.text
+        session_id = created.json()["session"]["id"]
 
         def teams() -> list[str]:
+            return list(_work_places(client, session_id))
+
+        def landed() -> list[str]:
             detail = client.get("/api/director/org/nodes/root").json()
             return [child["id"] for child in detail["children"]]
 
@@ -4037,7 +4138,12 @@ def test_director_prunes_a_blocked_team_and_maps_who_owns_what(
             seen.update(teams())
             time.sleep(0.1)
 
-        assert teams() == ["apps.web"]
+        assert teams() == ["root", "apps.web"]
+        # The work of the team that is left is all of the session's, and
+        # with it accepted the org has that team and never had the other.
+        while time.time() < deadline and not landed():
+            time.sleep(0.1)
+        assert landed() == ["apps.web"]
         ownership = client.get("/api/director/org/nodes/root/ownership")
         assert ownership.status_code == 200, ownership.text
         body = ownership.json()
@@ -4051,7 +4157,9 @@ def test_director_prunes_a_blocked_team_and_maps_who_owns_what(
             item["title"]
             for item in client.get("/api/conversations/search").json()["items"]
         ]
-        assert "Web (IC)" in titles and "API (IC)" not in titles
+        # An agent's conversation is named by its team and its session.
+        assert "Web · Checkout (IC)" in titles
+        assert not any(title.startswith("API") for title in titles)
 
 
 def test_director_starts_an_org_from_a_message_and_holds_teams_to_their_directories(
@@ -4086,7 +4194,18 @@ def test_director_starts_an_org_from_a_message_and_holds_teams_to_their_director
                     )
                 },
             ),
+            (
+                "terminal",
+                {
+                    "command": (
+                        "git add . && git -c user.name=T -c user.email=t@example.com "
+                        "commit -q -m Served"
+                    )
+                },
+            ),
+            ("submit_review", {"summary": "Served."}),
         ],
+        tasked=("services.api",),
     )
     run_git_command(["git", "init", "-b", "main"], repo)
     run_git_command(
@@ -4096,6 +4215,11 @@ def test_director_starts_an_org_from_a_message_and_holds_teams_to_their_director
     )
 
     with httpx.Client(base_url=server_env["host"], timeout=30) as client:
+        # The teams write where the script says: in the repository's checkout.
+        settings = client.patch(
+            "/api/director/settings", json={"session_worktrees": False}
+        )
+        assert settings.status_code == 200, settings.text
         started = client.post(
             "/api/director/org/messages",
             json={
@@ -4110,18 +4234,20 @@ def test_director_starts_an_org_from_a_message_and_holds_teams_to_their_director
             },
         )
         assert started.status_code == 200, started.text
+        [session] = client.get("/api/director/org/sessions").json()
         assert (started.json()["node_id"], started.json()["started_org"]) == (
-            "root",
+            f"root@{session['id']}",
             True,
         )
+        assert started.json()["conversation_id"] == session["conversation_id"]
         confined = client.get("/api/director/org").json()["boundary_enforcement"]
 
         def api_ic_events() -> list[dict]:
-            api = client.get("/api/director/org/nodes/services.api")
+            api = _work_places(client, session["id"]).get("services.api")
             # A team has no agent until its IC above gives it its task.
-            if api.status_code != 200 or not api.json()["node"]["agents"]:
+            if api is None or not api["agents"]:
                 return []
-            api_ic = api.json()["node"]["agents"][0]["conversation_id"]
+            api_ic = api["agents"][0]["conversation_id"]
             page = client.get(
                 f"/api/conversations/{api_ic}/events/search", params={"limit": 100}
             )
@@ -4129,7 +4255,8 @@ def test_director_starts_an_org_from_a_message_and_holds_teams_to_their_director
 
         def finished(events: list[dict]) -> bool:
             return any(
-                event.get("source") == "agent" and event.get("kind") == "MessageEvent"
+                event.get("kind") == "ObservationEvent"
+                and event.get("tool_name") == "submit_review"
                 for event in events
             )
 
@@ -4140,11 +4267,13 @@ def test_director_starts_an_org_from_a_message_and_holds_teams_to_their_director
             events = api_ic_events()
         assert finished(events), [event.get("kind") for event in events]
 
-        root = client.get("/api/director/org/nodes/root").json()["node"]
+        root = _work_places(client, session["id"])["root"]
         assert (root["title"], root["headline"]) == (
             "Checkout",
             "Builds the checkout flow.",
         )
+        tree = client.get("/api/director/org/nodes/root").json()["node"]
+        assert (tree["title"], tree["headline"]) == (root["title"], root["headline"])
         root_ic = root["agents"][0]["conversation_id"]
         assert client.get(f"/api/conversations/{root_ic}").json()["title"] == (
             "Checkout (IC)"
@@ -4161,15 +4290,31 @@ def test_director_starts_an_org_from_a_message_and_holds_teams_to_their_director
         assert not (repo / "by-editor.txt").exists()
         assert (repo / "services" / "api" / "by-editor.txt").read_text() == "x"
 
+        if confined != "sandbox":
+            pytest.skip(
+                "this machine cannot confine a shell; only file tools are checked"
+            )
+        # The shell starts in the team's directory and can write nowhere else.
+        assert (repo / "services" / "api" / "by-shell.txt").exists()
+        assert not (repo / "by-shell.txt").exists()
+        assert not (repo / "apps" / "by-shell.txt").exists()
+
+        # What is said from a team's directory opens a session at that team,
+        # which the org has once the work of its first session is accepted.
+        while time.time() < deadline and (
+            client.get("/api/director/org/nodes/services.api").status_code != 200
+        ):
+            time.sleep(0.3)
         routed = client.post(
             "/api/director/org/messages",
             json={"text": "Add refunds", "path": "services/api/handlers"},
         ).json()
-        assert (routed["node_id"], routed["started_org"]) == ("services.api", False)
-
-    if confined != "sandbox":
-        pytest.skip("this machine cannot confine a shell; only file tools are checked")
-    # The shell starts in the team's directory and can write nowhere else.
-    assert (repo / "services" / "api" / "by-shell.txt").exists()
-    assert not (repo / "by-shell.txt").exists()
-    assert not (repo / "apps" / "by-shell.txt").exists()
+        [_, opened] = client.get("/api/director/org/sessions").json()
+        assert (opened["team_id"], opened["request"]) == (
+            "services.api",
+            "Add refunds\n\n(The human sent this from services/api/handlers.)",
+        )
+        assert (routed["node_id"], routed["started_org"]) == (
+            f"services.api@{opened['id']}",
+            False,
+        )

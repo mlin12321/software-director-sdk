@@ -1,6 +1,7 @@
 """An org pulled from and pushed to a remote of its repository, as a merge."""
 
 from pathlib import Path
+from uuid import UUID
 
 import pytest
 
@@ -15,7 +16,7 @@ from openhands.agent_server.director.models import (
 )
 from openhands.agent_server.director.org_merge import by_id, merge_orgs, rehomed
 from openhands.agent_server.director.org_persistence import create_org_board
-from openhands.agent_server.director.org_store import AGENT_LOST
+from openhands.agent_server.director.org_store import AGENT_LOST, team_id_of
 from openhands.agent_server.director.service import DirectorService
 from openhands.sdk.errors import Conflict, Unprocessable
 from tests.agent_server.director.conftest import (
@@ -24,6 +25,7 @@ from tests.agent_server.director.conftest import (
     root_conversation,
     run_git,
 )
+from tests.agent_server.director.test_director_landing import landed
 from tests.agent_server.director.test_director_limits import started
 from tests.agent_server.director.test_director_tools import ic, node, split_root
 
@@ -195,8 +197,11 @@ async def elsewhere(remote: Path, tmp_path: Path) -> tuple[DirectorService, Path
 async def an_org_on_two_machines(
     repo: Path, launcher: FakeLauncher, remote: Path, tmp_path: Path
 ) -> tuple[DirectorService, DirectorService]:
+    """An org whose first session set up API and Web, and a second clone
+    that pulled it."""
     here = await started(repo, launcher)
     await split_root(here)
+    await landed(here)
     await here.push_org("origin")
     there, _ = await elsewhere(remote, tmp_path)
     await there.pull_org("origin")
@@ -204,16 +209,24 @@ async def an_org_on_two_machines(
     return here, there
 
 
+def team(service: DirectorService, team_id: str) -> OrgNode:
+    """A team as the org has it, whatever a session has there."""
+    found = service.store.team(team_id)
+    assert found is not None
+    return found
+
+
 def change(service: DirectorService, node_id: str, **fields: object) -> None:
     service.store.update_node(node_id, **fields)
 
 
-async def test_a_pushed_org_is_whole_in_another_clone_except_for_its_agents(
+async def test_a_pushed_org_is_whole_in_another_clone_except_for_its_sessions(
     repo: Path, launcher: FakeLauncher, remote: Path, tmp_path: Path
 ):
     here = await started(repo, launcher)
     await split_root(here)
     here.report(node(here, API), "ic", "Never log card numbers")
+    await landed(here)
 
     pushed = await here.push_org("origin")
     there, clone = await elsewhere(remote, tmp_path)
@@ -221,15 +234,15 @@ async def test_a_pushed_org_is_whole_in_another_clone_except_for_its_agents(
     await there.settled()
 
     assert pushed.result == "pushed" and pulled.result == "fast_forward"
-    assert [team.id for team in there.store.all()] == ["root", API, WEB]
-    assert node(there, API).title == "API" and node(there, API).spec_summary
-    [carried] = there.reports_of(node(there, API))
+    assert [found.id for found in there.store.all()] == ["root", API, WEB]
+    assert team(there, API).title == "API" and team(there, API).spec_summary
+    [carried] = there.reports_of(team(there, API))
     assert carried.text == "Never log card numbers"
     assert there.team_memory.applies_to("services/api", "")[1]
-    assert node(there, "root").worktree_path == str(clone)
-    assert {agent.status for team in there.store.all() for agent in team.agents} == {
-        AGENT_LOST
-    }
+    assert team(there, "root").worktree_path == str(clone)
+    # Who works on it is the first machine's alone.
+    assert there.store.sessions() == [] and len(here.store.sessions()) == 1
+    assert [found.agents for found in there.store.all()] == [[], [], []]
     assert there.summary().paused is None and here.summary().paused is None
     await here.aclose()
     await there.aclose()
@@ -254,13 +267,14 @@ async def test_what_each_side_changed_is_merged_and_goes_back_with_the_next_push
 
     assert merged.result == "merged" and merged.merge is None
     for side in (here, there):
-        assert node(side, API).headline == "API has its routes"
-        assert node(side, API).title == "Orders API"
-        assert node(side, WEB).headline == "Web has its pages"
+        assert team(side, API).headline == "API has its routes"
+        assert team(side, API).title == "Orders API"
+        assert team(side, WEB).headline == "Web has its pages"
     assert back.result in ("merged", "fast_forward")
-    assert ic(here, API) == mine and node(here, "root").worktree_path == str(repo)
+    # The session that works here is as it was.
+    assert ic(here, API) == mine and team(here, "root").worktree_path == str(repo)
     assert merged.head is not None
-    clone = Path(node(there, "root").worktree_path)
+    clone = Path(team(there, "root").worktree_path)
     commit, *parents = run_git(
         clone, "rev-list", "--parents", "-n", "1", merged.head
     ).split()
@@ -297,7 +311,7 @@ async def test_a_pull_stops_on_a_conflict_and_writes_nothing(
         "Mine",
         "Theirs",
     )
-    assert node(here, API).headline == "Mine" and node(here, WEB).headline != (
+    assert team(here, API).headline == "Mine" and team(here, WEB).headline != (
         "Web moved on"
     )
     assert create_org_board(repo).head() == before
@@ -329,8 +343,8 @@ async def test_a_conflict_is_resolved_either_way_and_the_merge_is_finished(
     await here.settled()
 
     assert done.result == "merged" and done.merge is None
-    assert node(here, API).headline == headline
-    assert node(here, WEB).headline == "Web moved on"
+    assert team(here, API).headline == headline
+    assert team(here, WEB).headline == "Web moved on"
     summary = here.summary()
     assert not summary.merging and summary.paused is None
     assert (await here.push_org("origin")).result == "pushed"
@@ -364,14 +378,14 @@ async def test_a_merge_that_waits_survives_a_restart_and_can_be_abandoned(
 
     assert waiting is not None and len(waiting.conflicts) == 1
     assert abandoned.result == "up_to_date" and await again.merge() is None
-    assert node(again, API).headline == "Mine"
+    assert team(again, API).headline == "Mine"
     assert not again.summary().merging and again.summary().paused is None
     taken = await again.pull_org("origin")
     everything = await again.resolve_merge(
         ResolveMergeRequest.model_validate({"rest": "theirs"})
     )
     assert taken.result == "conflicts" and everything.result == "merged"
-    assert node(again, API).headline == "Theirs"
+    assert team(again, API).headline == "Theirs"
     await again.aclose()
     await there.aclose()
 
@@ -405,7 +419,7 @@ async def test_a_spec_both_sides_rewrote_is_a_conflict_about_the_file(
     await there.aclose()
 
 
-async def test_unfinished_work_for_a_team_the_pull_removed_is_put_aside(
+async def test_a_session_goes_on_with_a_team_the_pull_removed(
     repo: Path, launcher: FakeLauncher, remote: Path, tmp_path: Path
 ):
     here, there = await an_org_on_two_machines(repo, launcher, remote, tmp_path)
@@ -418,85 +432,88 @@ async def test_unfinished_work_for_a_team_the_pull_removed_is_put_aside(
     pulled = await here.pull_org("origin")
 
     assert pulled.result in ("merged", "fast_forward")
-    assert here.store.get(API) is None
-    (dropped,) = pulled.put_aside
-    assert dropped.node_id == API and "idempotency" in dropped.detail
+    assert here.store.team(API) is None
+    # The session has the team as it set it up; it is not made to catch up
+    # while it works.
+    assert team_id_of(node(here, API)) == API and ic(here, API) is not None
+    assert pulled.put_aside == []
     assert here.summary().paused == "human"
-    assert (await here.recovery()).messages_held == 0
+    assert (await here.recovery()).messages_held == 1
     await here.aclose()
     await there.aclose()
 
 
-async def test_a_team_without_agents_here_is_started_again_on_its_work(
-    repo: Path, launcher: FakeLauncher, remote: Path, tmp_path: Path
+async def test_a_team_whose_conversation_is_gone_is_started_again_on_its_work(
+    repo: Path, launcher: FakeLauncher
 ):
-    here, there = await an_org_on_two_machines(repo, launcher, remote, tmp_path)
-    clone = Path(node(there, "root").worktree_path)
-    there.team_memory.write("services/api", SPEC_FILE, "Serve orders over REST\n")
-    fake = there._require_launcher()
-    assert isinstance(fake, FakeLauncher)
+    here = await started(repo, launcher)
+    await split_root(here)
+    here.team_memory.write("services/api", SPEC_FILE, "Serve orders over REST\n")
+    lost = ic(here, API)
+    assert lost is not None
+    del launcher.known[UUID(lost)]
+    derived = len(launcher.derived)
+    api = node(here, API).id
 
-    team = await there.start_again(
-        API, StartAgainRequest(conversation=root_conversation(clone))
+    started_again = await here.start_again(
+        api, StartAgainRequest(conversation=root_conversation(repo))
     )
-    await there.settled()
+    await here.settled()
 
-    assert ic(there, API) != ic(here, API)
-    assert fake.root is not None
-    assert fake.root.workspace.working_dir == node(there, API).worktree_path
-    assert str(fake.root.conversation_id) == ic(there, API)
-    (briefing,) = fake.messages_to(ic(there, API))
+    assert ic(here, API) != lost
+    assert launcher.root is not None
+    assert launcher.root.workspace.working_dir == node(here, API).worktree_path
+    assert str(launcher.root.conversation_id) == ic(here, API)
+    (briefing,) = launcher.messages_to(ic(here, API))
     assert "Serve orders over REST" in briefing and "worked on before" in briefing
-    assert fake.derived == []
-    assert {agent.status for agent in team.agents} != {AGENT_LOST}
+    assert len(launcher.derived) == derived
+    assert {agent.status for agent in started_again.agents} != {AGENT_LOST}
     with pytest.raises(Conflict, match="has a conversation here"):
-        await there.start_again(
-            API, StartAgainRequest(conversation=root_conversation(clone))
+        await here.start_again(
+            api, StartAgainRequest(conversation=root_conversation(repo))
         )
     await here.aclose()
-    await there.aclose()
 
 
-async def test_a_lost_team_is_started_again_like_the_ic_above_in_its_own_checkout(
-    repo: Path, launcher: FakeLauncher, remote: Path, tmp_path: Path
+async def test_such_a_team_is_started_again_like_the_ic_above_in_its_own_checkout(
+    repo: Path, launcher: FakeLauncher
 ):
-    here, there = await an_org_on_two_machines(repo, launcher, remote, tmp_path)
-    clone = Path(node(there, "root").worktree_path)
-    fake = there._require_launcher()
-    assert isinstance(fake, FakeLauncher)
+    here = await started(repo, launcher)
+    await split_root(here)
+    api, branch = node(here, API).id, node(here, API).branch
+    top_ic, lost = ic(here), ic(here, API)
+    assert top_ic is not None and lost is not None
+    del launcher.known[UUID(lost)]
 
-    with pytest.raises(Conflict, match="top of the org"):
-        await there.start_again("root", StartAgainRequest())
-    with pytest.raises(Conflict, match="Start that team again first"):
-        await there.start_again(API, StartAgainRequest())
-    assert {agent.status for agent in node(there, API).agents} == {AGENT_LOST}
+    # Nobody works at a team of the org itself.
+    with pytest.raises(Conflict, match="open a session there"):
+        await here.start_again("root", StartAgainRequest())
+    # With no conversation of the org left here there is nothing to start
+    # it like.
+    kept = launcher.known.pop(UUID(top_ic))
+    with pytest.raises(Conflict, match="Start it again with a conversation"):
+        await here.start_again(api, StartAgainRequest())
+    launcher.known[UUID(top_ic)] = kept
 
-    await there.start_again(
-        "root", StartAgainRequest(conversation=root_conversation(clone))
-    )
-    await there.settled()
-    before = len(fake.derived)
-    await there.start_again(API, StartAgainRequest())
-    await there.settled()
+    before = len(launcher.derived)
+    await here.start_again(api, StartAgainRequest())
+    await here.settled()
 
-    [team] = fake.derived[before:]
-    assert team.title == "API (IC)"
-    assert str(team.parent_id) == ic(there) and str(team.conversation_id) == ic(
-        there, API
-    )
-    assert team.checkout == node(there, API).worktree_path
-    assert "worked on before" in team.task
-    assert {agent.status for agent in node(there, API).agents} != {AGENT_LOST}
-    assert node(there, API).branch == node(here, API).branch
+    [again] = launcher.derived[before:]
+    assert str(again.parent_id) == top_ic
+    assert str(again.conversation_id) == ic(here, API) != lost
+    assert again.checkout == node(here, API).worktree_path
+    assert "worked on before" in again.task
+    assert {agent.status for agent in node(here, API).agents} != {AGENT_LOST}
+    assert node(here, API).branch == branch
     await here.aclose()
-    await there.aclose()
 
 
-async def test_a_message_with_a_conversation_starts_the_nearest_lost_team_again(
+async def test_a_message_with_a_conversation_opens_a_session_in_a_pulled_org(
     repo: Path, launcher: FakeLauncher, remote: Path, tmp_path: Path
 ):
     here, there = await an_org_on_two_machines(repo, launcher, remote, tmp_path)
-    clone = Path(node(there, "root").worktree_path)
+    clone = Path(team(there, "root").worktree_path)
     fake = there._require_launcher()
     assert isinstance(fake, FakeLauncher)
 
@@ -509,9 +526,15 @@ async def test_a_message_with_a_conversation_starts_the_nearest_lost_team_again(
     )
     await there.settled()
 
-    assert routed.node_id == API and routed.conversation_id == ic(there, API)
-    assert fake.messages_to(ic(there, API))[-1].startswith("Add a health check")
-    assert node(there, "root").agents[0].status == AGENT_LOST
+    # The team nearest to where it was said, in a session of this machine.
+    [session] = there.store.sessions()
+    assert (session.team_id, session.request) == (API, "Add a health check")
+    assert routed.node_id == session.teams[0].id
+    assert fake.root is not None
+    assert routed.conversation_id == str(fake.root.conversation_id)
+    assert routed.conversation_id == ic(there, routed.node_id)
+    assert "Add a health check" in fake.messages_to(routed.conversation_id)[-1]
+    assert [found.agents for found in there.store.teams()] == [[], [], []]
     await here.aclose()
     await there.aclose()
 

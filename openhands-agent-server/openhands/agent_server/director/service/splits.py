@@ -14,17 +14,18 @@ from openhands.agent_server.director.git import (
     save_and_discard,
     uncommitted,
 )
+from openhands.agent_server.director.git_store import SPEC_FILE, team_key
 from openhands.agent_server.director.merge_back import merge_back
 from openhands.agent_server.director.models import (
     FormerTeam,
     HandOverMode,
     OrgNode,
-    OrgNodeInput,
     SplitChild,
 )
 from openhands.agent_server.director.org_store import (
     AGENT_LOST,
     OrgStoreError,
+    session_id_of,
 )
 from openhands.agent_server.director.prompts import (
     HAND_OVER_FAILED,
@@ -37,8 +38,10 @@ from openhands.agent_server.director.prompts import (
 )
 from openhands.agent_server.director.run_state import (
     CHECKS,
+    DRAFT,
     HANDING,
     PROGRESS,
+    REPORTS,
     TASK,
     TOLD,
     Intent,
@@ -47,8 +50,10 @@ from openhands.agent_server.director.service.state import (
     PRUNED_REFS,
     _child_node,
     _spec_file,
+    _unit,
     agent_conversation,
     hand_over_of,
+    team_of,
 )
 from openhands.agent_server.director.service.watch import Watch
 from openhands.agent_server.director.split import (
@@ -150,7 +155,15 @@ class Splits(Watch):
                 self._decline(node, str(error))
                 return
             gone = {team.id for team in split.replaces}
-            taken = {team.id for team in store.all()} - gone
+            # A new team's id is no team's of the org and none of the
+            # session's, so that it can become the org's when the
+            # session's work is accepted.
+            taken = {
+                team_of(team)
+                for team in store.all()
+                if team.id not in gone
+                and session_id_of(team) in ("", session_id_of(node))
+            }
             teams = [_child_node(taken, node, child) for child in split.children]
             teams = [
                 team.model_copy(
@@ -238,7 +251,7 @@ class Splits(Watch):
                 bool(plan["replaces"]),
             )
 
-        teams = [OrgNodeInput.model_validate(team) for team in plan["teams"]]
+        teams = [_unit(team) for team in plan["teams"]]
         for team in teams:
             if store.get(team.id) is None:
                 store.upsert(team)
@@ -520,16 +533,16 @@ class Splits(Watch):
         team of the same name or directory then starts from nothing but
         the old team's spec. Doing it again changes nothing."""
         team_memory = self._memory()
-        kept = await asyncio.to_thread(team_memory.former, team.id)
+        kept = await asyncio.to_thread(team_memory.former, team_of(team))
         record = next((former for former in kept if former.at == at), None)
         if record is None:
             reports = await asyncio.to_thread(self.reports_of, team)
             record = await asyncio.to_thread(
                 team_memory.record_former,
                 FormerTeam(
-                    id=team.id,
+                    id=team_of(team),
                     title=team.title,
-                    above=team.parent_id or "",
+                    above=team_key(team.parent_id or ""),
                     path=team.boundary.path,
                     purpose=self._purpose(team),
                     ended=ended,
@@ -538,9 +551,18 @@ class Splits(Watch):
                     reports=reports,
                     compacted_report=await self._as_one_report(reports),
                 ),
+                team.id,
+            )
+        # What a session wrote for the team is the removed team's: its spec
+        # stays in the directory as an old one, and nothing of it is a
+        # later team's at the same place.
+        draft = await asyncio.to_thread(self.spec_draft, team)
+        if draft is not None:
+            await asyncio.to_thread(
+                team_memory.write, team.boundary.path, SPEC_FILE, draft[0]
             )
         run = self._runs()
-        for kind in (TASK, PROGRESS, CHECKS):
+        for kind in (TASK, PROGRESS, CHECKS, DRAFT, REPORTS):
             run.unmark(kind, team.id)
         self._work_accepted(team)
         return record

@@ -127,6 +127,14 @@ def _require_node(service: DirectorService, node_id: str) -> OrgNode:
     return node
 
 
+def _require_place(service: DirectorService, node_id: str) -> OrgNode:
+    """A node of the org tree, or what a session has at a team, by its id."""
+    node = service.store.get(node_id)
+    if node is None:
+        raise NotFound(f"Unknown node: {node_id}")
+    return node
+
+
 def _require_session(service: DirectorService, session_id: str) -> Session:
     for session in service.sessions():
         if session.id == session_id:
@@ -296,7 +304,7 @@ def search_org(
 
 @director_router.post(
     "/org",
-    response_model=OrgNode,
+    response_model=OpenedSession,
     status_code=status.HTTP_201_CREATED,
     responses=error_responses(
         {
@@ -316,13 +324,15 @@ def search_org(
 async def create_org(
     request: CreateOrgRequest,
     service: DirectorService = Depends(get_director_service),
-) -> OrgNode:
-    """Start an org: a root team whose IC is briefed with the task.
+) -> OpenedSession:
+    """Start an org: its top team, and the session that works on the task.
 
-    The IC runs as the given conversation and its Manager, like every agent of
-    the teams it later splits into, is derived from it. The org lives in the
-    git repository of that conversation's workspace, which the server keeps
-    for its next start. Follow the org on the tree stream.
+    The session's IC runs as the given conversation, and every other agent
+    of the org is derived from one that runs already. Nobody works at a
+    team of the org itself: all work is done in sessions, and accepted work
+    is merged into the checkout of the repository the conversation's
+    workspace is in, which the server keeps for its next start. Follow the
+    org on the tree stream.
     """
     return await service.create_org(request)
 
@@ -423,6 +433,11 @@ async def route_message(
     and the answer says how the team was chosen. The ICs above that team are
     not woken; they are told of the message in their context.
 
+    With `session_id` the message continues that session and opens none: it
+    goes to the IC of the team the session was opened at, or of a team the
+    session has below it when the director is sure, a team the session set
+    up itself included.
+
     When there is no org yet, the message needs a `conversation`. If the
     repository of that conversation's workspace (or one above that has it as
     a submodule) has a saved org, the director takes that org up and routes
@@ -431,31 +446,6 @@ async def route_message(
     it.
     """
     return await service.route_message(request)
-
-
-@director_router.post(
-    "/org/nodes/{node_id}/escalations/{escalation_id}/answer",
-    response_model=OrgNode,
-    responses=error_responses(
-        {
-            NotFound: "No such node, or it has no such escalation",
-            Conflict: "The escalation is still with a team, not with the human",
-            Unavailable: "The director is not running agents",
-        }
-    ),
-)
-def answer_escalation(
-    node_id: str,
-    escalation_id: str,
-    request: AnswerEscalationRequest,
-    service: DirectorService = Depends(get_director_service),
-) -> OrgNode:
-    """Answer an escalation that waits on the human, which settles it.
-
-    The answer is sent to the IC of the team that raised it.
-    """
-    _require_node(service, node_id)
-    return service.answer_escalation(node_id, escalation_id, request.answer)
 
 
 @director_router.get(
@@ -659,8 +649,8 @@ def get_node_memory(
     """Get what a node works to: the spec of its boundary, the contracts
     between its sub-teams and the ones the team above set for it, and
     what its two agents reported."""
-    node = _require_node(service, node_id)
-    above = service.store.get(node.parent_id) if node.parent_id else None
+    node = _require_place(service, node_id)
+    above = service._works_above(node)
     _, contracts = service.team_memory.applies_to(
         node.boundary.path, above.boundary.path if above else None
     )
@@ -687,7 +677,7 @@ def get_node_messages(
     """Get what a node's agents have said to Managers and ICs: its IC and
     its Manager to each other, its Manager to the ICs directly below, and
     the Manager above to its IC."""
-    return service.threads_of(_require_node(service, node_id))
+    return service.threads_of(_require_place(service, node_id))
 
 
 @director_router.get(
@@ -723,7 +713,7 @@ def get_node_changes(
 ) -> TeamChanges:
     """List the files a team changed in its directory since its work
     started or was last accepted, uncommitted and new files included."""
-    return team_changes(_require_node(service, node_id))
+    return team_changes(_require_place(service, node_id))
 
 
 @director_router.get(
@@ -744,7 +734,7 @@ def get_node_changed_file(
 ) -> FileSides:
     """Get one file as it was at the team's base commit and as it is in the
     team's checkout now."""
-    return file_sides(_require_node(service, node_id), path)
+    return file_sides(_require_place(service, node_id), path)
 
 
 @director_router.put(
@@ -771,7 +761,7 @@ async def edit_node_file(
     told. Refused while an agent of the team is in the middle of a turn, and
     for a file the team's own agents may not write.
     """
-    _require_node(service, node_id)
+    _require_place(service, node_id)
     return await service.edit_file(node_id, path, request.content)
 
 
@@ -911,8 +901,8 @@ async def abort_merge(
 
 
 @director_router.post(
-    "/org/nodes/{node_id}/start_again",
-    response_model=OrgNode,
+    "/org/sessions/{session_id}/teams/{node_id}/start_again",
+    response_model=SessionTeam,
     responses=error_responses(
         {
             NotFound: "There is no such team",
@@ -922,19 +912,21 @@ async def abort_merge(
     ),
 )
 async def start_team_again(
+    session_id: str,
     node_id: str,
     request: StartAgainRequest,
     service: DirectorService = Depends(get_director_service),
 ) -> OrgNode:
-    """Start afresh a team whose agents have no conversation on this server.
-
-    That is the state of every team after its org was pulled into another
-    clone: the tree, the specs and the teams' branches travel, the agents'
-    conversations do not. The team's IC starts as the given conversation in
-    the team's own checkout and is briefed from the team's spec.
+    """Start afresh a team of a session whose agents have no conversation
+    on this server any more. The team's IC starts as the given conversation
+    in the team's own checkout and is briefed from the team's spec and what
+    the session recorded.
     """
-    _require_node(service, node_id)
-    return await service.start_again(node_id, request)
+    session = _require_session(service, session_id)
+    team = next((team for team in session.teams if team.team_id == node_id), None)
+    if team is None:
+        raise NotFound(f"Session {session_id!r} has no team {node_id}")
+    return await service.start_again(team.id, request)
 
 
 @director_tools_router.get("")

@@ -7,6 +7,8 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
+from pydantic import TypeAdapter
+
 from openhands.agent_server.director.boundary import (
     owns,
 )
@@ -20,6 +22,7 @@ from openhands.agent_server.director.git_store import (
     SPEC_FILE,
     GitStore,
     normalize_store_path,
+    team_key,
 )
 from openhands.agent_server.director.models import (
     AGENT_ROLES,
@@ -35,12 +38,13 @@ from openhands.agent_server.director.models import (
     OrgNode,
     Report,
     RoutedRequest,
+    SessionTeam,
     SplitProposal,
     TeamEvent,
     TeamEventKind,
     Thread,
 )
-from openhands.agent_server.director.org_store import session_id_of
+from openhands.agent_server.director.org_store import reviews_only, session_id_of
 from openhands.agent_server.director.prompts import (
     NEEDED_WORTH_SAYING,
     event_line,
@@ -55,6 +59,7 @@ from openhands.agent_server.director.run_state import (
     CHECKS,
     DRAFT,
     JOINED,
+    REPORTS,
 )
 from openhands.agent_server.director.service.state import (
     ASKED_KEPT,
@@ -75,6 +80,7 @@ from openhands.sdk.errors import NotFound
 
 
 logger = logging.getLogger(__name__)
+_REPORTS = TypeAdapter(list[Report])
 
 
 # How the org's own team is named to the sessions that work beside it.
@@ -160,7 +166,10 @@ class Records(ServiceState):
         with self._keeping_needs:
             kept = False
             for event in self.team_memory.history(team.parent_id):
-                if event.kind == "set_up" and event.team_id in (team.id, beside.id):
+                if event.kind == "set_up" and event.team_id in (
+                    team_of(team),
+                    team_of(beside),
+                ):
                     # A new team in that place is counted from its start.
                     kept = False
                 elif event.kind == "needed":
@@ -169,7 +178,7 @@ class Records(ServiceState):
                         event.other_id,
                         event.paths,
                         event.detail,
-                    ) == (team.id, beside.id, [path], how)
+                    ) == (team_of(team), team_of(beside), [path], how)
             if not kept:
                 self.record_event(team.parent_id, "needed", team, how, [path], beside)
 
@@ -263,11 +272,12 @@ class Records(ServiceState):
         if team.parent_id is None:
             return ""
         records = track_records(self.team_memory.history(team.parent_id))
-        counted = next((record_line(r) for r in records if r["node_id"] == team.id), "")
+        own = team_of(team)
+        counted = next((record_line(r) for r in records if r["node_id"] == own), "")
         needed = [
-            need_words(pair, team.id)
+            need_words(pair, own)
             for pair in self.needs_below(team.parent_id)
-            if team.id in pair["node_ids"]
+            if own in pair["node_ids"]
         ]
         return "; ".join(part for part in (counted, *needed) if part)
 
@@ -323,7 +333,7 @@ class Records(ServiceState):
         needed = [
             f"{need_words(pair)}."
             for pair in needs_between(history)
-            if set(pair["node_ids"]) <= set(proposal.replaces)
+            if set(pair["node_ids"]) <= {team_key(r) for r in proposal.replaces}
         ]
         return proposal_facts(
             sizes, together, before + declined + needed, proposal.reason
@@ -442,7 +452,7 @@ class Records(ServiceState):
         """
         store = self.store
         team_memory = self.team_memory
-        above = store.get(node.parent_id) if node.parent_id else None
+        above = self._works_above(node)
         _, contracts = team_memory.applies_to(
             node.boundary.path, above.boundary.path if above else None
         )
@@ -470,7 +480,10 @@ class Records(ServiceState):
         others = [
             other
             for other in store.all()
-            if team_of(other) == team_of(node) and other.id != node.id and other.agents
+            if team_of(other) == team_of(node)
+            and other.id != node.id
+            and other.agents
+            and not reviews_only(other)
         ]
         title = store.session_title(node)
         context: dict[str, Any] = {
@@ -649,7 +662,51 @@ class Records(ServiceState):
             for role in AGENT_ROLES
             for report in team_memory.reports(team_of(node), role)
         ]
-        return sorted(reports, key=lambda report: report.at)
+        return sorted([*reports, *self.own_reports(node)], key=lambda report: report.at)
+
+    def own_reports(self, node: OrgNode) -> list[Report]:
+        """What the agents of a session's team recorded since the session's
+        work was last accepted. It is the session's alone until its work
+        is accepted again, and the team's from then on."""
+        kept = self._runs().marked(REPORTS).get(node.id)
+        return _REPORTS.validate_json(kept) if kept else []
+
+    def _keep_report(self, node: OrgNode, report: Report) -> None:
+        reports = [*self.own_reports(node), report]
+        self._runs().mark(REPORTS, node.id, _REPORTS.dump_json(reports).decode())
+
+    def _works_above(self, node: OrgNode) -> OrgNode | None:
+        """The team above ``node`` that works: nobody does at the place a
+        session's work is reviewed from."""
+        above = self.store.get(node.parent_id) if node.parent_id else None
+        return None if above is None or reviews_only(above) else above
+
+    def _land_reports(
+        self, top: OrgNode, only: set[str] | None = None
+    ) -> list[tuple[str, AgentRole]]:
+        """Add what a session's agents recorded to the records of their
+        teams, now that its work is accepted. The other sessions at those
+        teams read it with the next message they get.
+
+        Returns:
+            The team and the role of each record that grew.
+        """
+        session = session_id_of(top)
+        team_memory = self._memory()
+        run = self._runs()
+        grown: list[tuple[str, AgentRole]] = []
+        waits = self._waits(top)
+        for team in self.store.session(session) if session else []:
+            if team.team_id in waits or (only is not None and team.team_id not in only):
+                continue
+            # What a team the org no longer has reported is dropped with it.
+            kept = self.store.team(team_of(team)) is not None
+            for report in self.own_reports(team) if kept else []:
+                team_memory.append_report(team_of(team), report.role, report)
+                if (team_of(team), report.role) not in grown:
+                    grown.append((team_of(team), report.role))
+            run.unmark(REPORTS, team.id)
+        return grown
 
     def specs_of(self, node: OrgNode) -> list[InheritedSpec]:
         """The spec of a team's own boundary and the ones teams before it
@@ -736,26 +793,46 @@ class Records(ServiceState):
                 found.append((team.boundary.path, now or "", draft[0]))
         return found
 
-    def _land_specs(self, top: OrgNode) -> None:
+    def _waits(self, top: OrgNode) -> set[str]:
+        """The teams of a session that wait to be settled before they are
+        the org's."""
+        review = self.store.get(top.parent_id or "")
+        if not isinstance(review, SessionTeam) or review.org_change is None:
+            return set()
+        return {team.team_id for team in review.org_change.teams}
+
+    def _land_specs(self, top: OrgNode, only: set[str] | None = None) -> None:
         """Make the specs a session wrote the specs of its teams, now that
-        its work is accepted."""
+        its work is accepted. What it wrote for a team that waits to be
+        settled is kept with the session until then.
+
+        Args:
+            only: The teams that were settled, when it is those alone.
+        """
         session = session_id_of(top)
         if not session:
             return
         team_memory = self._memory()
         run = self._runs()
+        waits = self._waits(top)
         for team in self.store.session(session):
+            if team.team_id in waits or (only is not None and team.team_id not in only):
+                continue
             draft = self.spec_draft(team)
             if draft is None:
+                continue
+            run.unmark(DRAFT, team.id)
+            if self.store.team(team.team_id) is None:
+                # The org lost the team meanwhile and the session did not
+                # set it up again: its spec goes with it.
+                logger.info("The spec %s drafted is dropped with the team", team.id)
                 continue
             path = team.boundary.path
             if team_memory.read(_spec_file(path)) != draft[0]:
                 team_memory.write(path, SPEC_FILE, draft[0])
-            if self.store.team(team.team_id) is not None:
-                self.store.update_node(
-                    team.team_id, spec_summary=team.spec_summary, old_specs=[]
-                )
-            run.unmark(DRAFT, team.id)
+            self.store.update_node(
+                team.team_id, spec_summary=team.spec_summary, old_specs=[]
+            )
 
     def _specs_left_in(self, path: str, removed: list[OrgNode]) -> list[OldSpec]:
         """The specs a team that is given ``path`` finds there: the one of
@@ -783,10 +860,17 @@ class Records(ServiceState):
         # A spec in the directory itself that no team here is known to have
         # left: a team pruned long ago, or one written by hand.
         left.setdefault(own, None)
+        # A spec a removed team wrote in a session is still the session's
+        # own; it is left in the directory when the team is archived.
+        drafted = {
+            normalize_store_path(team.boundary.path)
+            for team in removed
+            if self.spec_draft(team) is not None
+        }
         return [
             OldSpec(path=directory, team=team)
             for directory, team in left.items()
-            if team_memory.read(_spec_file(directory))
+            if directory in drafted or team_memory.read(_spec_file(directory))
         ]
 
     def _record_contracts(self, node: OrgNode, contracts: str, replace: bool) -> None:

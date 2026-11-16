@@ -17,6 +17,12 @@ from openhands.agent_server.director.models import (
     OrgNode,
     SplitChild,
 )
+from openhands.agent_server.director.org_store import (
+    review_place_id,
+    reviews_only,
+    session_id_of,
+    team_id_of,
+)
 from openhands.agent_server.director.prompts import MANAGER_ROLE
 from openhands.agent_server.director.service import (
     DirectorService,
@@ -32,6 +38,8 @@ from openhands.agent_server.director.tools import (
     ReadNodeContextTool,
     ReportTool,
     ResolveEscalationTool,
+    ReviewTeamTool,
+    SubmitReviewTool,
     WriteSpecTool,
 )
 from openhands.agent_server.director.tools.definition import (
@@ -44,6 +52,8 @@ from openhands.agent_server.director.tools.definition import (
     ReadNodeContextAction,
     ReportAction,
     ResolveEscalationAction,
+    ReviewTeamAction,
+    SubmitReviewAction,
     WriteSpecAction,
 )
 from openhands.agent_server.director.tools.impl import DirectorObservation
@@ -100,9 +110,35 @@ async def use(
 
 
 def node(service: DirectorService, node_id: str) -> OrgNode:
+    """A place by its id, or the place of the session opened first at the
+    team of that id."""
     found = service.store.get(node_id)
+    if "@" not in node_id:
+        found = next(
+            (
+                place
+                for place in service.store.all()
+                if session_id_of(place)
+                and not reviews_only(place)
+                and team_id_of(place) == node_id
+            ),
+            found,
+        )
     assert found is not None
     return found
+
+
+def reviewer(service: DirectorService, node_id: str = "root") -> str | None:
+    """The IC that reviews the session of the place ``node_id``."""
+    place = service.store.get(review_place_of(service, node_id))
+    assert place is not None
+    return agent_conversation(place, "ic")
+
+
+def review_place_of(service: DirectorService, node_id: str = "root") -> str:
+    session = service.store.session_of(node(service, node_id))
+    assert session is not None
+    return review_place_id(session.above_id, session.id)
 
 
 def ic(service: DirectorService, node_id: str = "root") -> str | None:
@@ -116,7 +152,7 @@ def manager(service: DirectorService, node_id: str = "root") -> str | None:
 async def woken(service: DirectorService, node_id: str = "root") -> str:
     """The Manager of a team, started as the first message to it does."""
     if manager(service, node_id) is None:
-        service.tell_manager(node_id, "Look in on your team.")
+        service.tell_manager(node(service, node_id).id, "Look in on your team.")
         await service.settled()
     found = manager(service, node_id)
     assert found is not None
@@ -151,6 +187,19 @@ async def split_root(service: DirectorService) -> None:
     await tasked(service)
 
 
+def sub_teams(service: DirectorService, node_id: str = "root") -> list[OrgNode]:
+    """What the session opened first has directly below a team."""
+    return service.store.children(node(service, node_id).id)
+
+
+def has_place(service: DirectorService, team_id: str) -> bool:
+    """Whether a session has the team ``team_id``."""
+    return any(
+        session_id_of(place) and team_id_of(place) == team_id
+        for place in service.store.all()
+    )
+
+
 async def test_an_agent_reads_who_it_is_and_what_its_team_reported(
     service: DirectorService,
 ):
@@ -163,7 +212,12 @@ async def test_an_agent_reads_who_it_is_and_what_its_team_reported(
     )
 
     context = json.loads(observation.text)
-    assert context["you"] == {"role": "manager", "node_id": "root", "team": "Checkout"}
+    assert context["you"] == {
+        "role": "manager",
+        "node_id": node(service, "root").id,
+        "team": "Checkout",
+        "session": "Checkout",
+    }
     [reported] = context["reports_of_your_team"]
     assert (reported["by"], reported["text"]) == ("ic", "Never log card numbers")
     assert context["sub_teams"] == []
@@ -190,6 +244,21 @@ async def test_the_ic_writes_the_spec_its_sub_teams_inherit(service: DirectorSer
 
     assert not written.is_error and refused.is_error
     assert node(service, "root").spec_summary == "Checkout"
+    read = await use(service, ic(service), ReadNodeContextTool, ReadNodeContextAction())
+    assert "integer cents" in json.loads(read.text)["spec"]
+    # It is the team's once the work it was written with is accepted.
+    assert service.team_memory.applies_to("", None)[0] == []
+
+    await use(
+        service, ic(service), SubmitReviewTool, SubmitReviewAction(summary="Done.")
+    )
+    await use(
+        service,
+        reviewer(service),
+        ReviewTeamTool,
+        ReviewTeamAction(node_id=node(service, "root").id, decision="accept"),
+    )
+
     [spec], _ = service.team_memory.applies_to("", None)
     assert not spec.readonly and "integer cents" in spec.spec
 
@@ -206,7 +275,7 @@ async def test_proposed_sub_teams_wait_for_the_manager(
         ["services/api/**"],
         ["apps/web/**"],
     ]
-    assert service.store.children("root") == []
+    assert sub_teams(service) == []
     told = launcher.messages_to(manager(service))[-1]
     assert told.startswith("[director] Your IC writes:\nI propose these sub-teams.")
     assert "services/api" in told and "POST /checkout" in told
@@ -223,7 +292,7 @@ async def test_only_the_ic_proposes_and_only_the_manager_approves(
 
     assert by_manager.is_error and by_ic.is_error
     assert nothing_yet.is_error and "no proposed sub-teams" in nothing_yet.text
-    assert service.store.children("root") == []
+    assert sub_teams(service) == []
 
 
 @pytest.mark.parametrize(
@@ -299,7 +368,10 @@ async def test_a_message_from_the_manager_leaves_the_proposal_waiting(
     assert "still wait on your Manager" in told
     approved = await use(service, manager(service), ApproveTeamsTool, APPROVE)
     assert not approved.is_error
-    assert node(service, "root").child_ids == ["services.api", "apps.web"]
+    assert [team_id_of(team) for team in sub_teams(service)] == [
+        "services.api",
+        "apps.web",
+    ]
 
 
 DECLINE = DeclineTeamsAction(reason="Web and API share a schema; keep them together.")
@@ -379,7 +451,7 @@ async def test_a_later_proposal_takes_the_place_of_the_one_that_waits(
     await use(service, manager(service), ApproveTeamsTool, APPROVE)
     await tasked(service)
 
-    assert [team.title for team in service.store.children("root")] == ["Docs"]
+    assert [team.title for team in sub_teams(service)] == ["Docs"]
 
 
 async def test_a_team_without_sub_teams_writes_to_its_manager_only_to_propose(
@@ -481,8 +553,9 @@ async def test_each_agent_sees_the_threads_it_takes_part_in(service: DirectorSer
             for thread in service.threads_of(node(service, node_id))
         ]
 
-    own = ("root", "root", [("ic", SPLIT.text), ("ic", "API is slow.")])
-    down = ("root", api, [("manager", "Status?")])
+    top = node(service, "root").id
+    own = (top, top, [("ic", SPLIT.text), ("ic", "API is slow.")])
+    down = (top, node(service, api).id, [("manager", "Status?")])
     assert threads("root") == [own, down]
     assert threads(api) == [down]
     assert threads("apps.web") == []
@@ -493,13 +566,15 @@ async def test_an_approved_split_starts_a_pod_for_each_sub_team(
 ):
     await split_root(service)
 
-    api, web = service.store.children("root")
-    assert (api.id, api.title, api.boundary.path) == (
+    api, web = sub_teams(service)
+    assert (team_id_of(api), api.title, api.boundary.path) == (
         "services.api",
         "API",
         "services/api",
     )
-    assert (web.id, web.isolation) == ("apps.web", "worktree")
+    assert (team_id_of(web), web.isolation) == ("apps.web", "worktree")
+    # They are the session's until its work is accepted.
+    assert [team.id for team in service.store.teams()] == ["root"]
     starts = {str(start.conversation_id): start for start in launcher.derived}
     api_ic, web_ic = starts[str(ic(service, api.id))], starts[str(ic(service, web.id))]
     # Each IC continues from the IC above.
@@ -537,7 +612,7 @@ async def test_a_sub_team_that_cannot_start_is_shown_as_blocked(
     await use(service, manager(service), ApproveTeamsTool, APPROVE)
     await tasked(service)
 
-    api, web = service.store.children("root")
+    api, web = sub_teams(service)
     assert (api.status, web.status) == ("blocked", "blocked")
     assert [agent.status for agent in api.agents] == ["lost"]
 
@@ -567,7 +642,10 @@ async def test_what_an_ic_escalates_goes_to_the_ic_above_and_then_to_the_human(
 
     [escalation] = node(service, api).escalations
     assert not raised.is_error
-    assert (escalation.held_by, escalation.raised_by) == ("root", "ic")
+    assert (escalation.held_by, escalation.raised_by) == (
+        node(service, "root").id,
+        "ic",
+    )
     told = launcher.messages_to(ic(service))[-1]
     assert "The IC of team 'API'" in told and "Cents or decimals?" in told
     assert len(launcher.messages_to(manager(service))) == to_manager
@@ -578,25 +656,27 @@ async def test_what_an_ic_escalates_goes_to_the_ic_above_and_then_to_the_human(
     }
     [to_settle] = seen["ic"]["escalations_for_you_to_settle"]
     assert to_settle["escalation_id"] == escalation.id
+    raiser = to_settle["node_id"]
+    assert raiser == node(service, api).id
     assert seen["manager"]["escalations_for_you_to_settle"] == []
 
     by_a_peer = await use(
         service,
         ic(service, "apps.web"),
         ResolveEscalationTool,
-        resolving(api, escalation.id, "settle", "Cents."),
+        resolving(raiser, escalation.id, "settle", "Cents."),
     )
     by_the_manager = await use(
         service,
         manager(service),
         ResolveEscalationTool,
-        resolving(api, escalation.id, "settle", "Cents."),
+        resolving(raiser, escalation.id, "settle", "Cents."),
     )
     passed = await use(
         service,
         ic(service),
         ResolveEscalationTool,
-        resolving(api, escalation.id, "pass_up", "Finance has to choose."),
+        resolving(raiser, escalation.id, "pass_up", "Finance has to choose."),
     )
 
     assert by_a_peer.is_error and "not with your team" in by_a_peer.text
@@ -606,7 +686,7 @@ async def test_what_an_ic_escalates_goes_to_the_ic_above_and_then_to_the_human(
     assert waiting.escalation.held_by is None
     assert waiting.escalation.handoffs[0].reason == "Finance has to choose."
 
-    service.answer_escalation(api, escalation.id, "Cents.")
+    service.answer_escalation(node(service, api).id, escalation.id, "Cents.")
     await service.settled()
 
     assert "Cents." in launcher.messages_to(ic(service, api))[-1]
@@ -625,13 +705,14 @@ async def test_a_team_is_blocked_while_its_ic_waits_on_an_escalation(
     launcher.report(api_ic, ConversationExecutionStatus.RUNNING)
 
     [escalation] = node(service, api).escalations
+    raiser = node(service, api).id
     assert node(service, api).status == "blocked"
 
     await use(
         service,
         ic(service),
         ResolveEscalationTool,
-        resolving(api, escalation.id, "settle", "Cents."),
+        resolving(raiser, escalation.id, "settle", "Cents."),
     )
 
     assert node(service, api).escalations == []
@@ -650,8 +731,12 @@ async def test_what_a_manager_escalates_goes_to_the_manager_above(
     raised = await use(service, await woken(service, api), RaiseEscalationTool, CENTS)
 
     [escalation] = node(service, api).escalations
+    raiser = node(service, api).id
     assert not raised.is_error and "Manager of the team above" in raised.text
-    assert (escalation.held_by, escalation.raised_by) == ("root", "manager")
+    assert (escalation.held_by, escalation.raised_by) == (
+        node(service, "root").id,
+        "manager",
+    )
     assert node(service, api).status != "blocked"
     told = launcher.messages_to(await woken(service))[-1]
     assert "The Manager of team 'API'" in told and "For totals." in told
@@ -661,13 +746,13 @@ async def test_what_a_manager_escalates_goes_to_the_manager_above(
         service,
         ic(service),
         ResolveEscalationTool,
-        resolving(api, escalation.id, "settle", "Cents."),
+        resolving(raiser, escalation.id, "settle", "Cents."),
     )
     settled = await use(
         service,
         await woken(service),
         ResolveEscalationTool,
-        resolving(api, escalation.id, "settle", "Cents."),
+        resolving(raiser, escalation.id, "settle", "Cents."),
     )
 
     assert by_the_ic.is_error and "raised by a Manager" in by_the_ic.text
@@ -694,7 +779,7 @@ async def test_what_the_top_team_escalates_waits_on_the_human(
     assert waiting.escalation.held_by is None
     assert node(service, "root").status == ("blocked" if role == "ic" else "idle")
 
-    service.answer_escalation("root", waiting.escalation.id, "Cents.")
+    service.answer_escalation(node(service, "root").id, waiting.escalation.id, "Cents.")
     await service.settled()
 
     assert "The human answered" in launcher.messages_to(raiser)[-1]
@@ -720,7 +805,7 @@ async def test_a_pruned_team_is_gone_with_its_agents_and_its_ic_above_is_told(
     answer = await use(service, await woken(service), PruneTeamTool, PRUNE_API)
 
     assert not answer.is_error
-    assert service.store.get("services.api") is None
+    assert not has_place(service, "services.api")
     assert {str(gone) for gone in launcher.deleted} == agents
     assert launcher.stopped == launcher.deleted
     # Only the team's own uncommitted work went, and git still has it.
@@ -755,9 +840,9 @@ async def test_a_pruned_team_takes_the_teams_below_it_along(
 
     await use(service, manager(service), PruneTeamTool, PRUNE_API)
 
-    assert service.store.get("services.api.db") is None
+    assert not has_place(service, "services.api.db")
     assert below in {str(gone) for gone in launcher.deleted}
-    assert [team.id for team in service.store.children("root")] == ["apps.web"]
+    assert [team_id_of(team) for team in sub_teams(service)] == ["apps.web"]
 
 
 async def test_reports_are_for_the_two_agents_of_one_team(service: DirectorService):
@@ -817,7 +902,7 @@ async def test_a_prune_is_refused_and_the_team_stays(
     answer = await use(service, caller, PruneTeamTool, action)
 
     assert answer.is_error and refusal in answer.text
-    assert service.store.get("services.api") is not None
+    assert has_place(service, "services.api")
     assert launcher.deleted == []
 
 

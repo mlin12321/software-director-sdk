@@ -19,13 +19,11 @@ from openhands.agent_server.director.models import (
 )
 from openhands.agent_server.director.org_persistence import create_org_board
 from openhands.agent_server.director.org_store import (
-    AGENT_LOST,
     session_id_of,
 )
 from openhands.agent_server.director.routing import USAGE_ID
 from openhands.agent_server.director.service import DirectorService
 from openhands.agent_server.director.tools import (
-    MsgManagerTool,
     MsgTeamTool,
     PruneTeamTool,
     ReadNodeContextTool,
@@ -44,6 +42,7 @@ from openhands.agent_server.director.tools.definition import (
 )
 from openhands.sdk.errors import Conflict, NotFound
 from tests.agent_server.director.conftest import FakeLauncher, run_git
+from tests.agent_server.director.test_director_landing import landed
 from tests.agent_server.director.test_director_limits import started
 from tests.agent_server.director.test_director_pause import again
 from tests.agent_server.director.test_director_review import DONE, accept, commit
@@ -55,7 +54,7 @@ from tests.agent_server.director.test_director_teams import (
 from tests.agent_server.director.test_director_tools import (
     ic,
     node,
-    proposing,
+    reviewer,
     split_root,
     use,
     woken,
@@ -73,7 +72,8 @@ def launcher() -> FakeLauncher:
 
 @pytest.fixture
 async def service(repo: Path, launcher: FakeLauncher) -> AsyncIterator[DirectorService]:
-    """An org of API (with DB below it) and Web, every team started."""
+    """An org of API (with DB below it) and Web, which the first session
+    made and whose work is accepted."""
     service = await started(repo, launcher, stall_poll=3600)
     await split_root(service)
     await propose_and_approve(
@@ -81,6 +81,7 @@ async def service(repo: Path, launcher: FakeLauncher) -> AsyncIterator[DirectorS
         API,
         SplitChild(title="DB", path="services/api/db", task="Own the schema"),
     )
+    await landed(service)
     yield service
     await service.aclose()
 
@@ -101,12 +102,13 @@ async def opened(
 def own_checkout(
     service: DirectorService, repo: Path, tmp_path: Path, node_id: str
 ) -> Path:
-    """Give a session's team the worktree its conversation would have made."""
+    """Give a session's teams the worktree its conversation would have made."""
     name = node_id.replace("@", "-")
     worktree = tmp_path / name
     run_git(repo, "worktree", "add", "--quiet", "-b", name, str(worktree))
     for team in service.store.session(session_id_of(node(service, node_id))):
-        service.store.update_node(team.id, worktree_path=str(worktree), branch=name)
+        if not team.review_only:
+            service.store.update_node(team.id, worktree_path=str(worktree), branch=name)
     return worktree
 
 
@@ -114,6 +116,9 @@ async def test_a_session_is_beside_the_org_tree_with_a_place_at_each_of_its_team
     service: DirectorService, launcher: FakeLauncher
 ):
     tree_before = [team.model_dump() for team in service.store.teams()]
+    [first] = service.sessions()
+    api = service.store.team(API)
+    assert api is not None
     events: list[str] = []
     snapshot, unsubscribe = service.store.subscribe(
         "root", lambda event: events.append(event.type), full=True
@@ -125,35 +130,42 @@ async def test_a_session_is_beside_the_org_tree_with_a_place_at_each_of_its_team
     found = session.session
     assert (found.title, found.team_id, found.above_id) == ("Refunds", API, "root")
     assert (found.team, found.request) == ("API", REFUNDS)
-    top, db = found.teams
+    top, db, review = found.teams
     assert isinstance(top, SessionTeam) and top.id == f"{API}@{found.id}"
-    # Above the team it was opened at is the team whose IC reviews it.
-    assert (top.team_id, top.parent_id, top.child_ids) == (API, "root", [db.id])
-    assert top.boundary == node(service, API).boundary and top.isolation == "worktree"
+    # Above the team it was opened at is the place its work is reviewed from,
+    # where nobody stands until it submits.
+    assert (review.id, review.team_id) == (f"root@{found.id}@review", "root")
+    assert review.review_only and review.parent_id is None and review.agents == []
+    assert (top.team_id, top.parent_id, top.child_ids) == (API, review.id, [db.id])
+    assert top.boundary == api.boundary
     assert (db.team_id, db.parent_id, db.agents) == (DB, top.id, [])
-    # The session's IC starts from the reviewer's, in a checkout of its own.
+    # The session's IC starts from the IC the org's first session began with.
     start = launcher.derived[-1]
     assert str(start.conversation_id) == ic(service, top.id) == found.conversation_id
-    assert (str(start.parent_id), start.isolation) == (ic(service), "worktree")
+    assert str(start.parent_id) == ic(service)
     assert REFUNDS in start.task and "session 'Refunds'" in start.task
     assert session.conversation_id == found.conversation_id
     # The tree is what it was: no node, no child and no count is the session's.
     assert [team.model_dump() for team in service.store.teams()] == tree_before
     assert service.store.team(top.id) is None and len(service.store) == 4
     assert [team.id for team in service.store.children("root")] == [API, WEB]
-    assert [team.id for team in service.store.opened_under("root")] == [top.id]
+    assert [team.id for team in service.store.opened_under("root")] == [
+        node(service, "root").id,
+        top.id,
+    ]
     now = service.store.snapshot("root", full=True)
     assert snapshot is not None and now is not None
     assert [team.id for team in now.nodes] == [team.id for team in snapshot.nodes]
-    assert snapshot.sessions == [] and [open.id for open in now.sessions] == [found.id]
+    assert [open.id for open in snapshot.sessions] == [first.id]
+    assert [open.id for open in now.sessions] == [first.id, found.id]
     assert "sessions" in events and "node_upsert" not in events
-    assert [open.id for open in service.sessions()] == [found.id]
+    assert [open.id for open in service.sessions()] == [first.id, found.id]
     [event] = [
         event
         for event in service.team_memory.history("root")
-        if event.kind == "session_opened"
+        if event.kind == "session_opened" and event.session == "Refunds"
     ]
-    assert (event.team_id, event.session, event.detail) == (API, "Refunds", REFUNDS)
+    assert (event.team_id, event.detail) == (API, REFUNDS)
 
 
 async def test_a_conversation_the_human_writes_in_is_marked_and_named(
@@ -164,18 +176,23 @@ async def test_a_conversation_the_human_writes_in_is_marked_and_named(
     top = ic(service, session.session.teams[0].id)
     assert top is not None
 
-    await service.route_message(
+    routed = await service.route_message(
         RouteMessageRequest(text="Tidy the handlers.", path="services/api")
     )
     await service.settled()
     service.joined(top)
     await service.settled()
 
-    # The session's IC and the team's own, once each; not the top team's,
-    # which the human started, nor one only the director wrote to.
-    assert launcher.joined == [UUID(top), UUID(ic(service, API) or "")]
+    # The IC of each session the human's words opened, once each; not one
+    # only the director wrote to.
+    assert launcher.joined == [
+        UUID(ic(service) or ""),
+        UUID(top),
+        UUID(routed.conversation_id),
+    ]
     assert launcher.titles[UUID(top)] == "API · Refunds (IC)"
     assert service.place_of(top).human_joined
+    assert not service.place_of(ic(service, API) or "").human_joined
     with pytest.raises(NotFound):
         service.joined(str(uuid4()))
 
@@ -183,6 +200,7 @@ async def test_a_conversation_the_human_writes_in_is_marked_and_named(
 async def test_a_conversation_links_to_the_ones_a_level_from_it(
     service: DirectorService,
 ):
+    [first] = service.sessions()
     session = await opened(service)
     top = session.session.teams[0].id
     await use(
@@ -203,42 +221,63 @@ async def test_a_conversation_links_to_the_ones_a_level_from_it(
     root = service.place_of(ic(service) or "")
     in_session = service.place_of(ic(service, top) or "")
 
-    assert (root.node_id, root.role, root.session_id) == ("root", "ic", "")
-    # The top team reaches its sub-teams and the session it reviews.
+    assert (root.node_id, root.role, root.session_id) == ("root", "ic", first.id)
+    # The IC a session was opened with reaches the IC that reviewed it, its
+    # Manager and its sub-teams, all of its own session.
     assert links(ic(service)) == [
-        ("beside", "root", "manager", ""),
-        ("below", API, "ic", ""),
-        ("below", WEB, "ic", ""),
-        ("session", API, "ic", "Refunds"),
+        ("above", "root", "ic", "Checkout"),
+        ("beside", "root", "manager", "Checkout"),
+        ("below", API, "ic", "Checkout"),
+        ("below", WEB, "ic", "Checkout"),
     ]
     assert (in_session.node_id, in_session.team) == (API, "API")
     assert (in_session.session_id, in_session.session) == (
         session.session.id,
         "Refunds",
     )
-    # The session's IC is reviewed from above and reaches its own sub-team.
-    assert links(ic(service, top)) == [
-        ("above", "root", "ic", ""),
-        ("above", "root", "manager", ""),
-        ("below", DB, "ic", "Refunds"),
-    ]
-    assert links(ic(service, API))[0] == ("above", "root", "ic", "")
-    assert ("below", DB, "ic", "") in links(ic(service, API))
+    # Nobody is above a session that has not submitted its work.
+    assert links(ic(service, top)) == [("below", DB, "ic", "Refunds")]
+    assert links(ic(service, API))[0] == ("above", "root", "ic", "Checkout")
+    assert ("below", DB, "ic", "Checkout") in links(ic(service, API))
+
+    await use(service, ic(service, top), SubmitReviewTool, DONE)
+
+    assert links(ic(service, top))[0] == ("above", "root", "ic", "Refunds")
+    assert links(reviewer(service, top)) == [("below", API, "ic", "Refunds")]
 
 
-async def test_a_session_at_the_top_team_is_reviewed_by_its_own_ic(
+async def test_a_session_at_the_top_team_is_reviewed_from_a_place_of_that_team(
     service: DirectorService,
 ):
     session = await opened(service, "root", "Rename the product everywhere.")
 
     found = session.session
     assert (found.team_id, found.above_id) == ("root", "root")
-    assert found.teams[0].parent_id == "root"
-    # It has a place at every team of the org, and only the first started.
-    assert [team.team_id for team in found.teams] == ["root", API, WEB, DB]
-    assert [bool(team.agents) for team in found.teams] == [True, False, False, False]
+    assert found.teams[0].parent_id == f"root@{found.id}@review"
+    # It has a place at every team of the org and one it is reviewed from,
+    # and only the first started.
+    assert [team.team_id for team in found.teams] == ["root", API, WEB, DB, "root"]
+    assert [bool(team.agents) for team in found.teams] == [
+        True,
+        False,
+        False,
+        False,
+        False,
+    ]
     # The top team keeps its sub-teams and gains none.
     assert [team.id for team in service.store.children("root")] == [API, WEB]
+
+
+async def test_a_session_is_refused_where_it_cannot_be_found_or_started(
+    service: DirectorService, launcher: FakeLauncher
+):
+    with pytest.raises(NotFound):
+        await opened(service, "no.such.team")
+
+    del launcher.known[UUID(ic(service) or "")]
+    with pytest.raises(Conflict, match="No conversation of the org"):
+        await opened(service)
+    assert [open.title for open in service.sessions()] == ["Checkout"]
 
 
 async def test_the_director_chooses_the_team_when_none_is_named(
@@ -250,18 +289,6 @@ async def test_the_director_chooses_the_team_when_none_is_named(
 
     assert session.session.team_id == WEB
     assert (session.chosen_by, session.reason) == ("model", "It is the cart page.")
-
-
-async def test_a_session_is_refused_where_it_cannot_be_reviewed_or_found(
-    service: DirectorService,
-):
-    with pytest.raises(NotFound):
-        await opened(service, "no.such.team")
-
-    service.store.set_agent("root", "ic", status=AGENT_LOST)
-    with pytest.raises(Conflict, match="reviews the work"):
-        await opened(service)
-    assert service.sessions() == []
 
 
 async def test_a_sub_team_joins_a_session_when_its_ic_gives_it_a_task(
@@ -283,26 +310,30 @@ async def test_a_sub_team_joins_a_session_when_its_ic_gives_it_a_task(
     assert str(start.conversation_id) == ic(service, db)
     assert str(start.parent_id) == ic(service, top)
     assert "Add a refunds table." in start.task and "Own the schema" in start.task
-    # The team's own DB hears nothing of it.
+    # The DB of the other session hears nothing of it.
     assert len(launcher.messages_to(ic(service, DB))) == to_db
 
 
-async def test_each_session_is_reviewed_by_the_ic_above_and_the_second_meets_the_first(
+async def test_each_session_has_a_reviewer_of_its_own_and_the_second_meets_the_first(
     service: DirectorService, launcher: FakeLauncher, repo: Path, tmp_path: Path
 ):
     first = (await opened(service, title="Refunds")).session.teams[0].id
     second = (await opened(service, title="Vouchers")).session.teams[0].id
+    to_root = len(launcher.messages_to(ic(service)))
     for team, content in ((first, "refunds\n"), (second, "vouchers\n")):
         worktree = own_checkout(service, repo, tmp_path, team)
         commit(worktree, "services/api/routes.ts", content)
-        before = len(launcher.messages_to(ic(service)))
+        assert reviewer(service, team) is None
         await use(service, ic(service, team), SubmitReviewTool, DONE)
-        # Web has not submitted, and the session's review does not wait for it.
-        [request] = launcher.messages_to(ic(service))[before:]
-        assert "The human opened the session" in request and team in request
+        # Its reviewer starts for it, with the request.
+        start = launcher.derived[-1]
+        assert str(start.conversation_id) == reviewer(service, team)
+        assert "submits its work" in start.task and team in start.task
+    assert reviewer(service, first) != reviewer(service, second)
+    assert len(launcher.messages_to(ic(service))) == to_root
 
-    await use(service, ic(service), ReviewTeamTool, accept(first))
-    await use(service, ic(service), ReviewTeamTool, accept(second))
+    await use(service, reviewer(service, first), ReviewTeamTool, accept(first))
+    await use(service, reviewer(service, second), ReviewTeamTool, accept(second))
 
     assert (repo / "services/api/routes.ts").read_text() == "refunds\n"
     reviews = [node(service, team).review for team in (first, second)]
@@ -314,38 +345,42 @@ async def test_each_session_is_reviewed_by_the_ic_above_and_the_second_meets_the
     # An accepted session stays open, with its conversation, until the human
     # closes it.
     await service.settled()
-    assert [open.title for open in service.sessions()] == ["Refunds", "Vouchers"]
+    assert [open.title for open in service.sessions()] == [
+        "Checkout",
+        "Refunds",
+        "Vouchers",
+    ]
     assert launcher.deleted == []
 
 
 async def test_work_uncommitted_beside_a_session_is_not_put_aside_for_it(
     service: DirectorService, launcher: FakeLauncher, repo: Path, tmp_path: Path
 ):
-    """The team's own IC works in the checkout the session is merged into.
-    What it has not committed there is its work, not something in the way."""
+    """What is not committed in the checkout a session is merged into is
+    somebody's work, not something in the way: the merge waits for it."""
     top = (await opened(service)).session.teams[0].id
     worktree = own_checkout(service, repo, tmp_path, top)
     commit(worktree, "services/api/routes.ts", "refunds\n")
     (repo / "services/api").mkdir(parents=True, exist_ok=True)
-    (repo / "services/api/routes.ts").write_text("the team's own, not committed\n")
+    (repo / "services/api/routes.ts").write_text("another's, not committed\n")
     await use(service, ic(service, top), SubmitReviewTool, DONE)
 
-    await use(service, ic(service), ReviewTeamTool, accept(top))
+    await use(service, reviewer(service, top), ReviewTeamTool, accept(top))
 
     assert (repo / "services/api/routes.ts").read_text() == (
-        "the team's own, not committed\n"
+        "another's, not committed\n"
     )
     review = node(service, top).review
     assert review is not None and review.state == "pending"
-    assert "not committed" in launcher.messages_to(ic(service))[-1]
+    told = launcher.messages_to(reviewer(service, top))[-1]
+    assert "uncommitted changes are in the way of the merge" in told
 
 
-async def test_a_sessions_work_never_goes_up_without_a_review(
+async def test_a_session_that_changed_nothing_itself_is_accepted_with_its_sub_teams(
     service: DirectorService, launcher: FakeLauncher, repo: Path
 ):
-    """A team that changed nothing itself passes its sub-teams' accepted
-    work up unreviewed. The IC above a session gave it no task, so it
-    reviews what the session delivers all the same."""
+    """Each change is reviewed once, by the IC above the team that made it.
+    A session whose own IC changed nothing has no change left to review."""
     session = await opened(service)
     top, db = session.session.teams[0].id, f"{DB}@{session.session.id}"
     await use(service, ic(service, top), MsgTeamTool, MsgTeamAction(team=db, text="Go"))
@@ -356,48 +391,45 @@ async def test_a_sessions_work_never_goes_up_without_a_review(
 
     accepted = node(service, db).review
     assert accepted is not None and accepted.state == "accepted"
-    assert node(service, top).review is None
+    passed = node(service, top).review
+    assert passed is not None and (passed.state, passed.passed_up) == ("accepted", True)
+    assert reviewer(service, top) is None
+    assert "without another review" in launcher.messages_to(ic(service, top))[-1]
 
 
-async def test_sub_teams_are_not_changed_where_a_session_works(
+async def test_sub_teams_a_session_changes_are_its_own_until_its_work_is_accepted(
     service: DirectorService,
 ):
     session = await opened(service)
     top = session.session.teams[0].id
-    more = proposing(
-        [SplitChild(title="Routes", path="services/api/routes", task="Route")],
-        keep=["DB"],
-    )
+    routes = SplitChild(title="Routes", path="services/api/routes", task="Route")
 
-    inside = await use(service, ic(service, top), MsgManagerTool, more)
-    beside = await use(service, ic(service, API), MsgManagerTool, more)
-    pruned = await use(
-        service,
-        await woken(service),
-        PruneTeamTool,
-        PruneTeamAction(node_id=API, reason="Too slow"),
-    )
-    closed = await use(
+    await propose_and_approve(service, top, routes, keep=["DB"])
+    by_another = await use(
         service,
         await woken(service),
         PruneTeamTool,
         PruneTeamAction(node_id=top, reason="Not needed"),
     )
 
-    assert "not changed inside a session" in inside.text
-    assert "while the session 'Refunds' works in it" in beside.text
-    assert "sessions (Refunds) work in it" in pruned.text
-    assert "Only the human closes a session" in closed.text
-    assert node(service, API).pending_split is None
+    assert [team.title for team in service.store.children(top)] == ["DB", "Routes"]
+    assert "not a team directly below yours" in by_another.text
+    # Neither the org nor the other session at the team has the new one.
+    assert [team.id for team in service.store.children(API)] == [DB]
+    assert [team.title for team in service.store.children(node(service, API).id)] == [
+        "DB"
+    ]
 
-    service.close_session(session.session.id)
-    await service.settled()
-    again = await use(service, ic(service, API), MsgManagerTool, more)
+    await use(service, ic(service, top), SubmitReviewTool, DONE)
+    await use(service, reviewer(service, top), ReviewTeamTool, accept(top))
 
-    assert "Sent to your Manager with the sub-teams" in again.text
+    assert [team.id for team in service.store.children(API)] == [
+        DB,
+        "services.api.routes",
+    ]
 
 
-async def test_the_sessions_of_a_team_share_its_reports_and_know_of_each_other(
+async def test_the_sessions_of_a_team_know_of_each_other_and_share_accepted_reports(
     service: DirectorService,
 ):
     top = (await opened(service)).session.teams[0].id
@@ -408,33 +440,64 @@ async def test_the_sessions_of_a_team_share_its_reports_and_know_of_each_other(
         service, ic(service, top), ReportTool, ReportAction(text="Refunds are async.")
     )
 
-    own = service.context_of(node(service, API), "ic")
-    session = service.context_of(node(service, top), "ic")
-    above = service.context_of(node(service, "root"), "ic")
+    def reports(place: str) -> list[tuple[str, str]]:
+        context = service.context_of(node(service, place), "ic")
+        return [
+            (report["by"], report["text"]) for report in context["reports_of_your_team"]
+        ]
 
-    assert [
-        (report["by"], report["text"]) for report in own["reports_of_your_team"]
-    ] == [
+    other = service.context_of(node(service, API), "ic")
+    session = service.context_of(node(service, top), "ic")
+
+    # What a session records is its own until its work is accepted.
+    assert reports(API) == [("ic", "Routes are typed.")]
+    assert reports(top) == [("ic", "Refunds are async.")]
+    assert session["you"]["session"] == "Refunds"
+    assert [found["node_id"] for found in session["other_sessions_of_your_team"]] == [
+        node(service, API).id
+    ]
+    assert [found["session"] for found in other["other_sessions_of_your_team"]] == [
+        "Refunds"
+    ]
+
+    await use(service, ic(service, top), SubmitReviewTool, DONE)
+    await use(service, reviewer(service, top), ReviewTeamTool, accept(top))
+
+    assert reports(API) == [
         ("ic", "Routes are typed."),
         ("ic in 'Refunds'", "Refunds are async."),
     ]
-    assert [
-        (report["by"], report["text"]) for report in session["reports_of_your_team"]
-    ] == [
-        ('ic in "the team\'s own work"', "Routes are typed."),
-        ("ic", "Refunds are async."),
-    ]
-    assert session["you"]["session"] == "Refunds"
-    assert [other["node_id"] for other in session["other_sessions_of_your_team"]] == [
-        API
-    ]
-    assert [other["session"] for other in own["other_sessions_of_your_team"]] == [
-        "Refunds"
-    ]
-    assert [found["node_id"] for found in above["sessions_whose_work_you_review"]] == [
-        top
-    ]
-    assert [team["node_id"] for team in above["sub_teams"]] == [API, WEB]
+
+
+async def test_a_request_to_the_org_opens_a_session_and_reaches_no_other(
+    service: DirectorService, launcher: FakeLauncher
+):
+    top = (await opened(service)).session.teams[0].id
+    launcher.answers[USAGE_ID] = f"Teams: {API}\nReason: It is the API's."
+    heard = {
+        place.id: len(launcher.messages_to(ic(service, place.id)))
+        for place in service.store.all()
+        if place.agents
+    }
+
+    routed = await service.route_message(
+        RouteMessageRequest(text="Make services/api faster.", path="", auto=True)
+    )
+    by_path = await service.route_message(
+        RouteMessageRequest(text="Tidy the handlers.", path="services/api")
+    )
+    await service.settled()
+
+    *_, faster, tidy = service.sessions()
+    assert (routed.node_id, by_path.node_id) == (
+        f"{API}@{faster.id}",
+        f"{API}@{tidy.id}",
+    )
+    assert (faster.team_id, tidy.team_id) == (API, API)
+    assert "Tidy the handlers." in launcher.derived[-1].task
+    assert top in heard and heard == {
+        place: len(launcher.messages_to(ic(service, place))) for place in heard
+    }
 
 
 async def test_an_agent_reads_the_other_sessions_with_its_context(
@@ -449,39 +512,19 @@ async def test_an_agent_reads_the_other_sessions_with_its_context(
     assert "other_sessions_of_your_team" in observation.text
 
 
-async def test_a_request_to_the_org_never_goes_to_a_session(
-    service: DirectorService, launcher: FakeLauncher
-):
-    top = (await opened(service)).session.teams[0].id
-    launcher.answers[USAGE_ID] = f"Teams: {API}\nReason: It is the API's."
-
-    routed = await service.route_message(
-        RouteMessageRequest(text="Make services/api faster.", path="", auto=True)
-    )
-    by_path = await service.route_message(
-        RouteMessageRequest(text="Tidy the handlers.", path="services/api")
-    )
-    await service.settled()
-
-    assert (routed.node_id, by_path.node_id) == (API, API)
-    assert all(
-        "faster" not in text and "Tidy" not in text
-        for text in launcher.messages_to(ic(service, top))
-    )
-
-
 async def test_what_a_session_waits_on_the_human_for_is_told_with_its_team(
     service: DirectorService,
 ):
     session = await opened(service, "root", "Rename the product everywhere.")
     top = session.session.teams[0].id
-    service.store.raise_escalation(
+    # Nobody stands above the team a session was opened at.
+    raised = service.store.raise_escalation(
         top, "name", kind="design_decision", title="Which name?"
     )
-    service.store.pass_up_escalation(top, "name", reason="The human's to choose")
 
     [waiting] = service.store.escalations("root")
 
+    assert raised.held_by is None
     # It names the team of the org, which a client can show, and the session.
     assert (waiting.node_id, waiting.session_id, waiting.session) == (
         "root",
@@ -489,12 +532,14 @@ async def test_what_a_session_waits_on_the_human_for_is_told_with_its_team(
         "Refunds",
     )
     assert [step.id for step in waiting.path] == ["root"]
-    assert node(service, "root").escalation_count == 0
+    root = service.store.team("root")
+    assert root is not None and root.escalation_count == 0
 
 
 async def test_a_session_is_kept_on_its_machine_and_what_it_changes_with_the_org(
     service: DirectorService, repo: Path, launcher: FakeLauncher
 ):
+    [first] = service.sessions()
     session = await opened(service)
     top = session.session.teams[0].id
     await use(
@@ -515,23 +560,27 @@ async def test_a_session_is_kept_on_its_machine_and_what_it_changes_with_the_org
         assert set(saved) == {"version", "nodes"}
         assert [team["id"] for team in saved["nodes"]] == ["root", API, WEB, DB]
         assert all("session" not in team for team in saved["nodes"])
-        # What it changed of the org is with the team's memory.
+        assert restarted.team_memory.reports(API, "ic") == []
+        # That it was opened is with the team's memory.
         assert [
-            (report.text, report.session)
-            for report in restarted.team_memory.reports(API, "ic")
-        ] == [("Refunds need the order id.", "Refunds")]
-        assert [
-            event.kind
+            event.session
             for event in restarted.team_memory.history("root")
             if event.kind == "session_opened"
-        ] == ["session_opened"]
-        # The session itself comes back from what this machine kept.
-        [found] = restarted.sessions()
-        assert found.id == session.session.id
+        ] == ["Checkout", "Refunds"]
+        # The sessions themselves come back from what this machine kept,
+        # with what their agents recorded.
+        assert [found.id for found in restarted.sessions()] == [
+            first.id,
+            session.session.id,
+        ]
+        found = restarted.sessions()[-1]
         assert [team.id for team in found.teams] == [
             team.id for team in session.session.teams
         ]
         assert found.conversation_id == session.conversation_id
+        assert [
+            report.text for report in restarted.own_reports(node(restarted, top))
+        ] == ["Refunds need the order id."]
     finally:
         await restarted.aclose()
 
@@ -546,12 +595,12 @@ async def test_closing_a_session_removes_it_and_keeps_what_was_not_merged(
     commit(worktree, "services/api/routes.ts", "refunds\n")
     tip = run_git(worktree, "rev-parse", "HEAD").strip()
     (repo / "services/api").mkdir(parents=True, exist_ok=True)
-    (repo / "services/api/own.ts").write_text("the team's own, not committed\n")
+    (repo / "services/api/own.ts").write_text("another's, not committed\n")
 
     service.close_session(session.session.id)
     await service.settled()
 
-    assert service.sessions() == []
+    assert [open.title for open in service.sessions()] == ["Checkout"]
     assert service.store.session(session.session.id) == []
     assert conversation is not None and UUID(conversation) in launcher.deleted
     kept = run_git(
@@ -559,7 +608,6 @@ async def test_closing_a_session_removes_it_and_keeps_what_was_not_merged(
     ).split()
     assert kept == [tip]
     assert (repo / "services/api/own.ts").exists()
-    assert "closed the session 'Refunds'" in launcher.messages_to(ic(service))[-1]
     [event] = [
         event
         for event in service.team_memory.history("root")
@@ -650,14 +698,15 @@ async def test_work_is_accepted_in_the_order_it_was_submitted(
 ):
     first, second = await two_submitted(service, repo, tmp_path)
 
-    refused = await use(service, ic(service), ReviewTeamTool, accept(second))
+    refused = await use(
+        service, reviewer(service, second), ReviewTeamTool, accept(second)
+    )
 
     assert "submitted before" in refused.text
     pending = node(service, second).review
     assert pending is not None and pending.state == "pending"
 
-    # Sending the earlier one back lets the later one through as well.
-    await use(service, ic(service), ReviewTeamTool, accept(first))
+    await use(service, reviewer(service, first), ReviewTeamTool, accept(first))
     accepted = node(service, first).review
     assert accepted is not None and accepted.state == "accepted"
 
@@ -668,9 +717,11 @@ async def test_work_that_meets_merged_work_is_reconciled_before_it_is_merged(
     """git merges two changes to different lines of a file without a word.
     The reviewer is asked about them all the same."""
     first, second = await two_submitted(service, repo, tmp_path)
-    await use(service, ic(service), ReviewTeamTool, accept(first))
+    await use(service, reviewer(service, first), ReviewTeamTool, accept(first))
 
-    asked = (await use(service, ic(service), ReviewTeamTool, accept(second))).text
+    asked = (
+        await use(service, reviewer(service, second), ReviewTeamTool, accept(second))
+    ).text
 
     assert "Not merged yet" in asked
     assert f"- {ROUTES}" in asked
@@ -679,7 +730,7 @@ async def test_work_that_meets_merged_work_is_reconciled_before_it_is_merged(
 
     await use(
         service,
-        ic(service),
+        reviewer(service, second),
         ReviewTeamTool,
         ReviewTeamAction(
             node_id=second, decision="accept", reconciled="Both lines hold."
@@ -709,10 +760,11 @@ async def test_a_spec_a_session_writes_is_its_own_until_its_work_is_accepted(
 
     commit(own_checkout(service, repo, tmp_path, top), ROUTES, "refunds\n")
     await use(service, ic(service, top), SubmitReviewTool, DONE)
-    await use(service, ic(service), ReviewTeamTool, accept(top))
+    await use(service, reviewer(service, top), ReviewTeamTool, accept(top))
 
     assert service.team_memory.read("services/api/spec.md") == "# Refunds"
-    assert node(service, API).spec_summary == "Refunds"
+    api = service.store.team(API)
+    assert api is not None and api.spec_summary == "Refunds"
 
 
 async def test_a_spec_written_over_one_that_changed_meanwhile_is_reconciled(
@@ -722,13 +774,18 @@ async def test_a_spec_written_over_one_that_changed_meanwhile_is_reconciled(
     await use(
         service, ic(service, top), WriteSpecTool, WriteSpecAction(text="# Refunds")
     )
+    other = (await opened(service, title="Vouchers")).session.teams[0].id
     await use(
-        service, ic(service, API), WriteSpecTool, WriteSpecAction(text="# The API")
+        service, ic(service, other), WriteSpecTool, WriteSpecAction(text="# The API")
     )
+    await use(service, ic(service, other), SubmitReviewTool, DONE)
+    await use(service, reviewer(service, other), ReviewTeamTool, accept(other))
     commit(own_checkout(service, repo, tmp_path, top), ROUTES, "refunds\n")
     await use(service, ic(service, top), SubmitReviewTool, DONE)
 
-    asked = (await use(service, ic(service), ReviewTeamTool, accept(top))).text
+    asked = (
+        await use(service, reviewer(service, top), ReviewTeamTool, accept(top))
+    ).text
 
     assert "It wrote a spec for services/api" in asked
     assert "# The API" in asked and "# Refunds" in asked
@@ -736,7 +793,7 @@ async def test_a_spec_written_over_one_that_changed_meanwhile_is_reconciled(
 
     await use(
         service,
-        ic(service),
+        reviewer(service, top),
         ReviewTeamTool,
         ReviewTeamAction(node_id=top, decision="accept", reconciled="Refunds holds."),
     )

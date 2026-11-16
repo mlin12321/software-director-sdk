@@ -273,6 +273,7 @@ class FakeLauncher:
         adapt_agent: AgentAdapter | None = None,
         profile: str | None = None,
         checkout: str | None = None,
+        base: str | None = None,
     ) -> StartedAgent:
         if self.full_for > 0:
             self.full_for -= 1
@@ -320,6 +321,7 @@ class FakeLauncher:
         tool_params: ToolParams | None = None,
         adapt_agent: AgentAdapter | None = None,
         checkout: str | None = None,
+        base: str | None = None,
     ) -> StartedAgent:
         if profile not in self.profiles:
             raise NotFound(f"There is no agent profile named {profile!r}")

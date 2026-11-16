@@ -20,6 +20,7 @@ from openhands.agent_server.director.tools.definition import (
     StopTeamAction,
 )
 from tests.agent_server.director.conftest import FakeLauncher
+from tests.agent_server.director.test_director_landing import landed
 from tests.agent_server.director.test_director_limits import started
 from tests.agent_server.director.test_director_stalls import Clock
 from tests.agent_server.director.test_director_teams import (
@@ -62,7 +63,8 @@ def launcher() -> FakeLauncher:
 
 @pytest.fixture
 async def service(repo: Path, launcher: FakeLauncher, clock: Clock):
-    """An org of API (with DB below it) and Web, every team started."""
+    """An org of API (with DB below it) and Web, which the first session
+    made and whose work is accepted, every team started."""
     service = await started(repo, launcher, clock=clock, stall_poll=3600)
     await split_root(service)
     await propose_and_approve(
@@ -70,6 +72,7 @@ async def service(repo: Path, launcher: FakeLauncher, clock: Clock):
         API,
         SplitChild(title="DB", path="services/api/db", task="Own the schema"),
     )
+    await landed(service)
     yield service
     await service.aclose()
 
@@ -88,7 +91,7 @@ async def test_a_request_in_the_words_of_the_asking_team_still_goes_direct(
 
     await use(service, ic(service, DB), RaiseEscalationTool, asked)
 
-    assert the_one(service).asked_of == WEB
+    assert the_one(service).asked_of == node(service, WEB).id
 
 
 def the_one(service: DirectorService, node_id: str = DB):
@@ -111,7 +114,7 @@ async def answer(
         ic(service, by),
         ResolveEscalationTool,
         ResolveEscalationAction(
-            node_id=DB,
+            node_id=node(service, DB).id,
             escalation_id=the_one(service).id,
             action=action,
             text=text,
@@ -131,7 +134,10 @@ async def test_what_an_ic_needs_of_another_team_goes_straight_to_its_ic(
 
     assert "takes it to the IC of the team it concerns" in raised.text
     escalation = the_one(service)
-    assert (escalation.asked_of, escalation.held_by) == (WEB, API)
+    assert (escalation.asked_of, escalation.held_by) == (
+        node(service, WEB).id,
+        node(service, API).id,
+    )
     assert node(service, DB).status == "blocked"
     asked = launcher.messages_to(ic(service, WEB))[-1]
     assert "asks your team directly 'The cart must send the order id'" in asked
@@ -195,7 +201,7 @@ async def test_a_team_that_cannot_settle_it_gives_it_to_the_chain(
     assert by_api.is_error and "is not with your team" in by_api.text
     assert "now with the IC of the team above the one that asked" in passed.text
     escalation = the_one(service)
-    assert (escalation.asked_of, escalation.held_by) == (None, API)
+    assert (escalation.asked_of, escalation.held_by) == (None, node(service, API).id)
     told = launcher.messages_to(ic(service, API))[-1]
     assert "escalates 'The cart must send the order id'" in told
     assert (
@@ -271,7 +277,8 @@ async def test_no_more_than_three_requests_are_open_with_one_team(
         await use(service, ic(service, DB), RaiseEscalationTool, need(f"Need {number}"))
 
     asked = [e.asked_of for e in node(service, DB).escalations]
-    assert asked == [WEB, WEB, WEB, None]
+    web = node(service, WEB).id
+    assert asked == [web, web, web, None]
     # At the org's setbacks number the IC above both is woken, once.
     woken = [
         text
@@ -290,7 +297,7 @@ async def test_a_request_nobody_answers_goes_to_the_chain_by_itself(
     clock.passes(119)
     await service._check_asks()
     await service.settled()
-    assert the_one(service).asked_of == WEB
+    assert the_one(service).asked_of == node(service, WEB).id
 
     clock.passes(1)
     await service._check_asks()

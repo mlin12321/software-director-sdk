@@ -9,12 +9,17 @@ from openhands.agent_server.director import routing
 from openhands.agent_server.director.git import (
     last_commit_in,
 )
+from openhands.agent_server.director.git_store import team_key
 from openhands.agent_server.director.models import (
     Escalation,
     OrgNode,
     Stopped,
 )
-from openhands.agent_server.director.org_store import AGENT_LOST, session_id_of
+from openhands.agent_server.director.org_store import (
+    AGENT_LOST,
+    reviews_only,
+    session_id_of,
+)
 from openhands.agent_server.director.prompts import (
     NEED_ASKED,
     PASSED_UP,
@@ -109,12 +114,10 @@ class Watch(Reviews):
         if escalation.held_by is None or escalation.asked_of is not None:
             return
         asked = "\n".join(filter(None, (team_for, escalation.title, escalation.detail)))
-        choice = await self.choose_team(
-            asked, root, asker=store.get(team_of(raiser)) or raiser
-        )
-        # The team as it is in the session that asks, when it works there.
-        within = store.instance(choice.node_id, session_id_of(raiser))
-        owner = within if within and within.agents else store.get(choice.node_id)
+        choice = await self.choose_team(asked, root, asker=raiser)
+        # The team as it is in the session that asks: a request never
+        # leaves the session it was made in.
+        owner = store.instance(choice.node_id, session_id_of(raiser))
         if not choice.sure or owner is None or not self._may_ask(raiser, owner):
             self.hand_escalation(escalation.held_by, raiser, raiser, escalation, [])
             return
@@ -183,7 +186,7 @@ class Watch(Reviews):
             (
                 r
                 for r in table
-                if (r["from_node"], r["to_node"]) == (raiser.id, owner.id)
+                if (r["from_node"], r["to_node"]) == (team_of(raiser), team_of(owner))
             ),
             None,
         )
@@ -240,7 +243,8 @@ class Watch(Reviews):
                 event
                 for event in self.team_memory.history(above.id)
                 if event.kind == "asked_team"
-                and (event.team_id, event.other_id) == (raiser.id, asked)
+                and (event.team_id, event.other_id)
+                == (team_of(raiser), team_key(asked or ""))
             ]
             if made:
                 self.record_event(
@@ -356,8 +360,10 @@ class Watch(Reviews):
         that holds the team above from giving it one."""
         return (
             team.parent_id is not None
-            # The teams of a session are there for its IC to use or not.
-            and not session_id_of(team)
+            # A team the org already had is there for the session's IC to
+            # use or not; one the session set up itself is owed a task.
+            and self.store.team(team_of(team)) is None
+            and not reviews_only(team)
             and not team.agents
             and not team.waiting_to_start
             and team.stopped is None

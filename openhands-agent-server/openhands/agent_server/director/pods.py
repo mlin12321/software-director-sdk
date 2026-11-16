@@ -103,6 +103,7 @@ class PodLauncher(Protocol):
         tool_params: ToolParams | None = None,
         adapt_agent: AgentAdapter | None = None,
         checkout: str | None = None,
+        base: str | None = None,
     ) -> StartedAgent:
         """Start an agent with the configuration of ``parent_id``.
 
@@ -112,6 +113,8 @@ class PodLauncher(Protocol):
             adapt_agent: Applied last to the agent it inherits.
             checkout: A checkout that exists already, for the agent to work
                 in; ``isolation`` then only says what kind it is.
+            base: The commit a worktree of its own is made from; the commit
+                the agent it derives from is at when None.
 
         Raises:
             NotFound: The parent conversation does not exist.
@@ -134,6 +137,7 @@ class PodLauncher(Protocol):
         tool_params: ToolParams | None = None,
         adapt_agent: AgentAdapter | None = None,
         checkout: str | None = None,
+        base: str | None = None,
     ) -> StartedAgent:
         """Start an agent from a stored agent profile, in the workspace of
         ``parent_id`` and as its child.
@@ -315,6 +319,7 @@ class ConversationPodLauncher:
         tool_params: ToolParams | None = None,
         adapt_agent: AgentAdapter | None = None,
         checkout: str | None = None,
+        base: str | None = None,
     ) -> StartedAgent:
         started = await self._conversations.start_child_conversation(
             parent_id,
@@ -322,8 +327,11 @@ class ConversationPodLauncher:
             child_id=conversation_id,
             extra_suffixes=suffixes,
             # A sub-team continues from its parent's work, not from the
-            # repository's default branch.
-            worktree_options=ConversationWorktreeOptions(base="head"),
+            # repository's default branch. A session starts from the commit
+            # the repository's checkout is at.
+            worktree_options=ConversationWorktreeOptions(base="ref", ref=base)
+            if base
+            else ConversationWorktreeOptions(base="head"),
             tool_params=tool_params,
             extra_tags=STARTED_BY_DIRECTOR,
             adapt_agent=adapt_agent,
@@ -351,6 +359,7 @@ class ConversationPodLauncher:
         tool_params: ToolParams | None = None,
         adapt_agent: AgentAdapter | None = None,
         checkout: str | None = None,
+        base: str | None = None,
     ) -> StartedAgent:
         parent = await self._conversations.get_event_service(parent_id)
         if parent is None:
@@ -371,7 +380,9 @@ class ConversationPodLauncher:
                 role="user", content=[TextContent(text=task)], run=True
             ),
             worktree=isolation == "worktree" and not checkout,
-            worktree_options=ConversationWorktreeOptions(base="head"),
+            worktree_options=ConversationWorktreeOptions(base="ref", ref=base)
+            if base
+            else ConversationWorktreeOptions(base="head"),
             tags=STARTED_BY_DIRECTOR,
             autotitle=False,
             agent_launch_additions=AgentLaunchAdditions(

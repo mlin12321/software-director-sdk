@@ -46,6 +46,8 @@ from openhands.agent_server.director.org_persistence import (
 from openhands.agent_server.director.org_store import (
     AGENT_LOST,
     OrgStore,
+    reviews_only,
+    session_id_of,
 )
 from openhands.agent_server.director.prompts import (
     POD_PROTOCOL,
@@ -401,6 +403,10 @@ class Sync(Sessions):
         node = store.get(node_id)
         if node is None:
             raise NotFound(f"There is no team {node_id}")
+        if not session_id_of(node) or reviews_only(node):
+            raise Conflict(
+                f"Nobody works at {node.title!r} itself: open a session there."
+            )
         if node.status == "done":
             raise Conflict(f"Team {node.title} is done")
         ic = agent_conversation(node, "ic")
@@ -418,18 +424,16 @@ class Sync(Sessions):
                 f"The session {store.session_title(node)!r} has no checkout yet. "
                 "Start it again without a conversation."
             )
-        if conversation is None:
-            if above is None:
-                raise Conflict(
-                    f"Team {node.title} is the top of the org: it is started "
-                    "again by a conversation started in its folder"
-                )
-            above_ic = agent_conversation(above, "ic")
-            if above_ic is None or await launcher.started(UUID(above_ic)) is None:
-                raise Conflict(
-                    f"Team {above.title} above it has no IC here. Start that "
-                    "team again first."
-                )
+        if (
+            conversation is None
+            and await self._started_ic(above) is None
+            and await self._template() is None
+        ):
+            raise Conflict(
+                "No conversation of the org runs on this server to start "
+                f"the IC of {node.title!r} from. Start it again with a "
+                "conversation."
+            )
         await asyncio.to_thread(restore_worktrees, self._repo_dir, [node], self._home())
         ic_id = uuid4()
         task = await asyncio.to_thread(self._task_of, node)
@@ -440,7 +444,9 @@ class Sync(Sessions):
                 node_id,
                 task=task,
                 parent=node.parent_id,
-                checkout=node.worktree_path if own_checkout else None,
+                checkout=node.worktree_path
+                if own_checkout or self._in_place(node)
+                else None,
             )
             return store.get(node_id) or node
         additions = conversation.agent_launch_additions or AgentLaunchAdditions()
@@ -467,7 +473,7 @@ class Sync(Sessions):
                     }
                 ),
                 [Tool(name=name) for name in TOOLS_OF["ic"]],
-                title=_agent_title(node.title, "ic"),
+                title=_agent_title(node.title, "ic", store.session_title(node)),
                 tool_params=await asyncio.to_thread(self._confine, node_id, "ic"),
                 adapt_agent=await asyncio.to_thread(
                     self._adapter, str(ic_id), TOOLS_OF["ic"]
@@ -652,7 +658,8 @@ class Sync(Sessions):
     def _apply(self, store: OrgStore, nodes: list[dict[str, Any]]) -> None:
         """Make ``store`` hold the merged tree, announcing what changed."""
         wanted = by_id(nodes)
-        for node in store.all():
+        # Only the org's own teams: what a session has stays as it is.
+        for node in store.teams():
             moved = node.id in wanted and wanted[node.id]["parent_id"] != node.parent_id
             if (node.id not in wanted or moved) and store.get(node.id) is not None:
                 store.remove(node.id)

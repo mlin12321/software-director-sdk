@@ -7,10 +7,16 @@ from pathlib import Path
 from openhands.agent_server.director import routing
 from openhands.agent_server.director.boundary import owns
 from openhands.agent_server.director.git import GitError, git
-from openhands.agent_server.director.models import OrgNode
-from openhands.agent_server.director.org_store import AGENT_LOST
+from openhands.agent_server.director.git_store import team_key
+from openhands.agent_server.director.models import OrgNode, RoutedRequest
+from openhands.agent_server.director.org_store import (
+    AGENT_LOST,
+    reviews_only,
+    session_id_of,
+)
 from openhands.agent_server.director.prompts import misrouted_notice
 from openhands.agent_server.director.routing import Card, Choice
+from openhands.agent_server.director.service.state import team_of
 from openhands.agent_server.director.service.teams import Teams
 from openhands.sdk.errors import Invalid
 
@@ -50,7 +56,12 @@ class Requests(Teams):
     """Chooses the team a request goes straight to."""
 
     async def choose_team(
-        self, text: str, start: OrgNode, *, asker: OrgNode | None = None
+        self,
+        text: str,
+        start: OrgNode,
+        *,
+        asker: OrgNode | None = None,
+        within: str = "",
     ) -> Choice:
         """The team at or below ``start`` that what is asked in ``text``
         goes to. It is ``start`` unless a lower team is sure.
@@ -60,22 +71,53 @@ class Requests(Teams):
                 a team asks for is told in the words of its own work, so
                 its card and those of the teams above and below it say
                 nothing about whose the request is.
+            within: The session the human says it in, when it does not
+                begin a new one.
         """
         store = self.store
-        # A session takes what the human writes to it and no request more.
-        nodes = store.teams()
+        within = session_id_of(asker) if asker else within
+        if not within:
+            # What the human asks anew opens a session of its own, which
+            # any team of the org can have.
+            nodes = store.teams()
+        else:
+            # What is said in a session stays in it: the teams are the ones
+            # the session has, those it set up itself included, each as it
+            # is there, under the team's own id.
+            places = [
+                place for place in store.session(within) if not reviews_only(place)
+            ]
+            ids = {place.id: team_of(place) for place in places}
+            nodes = [
+                place.model_copy(
+                    update={
+                        "id": ids[place.id],
+                        "parent_id": ids.get(place.parent_id or ""),
+                    }
+                )
+                for place in places
+            ]
+            start = nodes[0] if nodes else start
         parents = {node.id: node.parent_id for node in nodes}
-        below = [
-            node
-            for node in nodes
-            if node.id == start.id
-            or any(above.id == start.id for above in store.ancestors(node.id))
-        ]
-        takes = {node.id for node in below if takes_requests(node)} | {start.id}
+
+        def under(node_id: str | None) -> bool:
+            seen: set[str] = set()
+            while node_id is not None and node_id not in seen:
+                if node_id == start.id:
+                    return True
+                seen.add(node_id)
+                node_id = parents.get(node_id)
+            return False
+
+        below = [node for node in nodes if under(node.id)]
+        takes = {node.id for node in below if not within or takes_requests(node)} | {
+            start.id
+        }
         if len(takes) == 1:
             return Choice(start.id, "top", False, "no team below can take it")
         root = store.get(store.root_id) if store.root_id else None
-        checkout = Path((root or start).worktree_path)
+        # A session's own checkout has the directories of the teams it set up.
+        checkout = Path((start if within else root or start).worktree_path)
         tracked = await asyncio.to_thread(_tracked, checkout)
         named = routing.paths_named(text, tracked)
         owners = [
@@ -87,14 +129,18 @@ class Requests(Teams):
         # same: what is its own then goes to the team above it.
         cards = await asyncio.to_thread(
             self._cards,
-            [node for node in below if node.agents or node.id == start.id],
+            [
+                node
+                for node in below
+                if not within or node.id == start.id or node.agents
+            ],
             tracked,
         )
         own = (
             {
                 node.id
                 for node in below
-                if routing.on_one_line(node.id, asker.id, parents)
+                if routing.on_one_line(node.id, team_of(asker), parents)
             }
             if asker
             else set()
@@ -116,11 +162,13 @@ class Requests(Teams):
         return choice
 
     def _cards(self, teams: list[OrgNode], tracked: list[str]) -> list[Card]:
-        directories = {node.boundary.path for node in self.store.teams()}
+        directories = {node.boundary.path for node in self.store.teams()} | {
+            node.boundary.path for node in teams
+        }
         took: dict[str, list[str]] = {}
         for request in self.routed_requests():
             if request.kind == "asked":
-                took.setdefault(request.team_id, []).append(request.text)
+                took.setdefault(team_key(request.team_id), []).append(request.text)
         return [
             Card(
                 node_id=node.id,
@@ -186,6 +234,12 @@ class Requests(Teams):
             )
         request = mine[-1]
         self.keep_routed("misrouted", node, request.text, request.chosen_by, why)
+        return self._hand_on(node, above, request, why)
+
+    def _hand_on(
+        self, node: OrgNode, above: OrgNode, request: RoutedRequest, why: str
+    ) -> str:
+        """Give a request a team said is not its own to the IC above it."""
         self.tell_ic(above.id, misrouted_notice(node, request.text, why))
         return (
             f"Handed to the IC of the team above ({above.title}). It is no "

@@ -131,8 +131,14 @@ def _former_file(node_id: str, at: str) -> str:
     return f"{FORMER_DIR}/{node_id}/{at}.json"
 
 
+def team_key(node_id: str) -> str:
+    """The team what is kept for ``node_id`` is kept under: the team of the
+    org itself, whichever session's place the id names."""
+    return node_id.split("@")[0]
+
+
 def _history_file(node_id: str) -> str:
-    return f"{HISTORY_DIR}/{node_id}.json"
+    return f"{HISTORY_DIR}/{team_key(node_id)}.json"
 
 
 def _parse_messages(raw: str | None) -> list[ThreadMessage]:
@@ -248,7 +254,7 @@ class GitStore:
         commit = self.head()
         return [
             FormerTeam.model_validate_json(raw)
-            for file in sorted(self._files(f"{FORMER_DIR}/{node_id}"))
+            for file in sorted(self._files(f"{FORMER_DIR}/{team_key(node_id)}"))
             if (raw := self._read_at(commit, file))
         ]
 
@@ -262,17 +268,21 @@ class GitStore:
             if (raw := self._read_at(commit, file))
         ]
         return sorted(
-            (record for record in records if record.above == above),
+            (record for record in records if record.above == team_key(above)),
             key=lambda record: record.at,
         )
 
-    def record_former(self, team: FormerTeam) -> FormerTeam:
+    def record_former(self, team: FormerTeam, place: str = "") -> FormerTeam:
         """Keep what a removed team left as one record and take it out of
         where a later team of the same name or directory would find it:
         its reports, its messages and the contracts between its sub-teams.
         Its spec stays where it is.
 
         Recording the same removal again changes nothing.
+
+        Args:
+            place: The id its messages are kept under, when that is not the
+                team's own: its place in a session.
 
         Returns:
             The record as kept.
@@ -290,7 +300,7 @@ class GitStore:
                 file
                 for directory in (THREADS_DIR, IC_THREADS_DIR)
                 for file in self._files(directory)
-                if team.id in (Path(file).parent.name, Path(file).stem)
+                if (place or team.id) in (Path(file).parent.name, Path(file).stem)
             ]
             kept = team.model_copy(
                 update={

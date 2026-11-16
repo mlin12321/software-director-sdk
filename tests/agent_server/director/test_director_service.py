@@ -15,12 +15,11 @@ from openhands.agent_server.director.headline import TeamSummary
 from openhands.agent_server.director.models import (
     AgentRole,
     CreateOrgRequest,
-    OrgNode,
     RouteMessageRequest,
     SplitChild,
 )
 from openhands.agent_server.director.org_persistence import ORG_REF
-from openhands.agent_server.director.org_store import AGENT_LOST
+from openhands.agent_server.director.org_store import AGENT_LOST, team_id_of
 from openhands.agent_server.director.prompts import MANAGER_ROLE, POD_PROTOCOL
 from openhands.agent_server.director.service import (
     DIRECTOR_TOOL_NAMES,
@@ -43,12 +42,13 @@ from openhands.tools.file_editor.definition import FileEditorAction
 from openhands.tools.terminal.definition import TerminalAction
 from tests.agent_server.director.conftest import (
     FakeLauncher,
-    make_node,
     root_conversation,
     run_git,
     tasked,
     teams_block,
 )
+from tests.agent_server.director.test_director_landing import landed
+from tests.agent_server.director.test_director_tools import node, review_place_of
 
 
 @pytest.fixture
@@ -75,19 +75,27 @@ def org_request(repo: Path, **conversation) -> CreateOrgRequest:
 async def test_starting_an_org_runs_a_root_team_briefed_with_the_task(
     service: DirectorService, launcher: FakeLauncher, repo: Path
 ):
-    root = await service.create_org(org_request(repo))
+    opened = await service.create_org(org_request(repo))
     await service.settled()
 
-    assert (root.id, root.parent_id, root.title) == ("root", None, "Checkout")
+    root = service.store.team("root")
+    assert root is not None
+    assert (root.parent_id, root.title, root.agents) == (None, "Checkout", [])
     assert root.boundary.path == ""
     assert root.spec_summary == "Build the checkout flow"
-    ic = agent_conversation(root, "ic")
-    assert ic is not None and [agent.role for agent in root.agents] == ["ic"]
+    # Its agents are at its place in the session the task opened.
+    top = node(service, "root")
+    assert top.id == f"root@{opened.session.id}" == opened.session.teams[0].id
+    ic = opened.conversation_id
+    assert [(agent.role, agent.conversation_id) for agent in top.agents] == [("ic", ic)]
 
     assert launcher.root is not None
     assert str(launcher.root.conversation_id) == ic
     assert launcher.root_tools == list(TOOLS_OF["ic"])
-    assert (launcher.root_title, launcher.root.autotitle) == ("Checkout (IC)", False)
+    assert (launcher.root_title, launcher.root.autotitle) == (
+        "Checkout (IC)",
+        False,
+    )
     [briefing] = launcher.messages_to(ic)
     assert "IC" in briefing and "Build the checkout flow\nwith tests" in briefing
     # A team has no Manager until something is sent to it.
@@ -128,6 +136,8 @@ def test_every_director_tool_is_offered_to_the_role_that_may_use_it():
     assert "approve_teams" not in TOOLS_OF["ic"]
     assert "submit_review" not in TOOLS_OF["manager"]
     assert set(HAND_OVER_TOOLS) <= set(TOOLS_OF["ic"])
+    # Only a Manager where a session is reviewed from settles its teams.
+    assert "settle_teams" not in {*TOOLS_OF["ic"], *TOOLS_OF["manager"]}
     # A tool an agent is given and the server cannot find stops its first turn.
     assert set(DIRECTOR_TOOL_NAMES) <= set(list_registered_tools())
 
@@ -166,10 +176,10 @@ def test_an_ic_is_not_told_what_only_a_manager_does():
 async def test_a_team_started_again_is_briefed_with_what_it_reported(
     service: DirectorService, launcher: FakeLauncher, repo: Path
 ):
-    root = await service.create_org(org_request(repo))
+    await service.create_org(org_request(repo))
     await service.settled()
     await woken_manager(service)
-    root = team(service, "root")
+    root = node(service, "root")
     service.report(root, "manager", "The API team needs a schema first.")
 
     briefing, _ = service._briefing(root, "ic", "Build")
@@ -232,10 +242,8 @@ async def test_an_org_lives_in_the_repository_its_first_conversation_is_opened_i
         await second.aclose()
 
     assert second.summary().repo_path == str(other)
-    assert again.conversation_id == routed.conversation_id
-    assert launcher.messages_to(again.conversation_id)[-1] == (
-        "And tests\n\n(The human sent this from src.)"
-    )
+    assert again.conversation_id != routed.conversation_id
+    assert "And tests\n\n(The human sent this from src.)" in (launcher.derived[-1].task)
 
 
 async def test_a_first_message_takes_up_the_org_saved_where_it_is_sent_from(
@@ -244,7 +252,7 @@ async def test_a_first_message_takes_up_the_org_saved_where_it_is_sent_from(
     other = other_repository(tmp_path)
     there = DirectorService(other, save_delay=0)
     await there.start(launcher)
-    root = await there.create_org(org_request(other))
+    opened = await there.create_org(org_request(other))
     await there.settled()
     await there.aclose()
 
@@ -261,8 +269,10 @@ async def test_a_first_message_takes_up_the_org_saved_where_it_is_sent_from(
         await service.aclose()
 
     assert not routed.started_org
-    assert routed.conversation_id == agent_conversation(root, "ic")
-    assert launcher.messages_to(routed.conversation_id)[-1] == "Add refunds"
+    assert routed.conversation_id != opened.conversation_id
+    assert routed.node_id.startswith("root@")
+    assert routed.node_id != opened.session.teams[0].id
+    assert "Add refunds" in launcher.messages_to(routed.conversation_id)[-1]
     assert launcher.root is not None
     assert launcher.root.conversation_id == UUID(routed.conversation_id)
 
@@ -327,15 +337,13 @@ async def test_no_org_is_left_when_its_root_agent_cannot_start(
 async def test_a_node_works_while_an_agent_runs_and_is_blocked_by_a_failed_one(
     service: DirectorService, launcher: FakeLauncher, repo: Path
 ):
-    root = await service.create_org(org_request(repo))
+    opened = await service.create_org(org_request(repo))
     await service.settled()
-    ic = agent_conversation(root, "ic")
-    assert ic is not None
+    ic = opened.conversation_id
 
     def state() -> tuple[str, list[str]]:
-        node = service.store.get("root")
-        assert node is not None
-        return node.status, [agent.status for agent in node.agents]
+        top = node(service, "root")
+        return top.status, [agent.status for agent in top.agents]
 
     launcher.report(ic, ConversationExecutionStatus.RUNNING)
     assert state() == ("working", ["working"])
@@ -362,12 +370,11 @@ async def test_the_org_is_saved_and_comes_back_with_its_conversations(
 ):
     first = DirectorService(repo, save_delay=0)
     await first.start(launcher)
-    root = await first.create_org(org_request(repo))
+    opened = await first.create_org(org_request(repo))
     await first.settled()
     manager = await woken_manager(first)
     await first.aclose()
-    ic = agent_conversation(root, "ic")
-    assert ic is not None
+    ic = opened.conversation_id
     assert run_git(repo, "status", "--porcelain") == ""
     assert run_git(repo, "rev-parse", ORG_REF).strip()
 
@@ -377,13 +384,13 @@ async def test_the_org_is_saved_and_comes_back_with_its_conversations(
     second = DirectorService(repo, save_delay=0)
     await second.start(launcher)
     try:
-        loaded = second.store.get("root")
+        loaded = node(second, "root")
         await second.settled()
-        resynced = second.store.get("root")
+        resynced = node(second, "root")
     finally:
         await second.aclose()
 
-    assert loaded is not None and resynced is not None
+    assert loaded.id == opened.session.teams[0].id
     assert agent_conversation(loaded, "ic") == ic
     assert [agent.status for agent in resynced.agents] == ["working", AGENT_LOST]
     assert resynced.status == "working"
@@ -392,17 +399,18 @@ async def test_the_org_is_saved_and_comes_back_with_its_conversations(
 async def test_the_humans_answer_reaches_the_team_that_raised_the_escalation(
     service: DirectorService, launcher: FakeLauncher, repo: Path
 ):
-    root = await service.create_org(org_request(repo))
+    opened = await service.create_org(org_request(repo))
+    top = opened.session.teams[0].id
     service.store.raise_escalation(
-        "root", "jwt", kind="design_decision", title="JWT or opaque tokens?"
+        top, "jwt", kind="design_decision", title="JWT or opaque tokens?"
     )
 
-    node = service.answer_escalation("root", "jwt", "Opaque tokens.")
+    answered = service.answer_escalation(top, "jwt", "Opaque tokens.")
     await service.settled()
 
-    assert node.escalations == []
-    assert service.store.escalations("root") == []
-    answer = launcher.messages_to(agent_conversation(root, "ic"))[-1]
+    assert answered.escalations == []
+    assert service.store.escalations(top) == []
+    answer = launcher.messages_to(opened.conversation_id)[-1]
     assert "JWT or opaque tokens?" in answer and "Opaque tokens." in answer
 
 
@@ -411,26 +419,25 @@ async def test_an_escalation_a_team_still_holds_cannot_be_answered_by_the_human(
 ):
     await service.create_org(org_request(repo))
     await service.settled()
-    service.store.upsert(make_node("api", "root", path="api"))
+    await split_root(service, API)
+    api = node(service, "services.api").id
     service.store.raise_escalation(
-        "api", "schema", kind="design_decision", title="Which schema?"
+        api, "schema", kind="design_decision", title="Which schema?"
     )
 
     with pytest.raises(Conflict):
-        service.answer_escalation("api", "schema", "v2")
+        service.answer_escalation(api, "schema", "v2")
     with pytest.raises(NotFound):
-        service.answer_escalation("api", "nothing", "v2")
+        service.answer_escalation(api, "nothing", "v2")
 
-    api = service.store.get("api")
-    assert api is not None and len(api.escalations) == 1
+    assert len(node(service, api).escalations) == 1
 
 
 async def woken_manager(service: DirectorService, node_id: str = "root") -> str:
     """The Manager of a team, started as the first message to it does."""
-    service.tell_manager(node_id, "Look in on your team.")
+    service.tell_manager(node(service, node_id).id, "Look in on your team.")
     await service.settled()
-    found = service.store.get(node_id)
-    manager = agent_conversation(found, "manager") if found else None
+    manager = agent_conversation(node(service, node_id), "manager")
     assert manager is not None
     return manager
 
@@ -439,9 +446,7 @@ async def split_root(service: DirectorService, *children: SplitChild) -> None:
     """Have the root IC propose ``children`` and its Manager approve them."""
 
     def caller(role: AgentRole) -> pod_actions.Caller:
-        root = service.store.get("root")
-        assert root is not None
-        conversation_id = agent_conversation(root, role)
+        conversation_id = agent_conversation(node(service, "root"), role)
         assert conversation_id is not None
         return pod_actions.caller_of(service, UUID(conversation_id))
 
@@ -455,21 +460,16 @@ API = SplitChild(title="API", path="services/api", task="Serve the checkout API"
 WEB = SplitChild(title="Web", path="apps/web", task="Build the checkout pages")
 
 
-def team(service: DirectorService, node_id: str) -> OrgNode:
-    node = service.store.get(node_id)
-    assert node is not None
-    return node
-
-
 async def test_an_org_without_a_title_is_named_by_a_model_from_its_task(
     service: DirectorService, launcher: FakeLauncher, repo: Path
 ):
     launcher.summary = TeamSummary("Checkout Flow", "Builds the shop's checkout.")
     request = org_request(repo).model_copy(update={"title": None})
 
-    root = await service.create_org(request)
+    opened = await service.create_org(request)
 
-    assert (root.title, root.headline) == (
+    top = opened.session.teams[0]
+    assert (top.title, top.headline) == (
         "Build the checkout flow",
         "Build the checkout flow",
     )
@@ -477,13 +477,12 @@ async def test_an_org_without_a_title_is_named_by_a_model_from_its_task(
 
     await service.settled()
 
-    root = team(service, "root")
-    assert (root.title, root.headline) == (
-        "Checkout Flow",
-        "Builds the shop's checkout.",
-    )
-    ic, manager = agent_conversation(root, "ic"), await woken_manager(service)
-    assert ic is not None
+    named = ("Checkout Flow", "Builds the shop's checkout.")
+    root = service.store.team("root")
+    assert root is not None and (root.title, root.headline) == named
+    top = node(service, "root")
+    assert (top.title, top.headline) == named
+    ic, manager = opened.conversation_id, await woken_manager(service)
     assert launcher.summarized == [(UUID(ic), "Build the checkout flow\nwith tests")]
     assert launcher.titles[UUID(ic)] == "Checkout Flow (IC)"
     assert launcher.titles[UUID(manager)] == "Checkout Flow (Manager)"
@@ -500,10 +499,10 @@ async def test_a_model_that_takes_too_long_does_not_hold_the_org_up(
 
     await service.create_org(org_request(repo).model_copy(update={"title": None}))
     await service.settled()
-    root = service.store.get("root")
+    root = node(service, "root")
     await service.aclose()
 
-    assert root is not None and root.title == "Build the checkout flow"
+    assert root.title == "Build the checkout flow"
     assert len(launcher.messages_to(agent_conversation(root, "ic"))) == 1
 
 
@@ -515,7 +514,7 @@ async def test_a_given_title_is_kept_and_only_the_headline_is_written(
     await service.create_org(org_request(repo))
     await service.settled()
 
-    root = team(service, "root")
+    root = node(service, "root")
     assert (root.title, root.headline) == ("Checkout", "Builds the shop's checkout.")
     assert launcher.titles[UUID(agent_conversation(root, "ic") or "")] == (
         "Checkout (IC)"
@@ -528,7 +527,7 @@ async def test_a_team_keeps_its_first_name_when_the_model_gives_nothing(
     await service.create_org(org_request(repo).model_copy(update={"title": None}))
     await service.settled()
 
-    root = team(service, "root")
+    root = node(service, "root")
     assert (root.title, root.headline) == (
         "Build the checkout flow",
         "Build the checkout flow",
@@ -544,7 +543,7 @@ async def test_every_sub_team_gets_a_headline_and_keeps_the_title_its_ic_gave(
 
     await split_root(service, API, WEB)
 
-    api = team(service, "services.api")
+    api = node(service, "services.api")
     assert (api.title, api.headline) == ("API", "Serves the checkout over HTTP.")
     assert {task for _, task in launcher.summarized[-2:]} == {API.task, WEB.task}
 
@@ -564,7 +563,7 @@ async def test_a_report_made_before_the_first_summary_is_not_overwritten_by_it(
     launcher.on_derived = report_at_once
     await split_root(service, API)
 
-    assert team(service, "services.api").headline == "Blocked on the session store."
+    assert node(service, "services.api").headline == "Blocked on the session store."
     assert [task for _, task in launcher.summarized[1:]] == [
         "Serve the checkout API\n\nLatest report of the team: it is blocked."
     ]
@@ -577,10 +576,10 @@ async def test_a_report_rewrites_the_headline(
     await service.settled()
     launcher.summary = TeamSummary("Ignored", "Checkout is done; tax is left out.")
 
-    service.refresh_headline("root", "it is done. Tax is left out.")
+    service.refresh_headline(node(service, "root").id, "it is done. Tax is left out.")
     await service.settled()
 
-    assert team(service, "root").headline == "Checkout is done; tax is left out."
+    assert node(service, "root").headline == "Checkout is done; tax is left out."
     assert launcher.summarized[-1][1] == (
         "Build the checkout flow\n\nLatest report of the team: it is done. "
         "Tax is left out."
@@ -605,7 +604,7 @@ async def test_a_file_tool_is_refused_a_write_outside_the_teams_boundary(
     await service.create_org(org_request(repo))
     await service.settled()
     await split_root(service, API, WEB)
-    api_ic = agent_conversation(team(service, "services.api"), "ic")
+    api_ic = agent_conversation(node(service, "services.api"), "ic")
 
     def refusal(path: Path | str) -> str | None:
         return attempt(service, api_ic, "file_editor", create(path))
@@ -628,7 +627,7 @@ async def test_a_link_out_of_the_boundary_does_not_carry_a_write_out(
     await split_root(service, API)
     (repo / "services" / "api").mkdir(parents=True)
     (repo / "services" / "api" / "up").symlink_to(repo)
-    api_ic = agent_conversation(team(service, "services.api"), "ic")
+    api_ic = agent_conversation(node(service, "services.api"), "ic")
 
     refused = attempt(
         service,
@@ -646,7 +645,7 @@ async def test_reading_and_tools_that_name_no_file_are_never_refused(
     await service.create_org(org_request(repo))
     await service.settled()
     await split_root(service, API)
-    api_ic = agent_conversation(team(service, "services.api"), "ic")
+    api_ic = agent_conversation(node(service, "services.api"), "ic")
 
     view = FileEditorAction(command="view", path=str(repo / "README.md"))
     assert attempt(service, api_ic, "file_editor", view) is None
@@ -659,7 +658,7 @@ async def test_an_ic_is_refused_what_it_handed_to_a_sub_team_and_a_manager_all(
 ):
     await service.create_org(org_request(repo))
     await service.settled()
-    root = team(service, "root")
+    root = node(service, "root")
     root_ic = agent_conversation(root, "ic")
     inside_api = create(repo / "services" / "api" / "pay.py")
     assert attempt(service, root_ic, "file_editor", inside_api) is None
@@ -670,7 +669,7 @@ async def test_an_ic_is_refused_what_it_handed_to_a_sub_team_and_a_manager_all(
         attempt(service, root_ic, "file_editor", inside_api) or ""
     )
     assert attempt(service, root_ic, "file_editor", create(repo / "README.md")) is None
-    manager = agent_conversation(team(service, "root"), "manager")
+    manager = agent_conversation(node(service, "root"), "manager")
     assert "Manager" in (
         attempt(service, manager, "file_editor", create(repo / "README.md")) or ""
     )
@@ -682,7 +681,7 @@ async def test_every_file_of_a_patch_must_be_in_the_boundary(
     await service.create_org(org_request(repo))
     await service.settled()
     await split_root(service, API)
-    api_ic = agent_conversation(team(service, "services.api"), "ic")
+    api_ic = agent_conversation(node(service, "services.api"), "ic")
 
     def patch(*files: str) -> ApplyPatchAction:
         body = "".join(f"*** Add File: {name}\n+x\n" for name in files)
@@ -701,7 +700,7 @@ async def test_files_outside_the_org_and_other_conversations_are_left_alone(
     await service.create_org(org_request(repo))
     await service.settled()
     await split_root(service, API)
-    api_ic = agent_conversation(team(service, "services.api"), "ic")
+    api_ic = agent_conversation(node(service, "services.api"), "ic")
 
     assert attempt(service, api_ic, "file_editor", create(tmp_path / "x.txt")) is None
     stranger = str(uuid4())
@@ -719,7 +718,7 @@ async def test_a_checkout_of_another_team_is_closed(
     await service.start(launcher)
     await service.create_org(org_request(repo))
     await service.settled()
-    root_ic = agent_conversation(team(service, "root"), "ic")
+    root_ic = agent_conversation(node(service, "root"), "ic")
 
     refused = attempt(
         service,
@@ -744,8 +743,8 @@ async def test_the_first_message_starts_the_org_when_there_is_none(
     )
     await service.settled()
 
-    root = team(service, "root")
-    assert (routed.node_id, routed.started_org) == ("root", True)
+    root = node(service, "root")
+    assert (routed.node_id, routed.started_org) == (root.id, True)
     assert routed.conversation_id == agent_conversation(root, "ic")
     assert root.title == "Checkout Flow"
     [briefing] = launcher.messages_to(routed.conversation_id)
@@ -761,51 +760,62 @@ async def test_the_first_message_cannot_start_an_org_without_a_conversation(
     assert service.store.root_id is None
 
 
-async def test_a_message_goes_to_the_nearest_team_above_where_it_was_sent(
+async def test_a_message_opens_a_session_at_the_nearest_team_above_where_it_was_sent(
     service: DirectorService, launcher: FakeLauncher, repo: Path
 ):
     await service.create_org(org_request(repo))
     await service.settled()
     await split_root(service, API, WEB)
+    await landed(service)
+    first = {place.id for place in service.store.all()}
 
-    async def send(path: str | None) -> tuple[str, bool]:
+    async def send(path: str | None) -> tuple[str, bool, str]:
         routed = await service.route_message(
             RouteMessageRequest(text="Add a refund endpoint", path=path)
         )
         await service.settled()
-        assert launcher.messages_to(routed.conversation_id)[-1].startswith(
-            "Add a refund endpoint"
+        place = node(service, routed.node_id)
+        assert place.id not in first and place.parent_id == review_place_of(
+            service, place.id
         )
-        assert routed.conversation_id == agent_conversation(
-            team(service, routed.node_id), "ic"
-        )
-        return routed.node_id, routed.started_org
+        start = launcher.derived[-1]
+        assert routed.conversation_id == str(start.conversation_id)
+        assert routed.conversation_id == agent_conversation(place, "ic")
+        asked = start.task.partition("Add a refund endpoint")[2]
+        return team_id_of(place), routed.started_org, asked.split("\n\n")[1]
 
-    assert await send("services/api/handlers") == ("services.api", False)
-    assert await send(str(repo / "services" / "api")) == ("services.api", False)
-    assert await send("services/billing") == ("root", False)
-    assert await send(None) == ("root", False)
+    sent_from = "(The human sent this from {}.)"
+    assert await send("services/api/handlers") == (
+        "services.api",
+        False,
+        sent_from.format("services/api/handlers"),
+    )
+    at_api = await send(str(repo / "services" / "api"))
+    assert at_api[:2] == ("services.api", False) and "The human sent" not in at_api[2]
+    assert await send("services/billing") == (
+        "root",
+        False,
+        sent_from.format("services/billing"),
+    )
+    assert (await send(None))[:2] == ("root", False)
+    assert len(service.sessions()) == 5
 
-    api_ic = agent_conversation(team(service, "services.api"), "ic")
-    assert launcher.messages_to(api_ic)[-2:] == [
-        "Add a refund endpoint\n\n(The human sent this from services/api/handlers.)",
-        "Add a refund endpoint",
-    ]
 
-
-async def test_a_message_passes_over_a_team_whose_ic_is_gone(
+async def test_a_message_opens_a_session_at_a_team_whose_ic_in_another_is_gone(
     service: DirectorService, launcher: FakeLauncher, repo: Path
 ):
     await service.create_org(org_request(repo))
     await service.settled()
     await split_root(service, API)
-    service.store.set_agent("services.api", "ic", status=AGENT_LOST)
+    await landed(service)
+    service.store.set_agent(node(service, "services.api").id, "ic", status=AGENT_LOST)
 
     routed = await service.route_message(
         RouteMessageRequest(text="Add a refund endpoint", path="services/api")
     )
 
-    assert routed.node_id == "root"
+    assert team_id_of(node(service, routed.node_id)) == "services.api"
+    assert routed.node_id != node(service, "services.api").id
 
 
 @pytest.mark.parametrize("path", ["../elsewhere", "/etc"])
@@ -827,6 +837,7 @@ async def test_a_server_in_a_submodule_joins_the_org_of_the_repository_above(
     await above.create_org(org_request(repo))
     await above.settled()
     await split_root(above, SplitChild(title="Libraries", path="libs", task="Libs"))
+    await landed(above)
     await above.aclose()
 
     service = DirectorService(submodule, save_delay=0)
@@ -845,15 +856,17 @@ async def test_a_server_in_a_submodule_joins_the_org_of_the_repository_above(
         await service.aclose()
 
     assert (summary.repo_path, summary.directory) == (str(repo), "libs/payments")
-    assert (from_here.node_id, by_path.node_id, further_up.node_id) == (
+    sessions = [from_here.node_id, by_path.node_id, further_up.node_id]
+    assert len(set(sessions)) == 3
+    assert [team_id_of(node(service, place)) for place in sessions] == [
         "libs",
         "libs",
         "root",
-    )
-    assert launcher.messages_to(from_here.conversation_id) == [
-        "Refunds\n\n(The human sent this from libs/payments.)",
-        "Refunds\n\n(The human sent this from libs/payments/src.)",
     ]
+    asked = [start.task for start in launcher.derived[-3:]]
+    assert "Refunds\n\n(The human sent this from libs/payments.)" in asked[0]
+    assert "Refunds\n\n(The human sent this from libs/payments/src.)" in asked[1]
+    assert "Refunds\n\n(The human sent this from docs.)" in asked[2]
     with pytest.raises(subprocess.CalledProcessError):
         run_git(submodule, "rev-parse", "--verify", "--quiet", ORG_REF)
 
@@ -874,7 +887,7 @@ async def test_a_submodule_with_an_org_of_its_own_keeps_it(
         str(submodule),
         "",
     )
-    assert team(service, "root").worktree_path == str(submodule)
+    assert node(service, "root").worktree_path == str(submodule)
 
 
 async def test_the_first_message_in_a_submodule_starts_its_org_there_when_none_is_above(
@@ -1016,7 +1029,7 @@ async def test_a_pruned_agents_shell_and_index_are_removed(
     # agent would be started by, and the index with its marker.
     assert len(left) == 7
 
-    service.prune("services.api", "x")
+    service.prune(node(service, "services.api").id, "x")
     await service.settled()
 
     assert not [path for path in left if path.exists()]

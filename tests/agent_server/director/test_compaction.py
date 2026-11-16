@@ -10,6 +10,8 @@ from openhands.agent_server.director.models import (
 )
 from openhands.agent_server.director.service import DirectorService
 from tests.agent_server.director.conftest import FakeLauncher, root_conversation
+from tests.agent_server.director.test_director_landing import landed
+from tests.agent_server.director.test_director_tools import node
 
 
 def reports(*lengths: int, compacted: int = 0) -> list[Report]:
@@ -57,28 +59,28 @@ async def reporting_service(repo: Path, launcher: FakeLauncher) -> DirectorServi
     return service
 
 
-async def test_long_reports_are_rewritten_by_a_model_once(repo: Path):
+async def test_long_reports_are_rewritten_by_a_model_once_they_are_the_teams(
+    repo: Path,
+):
     launcher = FakeLauncher(answers={compaction.USAGE_ID: "Chose SQLite; ORM failed."})
     service = await reporting_service(repo, launcher)
     try:
-        root = service.store.get("root")
-        assert root is not None
+        root = node(service, "root")
         service.report(root, "ic", "a" * 600)
-        service.tell_manager("root", "Look in on your team.")
+        service.tell_manager(root.id, "Look in on your team.")
         await service.settled()
-        root = service.store.get("root")
-        assert root is not None
         service.report(root, "manager", "m" * 600)
-        await service.settled()
-        asked_before = len(launcher.asked)
         service.report(root, "ic", "b" * 600)
         await service.settled()
+        asked_before = len(launcher.asked)
+        await landed(service)
         service.report(root, "ic", "Then this.")
         await service.settled()
         kept = service.reports_of(root)
     finally:
         await service.aclose()
 
+    # What a session recorded is not the team's until its work is accepted.
     assert asked_before == 0
     assert [usage_id for _, usage_id, _, _ in launcher.asked] == [compaction.USAGE_ID]
     assert [(report.role, report.text, report.compacted) for report in kept] == [
@@ -94,10 +96,9 @@ async def test_an_answer_that_is_no_shorter_leaves_the_reports_as_they_are(
     launcher = FakeLauncher(answers={compaction.USAGE_ID: "z" * 5_000})
     service = await reporting_service(repo, launcher)
     try:
-        root = service.store.get("root")
-        assert root is not None
+        root = node(service, "root")
         service.report(root, "ic", "a" * 1_200)
-        await service.settled()
+        await landed(service)
         kept = service.reports_of(root)
     finally:
         await service.aclose()

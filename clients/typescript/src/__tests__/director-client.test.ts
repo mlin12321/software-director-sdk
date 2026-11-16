@@ -96,6 +96,12 @@ describe('DirectorClient', () => {
       auto: true,
     });
     expect(result).toEqual(routed);
+
+    await client.routeMessage({ text: 'And partial ones', session_id: 's1a2b3c' });
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({
+      text: 'And partial ones',
+      session_id: 's1a2b3c',
+    });
   });
 
   it('opens a session at a team, lists the open ones and closes one', async () => {
@@ -155,20 +161,6 @@ describe('DirectorClient', () => {
     expect(listed).toEqual([session]);
   });
 
-  it('answers an escalation of the node that raised it', async () => {
-    const fetchMock = mockFetch(() => jsonResponse({ id: 'payments.api', escalations: [] }));
-    const client = new DirectorClient({ host: 'http://example.com' });
-
-    const node = await client.answerEscalation('payments.api', 'jwt/1', 'Opaque tokens.');
-
-    const [url, init] = fetchMock.mock.calls[0];
-    expect(`${init.method} ${url}`).toBe(
-      'POST http://example.com/api/director/org/nodes/payments.api/escalations/jwt%2F1/answer'
-    );
-    expect(JSON.parse(init.body)).toEqual({ answer: 'Opaque tokens.' });
-    expect(node.escalations).toEqual([]);
-  });
-
   it('reads the history of the org, and what came before a time', async () => {
     const history = { events: [], earlier: false };
     const fetchMock = mockFetch(() => jsonResponse(history));
@@ -188,7 +180,9 @@ describe('DirectorClient', () => {
     mockFetch(() => jsonResponse({ detail: 'still with team root' }, 409));
     const client = new DirectorClient({ host: 'http://example.com' });
 
-    const refusal = await client.answerEscalation('api', 'jwt', 'x').catch((error) => error);
+    const refusal = await client
+      .answerSessionEscalation('s1', 'api', 'jwt', 'x')
+      .catch((error) => error);
 
     expect(isHttpError(refusal) && refusal.status).toBe(409);
   });
@@ -332,7 +326,7 @@ describe('DirectorClient', () => {
     await client.resolveMerge({ choices: { 'field:api:headline': 'theirs' }, rest: 'mine' });
     await client.abortMerge();
     await client.pushOrg('upstream');
-    await client.startAgain('services.api');
+    await client.startAgain('s1a2b3c', 'services.api');
 
     const calls = fetchMock.mock.calls.map(
       ([url, init]) => `${init.method} ${url} ${init.body ?? ''}`
@@ -343,7 +337,7 @@ describe('DirectorClient', () => {
       'POST http://example.com/api/director/org/merge/resolve {"choices":{"field:api:headline":"theirs"},"rest":"mine"}',
       'POST http://example.com/api/director/org/merge/abort ',
       'POST http://example.com/api/director/org/push {"remote":"upstream"}',
-      'POST http://example.com/api/director/org/nodes/services.api/start_again {}',
+      'POST http://example.com/api/director/org/sessions/s1a2b3c/teams/services.api/start_again {}',
     ]);
     expect(pulled).toEqual(sync);
   });
