@@ -46,6 +46,13 @@ SESSION_REFS = "refs/agents/sessions"
 _TITLE_LENGTH = 60
 
 
+def _how_closed(accepted: object, kept: object) -> str:
+    """How a session ended, for the record."""
+    if accepted:
+        return "its work was accepted"
+    return "with work that was not merged" if kept else ""
+
+
 class Sessions(Splits):
     """Opens and closes the human's sessions."""
 
@@ -180,7 +187,8 @@ class Sessions(Splits):
         """Close a session: its agents are stopped and removed with its
         teams. Work of it that was accepted stays where it was merged;
         the rest is kept under a ref and is in no checkout any more. Safe
-        from any thread.
+        from any thread. A session is closed like this by itself when its
+        work is accepted (see :meth:`_accept`).
 
         Raises:
             NotFound: No such session is open.
@@ -189,6 +197,20 @@ class Sessions(Splits):
         if not teams:
             raise NotFound(f"No session {session_id!r} is open")
         self._begin("close_session", teams[0].id)
+
+    async def _accept(self, node_id: str, needed_above: str) -> None:
+        """Accept a team's work. A session whose work is accepted is closed:
+        all of it is in the checkout above, nobody works in it any more, and
+        while it stays open the teams it has cannot be changed."""
+        await super()._accept(node_id, needed_above)
+        node = self.store.get(node_id)
+        if (
+            node is not None
+            and self.store.opens_session(node)
+            and node.review is not None
+            and node.review.state == "accepted"
+        ):
+            self._begin("close_session", node.id, accepted=True)
 
     async def _close_session(self, intent: Intent) -> None:
         store = self.store
@@ -265,12 +287,15 @@ class Sessions(Splits):
                     plan["parent"],
                     "session_closed",
                     top,
-                    "with work that was not merged" if intent.payload["kept"] else "",
+                    _how_closed(plan.get("accepted"), intent.payload["kept"]),
                 )
             store.close_session(plan["session"])
             await self._save()
             intent = run.step_done(intent, "removed")
         self._settling.pop(intent.id, None)
+        if plan.get("accepted"):
+            # The IC above accepted it just now and is told nothing more.
+            return
         above = store.get(plan["parent"])
         self.notify(
             agent_conversation(above, "ic") if above else None,

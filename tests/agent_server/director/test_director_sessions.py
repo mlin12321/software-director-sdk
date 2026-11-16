@@ -298,16 +298,32 @@ async def test_each_session_is_reviewed_by_the_ic_above_and_the_second_meets_the
         [request] = launcher.messages_to(ic(service))[before:]
         assert "The human opened the session" in request and team in request
 
+    accepted = ic(service, first)
     await use(service, ic(service), ReviewTeamTool, accept(first))
     await use(service, ic(service), ReviewTeamTool, accept(second))
+    await service.settled()
 
     assert (repo / "services/api/routes.ts").read_text() == "refunds\n"
-    reviews = [node(service, team).review for team in (first, second)]
-    assert [review.state for review in reviews if review] == [
-        "accepted",
-        "changes_requested",
-    ]
+    # The first is merged, so it is closed by itself: nobody works in it any
+    # more. The second was sent back and stays open.
+    assert [open.title for open in service.sessions()] == ["Vouchers"]
+    assert service.store.get(first) is None
+    assert accepted is not None and UUID(accepted) in launcher.deleted
+    review = node(service, second).review
+    assert review is not None and review.state == "changes_requested"
     assert "do not merge" in launcher.messages_to(ic(service, second))[-1]
+    [closed] = [
+        event
+        for event in service.team_memory.history("root")
+        if event.kind == "session_closed"
+    ]
+    assert (closed.session, closed.detail) == ("Refunds", "its work was accepted")
+    # The IC that accepted it is not woken to hear that it is closed.
+    assert not any(
+        "closed the session" in text for text in launcher.messages_to(ic(service))
+    )
+    # Nothing was left unmerged, so nothing is kept for it.
+    assert run_git(repo, "for-each-ref", "refs/agents/sessions/").strip() == ""
 
 
 async def test_work_uncommitted_beside_a_session_is_not_put_aside_for_it(
