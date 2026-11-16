@@ -20,6 +20,7 @@ from openhands.agent_server.director.changes import file_sides, team_changes
 from openhands.agent_server.director.mcp_shim import TOKEN_HEADER
 from openhands.agent_server.director.models import (
     AnswerEscalationRequest,
+    ConversationPlace,
     CreateOrgRequest,
     DirectorSettingsState,
     DirectorSettingsUpdate,
@@ -31,6 +32,8 @@ from openhands.agent_server.director.models import (
     MemorySyncRequest,
     NodeMemory,
     NodeOwnership,
+    OpenedSession,
+    OpenSessionRequest,
     OrgHistory,
     OrgMerge,
     OrgNode,
@@ -43,6 +46,8 @@ from openhands.agent_server.director.models import (
     ResolveMergeRequest,
     RoutedMessage,
     RouteMessageRequest,
+    Session,
+    SessionTeam,
     SnapshotEvent,
     StartAgainRequest,
     TeamChanges,
@@ -115,10 +120,18 @@ def _calling_agent(
 
 
 def _require_node(service: DirectorService, node_id: str) -> OrgNode:
-    node = service.store.get(node_id)
+    """A node of the org tree. What a session has at a team is no node."""
+    node = service.store.team(node_id)
     if node is None:
         raise NotFound(f"Unknown node: {node_id}")
     return node
+
+
+def _require_session(service: DirectorService, session_id: str) -> Session:
+    for session in service.sessions():
+        if session.id == session_id:
+            return session
+    raise NotFound(f"No session {session_id!r} is open")
 
 
 def _sse(event: SnapshotEvent | OrgChange | OrgStateEvent) -> str:
@@ -441,6 +454,7 @@ def answer_escalation(
 
     The answer is sent to the IC of the team that raised it.
     """
+    _require_node(service, node_id)
     return service.answer_escalation(node_id, escalation_id, request.answer)
 
 
@@ -459,6 +473,163 @@ def get_org_node(
         ancestors=service.store.ancestors(node_id),
         children=service.store.children(node_id),
     )
+
+
+@director_router.get(
+    "/org/conversations/{conversation_id}",
+    response_model=ConversationPlace,
+    responses=error_responses({NotFound: "No agent of the org has this conversation"}),
+)
+def get_conversation_place(
+    conversation_id: str, service: DirectorService = Depends(get_director_service)
+) -> ConversationPlace:
+    """Say where an agent's conversation is in the org.
+
+    With it come the conversations one level away: the agents of the team
+    above, the other agent of the same team, the ICs of the teams directly
+    below, and the ICs of the sessions whose work the team reviews. A client
+    shows them as links from one conversation to the next.
+    """
+    return service.place_of(conversation_id)
+
+
+@director_router.post(
+    "/org/conversations/{conversation_id}/joined",
+    response_model=ConversationPlace,
+    responses=error_responses(
+        {
+            NotFound: "No agent of the org has this conversation",
+            Unavailable: "The director is not running agents",
+        }
+    ),
+)
+def join_conversation(
+    conversation_id: str, service: DirectorService = Depends(get_director_service)
+) -> ConversationPlace:
+    """Note that the human has written in an agent's conversation.
+
+    The conversation gets the tag `humanjoined=true` beside
+    `startedby=director`, so that a client lists it with the conversations
+    the human started. A message sent through the director, and the request
+    a session is opened with, do this themselves; a client that writes to
+    an agent's conversation directly calls this. Calling it again changes
+    nothing.
+    """
+    service.joined(conversation_id)
+    return service.place_of(conversation_id)
+
+
+@director_router.get("/org/sessions", response_model=list[Session])
+def list_sessions(
+    service: DirectorService = Depends(get_director_service),
+) -> list[Session]:
+    """List the sessions that are open.
+
+    A session is a line of work the human opened at a team beside the
+    org's own. It is no part of the org tree: the tree is the org's
+    structure, and a session has agents and a checkout of its own at the
+    team it was opened at and, once they are given a task in it, at the
+    teams below that one (`teams`).
+    """
+    return service.sessions()
+
+
+@director_router.get(
+    "/org/sessions/{session_id}",
+    response_model=Session,
+    responses=error_responses({NotFound: "No such session is open"}),
+)
+def get_session(
+    session_id: str, service: DirectorService = Depends(get_director_service)
+) -> Session:
+    """Get one open session with what it has at each of its teams."""
+    return _require_session(service, session_id)
+
+
+@director_router.post(
+    "/org/sessions/{session_id}/teams/{node_id}/escalations/{escalation_id}/answer",
+    response_model=SessionTeam,
+    responses=error_responses(
+        {
+            NotFound: "No such session or team, or it has no such escalation",
+            Conflict: "The escalation is still with a team, not with the human",
+            Unavailable: "The director is not running agents",
+        }
+    ),
+)
+def answer_session_escalation(
+    session_id: str,
+    node_id: str,
+    escalation_id: str,
+    request: AnswerEscalationRequest,
+    service: DirectorService = Depends(get_director_service),
+) -> OrgNode:
+    """Answer an escalation a team raised in a session and that waits on
+    the human, which settles it.
+
+    The answer is sent to the session's IC at that team.
+    """
+    session = _require_session(service, session_id)
+    team = next((team for team in session.teams if team.team_id == node_id), None)
+    if team is None:
+        raise NotFound(f"Session {session_id!r} has no team {node_id}")
+    return service.answer_escalation(team.id, escalation_id, request.answer)
+
+
+@director_router.post(
+    "/org/sessions",
+    response_model=OpenedSession,
+    status_code=status.HTTP_201_CREATED,
+    responses=error_responses(
+        {
+            NotFound: "There is no such team",
+            Conflict: (
+                "There is no org, it is paused, the team's sub-teams are "
+                "being set up, or the IC that would review the session's "
+                "work is not running"
+            ),
+            Unavailable: "The director is not running agents",
+        }
+    ),
+)
+async def open_session(
+    request: OpenSessionRequest,
+    service: DirectorService = Depends(get_director_service),
+) -> OpenedSession:
+    """Open a session at a team and start it with a request.
+
+    The team gets one more IC for the request, in a git worktree and on a
+    branch of its own, so that it can work on the team's directory while
+    the team's own IC and other sessions do. The session has a place for
+    each team below, which starts when that IC gives it a task. The IC
+    of the team above reviews the session's work like a sub-team's and an
+    accept merges it into that team's checkout; the work of a session
+    opened at the top team is reviewed by the top team's own IC.
+
+    Without `node_id` the director chooses the team by what the text
+    concerns, as for a message sent with `auto`. Opening a session adds no
+    team to the org, so `max_teams` and `max_depth` do not count it.
+    """
+    return await service.open_session(request)
+
+
+@director_router.delete(
+    "/org/sessions/{session_id}",
+    status_code=status.HTTP_202_ACCEPTED,
+    responses=error_responses({NotFound: "No such session is open"}),
+)
+def close_session(
+    session_id: str, service: DirectorService = Depends(get_director_service)
+) -> None:
+    """Close a session.
+
+    Its agents end the step they are in, and are removed with their
+    conversations and the session's checkout. Work of the
+    session that was accepted stays where it was merged. Uncommitted work
+    is kept as a commit under `refs/agents/pruned/`, and commits that were
+    never merged stay reachable from `refs/agents/sessions/<session id>/`.
+    """
+    service.close_session(session_id)
 
 
 @director_router.get(
@@ -600,6 +771,7 @@ async def edit_node_file(
     told. Refused while an agent of the team is in the middle of a turn, and
     for a file the team's own agents may not write.
     """
+    _require_node(service, node_id)
     return await service.edit_file(node_id, path, request.content)
 
 
@@ -761,6 +933,7 @@ async def start_team_again(
     conversations do not. The team's IC starts as the given conversation in
     the team's own checkout and is briefed from the team's spec.
     """
+    _require_node(service, node_id)
     return await service.start_again(node_id, request)
 
 

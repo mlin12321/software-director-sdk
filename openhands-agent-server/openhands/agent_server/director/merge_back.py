@@ -111,4 +111,46 @@ def merge_back(above: Path, team: Path, directory: str, title: str) -> MergeBack
             return MergeBack(
                 "refused", tip, detail=(error.stderr or error.stdout).strip()
             )
+        _bring_up_to_date(above, ours)
     return MergeBack("merged", tip)
+
+
+def _bring_up_to_date(checkout: Path, before: str) -> None:
+    """Take a merge that moved the ``HEAD`` of ``checkout`` on from
+    ``before`` into the index of every agent that works there.
+
+    An agent's git holds what is outside its team's directory at ``HEAD``
+    by itself. What is inside it does not follow, so the index of an agent
+    whose directory the merge changed would still have the files as they
+    were, and its next commit would take the merge out again. Each merged
+    file the agent has staged nothing for is set to what the merge made of
+    it; what it staged stays staged.
+    """
+    merged = _names(git(checkout, ["diff", "--name-only", "-z", before, "HEAD"]))
+    if not merged:
+        return
+    git_dir = Path(git(checkout, ["rev-parse", "--absolute-git-dir"]).strip())
+    # The names are relative to the top of the checkout.
+    top = Path(git(checkout, ["rev-parse", "--show-toplevel"]).strip())
+    for index in git_dir.glob("agent-index-*"):
+        if index.suffix:
+            # What the agent's git keeps beside its index.
+            continue
+        own = {"GIT_INDEX_FILE": str(index)}
+        with suppress(GitError):
+            staged = _names(
+                git(top, ["diff", "--cached", "--name-only", "-z", before], env=own)
+            )
+            behind = sorted(merged - staged)
+            if behind:
+                git(
+                    top,
+                    ["reset", "-q", "HEAD", "--pathspec-from-file=-"]
+                    + ["--pathspec-file-nul"],
+                    env={**own, "GIT_LITERAL_PATHSPECS": "1"},
+                    stdin="\0".join(behind),
+                )
+
+
+def _names(listed: str) -> set[str]:
+    return {name for name in listed.split("\0") if name}

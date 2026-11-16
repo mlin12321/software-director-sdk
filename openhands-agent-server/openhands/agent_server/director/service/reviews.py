@@ -29,6 +29,7 @@ from openhands.agent_server.director.prompts import (
     changes_requested,
     put_aside_notice,
     review_request,
+    session_work,
 )
 from openhands.agent_server.director.run_state import (
     HELD,
@@ -162,8 +163,9 @@ class Reviews(Requests):
         run = self._runs()
         held = run.marked(HELD)
         teams = store.children(node.id)
+        opened = store.opened_under(node.id)
         waiting: list[OrgNode] = []
-        for team in teams:
+        for team in (*teams, *opened):
             if team.id not in held:
                 continue
             if team.review is not None and team.review.state == "pending":
@@ -191,14 +193,22 @@ class Reviews(Requests):
             )
             for team in teams
         )
-        if not (now or settled or reviewer in self._running):
+        # The work of a session waits for no sub-team: no task of this IC
+        # brought it.
+        of_a_session = any(store.opens_session(team) for team in waiting)
+        if not (now or settled or of_a_session or reviewer in self._running):
             return
         requests = []
         for team in waiting:
             run.unmark(HELD, team.id)
             if team.review is not None:
                 requests.append(
-                    review_request(
+                    (
+                        session_work(team, store.session_title(team))
+                        if store.opens_session(team)
+                        else ""
+                    )
+                    + review_request(
                         team, team.review, self._so_far(team), self.asked_of(team)
                     )
                 )
@@ -311,8 +321,12 @@ class Reviews(Requests):
         where = node.boundary.path or "the repository"
         team, checkout = Path(node.worktree_path), Path(above.worktree_path)
         merged = False
+        opens = store.opens_session(node)
         if _checkout_root(str(team)) != _checkout_root(str(checkout)):
-            await asyncio.to_thread(self._put_aside, above, node)
+            if not opens:
+                # What is uncommitted in a session's directory is the work
+                # of the team it was opened beside, and stays.
+                await asyncio.to_thread(self._put_aside, above, node)
             try:
                 result = await asyncio.to_thread(
                     merge_back, checkout, team, node.boundary.path, node.title
@@ -328,8 +342,15 @@ class Reviews(Requests):
                 self.notify(
                     reviewer,
                     f"git would not merge the work of {node.title!r} into your "
-                    f"checkout as it is:\n{result.detail}\nCommit or put aside "
-                    "what is in the way, then accept it again with `review_team`.",
+                    f"checkout as it is:\n{result.detail}\n"
+                    + (
+                        "What is in the way is work that is not committed "
+                        "yet in the same files. Accept it again with "
+                        "`review_team` once that is committed."
+                        if opens
+                        else "Commit or put aside what is in the way, then "
+                        "accept it again with `review_team`."
+                    ),
                 )
                 return
             if result.outcome in ("conflicts", "outside"):
@@ -436,7 +457,7 @@ class Reviews(Requests):
         """
         store = self.store
         node = store.get(node_id)
-        if node is None or not node.child_ids:
+        if node is None or not store.children(node_id):
             return
         # A team that was set up and never given work owes none.
         teams = [
@@ -455,7 +476,9 @@ class Reviews(Requests):
         own = await asyncio.to_thread(self._own_changes, node, teams)
         if own is None:
             return
-        if own or above is None:
+        # The work of a session is always reviewed: the IC above gave it no
+        # task and has seen none of it.
+        if own or above is None or store.opens_session(node):
             if not acted:
                 self.notify(
                     ic,

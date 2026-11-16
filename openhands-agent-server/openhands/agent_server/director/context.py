@@ -25,7 +25,11 @@ IN_THE_BRIEFING = (
 # Lists an agent adds to itself; what it added is not told back to it.
 _OWN = {"escalations_you_raised": None, "reports_of_your_team": "by"}
 # Lists with one entry for each team, told team by team.
-_BY_TEAM = ("sub_teams",)
+_BY_TEAM = (
+    "sub_teams",
+    "other_sessions_of_your_team",
+    "sessions_whose_work_you_review",
+)
 # Lists of which only the latest are kept: what is new in one is told, and
 # what dropped out of it is not.
 _LATEST = ("asked_directly_of_teams_below",)
@@ -42,13 +46,21 @@ def steady(context: dict[str, Any]) -> dict[str, Any]:
     return {
         **context,
         "status": _settled(context["status"]),
-        "sub_teams": [
-            {
-                **{key: value for key, value in team.items() if key != "headline"},
-                "status": _settled(team["status"]),
-            }
-            for team in context["sub_teams"]
-        ],
+        **{
+            key: [
+                {
+                    **{
+                        name: value
+                        for name, value in team.items()
+                        if name != "headline"
+                    },
+                    "status": _settled(team["status"]),
+                }
+                for team in context[key]
+            ]
+            for key in _BY_TEAM
+            if key in context
+        },
     }
 
 

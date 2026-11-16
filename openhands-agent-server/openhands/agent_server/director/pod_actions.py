@@ -23,6 +23,7 @@ from openhands.agent_server.director.models import (
     ReviewFinding,
     SplitProposal,
 )
+from openhands.agent_server.director.org_store import session_id_of
 from openhands.agent_server.director.service import (
     DirectorService,
     agent_conversation,
@@ -166,7 +167,7 @@ def msg_manager(service: DirectorService, caller: Caller, text: str) -> str:
     if not text:
         raise Invalid("A message cannot be empty")
     proposed = proposed_teams(text)
-    if proposed is None and not node.child_ids:
+    if proposed is None and not service.store.children(node.id):
         raise Invalid(
             "A team without sub-teams messages its Manager only to propose "
             f"some, in a ```{TEAMS_FENCE} block. Raise anything else with "
@@ -625,6 +626,19 @@ def prune_team(
     team = service.store.get(node_id)
     if team is None or team.parent_id != caller.node.id:
         raise Invalid(f"{node_id} is not a team directly below yours")
+    if session_id_of(team):
+        raise Invalid(
+            f"{team.title!r} works in the session "
+            f"{service.store.session_title(team)!r}, "
+            "which the human opened. Only the human closes a session, and "
+            "its teams are not pruned one by one."
+        )
+    sessions = service.store.sessions_at(team.id)
+    if sessions:
+        raise Conflict(
+            f"{team.title!r} cannot be pruned while the human's sessions "
+            f"({', '.join(sessions)}) work in it or below it."
+        )
     service.prune(node_id, reason.strip())
     return (
         f"Pruning {team.title!r}. Its directory goes back to your team's IC "

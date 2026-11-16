@@ -29,6 +29,8 @@ PROGRESS = "progress"  # node id -> when the team last got anywhere
 TASK = "task"  # node id -> what the team was started to do
 TOLD = "told"  # conversation id -> the context its agent was last told
 HANDING = "handing"  # node id -> what its hand-over conversation has done
+SESSION = "session"  # session id -> the session and what it has at its teams
+JOINED = "joined"  # conversation id, the human has written in it
 
 _TABLES = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);

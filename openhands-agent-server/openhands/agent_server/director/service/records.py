@@ -23,6 +23,9 @@ from openhands.agent_server.director.git_store import (
 from openhands.agent_server.director.models import (
     AGENT_ROLES,
     AgentRole,
+    ConversationLink,
+    ConversationPlace,
+    ConversationRelation,
     FormerTeam,
     HistoryEvent,
     InheritedSpec,
@@ -36,6 +39,7 @@ from openhands.agent_server.director.models import (
     TeamEventKind,
     Thread,
 )
+from openhands.agent_server.director.org_store import session_id_of
 from openhands.agent_server.director.prompts import (
     NEEDED_WORTH_SAYING,
     event_line,
@@ -48,6 +52,7 @@ from openhands.agent_server.director.prompts import (
 )
 from openhands.agent_server.director.run_state import (
     CHECKS,
+    JOINED,
 )
 from openhands.agent_server.director.service.state import (
     ASKED_KEPT,
@@ -59,13 +64,29 @@ from openhands.agent_server.director.service.state import (
     ServiceState,
     _now,
     _spec_file,
+    team_of,
 )
 from openhands.agent_server.director.split import (
     is_inside,
 )
+from openhands.sdk.errors import NotFound
 
 
 logger = logging.getLogger(__name__)
+
+
+# How the org's own team is named to the sessions that work beside it.
+OWN_SESSION = "the team's own work"
+
+
+def _written_by(report: Report, session: str) -> str:
+    """Who wrote a report, as the agents of a team in the session titled
+    ``session`` are told ('' for the org's own)."""
+    if report.handed_over:
+        return "ic_of_the_team_above"
+    if report.session == session:
+        return report.role
+    return f"{report.role} in {report.session or OWN_SESSION!r}"
 
 
 class Records(ServiceState):
@@ -99,11 +120,13 @@ class Records(ServiceState):
         event = TeamEvent(
             at=_now(),
             kind=kind,
-            team_id=team.id if team else "",
+            # The team of the org, whatever session it was the work of.
+            team_id=team_of(team) if team else "",
             team=team.title if team else "",
+            session=self.store.session_title(team) if team else "",
             detail=detail,
             paths=list(paths),
-            other_id=other.id if other else (other_gone or ("", ""))[0],
+            other_id=team_of(other) if other else (other_gone or ("", ""))[0],
             other=other.title if other else (other_gone or ("", ""))[1],
         )
         try:
@@ -323,8 +346,7 @@ class Records(ServiceState):
             kept = {}
         if not isinstance(kept, dict):
             kept = {}
-        node = self.store.get(node_id)
-        below = node.child_ids if node else []
+        below = {team.id for team in self.store.below(node_id)}
         return {
             "accepted": int(kept.get("accepted", 0)),
             "escalations": {
@@ -334,13 +356,62 @@ class Records(ServiceState):
             },
         }
 
+    def place_of(self, conversation_id: str) -> ConversationPlace:
+        """Where an agent's conversation is in the org, with the
+        conversations one level from it.
+
+        Raises:
+            NotFound: No agent of the org has this conversation.
+        """
+        store = self.store
+        found = store.find_by_conversation(conversation_id)
+        if found is None:
+            raise NotFound(f"No agent of the org has conversation {conversation_id}")
+        node, role = found
+        above = store.get(node.parent_id) if node.parent_id else None
+        if above is not None and above.id == node.id:
+            above = None
+        near: list[tuple[ConversationRelation, OrgNode]] = [
+            *([("above", above)] if above else []),
+            ("beside", node),
+            *(("below", team) for team in store.children(node.id)),
+            *(("session", team) for team in store.opened_under(node.id)),
+        ]
+        return ConversationPlace(
+            conversation_id=conversation_id,
+            node_id=team_of(node),
+            team=node.title,
+            role=role,
+            session_id=session_id_of(node),
+            session=store.session_title(node),
+            human_joined=conversation_id in self._runs().marked(JOINED),
+            links=[
+                ConversationLink(
+                    conversation_id=agent.conversation_id,
+                    relation=relation,
+                    node_id=team_of(team),
+                    team=team.title,
+                    role=agent.role,
+                    session_id=session_id_of(team),
+                    session=store.session_title(team),
+                    status=agent.status,
+                )
+                for relation, team in near
+                for agent in team.agents
+                if agent.conversation_id
+                and agent.conversation_id != conversation_id
+                # Below a team, its IC is the one that is written to.
+                and (relation in ("above", "beside") or agent.role == "ic")
+            ],
+        )
+
     def threads_of(self, node: OrgNode) -> list[Thread]:
         """What the agents of a team have said to Managers and ICs: its own
         two to each other, its Manager and its IC to the ICs directly
         below, and the Manager and the IC above to its IC. Threads nobody
         wrote in are left out."""
         team_memory = self._memory()
-        down = [(node.id, child_id) for child_id in node.child_ids]
+        down = [(node.id, team.id) for team in self.store.below(node.id)]
         up = [(node.parent_id, node.id)] if node.parent_id is not None else []
         return [
             Thread(
@@ -394,8 +465,15 @@ class Records(ServiceState):
             if escalation.raised_by == role
             and (escalation.asked_of or escalation.held_by) == node.id
         ]
+        others = [
+            other
+            for other in store.all()
+            if team_of(other) == team_of(node) and other.id != node.id and other.agents
+        ]
+        title = store.session_title(node)
         context: dict[str, Any] = {
-            "you": {"role": role, "node_id": node.id, "team": node.title},
+            "you": {"role": role, "node_id": node.id, "team": node.title}
+            | ({"session": title} if title else {}),
             "team_above": node.parent_id,
             "status": node.status,
             "boundary": node.boundary.model_dump(),
@@ -418,7 +496,7 @@ class Records(ServiceState):
             ],
             "reports_of_your_team": [
                 {
-                    "by": "ic_of_the_team_above" if report.handed_over else report.role,
+                    "by": _written_by(report, title),
                     "at": report.at,
                     "text": report.text,
                 }
@@ -453,7 +531,33 @@ class Records(ServiceState):
             ],
             "escalations_for_you_to_settle": to_settle,
         }
-        if role == "ic" and node.child_ids:
+        if others:
+            # They work on the same directory at the same time, each in a
+            # checkout of its own, and share the team's reports.
+            context["other_sessions_of_your_team"] = [
+                {
+                    "node_id": other.id,
+                    "session": store.session_title(other) or OWN_SESSION,
+                    "status": other.status,
+                    "headline": other.headline,
+                    "review": other.review.state if other.review else None,
+                    "branch": other.branch,
+                }
+                for other in others
+            ]
+        opened = store.opened_under(node.id)
+        if role == "ic" and opened:
+            context["sessions_whose_work_you_review"] = [
+                {
+                    "node_id": top.id,
+                    "team": top.title,
+                    "session": store.session_title(top),
+                    "status": top.status if top.agents else NOT_STARTED,
+                    "review": top.review.state if top.review else None,
+                }
+                for top in opened
+            ]
+        if role == "ic" and store.children(node.id):
             context["asked_directly_of_teams_below"] = self.asked_below(node)
             context["what_teams_below_asked_of_each_other_directly"] = requests_between(
                 team_memory.history(node.id)
@@ -541,7 +645,7 @@ class Records(ServiceState):
         reports = [
             report
             for role in AGENT_ROLES
-            for report in team_memory.reports(node.id, role)
+            for report in team_memory.reports(team_of(node), role)
         ]
         return sorted(reports, key=lambda report: report.at)
 

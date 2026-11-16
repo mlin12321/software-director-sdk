@@ -12,7 +12,11 @@ import type {
   DirectorOrgNode,
   DirectorOrgNodeDetail,
   DirectorOrgSummary,
+  DirectorOpenedSession,
   DirectorRoutedMessage,
+  DirectorSession,
+  DirectorSessionTeam,
+  DirectorConversationPlace,
   DirectorThread,
   DirectorOrgMerge,
   DirectorOrgSync,
@@ -79,6 +83,19 @@ export interface RouteMessageRequest {
    * there and becomes its task. Ignored when an org exists.
    */
   conversation?: CreateConversationPayload;
+}
+
+/** A request the human wants worked on beside what a team is doing. */
+export interface OpenSessionRequest {
+  /** What the session is to do. */
+  text: string;
+  /** What to call the session; taken from the text when empty. */
+  title?: string;
+  /**
+   * The team the session is opened at. Without it the director chooses the
+   * team as it does for a message sent with `auto`.
+   */
+  node_id?: DirectorNodeId;
 }
 
 const DIRECTOR_PATH = '/api/director';
@@ -179,6 +196,94 @@ export class DirectorClient {
     const response = await this.client.post<DirectorRoutedMessage>(
       `${DIRECTOR_PATH}/org/messages`,
       request
+    );
+    return response.data;
+  }
+
+  /** The sessions that are open. */
+  async listSessions(): Promise<DirectorSession[]> {
+    const response = await this.client.get<DirectorSession[]>(`${DIRECTOR_PATH}/org/sessions`);
+    return response.data;
+  }
+
+  /**
+   * Open a session at a team and start it with a request: the team gets one
+   * more IC for it, in a git worktree of its own, whose work the IC of the
+   * team above reviews. It adds no team to the org.
+   *
+   * @throws HttpError 404 when there is no such team; 409 when there is no
+   *   org, it is paused, the team's sub-teams are being set up, or the IC
+   *   that would review the session's work is not running.
+   */
+  async openSession(request: OpenSessionRequest): Promise<DirectorOpenedSession> {
+    const response = await this.client.post<DirectorOpenedSession>(
+      `${DIRECTOR_PATH}/org/sessions`,
+      request
+    );
+    return response.data;
+  }
+
+  /**
+   * Close a session: its agents and its checkout are removed.
+   * Work of it that was accepted stays where it was merged.
+   *
+   * @throws HttpError 404 when no such session is open.
+   */
+  async closeSession(sessionId: string): Promise<void> {
+    await this.client.delete(`${DIRECTOR_PATH}/org/sessions/${encodeURIComponent(sessionId)}`);
+  }
+
+  /** One open session with what it has at each of its teams. */
+  async getSession(sessionId: string): Promise<DirectorSession> {
+    const response = await this.client.get<DirectorSession>(
+      `${DIRECTOR_PATH}/org/sessions/${encodeURIComponent(sessionId)}`
+    );
+    return response.data;
+  }
+
+  /**
+   * Answer an escalation a team raised in a session and that waits on the
+   * human. The answer is sent to the session's IC at that team.
+   *
+   * @throws HttpError 404 when there is no such session, team or escalation;
+   *   409 when the escalation is still with a team.
+   */
+  async answerSessionEscalation(
+    sessionId: string,
+    nodeId: DirectorNodeId,
+    escalationId: string,
+    answer: string
+  ): Promise<DirectorSessionTeam> {
+    const response = await this.client.post<DirectorSessionTeam>(
+      `${DIRECTOR_PATH}/org/sessions/${encodeURIComponent(sessionId)}/teams/${encodeURIComponent(
+        nodeId
+      )}/escalations/${encodeURIComponent(escalationId)}/answer`,
+      { answer }
+    );
+    return response.data;
+  }
+
+  /**
+   * Where an agent's conversation is in the org, with links to the
+   * conversations one level from it.
+   *
+   * @throws HttpError 404 when no agent of the org has the conversation.
+   */
+  async getConversationPlace(conversationId: string): Promise<DirectorConversationPlace> {
+    const response = await this.client.get<DirectorConversationPlace>(
+      `${DIRECTOR_PATH}/org/conversations/${encodeURIComponent(conversationId)}`
+    );
+    return response.data;
+  }
+
+  /**
+   * Note that the human has written in an agent's conversation, so that it
+   * is tagged `humanjoined=true` and listed with the human's own. A message
+   * sent through the director does this itself.
+   */
+  async joinConversation(conversationId: string): Promise<DirectorConversationPlace> {
+    const response = await this.client.post<DirectorConversationPlace>(
+      `${DIRECTOR_PATH}/org/conversations/${encodeURIComponent(conversationId)}/joined`
     );
     return response.data;
   }

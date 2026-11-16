@@ -53,6 +53,9 @@ logger = logging.getLogger(__name__)
 # On every conversation the director starts itself, so that a client can tell
 # them from the ones a human started. The root IC is the human's own.
 STARTED_BY_DIRECTOR = {"startedby": "director"}
+# On a conversation the director started and the human has written in. A
+# client lists it with the conversations the human started.
+HUMAN_JOINED = {"humanjoined": "true"}
 
 
 @dataclass(frozen=True)
@@ -254,6 +257,15 @@ class PodLauncher(Protocol):
 
     async def rename(self, conversation_id: UUID, title: str) -> None:
         """Give a conversation a new title.
+
+        Raises:
+            NotFound: The conversation does not exist.
+        """
+        ...
+
+    async def mark_joined(self, conversation_id: UUID) -> None:
+        """Tag a conversation as one the human has written in
+        (``HUMAN_JOINED``), keeping its other tags.
 
         Raises:
             NotFound: The conversation does not exist.
@@ -494,6 +506,17 @@ class ConversationPodLauncher:
         )
         if not updated:
             raise NotFound(f"Conversation {conversation_id} does not exist")
+
+    async def mark_joined(self, conversation_id: UUID) -> None:
+        info = await self._conversations.get_conversation(conversation_id)
+        if info is None:
+            raise NotFound(f"Conversation {conversation_id} does not exist")
+        if all(info.tags.get(key) == value for key, value in HUMAN_JOINED.items()):
+            return
+        await self._conversations.update_conversation(
+            conversation_id,
+            UpdateConversationRequest(tags={**info.tags, **HUMAN_JOINED}),
+        )
 
 
 def _kind_of(agent: AgentBase) -> dict[str, Any]:

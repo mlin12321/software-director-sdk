@@ -95,6 +95,23 @@ def test_an_unknown_node_is_not_found_on_every_node_route(client: TestClient):
     assert [response.status_code for response in responses] == [404] * 4
 
 
+def test_no_session_is_open_in_a_saved_tree_and_an_unknown_one_is_not_found(
+    client: TestClient,
+):
+    answer = {"answer": "x"}
+
+    assert client.get("/api/director/org/sessions").json() == []
+    assert client.get("/api/director/org/sessions/s000000").status_code == 404
+    assert client.delete("/api/director/org/sessions/s000000").status_code == 404
+    assert (
+        client.post(
+            "/api/director/org/sessions/s000000/teams/a/escalations/e/answer",
+            json=answer,
+        ).status_code
+        == 404
+    )
+
+
 def test_routes_require_the_session_key_when_one_is_configured(saved_tree: Path):
     app = create_app(server_config(saved_tree, session_api_keys=["secret"]))
     client = TestClient(app, raise_server_exceptions=False)
@@ -407,6 +424,8 @@ class TestTreeStream:
         assert snapshot["escalations"] == [
             {
                 "node_id": "a1",
+                "session_id": "",
+                "session": "",
                 "escalation": make_escalation(
                     "jwt", passed_up_by=("a", "root")
                 ).model_dump(),

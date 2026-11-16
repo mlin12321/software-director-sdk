@@ -64,6 +64,7 @@ from openhands.agent_server.director.service.state import (
     _new_pod,
     _progress_of,
     agent_conversation,
+    team_of,
 )
 from openhands.sdk.errors import (
     NotFound,
@@ -159,9 +160,12 @@ class Teams(Delivery):
                     purpose=purpose,
                     parent=node.parent_id,
                 )
+                if human and ic.conversation_id:
+                    self.joined(ic.conversation_id)
                 return ic.conversation_id
         if human:
             self._post(conversation_id, text, at_once=True)
+            self.joined(conversation_id)
         else:
             self.notify(conversation_id, text)
         return conversation_id
@@ -356,7 +360,7 @@ class Teams(Delivery):
         team_memory = self._memory()
         if notes.strip():
             team_memory.append_report(
-                team.id,
+                team_of(team),
                 "ic",
                 Report(at=_instant(), role="ic", text=notes.strip(), handed_over=True),
             )
@@ -568,7 +572,10 @@ class Teams(Delivery):
             # work is kept apart and checked when it is merged.
             isolation = "worktree"
         adapt = await asyncio.to_thread(self._adapter, conversation_id, TOOLS_OF[role])
-        title = _agent_title(node.title, role)
+        session = self.store.session_title(node)
+        title = _agent_title(
+            f"{node.title} · {session}" if session else node.title, role
+        )
 
         async def start() -> StartedAgent:
             if profile:
@@ -638,10 +645,13 @@ class Teams(Delivery):
         self.progressed(node_id)
         started = self.store.get(node_id)
         left: list[str] = []
+        # A session starts beside the team's own work: what is uncommitted
+        # in the team's directory is not the session's.
+        opens = started is not None and self.store.opens_session(started)
         if started is not None:
             # A team of the same name before it left nothing to count on.
             self._work_accepted(started)
-            if above is not None:
+            if above is not None and not opens:
                 with suppress(GitError, OSError):
                     left = await asyncio.to_thread(
                         uncommitted,
@@ -655,10 +665,28 @@ class Teams(Delivery):
             f"{task}\n\n{left_for_team(left)}" if left else task,
             checkout,
         )
-        if above is not None:
+        if above is not None and not opens:
             await asyncio.to_thread(self._pass_down, above, node_id)
+        if opens:
+            self._checkout_for_session(node_id)
         purpose = intent.payload.get("purpose", task)
         self._enqueue(lambda: self._summarize(node_id, purpose, first=True), node_id)
+
+    def _checkout_for_session(self, node_id: str) -> None:
+        """Give the teams of a session that have not started the checkout
+        of the team the session was opened at, as a team that is set up
+        has the checkout of the team above."""
+        store = self.store
+        top = store.get(node_id)
+        if top is None or not top.agents:
+            return
+        teams = store.children(node_id)
+        for team in teams:
+            if not team.agents:
+                store.update_node(
+                    team.id, worktree_path=top.worktree_path, branch=top.branch
+                )
+                teams.extend(store.children(team.id))
 
     def _pass_down(self, above: OrgNode, node_id: str) -> None:
         """Close a started team's directory to the IC above, and bring what

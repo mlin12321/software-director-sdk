@@ -477,6 +477,8 @@ TeamEventKind = Literal[
     "misrouted",
     "asked_team",
     "answered",
+    "session_opened",
+    "session_closed",
 ]
 
 
@@ -489,6 +491,10 @@ class TeamEvent(BaseModel):
     kind: TeamEventKind
     team_id: str = ""
     team: str = ""
+    session: str = Field(
+        default="",
+        description="The title of the session that team works in, if it is in one.",
+    )
     detail: str = ""
     paths: list[str] = Field(
         default_factory=list,
@@ -514,6 +520,13 @@ class Report(BaseModel):
     at: str = Field(description="ISO 8601 timestamp.")
     role: AgentRole = Field(description="Which agent of the team wrote it.")
     text: str = Field(min_length=1)
+    session: str = Field(
+        default="",
+        description=(
+            "The title of the session the agent that wrote it works in; '' "
+            "for an agent of the org's own team."
+        ),
+    )
     compacted: bool = Field(
         default=False,
         description=(
@@ -1184,6 +1197,140 @@ class RoutedMessage(BaseModel):
     )
 
 
+class OpenSessionRequest(BaseModel):
+    """A request the human wants worked on beside what a team is doing."""
+
+    text: str = Field(min_length=1, description="What the session is to do.")
+    title: str = Field(
+        default="",
+        description="What to call the session; taken from the text when empty.",
+    )
+    node_id: str | None = Field(
+        default=None,
+        description=(
+            "The team the session is opened at. Without it the director "
+            "chooses the team as it does for a message sent with `auto`."
+        ),
+    )
+
+
+class SessionTeamInput(OrgNodeInput):
+    """A team as it is at work in one session.
+
+    It is no node of the org tree. It holds what a session has of its own at
+    a team: agents, a checkout, a review, escalations. The team's title and
+    boundary are the team's, as they were when the session was opened.
+    ``parent_id`` is what is above it in the session: the same session's
+    record for the team above, or, for the team the session was opened at,
+    the team of the org whose IC reviews the session's work.
+    """
+
+    session: str = Field(description="The session it belongs to.")
+    team_id: str = Field(description="The team of the org it is the work of.")
+
+
+class SessionTeam(SessionTeamInput, OrgNode):
+    """A team of a session, including the fields the store derives.
+    ``child_ids`` are the session's records for the team's sub-teams."""
+
+
+class SessionInput(BaseModel):
+    """A line of work the human opened at a team, beside the org's own."""
+
+    id: str
+    title: str
+    team_id: str = Field(description="The team it was opened at.")
+    above_id: str = Field(description="The team whose IC reviews its work.")
+    request: str = Field(default="", description="What the human asked of it.")
+    opened_at: str = Field(default="", description="ISO 8601 timestamp.")
+
+
+ConversationRelation = Literal["above", "beside", "below", "session"]
+
+
+class ConversationLink(BaseModel):
+    """An agent's conversation, as it is reached from another one."""
+
+    conversation_id: str
+    relation: ConversationRelation = Field(
+        description=(
+            "Where the agent is from the conversation asked about: `above` "
+            "is an agent of the team that reviews its team's work, `beside` "
+            "the other agent of its own team, `below` the IC of a team "
+            "directly below, and `session` the IC of a session whose work "
+            "its team reviews."
+        )
+    )
+    node_id: str = Field(description="The team of the org the agent works for.")
+    team: str = Field(description="That team's title.")
+    role: AgentRole
+    session_id: str = Field(
+        default="", description="The session the agent works in; '' for none."
+    )
+    session: str = Field(default="", description="That session's title.")
+    status: str = Field(default="", description="The agent's status.")
+
+
+class ConversationPlace(BaseModel):
+    """Where an agent's conversation is in the org, and the conversations
+    one level from it."""
+
+    conversation_id: str
+    node_id: str = Field(description="The team of the org the agent works for.")
+    team: str = Field(description="That team's title.")
+    role: AgentRole
+    session_id: str = Field(
+        default="", description="The session the agent works in; '' for none."
+    )
+    session: str = Field(default="", description="That session's title.")
+    human_joined: bool = Field(
+        default=False,
+        description="Whether the human has written in this conversation.",
+    )
+    links: list[ConversationLink] = Field(
+        default_factory=list,
+        description="Above first, then beside, below and sessions.",
+    )
+
+
+class Session(SessionInput):
+    """A session as a client reads it.
+
+    A session is apart from the org tree: the tree is the org's structure,
+    and a session is work over a part of it. For the team it was opened at
+    and each team below that one, the session has agents and a checkout of
+    its own. Its work is reviewed by the IC of the team above and merged
+    into that team's checkout.
+    """
+
+    team: str = Field(description="The title of the team it was opened at.")
+    status: NodeStatus = Field(description="Of the team it was opened at.")
+    review: ReviewState | None = Field(
+        default=None, description="Where the review of its work stands."
+    )
+    conversation_id: str | None = Field(
+        default=None,
+        description="The conversation of the IC the session started with.",
+    )
+    teams: list[SessionTeam] = Field(
+        description=(
+            "The team it was opened at, then each team below it. One whose "
+            "`agents` is empty was given no task in this session yet."
+        )
+    )
+
+
+class OpenedSession(BaseModel):
+    """A session that was just opened."""
+
+    session: Session
+    conversation_id: str = Field(
+        description="The conversation of the IC the session starts with."
+    )
+    chosen_by: ChosenBy = "path"
+    reason: str = ""
+
+
 class RoutedRequest(BaseModel):
     """Something the human said that the director sent straight to a team
     below the one it was said to, or that such a team said was not its own."""
@@ -1213,10 +1360,15 @@ class EscalationPathStep(BaseModel):
 class OpenEscalation(BaseModel):
     """An escalation that waits on the human, with the nodes it came up through."""
 
-    node_id: str = Field(description="The node that raised it.")
+    node_id: str = Field(description="The team that raised it.")
+    session_id: str = Field(
+        default="",
+        description="The session that team raised it in; '' for the org's own.",
+    )
+    session: str = Field(default="", description="The title of that session.")
     escalation: Escalation
     path: list[EscalationPathStep] = Field(
-        description="Root first, ending at the node that raised it."
+        description="Root first, ending at the team that raised it."
     )
 
 
@@ -1245,6 +1397,10 @@ class SnapshotEvent(BaseModel):
             "the subscriber is focused: critical issues first, then longest "
             "waiting first."
         ),
+    )
+    sessions: list[Session] = Field(
+        default_factory=list,
+        description="Every open session, wherever the subscriber is focused.",
     )
 
 
@@ -1275,6 +1431,13 @@ class OrgStateEvent(BaseModel):
     merging: bool = Field(
         description="A pull stopped on conflicts and waits for choices."
     )
+
+
+class SessionsEvent(BaseModel):
+    """A session was opened or closed, or one of its teams changed."""
+
+    type: Literal["sessions"] = "sessions"
+    sessions: list[Session] = Field(description="The complete new list.")
 
 
 class EscalationsEvent(BaseModel):

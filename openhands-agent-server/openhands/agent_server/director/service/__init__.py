@@ -314,11 +314,11 @@ class DirectorService(Sync):
                 else self._repo_relative(request.path)
             )
         )
-        node = nearest_team(store.all(), path, lost=AGENT_LOST)
+        node = nearest_team(store.teams(), path, lost=AGENT_LOST)
         if node is None and request.conversation is not None:
             # Nobody here can take it: the nearest team whose agents have no
             # conversation on this server is started again to take it.
-            gone = nearest_team(store.all(), path, lost="")
+            gone = nearest_team(store.teams(), path, lost="")
             if gone is not None and gone.status != "done":
                 node = await self.start_again(
                     gone.id, StartAgainRequest(conversation=request.conversation)
@@ -446,4 +446,5 @@ class DirectorService(Sync):
             "request_review": self._do_request_review,
             "accept": self._do_accept,
             "prune": self._prune,
+            "close_session": self._close_session,
         }

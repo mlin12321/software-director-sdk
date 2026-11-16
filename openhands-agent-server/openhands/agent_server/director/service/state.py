@@ -72,6 +72,7 @@ from openhands.agent_server.director.org_persistence import (
 )
 from openhands.agent_server.director.org_store import (
     OrgStore,
+    team_id_of,
 )
 from openhands.agent_server.director.pods import PodLauncher
 from openhands.agent_server.director.recovery import (
@@ -80,6 +81,7 @@ from openhands.agent_server.director.recovery import (
 from openhands.agent_server.director.run_state import (
     PROGRESS,
     RUNNING,
+    SESSION,
     TEAM,
     Intent,
     RunState,
@@ -90,6 +92,10 @@ from openhands.agent_server.director.sandbox import (
     find_bwrap,
     shell_script,
     write_shell,
+)
+from openhands.agent_server.director.session_state import (
+    kept_sessions,
+    restore_sessions,
 )
 from openhands.agent_server.director.split import (
     child_boundary,
@@ -239,6 +245,13 @@ def agent_conversation(node: OrgNode, role: AgentRole) -> str | None:
     return None
 
 
+def team_of(node: OrgNode) -> str:
+    """The team of the org ``node`` is, or is the work of in a session.
+    What is kept for a team whatever session worked on it, such as its
+    reports, is kept under this."""
+    return team_id_of(node)
+
+
 def hand_over_of(node: OrgNode) -> HandOverMode | None:
     """The hand-over mode of the node's IC, if it is or was in it."""
     for agent in node.agents:
@@ -264,6 +277,12 @@ def _checkout_root(workspace: str) -> Path:
     except (GitError, OSError):
         top = workspace
     return Path(os.path.realpath(top))
+
+
+def apart(team: OrgNode, above: OrgNode) -> bool:
+    """Whether a team works in a checkout of its own, not in the one of
+    the team above."""
+    return _checkout_root(team.worktree_path) != _checkout_root(above.worktree_path)
 
 
 def _is_in(path: Path, directory: Path) -> bool:
@@ -616,7 +635,7 @@ class ServiceState:
         found: list[TeamMatch] = []
         if not words:
             return found
-        for node in self.store.all():
+        for node in self.store.teams():
             text = f"{node.title}\n{node.boundary.path}".lower()
             if all(word in text for word in words):
                 found.append(
@@ -640,7 +659,7 @@ class ServiceState:
         store = self.store
         teams = [team]
         for found in teams:
-            teams.extend(store.children(found.id))
+            teams.extend(store.below(found.id))
         return [
             conversation_id
             for found in teams
@@ -906,6 +925,11 @@ class ServiceState:
             if load_org(create_org_board(repository), store):
                 self._repo_dir = _checkout_root(str(repository))
                 logger.info("Director loaded %d nodes from %s", len(store), repository)
+                kept = self._open_run_state()
+                try:
+                    restore_sessions(store, kept.marked(SESSION))
+                finally:
+                    kept.close()
                 return True
             repository = enclosing_repository(repository)
         return False
@@ -1076,6 +1100,8 @@ class ServiceState:
             run.replace_marks(
                 TEAM, {node.id: fingerprint(node) for node in store.all()}
             )
+            # Sessions are this machine's: kept here, not with the org.
+            run.replace_marks(SESSION, kept_sessions(store))
             run.put("org_commit", board.head())
 
     def _wait_for_save(self) -> None:

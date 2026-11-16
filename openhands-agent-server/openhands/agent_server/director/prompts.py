@@ -608,6 +608,65 @@ def _finding_lines(findings: list[ReviewFinding]) -> list[str]:
     return lines
 
 
+def session_work(team: OrgNode, title: str) -> str:
+    """What comes before the review request for the work of the session
+    titled ``title``."""
+    return (
+        f"The human opened the session {title!r} at "
+        f"{team.title!r}, beside that team's own work, and asked it for "
+        "something directly. It worked in a checkout of its own "
+        f"({team.worktree_path}, branch {team.branch}). You gave it no task: "
+        "judge its work by what the human asked and by the team's spec. "
+        "Accepting it merges it into your checkout, where it meets whatever "
+        "was delivered there meanwhile; if the two do not merge, it goes "
+        "back to the session to resolve.\n\n"
+    )
+
+
+def session_brief(team: OrgNode, title: str, above: OrgNode, others: list[str]) -> str:
+    """What the IC a session starts with is told after the human's request."""
+    beside = (
+        f" Beside you work: {', '.join(others)}."
+        if others
+        else " Nobody else works on the team's directory just now."
+    )
+    return (
+        f"\n\n[director] You are the IC of {team.title!r} in the session "
+        f"{title!r}, which the human opened for this request "
+        "beside the team's other work. You have a checkout and a branch of "
+        "your own, started from the checkout of "
+        f"{above.title!r}.{beside} Each works on the same directory in its "
+        "own checkout; `other_sessions_of_your_team` in your context names "
+        "them, and the team's reports are shared, so record with `report` "
+        "what the others must know. The team's spec is one for all of you: "
+        "rewrite it only where your request changes it. The sub-teams you "
+        "see are the team's, "
+        "there once more for this session and not started: one starts when "
+        "you give it a task with `msg_team`. Sub-teams cannot be proposed, "
+        "replaced or pruned inside a session. When the request is done, "
+        f"commit and call `submit_review`: the IC of {above.title!r} reviews "
+        "it and it is merged into that team's checkout. If it does not "
+        "merge with what was delivered there meanwhile, it comes back to "
+        "you: merge that team's branch into yours, resolve and submit again."
+    )
+
+
+def session_closed(title: str, team: str, kept: str | None) -> str:
+    """What the IC that reviewed a session's work is told when the human
+    closes the session."""
+    return (
+        f"The human closed the session {title!r} at {team!r}. Its agents and "
+        "its checkout are gone. What you accepted of its work is in your "
+        "checkout. "
+        + (
+            f"Commits of it that were never merged are kept at {kept}; "
+            "nothing is owed for them."
+            if kept
+            else "It left no commits that were not merged."
+        )
+    )
+
+
 def review_request(
     team: OrgNode, review: Review, so_far: str = "", asked: list[str] | None = None
 ) -> str:

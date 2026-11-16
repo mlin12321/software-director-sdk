@@ -30,6 +30,7 @@ from openhands.agent_server.director.prompts import (
     from_director,
 )
 from openhands.agent_server.director.run_state import (
+    JOINED,
     RUNNING,
     TOLD,
     WAITING,
@@ -44,6 +45,7 @@ from openhands.agent_server.director.service.state import (
     _instant,
     _lane_for,
     agent_conversation,
+    team_of,
 )
 from openhands.agent_server.event_service import ConversationRunLimitExceeded
 from openhands.sdk.errors import (
@@ -88,12 +90,44 @@ class Delivery(Records):
         text = text.strip()
         if not text:
             raise Invalid("A report cannot be empty")
-        node_id = node.id
+        node_id = team_of(node)
         reports = self._memory().append_report(
-            node_id, role, Report(at=_instant(), role=role, text=text)
+            node_id,
+            role,
+            Report(
+                at=_instant(),
+                role=role,
+                text=text,
+                session=self.store.session_title(node),
+            ),
         )
         if compaction.due(reports, self.settings.report_compaction_chars):
             self._enqueue(lambda: self._compact(node_id, role), MODELS_LANE)
+
+    def joined(self, conversation_id: str) -> None:
+        """Note that the human has written in an agent's conversation, so
+        that it is listed with the conversations the human started. Safe
+        from any thread, and to call again.
+
+        Raises:
+            NotFound: No agent of the org has this conversation.
+        """
+        found = self.store.find_by_conversation(conversation_id)
+        if found is None:
+            raise NotFound(f"No agent of the org has conversation {conversation_id}")
+        run = self._runs()
+        if conversation_id in run.marked(JOINED):
+            return
+        run.mark(JOINED, conversation_id)
+        # After what starts the conversation, when it is not there yet.
+        self._enqueue(lambda: self._mark_joined(conversation_id), found[0].id)
+
+    async def _mark_joined(self, conversation_id: str) -> None:
+        try:
+            await self._require_launcher().mark_joined(UUID(conversation_id))
+        except NotFound:
+            # Not started yet, or gone: asked for again when it is written to.
+            self._runs().unmark(JOINED, conversation_id)
 
     def _post(self, conversation_id: str, text: str, *, at_once: bool = False) -> None:
         """Record a message to an agent, then deliver it. Safe from any
