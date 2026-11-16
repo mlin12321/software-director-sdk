@@ -199,6 +199,11 @@ export interface DirectorOrgNode {
   id: DirectorNodeId;
   parent_id: DirectorNodeId | null;
   child_ids: DirectorNodeId[];
+  /**
+   * Those of `child_ids` that are no sub-teams of this team: the teams
+   * sessions were opened at whose work its IC reviews.
+   */
+  session_ids: DirectorNodeId[];
   title: string;
   boundary: DirectorBoundary;
   isolation: DirectorIsolationMode;

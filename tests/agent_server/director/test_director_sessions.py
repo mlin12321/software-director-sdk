@@ -125,6 +125,8 @@ async def test_a_session_puts_the_team_and_its_sub_teams_there_once_more(
     assert service.store.teams_below("root") == teams_before
     assert [team.id for team in service.store.children("root")] == [API, WEB]
     assert [team.id for team in service.store.opened_under("root")] == [top.id]
+    assert node(service, "root").session_ids == [top.id]
+    assert node(service, top.id).session_ids == []
     assert [(found.id, found.team_id, found.teams) for found in service.sessions()] == [
         (session.session.id, API, 1)
     ]

@@ -414,6 +414,13 @@ class OrgNode(OrgNodeInput):
     """A node of the org tree, including the fields the store derives."""
 
     child_ids: list[str] = Field(default_factory=list)
+    session_ids: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Those of `child_ids` that are no sub-teams of this team: the "
+            "teams sessions were opened at whose work its IC reviews."
+        ),
+    )
     descendant_counts: StatusCounts = Field(
         default_factory=StatusCounts,
         description=(

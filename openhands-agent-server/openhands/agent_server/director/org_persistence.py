@@ -41,7 +41,7 @@ def _persisted(node: OrgNodeInput) -> dict[str, Any]:
     from the conversations on load, so it is not worth a commit each time.
     """
     data = node.model_dump(
-        exclude={"child_ids", "descendant_counts", "escalation_count"}
+        exclude={"child_ids", "session_ids", "descendant_counts", "escalation_count"}
     )
     for agent in data["agents"]:
         agent["status"] = "idle"

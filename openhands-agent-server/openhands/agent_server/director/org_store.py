@@ -67,7 +67,29 @@ def status_of(node: OrgNode | OrgNodeInput) -> NodeStatus:
 type OrgChange = NodeUpsertEvent | NodeRemovedEvent | EscalationsEvent
 type OrgListener = Callable[[OrgChange], None]
 
-_DERIVED_FIELDS = {"child_ids", "descendant_counts", "escalation_count"}
+_DERIVED_FIELDS = {
+    "child_ids",
+    "session_ids",
+    "descendant_counts",
+    "escalation_count",
+}
+
+
+def _with(parent: OrgNode, child: OrgNode) -> dict[str, list[str]]:
+    """What ``parent`` holds once ``child`` is directly below it."""
+    opened = [child.id] if child.session != parent.session else []
+    return {
+        "child_ids": [*parent.child_ids, child.id],
+        "session_ids": [*parent.session_ids, *opened],
+    }
+
+
+def _without(parent: OrgNode, child_id: str) -> dict[str, list[str]]:
+    """What ``parent`` holds once ``child_id`` is no longer below it."""
+    return {
+        "child_ids": [c for c in parent.child_ids if c != child_id],
+        "session_ids": [c for c in parent.session_ids if c != child_id],
+    }
 
 
 @dataclass
@@ -394,6 +416,7 @@ class OrgStore:
             node = OrgNode(
                 **node_input.model_dump(),
                 child_ids=child_ids,
+                session_ids=existing.session_ids if existing else [],
                 descendant_counts=(
                     existing.descendant_counts if existing else StatusCounts()
                 ),
@@ -408,7 +431,7 @@ class OrgStore:
                 else:
                     parent = self._nodes[parent_id]
                     self._nodes[parent_id] = parent.model_copy(
-                        update={"child_ids": [*parent.child_ids, node.id]}
+                        update=_with(parent, node)
                     )
 
             self._emit(NodeUpsertEvent(node=node), node.id, parent_id)
@@ -450,11 +473,11 @@ class OrgStore:
                 return node
             old_parent = self._nodes[former]
             self._nodes[former] = old_parent.model_copy(
-                update={"child_ids": [c for c in old_parent.child_ids if c != node_id]}
+                update=_without(old_parent, node_id)
             )
             new_parent = self._nodes[parent_id]
             self._nodes[parent_id] = new_parent.model_copy(
-                update={"child_ids": [*new_parent.child_ids, node_id]}
+                update=_with(new_parent, node)
             )
             self._nodes[node_id] = node.model_copy(update={"parent_id": parent_id})
             moved = [node_id]
@@ -529,7 +552,7 @@ class OrgStore:
             else:
                 parent = self._nodes[node.parent_id]
                 self._nodes[parent.id] = parent.model_copy(
-                    update={"child_ids": [c for c in parent.child_ids if c != node_id]}
+                    update=_without(parent, node_id)
                 )
             self._refresh_ancestors(node.parent_id, always_announce_first=True)
             self._announce_escalations()
@@ -566,6 +589,8 @@ class OrgStore:
                     f"Parent {node.parent_id} of node {node.id} does not exist"
                 )
             parent.child_ids.append(node.id)
+            if node.session != parent.session:
+                parent.session_ids.append(node.id)
             self._check_escalations(node, self._chain(nodes, node.parent_id))
         if nodes and root_id is None:
             raise OrgStoreError("The tree has no root node")
