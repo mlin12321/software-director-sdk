@@ -2,7 +2,7 @@
 
 import pytest
 
-from openhands.agent_server.director.models import SplitChild
+from openhands.agent_server.director.models import DirectorSettings, SplitChild
 from openhands.agent_server.director.org_store import (
     OrgStore,
     OrgStoreError,
@@ -11,6 +11,7 @@ from openhands.agent_server.director.org_store import (
 from openhands.agent_server.director.split import (
     MAX_SPLIT_CHILDREN,
     Split,
+    check_limits,
     home_of,
     normalize_split,
     proposed_teams,
@@ -289,3 +290,36 @@ def test_what_a_proposal_keeps_is_asked_for_only_when_it_is_first_checked(
         normalize_split(store, root, new, ["a"])
     with pytest.raises(OrgStoreError, match="neither replaced by a proposed team"):
         normalize_split(store, root, new, [])
+
+
+def limits_under_a(max_depth: int = 4, max_teams: int = 32) -> tuple[OrgStore, str]:
+    """A session opened at ``a``, one team below the top, and the id of its
+    place at ``a1``."""
+    store = OrgStore()
+    store.replace_all(small_tree())
+    open_session_in(store, "a", "low")
+    return store, session_team_id("a1", "low")
+
+
+def test_levels_are_counted_from_the_top_of_the_org_not_of_the_session():
+    store, a1 = limits_under_a()
+    place = store.place(a1)
+    assert place is not None
+
+    # root, a and a1 are three levels, so teams under a1 are the fourth.
+    check_limits(store, place, 1, DirectorSettings(max_depth=4))
+    with pytest.raises(OrgStoreError, match="would be level 4"):
+        check_limits(store, place, 1, DirectorSettings(max_depth=3))
+
+
+def test_teams_are_counted_for_the_teams_of_the_org_above_the_session_too():
+    store, a1 = limits_under_a()
+    place = store.place(a1)
+    assert place is not None
+
+    # The org is five teams and a is three of them.
+    check_limits(store, place, 1, DirectorSettings(max_teams=6))
+    with pytest.raises(OrgStoreError, match="'root' is 5"):
+        check_limits(store, place, 1, DirectorSettings(max_teams=5))
+    with pytest.raises(OrgStoreError, match="'a' is 3"):
+        check_limits(store, place, 1, DirectorSettings(max_teams=3))

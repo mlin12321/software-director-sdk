@@ -37,30 +37,47 @@ _TEAMS_BLOCK = re.compile(
 )
 
 
+def _size(store: OrgStore, team_id: str) -> int:
+    """How many teams of the org the team ``team_id`` is with those below it."""
+    return 1 + sum(_size(store, team.id) for team in store.sub_teams(team_id))
+
+
 def check_limits(
     store: OrgStore, node: SessionTeam, added: int, settings: DirectorSettings
 ) -> None:
     """Refuse ``added`` new sub-teams of ``node`` that the org has no room for.
+
+    A session is counted where it is in the org: its levels from the top
+    team, and its teams for every team of the org above it as well.
 
     Raises:
         OrgStoreError: They would be too deep, or make ``node`` or a team
             above it more teams than a team may be with those below it.
     """
     above = store.above(node.id)
-    level = len(above) + 2
+    top = above[0] if above else node
+    higher = store.teams_above(top.team_id)
+    level = len(higher) + len(above) + 2
     if level > settings.max_depth:
         raise OrgStoreError(
             f"An org may have at most {settings.max_depth} levels of teams, "
             f"and sub-teams of {node.title!r} would be level {level}. Do the "
             "work in your own team."
         )
-    for team in (node, *reversed(above)):
-        teams = 1 + store.teams_below(team.id)
+    sizes = [
+        (team.title, 1 + store.teams_below(team.id))
+        for team in (node, *reversed(above))
+    ]
+    # What the session has at the team it was opened at stands in for what
+    # the org has there.
+    grown = sizes[-1][1] - (_size(store, top.team_id) if higher else 0)
+    sizes += [(team.title, _size(store, team.id) + grown) for team in reversed(higher)]
+    for title, teams in sizes:
         room = settings.max_teams - teams
         if added > room:
             raise OrgStoreError(
                 f"A team may be at most {settings.max_teams} teams together "
-                f"with the teams below it. {team.title!r} is {teams}, and "
+                f"with the teams below it. {title!r} is {teams}, and "
                 f"you propose {added} more. "
                 + (
                     f"At most {room} more sub-teams fit."
