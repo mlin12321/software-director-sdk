@@ -827,15 +827,13 @@ class OrgStore:
         """Take sessions back as they were kept, each with its teams, the
         one it was opened at first, without emitting events.
 
-        One is left out when the team it was opened at, or the team it is
-        reviewed from, is no longer in the tree, or when its teams do not
-        hang together.
+        One is left out only when its teams do not hang together. A team
+        of it that the org no longer has stays the session's: what becomes
+        of it is decided when its work is reviewed.
         """
         with self._lock:
             for session, teams in sessions:
                 if session.id in self._sessions:
-                    continue
-                if not {session.team_id, session.above_id} <= self._nodes.keys():
                     continue
                 self._sessions[session.id] = session
                 try:

@@ -6,15 +6,25 @@ from pathlib import Path
 
 import pytest
 
-from openhands.agent_server.director.org_store import session_id_of
+from openhands.agent_server.director.models import (
+    OpenSessionRequest,
+    RouteMessageRequest,
+)
+from openhands.agent_server.director.org_store import session_id_of, team_id_of
+from openhands.agent_server.director.routing import USAGE_ID
 from openhands.agent_server.director.service import DirectorService
 from openhands.agent_server.director.service.state import MERGE_WAITS
 from openhands.agent_server.director.tools import (
+    RaiseEscalationTool,
     ReportTool,
     ReviewTeamTool,
     SubmitReviewTool,
 )
-from openhands.agent_server.director.tools.definition import ReportAction
+from openhands.agent_server.director.tools.definition import (
+    RaiseEscalationAction,
+    ReportAction,
+    ReviewTeamAction,
+)
 from tests.agent_server.director.conftest import FakeLauncher, run_git
 from tests.agent_server.director.test_director_limits import started
 from tests.agent_server.director.test_director_review import DONE, accept, commit
@@ -149,3 +159,64 @@ async def test_the_human_is_asked_when_their_uncommitted_work_is_in_the_way(
     assert (repo / "app.py").read_text() == "refunds = True\n"
     review = node(service, "root").review
     assert review is not None and review.state == "accepted"
+
+
+async def test_a_team_a_session_set_up_is_asked_within_that_session_only(
+    service: DirectorService, launcher: FakeLauncher
+):
+    await split_root(service)
+    launcher.answers[USAGE_ID] = "Teams: apps.web\nReason: The cart page is Web's."
+    need = RaiseEscalationAction(
+        category="design_decision",
+        title="The cart must send the order id",
+        detail="POST /checkout needs it.",
+        team_for="The cart page should send order_id with the form.",
+    )
+
+    await use(service, ic(service, "services.api"), RaiseEscalationTool, need)
+    await service.settled()
+
+    # The org does not have Web yet; the session that set it up does.
+    assert service.store.team("apps.web") is None
+    [raised] = node(service, "services.api").escalations
+    assert raised.asked_of == node(service, "apps.web").id
+    assert (
+        "asks your team directly" in launcher.messages_to(ic(service, "apps.web"))[-1]
+    )
+
+    # A request of the human's is for the org's own teams: it cannot go to
+    # a team only a session has.
+    sent = await service.route_message(
+        RouteMessageRequest(text="Make the cart page faster.", auto=True)
+    )
+    assert team_id_of(node(service, sent.node_id)) == "root"
+
+
+async def test_a_team_the_org_lost_meanwhile_comes_back_when_the_reviewer_says_so(
+    service: DirectorService,
+):
+    await split_root(service)
+    await landed(service)
+    opened = await service.open_session(
+        OpenSessionRequest(text="Add refunds.", node_id="services.api")
+    )
+    await service.settled()
+    top = opened.session.teams[0].id
+    service.store.remove("services.api")
+
+    await use(service, opened.conversation_id, SubmitReviewTool, DONE)
+    asked = reviewer(service, top)
+    refused = await use(service, asked, ReviewTeamTool, accept(top))
+
+    assert "the org no longer has 'API'" in refused.text
+    assert service.store.team("services.api") is None
+
+    await use(
+        service,
+        asked,
+        ReviewTeamTool,
+        ReviewTeamAction(node_id=top, decision="accept", reconciled="API stays."),
+    )
+
+    back = service.store.team("services.api")
+    assert back is not None and (back.parent_id, back.agents) == ("root", [])

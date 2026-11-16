@@ -264,11 +264,11 @@ class Reviews(Requests):
     def _shapes(self, top: OrgNode) -> tuple[list[OrgNode], Shape, Shape] | None:
         """The sub-teams a session has under the team it was opened at, in
         the order they hang together, what they make, and what the org has
-        there now. None when the session is gone or its team is no longer
-        in the org."""
+        there now, which is nothing when the org no longer has the team.
+        None when the session is gone."""
         store = self.store
         session = store.session_of(top)
-        if session is None or store.team(session.team_id) is None:
+        if session is None:
             return None
         seats = [top]
         for seat in seats:
@@ -286,6 +286,12 @@ class Reviews(Requests):
         if session is None or shapes is None:
             return None
         _, theirs, now = shapes
+        if not now:
+            # The team it was opened at was removed from the org meanwhile.
+            return (
+                [f"none: the org no longer has {top.title!r} ({top.boundary.path})"],
+                [f"{team} ({path})" for team, _, path in theirs],
+            )
         if theirs == session.shape or now == session.shape or theirs == now:
             return None
         return (
@@ -302,12 +308,16 @@ class Reviews(Requests):
         if session is None or shapes is None:
             return
         seats, theirs, now = shapes
-        if theirs == session.shape or theirs == now:
+        if now and (theirs == session.shape or theirs == now):
             store.set_shape(session.id, now)
+            return
+        if not now and store.team(session.above_id) is None:
+            # Nowhere in the org to put the team back under.
             return
         was = {team for team, _, _ in now[1:]}
         checkout = str(self._repo_dir)
-        for seat in seats[1:]:
+        # A team the org lost while the session worked comes back with it.
+        for seat in seats[1:] if now else seats:
             above = store.get(seat.parent_id or "")
             if above is None:
                 continue

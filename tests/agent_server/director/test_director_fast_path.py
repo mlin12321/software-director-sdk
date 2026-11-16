@@ -229,17 +229,30 @@ async def test_a_team_hands_back_what_is_not_its_own_and_the_model_is_told(
 
     handed = await use(service, asked, RaiseEscalationTool, NOT_MINE)
     again = await use(service, asked, RaiseEscalationTool, NOT_MINE)
+    await service.settled()
 
-    assert not handed.is_error
+    assert not handed.is_error and "Handed to the team above (API)" in handed.text
     assert again.is_error and "Nothing was sent to your team directly" in again.text
-    # Nobody works above the team the session was opened at: the human,
-    # who asked, is told.
-    [told] = node(service, sent.node_id).escalations
+    # Nobody works above the team a session was opened at, so the request
+    # goes one team up the org in a session of its own, not to the human.
+    assert node(service, sent.node_id).escalations == []
+    at_api = service.store.sessions()[-1]
+    assert at_api.team_id == API
+    taken = briefing(launcher, at_api.conversation_id)
+    assert "Make the cart page faster." in taken
+    assert "whose IC said it is not that team's" in taken
+
+    # It goes on up while each team says the same, and to the human from
+    # the top.
+    await use(service, at_api.conversation_id, RaiseEscalationTool, NOT_MINE)
+    await service.settled()
+    at_top = service.store.sessions()[-1]
+    assert at_top.team_id == "root"
+    assert node(service, at_api.teams[0].id).escalations == []
+    last = await use(service, at_top.conversation_id, RaiseEscalationTool, NOT_MINE)
+    assert "The human, who asked, is told" in last.text
+    [told] = node(service, at_top.teams[0].id).escalations
     assert told.held_by is None and "Make the cart page faster." in told.detail
-    assert [e.kind for e in service.team_memory.history(API)][-2:] == [
-        "asked",
-        "misrouted",
-    ]
 
     await ask(service, "Make the cart page lighter.")
 

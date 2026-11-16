@@ -63,9 +63,11 @@ An IC asks a team that is not above it the same way: `raise_escalation` with `te
 - **What lands on accept.** The accept of the opening place's work merges it into the repository checkout (nothing to merge when the session works there) and `Reviews._landed` makes the session's drafts the org's: specs (`DRAFT` → team memory, `_land_specs`), reports (`REPORTS` → team memory, `_land_reports`; other sessions read them in their next context update, nobody is woken) and shape (`_land_shape`: the sub-teams the session split into, replaced or pruned are applied to the tree, only if the session changed them). Until then `specs_of`/`reports_of` show a session its own drafts over the team's.
 - **Shape.** Split, replace and prune work on a session's own places, approved by the place's Manager as before; `SessionInput.shape` is the tree shape the session started from. The tree's shape changes only through `_land_shape`.
 - **Unreviewed.** An opening place that changed nothing itself and meets nothing accepted meanwhile goes up without the reviewer (`_pass_up`).
-- **Requests between teams** stay in the session: `Watch._ask_team` asks the session's place at the other team.
+- **Requests between teams** stay in the session: `Watch._ask_team` asks the session's place at the other team, and `choose_team(asker=…)` chooses among the session's own places, the teams it set up itself included. What the human asks is chosen among the tree's teams only.
+- **A request that is not a team's own** (`not_ours`) goes to the IC above inside a session. From the place a session was opened at it goes one team up the org, in a session of its own (`Sessions._hand_on`, `_hand_up`), and to the human only from the top team.
+- **A team the org lost.** A session is not dropped when the tree no longer has a team of it, on restart or after a pull. When its work is reviewed the reviewer is asked (`_shape_to_reconcile`), and accepting puts the team back (`_land_shape`).
 - **Closing.** Only the human closes a session; one whose work was accepted stays open so more can be asked in it. Closing drops its drafts.
-- **Known gaps.** Contracts written at a split and former-team records are written to team memory when the split is carried out, not on accept. `choose_team` for a team-to-team request sees the tree's teams, not ones a session set up and has not landed. Order of accepts uses the review's timestamp.
+- **Known gaps.** Contracts written at a split and former-team records are written to team memory when the split is carried out, not on accept. Order of accepts uses the review's timestamp.
 
 ## Conversations the human reads
 

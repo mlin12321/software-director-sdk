@@ -3,6 +3,7 @@
 import asyncio
 import logging
 from datetime import UTC, datetime
+from itertools import count
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -13,6 +14,7 @@ from openhands.agent_server.director.models import (
     OpenedSession,
     OpenSessionRequest,
     OrgNode,
+    RoutedRequest,
     Session,
     SessionInput,
     SessionTeam,
@@ -20,6 +22,7 @@ from openhands.agent_server.director.models import (
 )
 from openhands.agent_server.director.org_store import (
     review_place_id,
+    reviews_only,
     session_team_id,
 )
 from openhands.agent_server.director.pods import PodLauncher
@@ -55,7 +58,13 @@ from openhands.sdk.conversation.request import (
     ConversationWorktreeOptions,
     StartConversationRequest,
 )
-from openhands.sdk.errors import Conflict, NotFound
+from openhands.sdk.errors import (
+    Conflict,
+    Invalid,
+    NotFound,
+    RateLimited,
+    Unavailable,
+)
 from openhands.sdk.tool.spec import Tool
 
 
@@ -303,6 +312,64 @@ class Sessions(Splits):
         )
         self._begin("brief", top.id, role="ic", task=text + brief)
         return str(ic_id)
+
+    def _hand_on(
+        self, node: OrgNode, above: OrgNode, request: RoutedRequest, why: str
+    ) -> str:
+        """Nobody works above the team a session was opened at, so a
+        request that team says is not its own goes one team up the org, in
+        a session of its own, and to the human only from the top."""
+        if not reviews_only(above):
+            return super()._hand_on(node, above, request, why)
+        own = self.store.team(team_of(node))
+        higher = self.store.team(own.parent_id or "") if own else None
+        if higher is None:
+            self._tell_human_misrouted(node, request.text, why)
+            return (
+                "The human, who asked, is told that it is not your team's. "
+                "Wait for the answer."
+            )
+        self._enqueue(
+            lambda: self._hand_up(node.id, higher.id, request.text, why), higher.id
+        )
+        return (
+            f"Handed to the team above ({higher.title}), which takes it up "
+            "in a session of its own. It is no longer yours."
+        )
+
+    def _tell_human_misrouted(self, node: OrgNode, text: str, why: str) -> None:
+        """Put a request no team took before the human, who asked."""
+        taken = {escalation.id for escalation in node.escalations}
+        self.store.raise_escalation(
+            node.id,
+            next(name for n in count(1) if (name := f"misrouted-{n}") not in taken),
+            kind="design_decision",
+            title="This request is not this team's",
+            detail=f"{why}\n\nThe request:\n{text}",
+        )
+        self._save_soon()
+
+    async def _hand_up(self, from_id: str, team_id: str, text: str, why: str) -> None:
+        """Open a session at the team above for a request the team it was
+        sent to said is not its own. The human is told when none can be."""
+        sent = self.store.get(from_id)
+        if sent is None:
+            return
+        try:
+            opened = await self.open_session(
+                OpenSessionRequest(
+                    text=f"{text}\n\n(The director sent this to {sent.title!r} "
+                    f"first, whose IC said it is not that team's: {why})",
+                    node_id=team_id,
+                )
+            )
+        except (Conflict, Invalid, NotFound, RateLimited, Unavailable):
+            self._tell_human_misrouted(sent, text, why)
+            return
+        # It may say the same, and the request then goes up once more.
+        await asyncio.to_thread(
+            self.keep_routed, "asked", opened.session.teams[0], text, "top", why
+        )
 
     def close_session(self, session_id: str) -> None:
         """Close a session: its agents are stopped and removed with its

@@ -524,7 +524,7 @@ async def test_an_org_set_to_resume_on_start_takes_its_work_up_unasked(
     await third.aclose()
 
 
-async def test_run_state_of_a_team_the_tree_no_longer_has_is_put_aside_and_named(
+async def test_a_session_stays_when_the_org_no_longer_has_its_team(
     repo: Path, launcher: FakeLauncher
 ):
     first = await started(repo, launcher)
@@ -552,26 +552,20 @@ async def test_run_state_of_a_team_the_tree_no_longer_has_is_put_aside_and_named
     second = await again(repo, launcher)
     left = await second.recovery()
 
-    # The session opened at the team is gone with it; the other one goes on.
+    # A session is not dropped with its team: what becomes of the team is
+    # decided when the session's work is reviewed.
+    assert second.store.team("services.api") is None
     open_now = [session.id for session in second.store.sessions()]
-    assert at_api.session.id not in open_now and at_web.session.id in open_now
-    gone = at_api.session.teams[0].id
-    dropped = [item for item in left.items if item.kind == "dropped"]
-    assert [item.node_id for item in dropped] == [gone]
-    assert "no longer in the org" in dropped[0].detail
-    assert "Rename the endpoint" in dropped[0].detail
-    assert left.messages_held == 1
+    assert at_api.session.id in open_now and at_web.session.id in open_now
+    assert [item for item in left.items if item.kind == "dropped"] == []
+    assert left.messages_held == 2
 
-    resumed = await second.resume()
+    await second.resume()
     await second.settled()
 
-    assert [item.node_id for item in resumed.items] == [gone]
-    assert all(
-        "Rename the endpoint" not in text
-        for text in launcher.messages_to(at_api.conversation_id)
-    )
+    assert "Rename the endpoint" in launcher.messages_to(at_api.conversation_id)[-1]
     assert "Carry on" in launcher.messages_to(at_web.conversation_id)[-1]
-    assert len(launcher.sent) == before + 1
+    assert len(launcher.sent) == before + 2
     await second.aclose()
 
 

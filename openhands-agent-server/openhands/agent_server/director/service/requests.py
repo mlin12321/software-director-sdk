@@ -2,13 +2,13 @@
 
 import asyncio
 import logging
-from itertools import count
 from pathlib import Path
 
 from openhands.agent_server.director import routing
 from openhands.agent_server.director.boundary import owns
 from openhands.agent_server.director.git import GitError, git
-from openhands.agent_server.director.models import OrgNode
+from openhands.agent_server.director.git_store import team_key
+from openhands.agent_server.director.models import OrgNode, RoutedRequest
 from openhands.agent_server.director.org_store import (
     AGENT_LOST,
     reviews_only,
@@ -68,31 +68,50 @@ class Requests(Teams):
                 nothing about whose the request is.
         """
         store = self.store
-        # What the human asks opens a session of its own, which any team
-        # can have. What a team asks stays in its session: only a team
-        # whose place there can take a request now is asked.
-        within = session_id_of(asker) if asker else ""
-
-        def place(node: OrgNode) -> OrgNode | None:
-            return store.instance(node.id, within) if asker else node
-
-        nodes = store.teams()
+        if asker is None:
+            # What the human asks opens a session of its own, which any
+            # team of the org can have.
+            nodes = store.teams()
+        else:
+            # What a team asks stays in its session: the teams are the ones
+            # the session has, those it set up itself included, each as it
+            # is there, under the team's own id.
+            places = [
+                place
+                for place in store.session(session_id_of(asker))
+                if not reviews_only(place)
+            ]
+            ids = {place.id: team_of(place) for place in places}
+            nodes = [
+                place.model_copy(
+                    update={
+                        "id": ids[place.id],
+                        "parent_id": ids.get(place.parent_id or ""),
+                    }
+                )
+                for place in places
+            ]
+            start = nodes[0] if nodes else start
         parents = {node.id: node.parent_id for node in nodes}
-        below = [
-            node
-            for node in nodes
-            if node.id == start.id
-            or any(above.id == start.id for above in store.ancestors(node.id))
-        ]
-        takes = {
-            node.id
-            for node in below
-            if asker is None or ((at := place(node)) and takes_requests(at))
-        } | {start.id}
+
+        def under(node_id: str | None) -> bool:
+            seen: set[str] = set()
+            while node_id is not None and node_id not in seen:
+                if node_id == start.id:
+                    return True
+                seen.add(node_id)
+                node_id = parents.get(node_id)
+            return False
+
+        below = [node for node in nodes if under(node.id)]
+        takes = {node.id for node in below if asker is None or takes_requests(node)} | {
+            start.id
+        }
         if len(takes) == 1:
             return Choice(start.id, "top", False, "no team below can take it")
         root = store.get(store.root_id) if store.root_id else None
-        checkout = Path((root or start).worktree_path)
+        # A session's own checkout has the directories of the teams it set up.
+        checkout = Path((start if asker else root or start).worktree_path)
         tracked = await asyncio.to_thread(_tracked, checkout)
         named = routing.paths_named(text, tracked)
         owners = [
@@ -107,9 +126,7 @@ class Requests(Teams):
             [
                 node
                 for node in below
-                if asker is None
-                or node.id == start.id
-                or ((at := place(node)) and at.agents)
+                if asker is None or node.id == start.id or node.agents
             ],
             tracked,
         )
@@ -139,11 +156,13 @@ class Requests(Teams):
         return choice
 
     def _cards(self, teams: list[OrgNode], tracked: list[str]) -> list[Card]:
-        directories = {node.boundary.path for node in self.store.teams()}
+        directories = {node.boundary.path for node in self.store.teams()} | {
+            node.boundary.path for node in teams
+        }
         took: dict[str, list[str]] = {}
         for request in self.routed_requests():
             if request.kind == "asked":
-                took.setdefault(request.team_id, []).append(request.text)
+                took.setdefault(team_key(request.team_id), []).append(request.text)
         return [
             Card(
                 node_id=node.id,
@@ -209,22 +228,12 @@ class Requests(Teams):
             )
         request = mine[-1]
         self.keep_routed("misrouted", node, request.text, request.chosen_by, why)
-        if reviews_only(above):
-            # Nobody works above the team a session was opened at: the
-            # human, who asked, is told.
-            taken = {escalation.id for escalation in node.escalations}
-            self.store.raise_escalation(
-                node.id,
-                next(name for n in count(1) if (name := f"misrouted-{n}") not in taken),
-                kind="design_decision",
-                title="This request is not this team's",
-                detail=f"{why}\n\nThe request:\n{request.text}",
-            )
-            self._save_soon()
-            return (
-                "The human, who asked, is told that it is not your team's. "
-                "Wait for the answer."
-            )
+        return self._hand_on(node, above, request, why)
+
+    def _hand_on(
+        self, node: OrgNode, above: OrgNode, request: RoutedRequest, why: str
+    ) -> str:
+        """Give a request a team said is not its own to the IC above it."""
         self.tell_ic(above.id, misrouted_notice(node, request.text, why))
         return (
             f"Handed to the IC of the team above ({above.title}). It is no "
