@@ -147,6 +147,18 @@ class Escalation(BaseModel):
             "first. Always the unbroken chain from that node's parent."
         ),
     )
+    asked_of: str | None = Field(
+        default=None,
+        description=(
+            "A team that is not above the one that raised it, which the "
+            "director asked to settle it directly. While set, that team's "
+            "IC has it and `held_by` does not; None once that team could "
+            "not settle it, or when no team was asked."
+        ),
+    )
+    asked_at: str | None = Field(
+        default=None, description="When `asked_of` was asked (ISO 8601)."
+    )
 
 
 class SplitChild(BaseModel):
@@ -463,6 +475,8 @@ TeamEventKind = Literal[
     "needed",
     "asked",
     "misrouted",
+    "asked_team",
+    "answered",
 ]
 
 

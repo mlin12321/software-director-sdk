@@ -117,6 +117,17 @@ class RaiseEscalationAction(Action):
     detail: str = Field(
         default="", description="What you need decided, and the options you see."
     )
+    team_for: str = Field(
+        default="",
+        description=(
+            "For an IC that needs something of a team that is not above it: "
+            "what it needs, of which files or of which part of the product. "
+            "The runtime then takes the escalation straight to the IC of the "
+            "team that holds it, when it is sure which team that is, and "
+            "otherwise to the IC of the team above as without this. Leave "
+            "empty for what the team above must decide."
+        ),
+    )
 
 
 class ResolveEscalationAction(Action):
@@ -435,7 +446,12 @@ class RaiseEscalationTool(_DirectorTool[RaiseEscalationAction]):
     @classmethod
     def act(cls):
         return lambda service, caller, action: pod_actions.raise_escalation(
-            service, caller, action.category, action.title, action.detail
+            service,
+            caller,
+            action.category,
+            action.title,
+            action.detail,
+            action.team_for,
         )
 
 

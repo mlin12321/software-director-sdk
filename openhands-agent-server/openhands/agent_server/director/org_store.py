@@ -586,6 +586,35 @@ class OrgStore:
             )
             return passed
 
+    def ask_escalation(
+        self,
+        node_id: str,
+        escalation_id: str,
+        team_id: str | None,
+        at: str | None = None,
+    ) -> Escalation:
+        """Give an escalation to a team that is not above the one that
+        raised it, to settle directly; None gives it back to the node that
+        holds it by the chain.
+
+        Raises:
+            NotFound: The node or the escalation does not exist.
+        """
+        with self._lock:
+            node = self._require(node_id)
+            escalation = self._require_escalation(node, escalation_id)
+            asked = escalation.model_copy(
+                update={
+                    "asked_of": team_id,
+                    "asked_at": (at or _now()) if team_id else None,
+                }
+            )
+            self._set_escalations(
+                node,
+                [asked if e.id == escalation_id else e for e in node.escalations],
+            )
+            return asked
+
     def settle_escalation(self, node_id: str, escalation_id: str) -> None:
         """Close an escalation, whoever settled it.
 

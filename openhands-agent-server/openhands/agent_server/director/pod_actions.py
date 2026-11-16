@@ -17,7 +17,6 @@ from openhands.agent_server.director.git_store import SPEC_FILE
 from openhands.agent_server.director.models import (
     ROLE_NAMES,
     AgentRole,
-    Escalation,
     EscalationKind,
     OrgNode,
     Review,
@@ -328,6 +327,7 @@ def raise_escalation(
     kind: EscalationKind | Literal["misrouted"],
     title: str,
     detail: str,
+    team_for: str = "",
 ) -> str:
     """Send something the caller cannot settle to the agent of its own role
     in the team above. `misrouted` hands back what the human's words
@@ -356,7 +356,14 @@ def raise_escalation(
             f"Raised as {escalation.id}. Nobody is above your team: it waits "
             "on the human."
         )
-    _hand_to(service, escalation.held_by, node, node, escalation, [])
+    if team_for.strip() and caller.role == "ic" and service.settings.route_requests:
+        service.ask_team(node.id, escalation.id, team_for.strip())
+        return (
+            f"Raised as {escalation.id}. The runtime takes it to the IC of the "
+            "team it concerns if it is sure which that is, and otherwise to "
+            "the IC of the team above; you will be told the answer."
+        )
+    service.hand_escalation(escalation.held_by, node, node, escalation, [])
     return (
         f"Raised as {escalation.id}. It is with the {_role_name(caller.role)} "
         "of the team above; you will be told the answer."
@@ -388,7 +395,10 @@ def resolve_escalation(
     )
     if raiser is None or escalation is None:
         raise NotFound(f"Node {node_id} has no escalation {escalation_id}")
-    if escalation.held_by != caller.node.id:
+    direct = escalation.asked_of == caller.node.id
+    if not direct and (
+        escalation.asked_of is not None or escalation.held_by != caller.node.id
+    ):
         raise Invalid(f"Escalation {escalation_id} is not with your team")
     if escalation.raised_by != caller.role:
         raise Invalid(
@@ -396,6 +406,8 @@ def resolve_escalation(
             f"{'an IC' if escalation.raised_by == 'ic' else 'a Manager'}: it is "
             f"for your team's {_role_name(escalation.raised_by)} to settle"
         )
+    if direct:
+        return service.answered_directly(raiser, escalation, action, text.strip())
     if action == "settle":
         store.settle_escalation(node_id, escalation_id)
         service.progressed(node_id)
@@ -408,8 +420,7 @@ def resolve_escalation(
     passed = store.pass_up_escalation(node_id, escalation_id, reason=text)
     if passed.held_by is None:
         return "Passed up. Nobody is above your team: it now waits on the human."
-    _hand_to(
-        service,
+    service.hand_escalation(
         passed.held_by,
         raiser,
         caller.node,
@@ -417,41 +428,6 @@ def resolve_escalation(
         [f"{handoff.node_id}: {handoff.reason}" for handoff in passed.handoffs],
     )
     return f"Passed up to the {_role_name(caller.role)} of the team above."
-
-
-def _hand_to(
-    service: DirectorService,
-    holder_id: str,
-    raiser: OrgNode,
-    through: OrgNode,
-    escalation: Escalation,
-    passed_up: list[str],
-) -> None:
-    """Tell the agent that now holds an escalation.
-
-    Args:
-        through: The team directly below the holder that it comes from:
-            the one that raised it, or the one that passed it up.
-    """
-    holder = service.store.get(holder_id)
-    if holder is None:
-        return
-    history = "".join(f"\nPassed up by {entry}" for entry in passed_up)
-    if escalation.raised_by == "ic":
-        # It is woken now anyway, so it gets what waits for its review too.
-        service.release_reviews(holder_id, now=True)
-        service.count_ic_escalation(holder_id, through.id)
-    text = (
-        f"The {_role_name(escalation.raised_by)} of team {raiser.title!r} "
-        f"(node {raiser.id}) escalates {escalation.title!r} (escalation "
-        f"{escalation.id}):\n{escalation.detail or '(no detail)'}{history}\n"
-        "Settle it with resolve_escalation if you can; pass it up only with "
-        "the reason you cannot."
-    )
-    if escalation.raised_by == "manager":
-        service.tell_manager(holder_id, text)
-    else:
-        service.tell_ic(holder_id, text)
 
 
 def submit_review(service: DirectorService, caller: Caller, summary: str) -> str:

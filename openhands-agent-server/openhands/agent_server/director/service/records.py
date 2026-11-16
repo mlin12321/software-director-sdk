@@ -43,6 +43,7 @@ from openhands.agent_server.director.prompts import (
     needs_between,
     proposal_facts,
     record_line,
+    requests_between,
     track_records,
 )
 from openhands.agent_server.director.run_state import (
@@ -78,6 +79,8 @@ class Records(ServiceState):
         detail: str = "",
         paths: Sequence[str] = (),
         other: OrgNode | None = None,
+        *,
+        other_gone: tuple[str, str] | None = None,
     ) -> None:
         """Keep, for the IC and the Manager of a team, what became of a team
         directly below it. Safe from any thread.
@@ -86,7 +89,10 @@ class Records(ServiceState):
             above_id: The team whose record it is; nothing is kept for None.
             team: The team it is about, or None when it is about none.
             paths: The directories a proposal was for.
-            other: The team beside it whose directory it needed.
+            other: The team beside it whose directory it needed, or the
+                team it asked directly.
+            other_gone: The id and the title of that team when it is no
+                longer in the org.
         """
         if above_id is None:
             return
@@ -97,8 +103,8 @@ class Records(ServiceState):
             team=team.title if team else "",
             detail=detail,
             paths=list(paths),
-            other_id=other.id if other else "",
-            other=other.title if other else "",
+            other_id=other.id if other else (other_gone or ("", ""))[0],
+            other=other.title if other else (other_gone or ("", ""))[1],
         )
         try:
             self.team_memory.append_history(above_id, event)
@@ -222,7 +228,8 @@ class Records(ServiceState):
         return [
             pair
             for pair in needs_between(self.team_memory.history(node_id))
-            if pair["writes_refused"] + pair["review_findings"] >= NEEDED_WORTH_SAYING
+            if pair["writes_refused"] + pair["review_findings"] + pair["requests"]
+            >= NEEDED_WORTH_SAYING
         ]
 
     def _so_far(self, team: OrgNode) -> str:
@@ -381,9 +388,11 @@ class Records(ServiceState):
                     for handoff in escalation.handoffs
                 ],
             }
+            | ({"asked_of_you_directly": True} if escalation.asked_of else {})
             for other in store.all()
             for escalation in other.escalations
-            if escalation.held_by == node.id and escalation.raised_by == role
+            if escalation.raised_by == role
+            and (escalation.asked_of or escalation.held_by) == node.id
         ]
         context: dict[str, Any] = {
             "you": {"role": role, "node_id": node.id, "team": node.title},
@@ -437,7 +446,7 @@ class Records(ServiceState):
                 {
                     "escalation_id": escalation.id,
                     "title": escalation.title,
-                    "with": escalation.held_by or "the human",
+                    "with": escalation.asked_of or escalation.held_by or "the human",
                 }
                 for escalation in node.escalations
                 if escalation.raised_by == role
@@ -446,6 +455,9 @@ class Records(ServiceState):
         }
         if role == "ic" and node.child_ids:
             context["asked_directly_of_teams_below"] = self.asked_below(node)
+            context["what_teams_below_asked_of_each_other_directly"] = requests_between(
+                team_memory.history(node.id)
+            )
         if role == "ic":
             # The IC is the one that passes on what removed teams left.
             context["former_teams"] = [
