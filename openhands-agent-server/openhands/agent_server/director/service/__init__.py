@@ -46,7 +46,6 @@ from openhands.agent_server.director.run_state import (
 from openhands.agent_server.director.runtime import bind_director
 from openhands.agent_server.director.service.state import (
     AGENT_PAUSED,
-    BASE_LANE,
     DIRECTOR_TOOL_NAMES,
     HAND_OVER_TOOLS,
     MERGE_WAITS,
@@ -231,7 +230,8 @@ class DirectorService(Sync):
         if request.title is None:
             # The org is named after what its first session is for.
             top = opened.session.teams[0].id
-            self._enqueue(lambda: self._name_org(top), BASE_LANE)
+            # In the lane of that team, after the model that names it.
+            self._enqueue(lambda: self._in_base(lambda: self._name_org(top)), top)
         return opened
 
     async def _name_org(self, top_id: str) -> None:
