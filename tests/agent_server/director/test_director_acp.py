@@ -405,7 +405,7 @@ async def test_an_ic_that_only_reviews_a_session_has_the_tools_for_that_alone(
     )
 
     assert {tool["name"] for tool in listed.json()} == {
-        "read_node_context",
+        "read_team_context",
         "report",
         "review_team",
     }

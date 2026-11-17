@@ -25,7 +25,7 @@ from openhands.agent_server.director.tools import (
     MsgManagerTool,
     MsgTeamTool,
     PruneTeamTool,
-    ReadNodeContextTool,
+    ReadTeamContextTool,
     ReportTool,
     StopTeamTool,
     WriteSpecTool,
@@ -35,7 +35,7 @@ from openhands.agent_server.director.tools.definition import (
     MsgManagerAction,
     MsgTeamAction,
     PruneTeamAction,
-    ReadNodeContextAction,
+    ReadTeamContextAction,
     ReportAction,
     StopTeamAction,
     WriteSpecAction,
@@ -348,7 +348,7 @@ async def test_the_ic_that_proposed_is_given_what_the_replaced_team_left(
     approved = await replace(service, ORDERS, keep=["Web"])
 
     told = given_aside(service, launcher)
-    assert "Team 'API' (node services.api, services/api), replaced." in told
+    assert "Team 'API' (id services.api, services/api), replaced." in told
     assert "It was for: Serve the checkout API" in told
     assert "Its reports, as one:\nSQLite, no cache." in told
     assert "reaches a new team unless you hand it over" in told
@@ -470,7 +470,7 @@ async def test_the_ic_above_is_given_what_a_pruned_team_left(
     assert "Your Manager pruned the team 'API'" in launcher.messages_to(ic(service))[-1]
     told = given_aside(service, launcher)
     assert "your Manager pruned the team 'API'" in told
-    assert "Team 'API' (node services.api, services/api), pruned." in told
+    assert "Team 'API' (id services.api, services/api), pruned." in told
     assert "Chose SQLite.\n\nDropped the cache." in told
     assert "Rewrite your own spec with `write_spec`" in told
     assert "`hand_over`" in told
@@ -482,14 +482,14 @@ async def test_an_ic_can_read_again_what_removed_teams_left(
 ):
     await replace(service, ORDERS, keep=["Web"])
 
-    read = await use(service, ic(service), ReadNodeContextTool, ReadNodeContextAction())
+    read = await use(service, ic(service), ReadTeamContextTool, ReadTeamContextAction())
 
     [former] = json.loads(read.text)["former_teams"]
     assert (former["team"], former["ended"]) == ("API", "replaced")
     assert former["reports_as_one"] == "Chose SQLite.\n\nDropped the cache."
     # What is told with every message names the team and no more.
     [named] = service.context_of(node(service, "root"), "ic")["former_teams"]
-    assert sorted(named) == ["at", "directory", "ended", "node_id", "team"]
+    assert sorted(named) == ["at", "directory", "ended", "team", "team_id"]
     assert "former_teams" not in service.context_of(node(service, "root"), "manager")
 
 
@@ -516,7 +516,7 @@ async def test_a_hand_over_is_a_side_conversation_of_the_ic_with_its_own_briefin
     # The team still has its two agents and no third.
     assert [agent.role for agent in node(service, "root").agents] == ["ic", "manager"]
     orders = node(service, API).id
-    assert f"- Orders (node {orders}, services/api): Keep the orders" in told
+    assert f"- Orders (id {orders}, services/api): Keep the orders" in told
     assert "Its directory is now in the folder of Orders (services/api)." in told
     assert "Its reports, as one:\nSQLite, no cache." in told
     assert "The spec it wrote (old; it stays in services/api):\n# API by hand" in told
@@ -540,7 +540,7 @@ async def test_a_hand_over_conversation_hands_over_and_writes_the_spec_and_no_mo
         service, side, HandOverTool, HandOverAction(team=API, notes="Keep SQLite.")
     )
     spec = await use(service, side, WriteSpecTool, WriteSpecAction(text="# Shop"))
-    read = await use(service, side, ReadNodeContextTool, ReadNodeContextAction())
+    read = await use(service, side, ReadTeamContextTool, ReadTeamContextAction())
     refused = [
         await use(service, side, ReportTool, ReportAction(text="Done.")),
         await use(service, side, MsgTeamTool, MsgTeamAction(team=API, text="Go.")),
@@ -787,7 +787,7 @@ async def api_in_hand_over(service: DirectorService, launcher: FakeLauncher) -> 
         service,
         manager(service, API),
         PruneTeamTool,
-        PruneTeamAction(node_id="services.api.db", reason="Not needed."),
+        PruneTeamAction(team="services.api.db", reason="Not needed."),
     )
     side = aside(service, API)
     assert side is not None

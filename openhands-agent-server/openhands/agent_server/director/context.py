@@ -32,13 +32,13 @@ _BY_TEAM = (
 # Lists whose entries are known by an id: what was added, changed and
 # removed is told, never the whole list again.
 _KEYED = {
-    **dict.fromkeys(_BY_TEAM, "node_id"),
+    **dict.fromkeys(_BY_TEAM, "team_id"),
     "escalations_for_you_to_settle": "escalation_id",
-    "former_teams": "node_id",
+    "former_teams": "team_id",
 }
 # How much of one text an update carries.
 CUT = 2000
-_CUT_NOTE = " … (cut; `read_node_context` returns all of it)"
+_CUT_NOTE = " … (cut; `read_team_context` returns all of it)"
 # Lists of which only the latest are kept: what is new in one is told, and
 # what dropped out of it is not.
 _LATEST = ("asked_directly_of_teams_below",)
@@ -152,7 +152,7 @@ def briefing_block(context: dict[str, Any]) -> str:
     return (
         "The rest of your team's context. When any of the context changes, "
         f"a `{UPDATE_HEADING}` is added to the next message you get, so "
-        "`read_node_context` is not needed in normal work; it returns all of "
+        "`read_team_context` is not needed in normal work; it returns all of "
         "it again if you have lost track.\n" + json.dumps(rest, indent=2)
     )
 

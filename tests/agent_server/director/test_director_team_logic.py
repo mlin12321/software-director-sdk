@@ -59,7 +59,7 @@ from tests.agent_server.director.test_director_tools import (
 
 
 API, WEB = "services.api", "apps.web"
-PRUNE = PruneTeamAction(node_id=API, reason="It holds everything up.")
+PRUNE = PruneTeamAction(team=API, reason="It holds everything up.")
 
 
 @pytest.fixture
@@ -145,7 +145,7 @@ def record_of_api(service: DirectorService) -> dict:
     [api] = [
         record
         for record in track_records(record_of(service, "root"))
-        if record["node_id"] == API
+        if record["team_id"] == API
     ]
     return api
 
@@ -315,7 +315,7 @@ def test_teams_that_needed_each_other_are_counted_as_a_pair_while_both_are_there
 
     assert counted == [
         {
-            "node_ids": ["a", "b"],
+            "team_ids": ["a", "b"],
             "teams": ["a", "b"],
             "writes_refused": 2,
             "review_findings": 1,
@@ -383,7 +383,7 @@ async def test_an_ic_is_told_of_teams_that_keep_needing_each_other(
         service,
         ic(service),
         ReviewTeamTool,
-        ReviewTeamAction(node_id=API, decision="reject", findings=[finding]),
+        ReviewTeamAction(team=API, decision="reject", findings=[finding]),
     )
     await use(service, ic(service, API), SubmitReviewTool, DONE)
     # A review is asked for once every team below has submitted.

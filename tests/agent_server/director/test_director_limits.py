@@ -89,7 +89,7 @@ async def accepted(service: DirectorService) -> None:
         service,
         division_lead_ic(service),
         ReviewTeamTool,
-        ReviewTeamAction(node_id=node(service, "root").id, decision="accept"),
+        ReviewTeamAction(team=node(service, "root").id, decision="accept"),
     )
 
 

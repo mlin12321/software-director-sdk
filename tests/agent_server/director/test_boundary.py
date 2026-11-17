@@ -61,7 +61,7 @@ def test_a_glob_stays_in_a_segment_unless_it_is_a_double_star(glob, path, matche
         ("write_file", {"file_path": "a.py", "content": "x"}, ["a.py"]),
         ("edit", {"file_path": "a.py"}, ["a.py"]),
         ("terminal", {"command": "rm -rf /r"}, []),
-        ("read_node_context", {}, []),
+        ("read_team_context", {}, []),
     ],
 )
 def test_only_file_tools_that_write_name_the_files_they_change(tool, action, paths):

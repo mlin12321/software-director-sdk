@@ -68,7 +68,7 @@ def caller_of(service: DirectorService, conversation_id: UUID) -> Caller:
 _ASIDE = (
     "You are in hand-over mode, and this conversation is for the hand-over "
     "alone: of the director's "
-    "tools only `read_node_context`, `hand_over` and `write_spec` work here. "
+    "tools only `read_team_context`, `hand_over` and `write_spec` work here. "
     "Leave the rest to your main conversation."
 )
 

@@ -732,7 +732,7 @@ async def test_what_a_reviewer_reconciled_holds_only_for_what_it_was_shown(
     await use(service, conversation, WriteSpecTool, WriteSpecAction(text="# Refunds"))
     service.team_memory.write("services/api", "spec.md", "# Orders")
     await use(service, conversation, SubmitReviewTool, DONE)
-    decided = ReviewTeamAction(node_id=top, decision="accept", reconciled="Refunds.")
+    decided = ReviewTeamAction(team=top, decision="accept", reconciled="Refunds.")
 
     # Saying it is reconciled before being shown anything settles nothing.
     unseen = await use(service, division_lead_ic(service, top), ReviewTeamTool, decided)
@@ -983,7 +983,7 @@ async def test_work_that_is_sent_back_waits_for_no_manager(
         service,
         division_lead_ic(service, top),
         ReviewTeamTool,
-        ReviewTeamAction(node_id=top, decision="reject", findings=[FINDING]),
+        ReviewTeamAction(team=top, decision="reject", findings=[FINDING]),
     )
 
     assert merge_of(service, top) is None
@@ -1014,7 +1014,7 @@ async def test_work_that_is_sent_back_joins_the_end_and_keeps_what_was_decided(
         service,
         division_lead_ic(service, top),
         ReviewTeamTool,
-        ReviewTeamAction(node_id=top, decision="reject", findings=[FINDING]),
+        ReviewTeamAction(team=top, decision="reject", findings=[FINDING]),
     )
     back = launcher.messages_to(conversation)[-1]
     heard = len(launcher.messages_to(asked))
@@ -1065,7 +1065,7 @@ async def test_a_reviewer_writes_the_spec_that_holds(service: DirectorService):
 
     def decided(path: str, take: str, text: str = "") -> ReviewTeamAction:
         return ReviewTeamAction(
-            node_id=top,
+            team=top,
             decision="accept",
             reconciled="Both.",
             specs=[
@@ -1114,7 +1114,7 @@ async def test_a_reviewer_keeps_the_orgs_spec(service: DirectorService):
         division_lead_ic(service, top),
         ReviewTeamTool,
         ReviewTeamAction(
-            node_id=top,
+            team=top,
             decision="accept",
             reconciled="Theirs.",
             specs=[SpecChoice(path="services/api", take="org")],
@@ -1201,7 +1201,7 @@ async def test_a_spec_written_for_a_team_the_org_lost_is_left_to_the_team_that_h
         division_lead_ic(service, top),
         ReviewTeamTool,
         ReviewTeamAction(
-            node_id=top,
+            team=top,
             decision="accept",
             reconciled="Kept what holds.",
             specs=[SpecChoice(path="", take="text", text="# Checkout, with refunds")]

@@ -352,7 +352,7 @@ async def test_a_stopped_team_does_not_stall_or_hold_back_reviews_and_is_pruned(
         service,
         manager(service),
         PruneTeamTool,
-        PruneTeamAction(node_id=API, reason="It is not coming back."),
+        PruneTeamAction(team=API, reason="It is not coming back."),
     )
     await service.settled()
 
@@ -452,7 +452,7 @@ async def test_a_team_set_up_and_given_no_task_is_told_to_the_ic_above(
     ]
     assert len(told) == 1
     api = node(service, API).id
-    assert f"Team 'API' (node {api}, services/api) was set up 2 h ago" in told[0]
+    assert f"Team 'API' (id {api}, services/api) was set up 2 h ago" in told[0]
     assert "`msg_team`" in told[0] and "pruned" in told[0]
     # Nobody is there to ask, and it is not counted as work that stalled.
     assert not any("Team 'API'" in text for text in notices(service, launcher))

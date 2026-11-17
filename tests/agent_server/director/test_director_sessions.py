@@ -26,7 +26,7 @@ from openhands.agent_server.director.service import DirectorService
 from openhands.agent_server.director.tools import (
     MsgTeamTool,
     PruneTeamTool,
-    ReadNodeContextTool,
+    ReadTeamContextTool,
     ReportTool,
     ReviewTeamTool,
     SubmitReviewTool,
@@ -35,7 +35,7 @@ from openhands.agent_server.director.tools import (
 from openhands.agent_server.director.tools.definition import (
     MsgTeamAction,
     PruneTeamAction,
-    ReadNodeContextAction,
+    ReadTeamContextAction,
     ReportAction,
     ReviewTeamAction,
     WriteSpecAction,
@@ -418,7 +418,7 @@ async def test_sub_teams_a_session_changes_are_its_own_until_its_work_is_accepte
         service,
         await woken(service),
         PruneTeamTool,
-        PruneTeamAction(node_id=top, reason="Not needed"),
+        PruneTeamAction(team=top, reason="Not needed"),
     )
 
     assert [team.title for team in service.store.below(top)] == ["DB", "Routes"]
@@ -460,7 +460,7 @@ async def test_the_sessions_of_a_team_know_of_each_other_and_share_accepted_repo
     assert reports(API) == [("ic", "Routes are typed.")]
     assert reports(top) == [("ic", "Refunds are async.")]
     assert session["you"]["session"] == "Refunds"
-    assert [found["node_id"] for found in session["other_sessions_of_your_team"]] == [
+    assert [found["team_id"] for found in session["other_sessions_of_your_team"]] == [
         node(service, API).id
     ]
     assert [found["session"] for found in other["other_sessions_of_your_team"]] == [
@@ -513,7 +513,7 @@ async def test_an_agent_reads_the_other_sessions_with_its_context(
     await opened(service)
 
     observation = await use(
-        service, ic(service, API), ReadNodeContextTool, ReadNodeContextAction()
+        service, ic(service, API), ReadTeamContextTool, ReadTeamContextAction()
     )
 
     assert "other_sessions_of_your_team" in observation.text
@@ -735,9 +735,7 @@ async def test_work_that_meets_merged_work_is_reconciled_before_it_is_merged(
         service,
         division_lead_ic(service, second),
         ReviewTeamTool,
-        ReviewTeamAction(
-            node_id=second, decision="accept", reconciled="Both lines hold."
-        ),
+        ReviewTeamAction(team=second, decision="accept", reconciled="Both lines hold."),
     )
 
     assert (repo / ROUTES).read_text() == "refunds\ntwo\nthree\nfour\nvouchers\n"
@@ -798,7 +796,7 @@ async def test_a_spec_written_over_one_that_changed_meanwhile_is_reconciled(
         service,
         division_lead_ic(service, top),
         ReviewTeamTool,
-        ReviewTeamAction(node_id=top, decision="accept", reconciled="Refunds holds."),
+        ReviewTeamAction(team=top, decision="accept", reconciled="Refunds holds."),
     )
 
     assert service.team_memory.read("services/api/spec.md") == "# Refunds"

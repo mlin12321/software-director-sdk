@@ -27,7 +27,7 @@ if TYPE_CHECKING:
     from openhands.sdk.conversation.state import ConversationState
 
 
-class ReadNodeContextAction(Action):
+class ReadTeamContextAction(Action):
     """Read who you are in the org and what concerns your team."""
 
 
@@ -64,7 +64,7 @@ class MsgManagerAction(Action):
             f"{TEAMS_EXAMPLE}\n"
             "Each team owns one directory strictly inside what your team "
             "may write; no two may overlap. `model` is one of the profiles "
-            "read_node_context lists. A team whose directory covers "
+            "read_team_context lists. A team whose directory covers "
             "sub-teams you already have replaces them, and so does one that "
             "takes part of an existing sub-team's directory; what the new "
             "teams leave of it is yours again. When you already have "
@@ -162,7 +162,7 @@ class RaiseEscalationAction(Action):
 class ResolveEscalationAction(Action):
     """Settle an escalation your team holds, or pass it up."""
 
-    node_id: str = Field(description="The node that raised the escalation.")
+    team: str = Field(description="The team that raised the escalation.")
     escalation_id: str
     action: Literal["settle", "pass_up"]
     text: str = Field(
@@ -182,7 +182,7 @@ class SubmitReviewAction(Action):
 class ReviewTeamAction(Action):
     """Decide on the work a team below yours submitted."""
 
-    node_id: str = Field(description="A team directly below yours.")
+    team: str = Field(description="A team directly below yours.")
     decision: Literal["accept", "reject"]
     findings: list[ReviewFinding] = Field(
         default_factory=list,
@@ -259,7 +259,7 @@ class StopTeamAction(Action):
 class PruneTeamAction(Action):
     """Remove a team below yours that is grossly inefficient."""
 
-    node_id: str = Field(description="A team directly below yours.")
+    team: str = Field(description="A team directly below yours.")
     reason: str = Field(description="Why the team is removed; its IC above is told.")
 
 
@@ -299,7 +299,7 @@ class _DirectorTool[ActionT: Action](ToolDefinition[ActionT, DirectorObservation
         ]
 
 
-class ReadNodeContextTool(_DirectorTool[ReadNodeContextAction]):
+class ReadTeamContextTool(_DirectorTool[ReadTeamContextAction]):
     summary = (
         "Read your place in the org: your team, role and folder, your spec, "
         "the contracts you keep and what your team has reported, your sub-teams "
@@ -310,7 +310,7 @@ class ReadNodeContextTool(_DirectorTool[ReadNodeContextAction]):
 
     @classmethod
     def action(cls):
-        return ReadNodeContextAction
+        return ReadTeamContextAction
 
     @classmethod
     def act(cls):
@@ -540,7 +540,7 @@ class ResolveEscalationTool(_DirectorTool[ResolveEscalationAction]):
         return lambda service, caller, action: agent_actions.resolve_escalation(
             service,
             caller,
-            action.node_id,
+            action.team,
             action.escalation_id,
             action.action,
             action.text,
@@ -588,7 +588,7 @@ class ReviewTeamTool(_DirectorTool[ReviewTeamAction]):
         return lambda service, caller, action: agent_actions.review_team(
             service,
             caller,
-            action.node_id,
+            action.team,
             action.decision,
             action.findings,
             action.needed_above,
@@ -635,12 +635,12 @@ class PruneTeamTool(_DirectorTool[PruneTeamAction]):
         return lambda service, caller, action: agent_actions.prune_team(
             service,
             caller,
-            action.node_id,
+            action.team,
             action.reason,
         )
 
 
-register_tool(ReadNodeContextTool.name, ReadNodeContextTool)
+register_tool(ReadTeamContextTool.name, ReadTeamContextTool)
 register_tool(WriteSpecTool.name, WriteSpecTool)
 register_tool(MsgManagerTool.name, MsgManagerTool)
 register_tool(MsgIcTool.name, MsgIcTool)
@@ -661,7 +661,7 @@ register_tool(HandOverTool.name, HandOverTool)
 DIRECTOR_TOOLS: dict[str, type[_DirectorTool]] = {
     tool.name: tool
     for tool in (
-        ReadNodeContextTool,
+        ReadTeamContextTool,
         WriteSpecTool,
         MsgManagerTool,
         MsgIcTool,

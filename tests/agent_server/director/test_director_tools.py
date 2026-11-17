@@ -34,7 +34,7 @@ from openhands.agent_server.director.tools import (
     MsgManagerTool,
     PruneTeamTool,
     RaiseEscalationTool,
-    ReadNodeContextTool,
+    ReadTeamContextTool,
     ReportTool,
     ResolveEscalationTool,
     ReviewTeamTool,
@@ -48,7 +48,7 @@ from openhands.agent_server.director.tools.definition import (
     MsgManagerAction,
     PruneTeamAction,
     RaiseEscalationAction,
-    ReadNodeContextAction,
+    ReadTeamContextAction,
     ReportAction,
     ResolveEscalationAction,
     ReviewTeamAction,
@@ -201,13 +201,13 @@ async def test_an_agent_reads_who_it_is_and_what_its_team_reported(
     )
 
     observation = await use(
-        service, await woken(service), ReadNodeContextTool, ReadNodeContextAction()
+        service, await woken(service), ReadTeamContextTool, ReadTeamContextAction()
     )
 
     context = json.loads(observation.text)
     assert context["you"] == {
         "role": "manager",
-        "node_id": node(service, "root").id,
+        "team_id": node(service, "root").id,
         "team": "Checkout",
         "session": "Checkout",
     }
@@ -218,7 +218,7 @@ async def test_an_agent_reads_who_it_is_and_what_its_team_reported(
 
 async def test_a_conversation_outside_the_org_is_refused(service: DirectorService):
     observation = await use(
-        service, str(uuid4()), ReadNodeContextTool, ReadNodeContextAction()
+        service, str(uuid4()), ReadTeamContextTool, ReadTeamContextAction()
     )
 
     assert observation.is_error
@@ -237,7 +237,7 @@ async def test_the_ic_writes_the_spec_its_sub_teams_inherit(service: DirectorSer
 
     assert not written.is_error and refused.is_error
     assert node(service, "root").spec_summary == "Checkout"
-    read = await use(service, ic(service), ReadNodeContextTool, ReadNodeContextAction())
+    read = await use(service, ic(service), ReadTeamContextTool, ReadTeamContextAction())
     assert "integer cents" in json.loads(read.text)["spec"]
     # It is the team's once the work it was written with is accepted.
     assert service.team_memory.read("spec.md") is None
@@ -249,7 +249,7 @@ async def test_the_ic_writes_the_spec_its_sub_teams_inherit(service: DirectorSer
         service,
         division_lead_ic(service),
         ReviewTeamTool,
-        ReviewTeamAction(node_id=node(service, "root").id, decision="accept"),
+        ReviewTeamAction(team=node(service, "root").id, decision="accept"),
     )
 
     assert "integer cents" in (service.team_memory.read("spec.md") or "")
@@ -610,7 +610,7 @@ async def test_a_sub_team_that_cannot_start_is_shown_as_blocked(
     assert [agent.status for agent in api.agents] == ["lost"]
 
 
-READ = ReadNodeContextAction()
+READ = ReadTeamContextAction()
 CENTS = RaiseEscalationAction(
     category="design_decision", title="Cents or decimals?", detail="For totals."
 )
@@ -620,7 +620,7 @@ def resolving(
     node_id: str, escalation_id: str, action: Literal["settle", "pass_up"], text: str
 ) -> ResolveEscalationAction:
     return ResolveEscalationAction(
-        node_id=node_id, escalation_id=escalation_id, action=action, text=text
+        team=node_id, escalation_id=escalation_id, action=action, text=text
     )
 
 
@@ -644,12 +644,12 @@ async def test_what_an_ic_escalates_goes_to_the_ic_above_and_then_to_the_human(
     assert len(launcher.messages_to(manager(service))) == to_manager
     assert service.store.escalations() == []
     seen = {
-        role: json.loads((await use(service, agent, ReadNodeContextTool, READ)).text)
+        role: json.loads((await use(service, agent, ReadTeamContextTool, READ)).text)
         for role, agent in (("ic", ic(service)), ("manager", manager(service)))
     }
     [to_settle] = seen["ic"]["escalations_for_you_to_settle"]
     assert to_settle["escalation_id"] == escalation.id
-    raiser = to_settle["node_id"]
+    raiser = to_settle["team_id"]
     assert raiser == node(service, api).id
     assert seen["manager"]["escalations_for_you_to_settle"] == []
 
@@ -781,7 +781,7 @@ async def test_what_the_top_team_escalates_waits_on_the_human(
 
 
 PRUNE_API = PruneTeamAction(
-    node_id="services.api",
+    team="services.api",
     reason="Every schema change broke all of them.",
 )
 
@@ -870,7 +870,7 @@ async def test_reports_are_for_the_two_agents_of_one_team(service: DirectorServi
         pytest.param("ic", PRUNE_API, "Only the Manager", id="an IC"),
         pytest.param(
             "manager",
-            PRUNE_API.model_copy(update={"node_id": "root"}),
+            PRUNE_API.model_copy(update={"team": "root"}),
             "not a team directly below yours",
             id="its own team",
         ),
@@ -917,12 +917,12 @@ async def test_a_sub_team_is_told_the_contracts_and_not_the_spec_of_the_team_abo
     starts = {str(start.conversation_id): start for start in launcher.derived}
     briefing = starts[str(api_ic)].task
     context = json.loads(
-        (await use(service, api_ic, ReadNodeContextTool, ReadNodeContextAction())).text
+        (await use(service, api_ic, ReadTeamContextTool, ReadTeamContextAction())).text
     )
     root_context = json.loads(
         (
             await use(
-                service, ic(service), ReadNodeContextTool, ReadNodeContextAction()
+                service, ic(service), ReadTeamContextTool, ReadTeamContextAction()
             )
         ).text
     )

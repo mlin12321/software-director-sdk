@@ -3592,11 +3592,11 @@ def _scripted_org_llm(
         if asked:
             # One call a turn: the teams of the request, in its order.
             request = text_of(messages[asked[-1]])
-            waiting = re.findall(r"`review_team` for node (\S+):", request)
+            waiting = re.findall(r"`review_team` for team (\S+):", request)
             reviewed = sum(m.role == "tool" for m in messages[asked[-1] :])
             if reviewed < len(waiting):
                 return tool_call(
-                    "review_team", {"node_id": waiting[reviewed], "decision": "accept"}
+                    "review_team", {"team": waiting[reviewed], "decision": "accept"}
                 )
         if last.role == "user" and "in hand-over mode" in text:
             return {"role": "assistant", "content": "Nothing to pass on."}
@@ -3626,7 +3626,7 @@ def _scripted_org_llm(
             return tool_call(
                 "prune_team",
                 {
-                    "node_id": "services.api",
+                    "team": "services.api",
                     "reason": "The file grew past what one agent can hold.",
                 },
             )

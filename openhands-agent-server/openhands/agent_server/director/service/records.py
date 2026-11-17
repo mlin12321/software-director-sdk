@@ -329,7 +329,7 @@ class Records(ServiceState):
         }
         return [
             {
-                "node_id": request.team_id,
+                "team_id": request.team_id,
                 "team": request.team,
                 "at": request.at,
                 "text": request.text,
@@ -370,11 +370,11 @@ class Records(ServiceState):
             return ""
         records = track_records(self.history_of(team.parent_id))
         own = team.team_id
-        counted = next((record_line(r) for r in records if r["node_id"] == own), "")
+        counted = next((record_line(r) for r in records if r["team_id"] == own), "")
         needed = [
             need_words(pair, own)
             for pair in self.needs_below(team.parent_id)
-            if own in pair["node_ids"]
+            if own in pair["team_ids"]
         ]
         return "; ".join(part for part in (counted, *needed) if part)
 
@@ -430,7 +430,7 @@ class Records(ServiceState):
         needed = [
             f"{need_words(pair)}."
             for pair in needs_between(history)
-            if set(pair["node_ids"]) <= {team_key(r) for r in proposal.replaces}
+            if set(pair["team_ids"]) <= {team_key(r) for r in proposal.replaces}
         ]
         return proposal_facts(
             sizes, together, before + declined + needed, proposal.reason
@@ -585,7 +585,7 @@ class Records(ServiceState):
         own_spec = next((spec for spec in specs if not spec.old), None)
         to_settle = [
             {
-                "node_id": other.id,
+                "team_id": other.id,
                 "team": other.title,
                 "escalation_id": escalation.id,
                 "kind": escalation.kind,
@@ -612,7 +612,7 @@ class Records(ServiceState):
         ]
         title = store.session_title(node)
         context: dict[str, Any] = {
-            "you": {"role": role, "node_id": node.id, "team": node.title}
+            "you": {"role": role, "team_id": node.id, "team": node.title}
             | ({"session": title} if title else {}),
             "team_above": node.parent_id,
             "status": node.status,
@@ -648,7 +648,7 @@ class Records(ServiceState):
             ],
             "sub_teams": [
                 {
-                    "node_id": child.id,
+                    "team_id": child.id,
                     "team": child.title,
                     "path": child.boundary.path,
                     "status": child.status if child.agents else NOT_STARTED,
@@ -694,7 +694,7 @@ class Records(ServiceState):
             # checkout of its own, and share the team's reports.
             context["other_sessions_of_your_team"] = [
                 {
-                    "node_id": other.id,
+                    "team_id": other.id,
                     "session": store.session_title(other),
                     "status": other.status,
                     "headline": other.headline,
@@ -712,7 +712,7 @@ class Records(ServiceState):
             # The IC is the one that passes on what removed teams left.
             context["former_teams"] = [
                 {
-                    "node_id": former.id,
+                    "team_id": former.id,
                     "team": former.title,
                     "directory": former.path or "the repository",
                     "ended": former.ended,

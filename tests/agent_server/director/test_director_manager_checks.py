@@ -11,7 +11,7 @@ from openhands.agent_server.director.tools import (
     MsgManagerTool,
     PruneTeamTool,
     RaiseEscalationTool,
-    ReadNodeContextTool,
+    ReadTeamContextTool,
     ResolveEscalationTool,
     ReviewTeamTool,
     SubmitReviewTool,
@@ -19,7 +19,7 @@ from openhands.agent_server.director.tools import (
 from openhands.agent_server.director.tools.definition import (
     PruneTeamAction,
     RaiseEscalationAction,
-    ReadNodeContextAction,
+    ReadTeamContextAction,
     ResolveEscalationAction,
 )
 from tests.agent_server.director.conftest import FakeLauncher, record_of, tasked
@@ -93,7 +93,7 @@ async def test_a_manager_looks_after_every_so_many_reviews_its_ic_accepted(
 
     [look] = looks(service, launcher)
     assert "your IC has accepted 5 reviews" in look
-    assert f"'API' (node {node(service, API).id}, services/api): " in look
+    assert f"'API' (id {node(service, API).id}, services/api): " in look
     assert "review accepted, round 1" in look
     assert "Nothing is asked of you" in look
 
@@ -136,7 +136,7 @@ async def test_what_a_team_escalated_is_counted_for_the_work_it_has_in_hand(
             ic(service),
             ResolveEscalationTool,
             ResolveEscalationAction(
-                node_id=API, escalation_id=escalation.id, action="settle", text="Yes."
+                team=API, escalation_id=escalation.id, action="settle", text="Yes."
             ),
         )
     await accepted(service, repo, API)
@@ -212,7 +212,7 @@ async def test_an_escalation_passed_up_counts_for_the_team_it_came_through(
             ic(service, API),
             ResolveEscalationTool,
             ResolveEscalationAction(
-                node_id="services.api.db",
+                team="services.api.db",
                 escalation_id=escalation.id,
                 action="pass_up",
                 text="Not mine to decide.",
@@ -279,7 +279,7 @@ async def test_a_new_team_in_a_removed_teams_place_starts_from_nothing(
         service,
         manager(service),
         PruneTeamTool,
-        PruneTeamAction(node_id=API, reason="Going nowhere."),
+        PruneTeamAction(team=API, reason="Going nowhere."),
     )
     await service.settled()
     again = [SplitChild(title="Orders", path="services/api", task="Take orders")]
@@ -327,7 +327,7 @@ async def test_what_became_of_its_teams_is_kept_for_a_teams_two_agents(
     ]
     # Both agents of the team read it with the rest of their context.
     for agent in (ic(service), manager(service)):
-        read = await use(service, agent, ReadNodeContextTool, ReadNodeContextAction())
+        read = await use(service, agent, ReadTeamContextTool, ReadTeamContextAction())
         assert '"sent_back": 1' in read.text
         assert "work accepted (at review 2)" in read.text
     # The IC reads a team's record with the next work it submits.
@@ -347,7 +347,7 @@ async def test_a_manager_is_shown_what_became_of_teams_that_are_gone(
         service,
         manager(service),
         PruneTeamTool,
-        PruneTeamAction(node_id=API, reason="It never got it right."),
+        PruneTeamAction(team=API, reason="It never got it right."),
     )
     await service.settled()
 
@@ -355,7 +355,7 @@ async def test_a_manager_is_shown_what_became_of_teams_that_are_gone(
 
     look = looks(service, launcher)[-1]
     assert "Teams that were here before and are gone:" in look
-    assert "- 'API' (node services.api), pruned: 3 sent back" in look
+    assert "- 'API' (id services.api), pruned: 3 sent back" in look
     history = record_of(service, "root")
     assert [e.detail for e in history if e.kind == "woken"] == [
         "your IC has sent the work of 'API' back 3 times.",

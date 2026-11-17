@@ -109,7 +109,7 @@ async def answer(
         ic(service, by),
         ResolveEscalationTool,
         ResolveEscalationAction(
-            node_id=node(service, DB).id,
+            team=node(service, DB).id,
             escalation_id=the_one(service).id,
             action=action,
             text=text,

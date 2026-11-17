@@ -102,13 +102,11 @@ def requests(service: DirectorService, launcher: FakeLauncher) -> list[str]:
 
 
 def reject(node_id: str = "services.api") -> ReviewTeamAction:
-    return ReviewTeamAction(node_id=node_id, decision="reject", findings=[FINDING])
+    return ReviewTeamAction(team=node_id, decision="reject", findings=[FINDING])
 
 
 def accept(node_id: str = "services.api", needed_above: str = "") -> ReviewTeamAction:
-    return ReviewTeamAction(
-        node_id=node_id, decision="accept", needed_above=needed_above
-    )
+    return ReviewTeamAction(team=node_id, decision="accept", needed_above=needed_above)
 
 
 async def test_submitted_work_goes_to_the_ic_above_with_the_teams_own_account(
@@ -307,8 +305,8 @@ async def test_reviews_wait_until_every_sub_team_has_submitted(
 
     [both] = requests(service, launcher)
     assert "Team 'API'" in both and "Team 'Web'" in both
-    assert "review_team` for node services.api" in both
-    assert "review_team` for node apps.web" in both
+    assert "review_team` for team services.api" in both
+    assert "review_team` for team apps.web" in both
 
 
 async def test_a_blocked_sub_team_is_not_waited_for(
@@ -389,7 +387,7 @@ async def test_only_the_ic_directly_above_reviews_and_only_work_that_waits(
         service,
         ic(service),
         ReviewTeamTool,
-        ReviewTeamAction(node_id="services.api", decision="reject"),
+        ReviewTeamAction(team="services.api", decision="reject"),
     )
 
     assert nothing_waits.is_error and "no work waiting" in nothing_waits.text
@@ -593,7 +591,7 @@ async def test_a_merge_laid_out_goes_with_work_that_is_sent_back(
         service,
         ic(service),
         ReviewTeamTool,
-        ReviewTeamAction(node_id="apps.web", decision="reject", findings=[FINDING]),
+        ReviewTeamAction(team="apps.web", decision="reject", findings=[FINDING]),
     )
 
     assert service.merge_checkout(web.id) is None

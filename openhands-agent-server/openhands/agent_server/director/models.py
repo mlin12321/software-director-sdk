@@ -187,7 +187,7 @@ class SplitChild(BaseModel):
         default=None,
         description=(
             "Name of the agent profile the sub-team's agents run on, from the "
-            "ones `read_node_context` lists. Leave it out for the same agent "
+            "ones `read_team_context` lists. Leave it out for the same agent "
             "as your own."
         ),
     )

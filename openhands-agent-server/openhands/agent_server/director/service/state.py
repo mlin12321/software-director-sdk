@@ -126,7 +126,7 @@ logger = logging.getLogger(__name__)
 
 ROOT_ID = "root"
 _TOOLS_OF_BOTH = (
-    "read_node_context",
+    "read_team_context",
     "raise_escalation",
     "resolve_escalation",
     "report",
@@ -152,13 +152,13 @@ TOOLS_OF: dict[AgentRole, tuple[str, ...]] = {
         "prune_team",
     ),
 }
-HAND_OVER_TOOLS = ("read_node_context", "hand_over", "write_spec")
+HAND_OVER_TOOLS = ("read_team_context", "hand_over", "write_spec")
 # What an IC has of the director's tools where it only reviews the work of
 # a session.
-DIVISION_LEAD_IC_TOOLS = ("read_node_context", "report", "review_team")
+DIVISION_LEAD_IC_TOOLS = ("read_team_context", "report", "review_team")
 # What a Manager has there: it settles the sub-teams a session and the org
 # each made something else of.
-DIVISION_LEAD_MANAGER_TOOLS = ("read_node_context", "report", "settle_teams")
+DIVISION_LEAD_MANAGER_TOOLS = ("read_team_context", "report", "settle_teams")
 
 
 def tools_of(node: SessionTeam, role: AgentRole) -> tuple[str, ...]:

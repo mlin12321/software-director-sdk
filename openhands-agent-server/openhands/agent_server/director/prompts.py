@@ -33,7 +33,7 @@ Basics
   Manager, who decides which sub-teams exist.
 - Your first message says which team and which agent you are, and gives your
   team's context. Later changes arrive under `[director] context update` on
-  the next message you get. `read_node_context` returns all of it again.
+  the next message you get. `read_team_context` returns all of it again.
 - Messages that start with [director] come from the runtime, not a person.
   A rare event (a review, a stalled team, replaced teams) is explained in
   the message that brings it.
@@ -88,7 +88,7 @@ WITH_SUB_TEAMS = (
     "teams that merge or replace them.",
     "- The runtime keeps what became of your teams and of what you "
     "proposed, also why it was declined; a review request says how a "
-    "team's earlier work went and `read_node_context` returns the record. "
+    "team's earlier work went and `read_team_context` returns the record. "
     "Do not propose again a division that failed or was declined unless "
     "something has changed.",
 )
@@ -129,7 +129,7 @@ other.
   that keeps what both sides need.
 - Taking one side's contracts whole often breaks the other side's code. If
   you do not take the session's, its IC is told to follow up.
-- Decide by your team's spec, contracts and records; `read_node_context`
+- Decide by your team's spec, contracts and records; `read_team_context`
   returns them.
 - Decide soon: later sessions' teams and contracts wait for you. Their code
   does not.
@@ -150,7 +150,7 @@ org as a whole works well, not that every team is busy.
   `decline_teams` with the reason and what to change. A proposal waits until
   you call one of the two; a message decides nothing.
 - `msg_ic` writes to your IC, or to the IC of a team directly below.
-- `read_node_context` shows how every team below has done, also removed
+- `read_team_context` shows how every team below has done, also removed
   ones, and what your IC proposed before. Weigh a proposal by it.
 - After you approve or prune, your IC passes on what removed teams left and
   rewrites the spec. Write to it if the change needs explaining.
@@ -168,7 +168,7 @@ HAND_OVER_ROLE = """\
 <ORG_ROLE>
 You are your team's IC in hand-over mode: a side conversation started for
 one hand-over. It does not carry on the team's work. Do not edit files or
-run commands that change the repository. Only `read_node_context`,
+run commands that change the repository. Only `read_team_context`,
 `hand_over` and `write_spec` work here.
 </ORG_ROLE>"""
 
@@ -219,7 +219,7 @@ def left_behind(
     for team in former:
         lines += [
             "",
-            f"Team {team.title!r} (node {team.id}, {team.path or 'the repository'}), "
+            f"Team {team.title!r} (id {team.id}, {team.path or 'the repository'}), "
             f"{team.ended}. It was for: {team.purpose or 'nothing that was kept'}",
             "Its reports, as one:",
             team.compacted_report or "It recorded nothing.",
@@ -345,7 +345,7 @@ _HAND_OVER = (
     "sub-teams, the contracts those must keep. Where one team's directory "
     "is now divided among several, give each the part that concerns its "
     "directory. It starts nothing and can be done again later; "
-    "`read_node_context` returns what the removed teams left "
+    "`read_team_context` returns what the removed teams left "
     "(`former_teams`)."
 )
 
@@ -424,7 +424,7 @@ def replaced_job(
         "they now own their directories. None of them has started; each "
         "starts when your main conversation gives it its task.",
         *(
-            f"- {team.title} (node {team.id}, {team.boundary.path}): "
+            f"- {team.title} (id {team.id}, {team.boundary.path}): "
             f"{team.spec_summary or 'no purpose given'}"
             for team in teams
         ),
@@ -484,7 +484,7 @@ def handed_over_notice(given: list[str], spec: bool) -> str:
     )
     return (
         f"Your hand-over mode has ended. {to} {spec_line} "
-        "`read_node_context` returns what the removed teams left "
+        "`read_team_context` returns what the removed teams left "
         "(`former_teams`) if more of it should be given with `hand_over`."
     )
 
@@ -600,7 +600,7 @@ def brief(
     lines = [
         f"{DIRECTOR_PREFIX} You are the {'Division Lead ' * node.division_lead}"
         f"{'IC' if role == 'ic' else 'Manager'} of the team {node.title!r} "
-        f"(node {node.id}).",
+        f"(id {node.id}).",
         f"Folder: {boundary}",
         f"Writable: {', '.join(node.boundary.writable) or 'nothing'}",
     ]
@@ -678,7 +678,7 @@ def accept_in_order(team: SessionTeam, first: SessionTeam, session: str = "") ->
             "then."
         )
     return (
-        f"The work of {first.title!r} (node {first.id}) was submitted before "
+        f"The work of {first.title!r} (id {first.id}) was submitted before "
         f"that of {team.title!r} and still waits for your review. Work is "
         "accepted in the order it was submitted, so that each is checked "
         "against what was merged before it: accept that one or send it back "
@@ -710,7 +710,7 @@ def reconcile_request(
             spec now, what the lost team was called and the spec.
     """
     lines = [
-        f"Not merged yet: the work of {team.title!r} (node {team.id}) meets "
+        f"Not merged yet: the work of {team.title!r} (id {team.id}) meets "
         "work that came into your checkout since it began"
         + (f" (merged meanwhile: {', '.join(landed)})." if landed else "."),
     ]
@@ -775,7 +775,7 @@ def merge_prepared(team: SessionTeam, where: str, files: list[str]) -> str:
     """What a reviewer is told when the work it accepts does not merge by
     itself: the merge is laid out for it to finish."""
     return (
-        f"The work of {team.title!r} (node {team.id}) does not merge with your "
+        f"The work of {team.title!r} (id {team.id}) does not merge with your "
         f"checkout by itself. These files do not merge: {', '.join(files)}\n\n"
         f"The merge is laid out in {where}, with git's conflict markers in "
         "those files and everything else merged. It is yours to finish, so "
@@ -803,7 +803,7 @@ def merge_request(
         accepted: Whether the session's code is accepted and merged.
     """
     lines = [
-        f"The work of {team.title!r} (node {team.id}) in the session "
+        f"The work of {team.title!r} (id {team.id}) in the session "
         f"{session!r} "
         + (
             "is accepted and its code is merged."
@@ -928,7 +928,7 @@ def teams_settled(
         )
         + (
             f"Contracts settled for: {', '.join(agreed)}; read them with "
-            "`read_node_context`. "
+            "`read_team_context`. "
             if agreed
             else ""
         )
@@ -941,7 +941,7 @@ def handed_up(sent: SessionTeam, text: str, why: str) -> str:
     request was sent to said it is not its own."""
     return (
         f"{text}\n\n(The director sent this request of the human's to "
-        f"{sent.title!r} (node {sent.id}) first, whose IC said it is not that "
+        f"{sent.title!r} (id {sent.id}) first, whose IC said it is not that "
         f"team's: {why}\nIt is yours now, in the same session and the same "
         f"checkout. {sent.title!r} is a sub-team of yours here and has done "
         "nothing for it: give it a task with `msg_team` if part of it is "
@@ -996,7 +996,7 @@ def review_request(
     """
     directory = team.boundary.path or "the repository"
     lines = [
-        f"Review request. Team {team.title!r} (node {team.id}) submits its work in "
+        f"Review request. Team {team.title!r} (id {team.id}) submits its work in "
         f"{directory}"
         + (f" (review round {review.round})." if review.round > 1 else "."),
     ]
@@ -1041,7 +1041,7 @@ def review_request(
         "The account and that review are the team's own. Read the diff of "
         "what you rely on, run the repository's checks on it, and compare it "
         "with the contracts you set and with the team's task. Then call "
-        f"`review_team` for node {team.id}: `accept`, or `reject` with what "
+        f"`review_team` for team {team.id}: `accept`, or `reject` with what "
         "must change. Set `needed_above` only if a team above yours waits on "
         "this work. Accepted work of a team with its own worktree is merged "
         "into your checkout by the runtime.",
@@ -1053,14 +1053,14 @@ def asked_by_team(raiser: SessionTeam, escalation: Escalation, team_for: str) ->
     """What a team's IC is told when the IC of a team that is not above it
     asks something of it directly."""
     return (
-        f"The IC of team {raiser.title!r} (node {raiser.id}), which is not "
+        f"The IC of team {raiser.title!r} (id {raiser.id}), which is not "
         f"above yours, asks your team directly {escalation.title!r} "
         f"(escalation {escalation.id}):\n{team_for}"
         + (f"\n{escalation.detail}" if escalation.detail else "")
         + "\nThe runtime brought it straight to you because it concerns what "
         "your team holds. It is a request, not a task: your own task and "
         "your contracts come first, and that team waits on your answer. "
-        f"Call `resolve_escalation` for node {raiser.id}: `settle` with what "
+        f"Call `resolve_escalation` for team {raiser.id}: `settle` with what "
         "you did or why you will not, or `pass_up` with the reason if it is "
         "not yours to settle or needs a contract changed. Passed up, it "
         "goes up the chain of teams above the one that asked."
@@ -1129,7 +1129,7 @@ def misrouted_notice(team: SessionTeam, text: str, why: str) -> str:
     words brought it directly is not its own."""
     return (
         f"The human asked what follows. The runtime sent it straight to "
-        f"team {team.title!r} (node {team.id}), whose IC says it is not that "
+        f"team {team.title!r} (id {team.id}), whose IC says it is not that "
         f"team's: {why or '(no reason given)'}\nIt is yours now: do it, or "
         "give it to the team it belongs to with `msg_team`.\n\n"
         f"The human wrote:\n{text}"
@@ -1156,7 +1156,7 @@ def _span(minutes: int) -> str:
 def unstarted_notice(team: SessionTeam, minutes: int) -> str:
     """What the IC above is told of a team it set up and gave no task."""
     return (
-        f"Team {team.title!r} (node {team.id}, "
+        f"Team {team.title!r} (id {team.id}, "
         f"{team.boundary.path or 'the repository'}) "
         f"was set up {_span(minutes)} ago and has been given no task. Nobody "
         "works in its directory, and nothing there is committed. Give it its "
@@ -1180,7 +1180,7 @@ def stall_notice(
     directory = team.boundary.path or "the repository"
     sent_back = team.review is not None and team.review.state == "changes_requested"
     lines = [
-        f"Team {team.title!r} (node {team.id}) has shown no progress for "
+        f"Team {team.title!r} (id {team.id}) has shown no progress for "
         f"{_span(minutes)}: no commit in {directory}, nothing submitted, no "
         "escalation."
     ]
@@ -1207,7 +1207,7 @@ def stall_notice(
         "Then decide. You can wait; write to its IC with `msg_team`; or "
         "write to your Manager with `msg_manager` if the teams should be "
         "made up differently. If it has gone on too long without progress "
-        f"and a message did not help, `stop_team` for node {team.id} stops "
+        f"and a message did not help, `stop_team` for team {team.id} stops "
         "it. Use that very sparingly: a stopped team does nothing until "
         "you write to it again or your Manager removes it.",
     ]
@@ -1267,7 +1267,7 @@ def track_records(events: list[TeamEvent]) -> list[dict[str, Any]]:
             continue
         record = records.setdefault(
             event.team_id,
-            {"node_id": event.team_id, "team": event.team} | _fresh(),
+            {"team_id": event.team_id, "team": event.team} | _fresh(),
         )
         if event.kind == "set_up":
             # A new team in the place of one that is gone starts its own.
@@ -1364,7 +1364,7 @@ def needs_between(events: list[TeamEvent]) -> list[dict[str, Any]]:
             pair = pairs.setdefault(
                 frozenset((event.team_id, event.other_id)),
                 {
-                    "node_ids": [event.team_id, event.other_id],
+                    "team_ids": [event.team_id, event.other_id],
                     "teams": [event.team, event.other],
                     "writes_refused": 0,
                     "review_findings": 0,
@@ -1399,7 +1399,7 @@ def need_words(pair: dict[str, Any], seen_from: str = "") -> str:
     ]
     one, other = pair["teams"]
     if seen_from:
-        beside = other if pair["node_ids"][0] == seen_from else one
+        beside = other if pair["team_ids"][0] == seen_from else one
         who = f"it and {beside!r} needed"
     else:
         who = f"{one!r} and {other!r} needed"
@@ -1449,7 +1449,7 @@ def manager_check(
             has in hand wake the Manager, which is what a success rate is
             counted against.
     """
-    records = {record["node_id"]: record for record in track_records(events or [])}
+    records = {record["team_id"]: record for record in track_records(events or [])}
     lines = [
         f"A look at your teams that your IC did not ask for: {reason}",
         "",
@@ -1487,15 +1487,15 @@ def manager_check(
         if rate:
             facts.append(rate)
         lines.append(
-            f"- {team.title!r} (node {team.id}, "
+            f"- {team.title!r} (id {team.id}, "
             f"{team.boundary.path or 'the repository'}): " + "; ".join(facts)
         )
     here = {team.id for team in teams}
     gone = [
-        f"- {record['team']!r} (node {record['node_id']}), {record['ended']}"
+        f"- {record['team']!r} (id {record['team_id']}), {record['ended']}"
         + (f": {so_far}" if (so_far := record_line(record)) else "")
         for record in records.values()
-        if record["ended"] and record["node_id"] not in here
+        if record["ended"] and record["team_id"] not in here
     ]
     if gone:
         lines += ["", "Teams that were here before and are gone:", *gone]
