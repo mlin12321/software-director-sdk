@@ -109,6 +109,8 @@ def write_spec(service: DirectorService, caller: Caller, content: str) -> str:
     service.store.update_place(caller.node.id, spec_summary=summary, old_specs=[])
     if caller.hand_over:
         service.note_hand_over(caller.node.id, spec=True)
+    else:
+        service.knows(caller.node.id, "ic", "spec")
     return f"Saved the spec of {path or 'the repository'}."
 
 
@@ -180,6 +182,7 @@ def msg_manager(service: DirectorService, caller: Caller, text: str) -> str:
             raise Conflict("The sub-teams your Manager approved are still being set up")
         proposal = _checked(service, node, proposed)
         service.store.update_place(node.id, pending_split=proposal)
+        service.knows(node.id, "ic", "pending_split")
         store = service.store
         replaced = [team.title for team in map(store.place, proposal.replaces) if team]
         kept = [team.title for team in map(store.place, proposal.keeps) if team]

@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import NamedTuple
 from uuid import UUID
 
+from pydantic import TypeAdapter
+
 from openhands.agent_server.director import bugbot
 from openhands.agent_server.director.boundary import owns
 from openhands.agent_server.director.git import (
@@ -49,7 +51,7 @@ from openhands.agent_server.director.models import (
     Take,
     TeamChoice,
 )
-from openhands.agent_server.director.org_store import OrgStoreError, reviews_only
+from openhands.agent_server.director.org_store import OrgStoreError, is_division_lead
 from openhands.agent_server.director.ownership import can_merge_in_memory, conflicts
 from openhands.agent_server.director.prompts import (
     NEED_FINDING,
@@ -65,6 +67,7 @@ from openhands.agent_server.director.prompts import (
 )
 from openhands.agent_server.director.reconcile import changes_of
 from openhands.agent_server.director.run_state import (
+    DECIDED,
     HELD,
     MERGING,
     SHOWN,
@@ -134,6 +137,9 @@ class Meets(NamedTuple):
     items: list[MergeItem]
 
 
+_ITEMS = TypeAdapter(list[MergeItem])
+
+
 class Landed(NamedTuple):
     """What became of a session's work when it landed."""
 
@@ -146,6 +152,9 @@ class Landed(NamedTuple):
     agreed: list[str]
     # The directories whose contracts waited and stay the org's.
     held: list[str]
+    # Where the contracts the session wrote do not hold: each directory
+    # with the contracts that do.
+    others: list[tuple[str, str]]
 
 
 def _submitted(team: SessionTeam) -> tuple[int, str]:
@@ -254,7 +263,10 @@ class Reviews(Requests):
                 team=node,
             )
         self.notify(
-            agent_conversation(node, "ic"), changes_requested(above or node, findings)
+            agent_conversation(node, "ic"),
+            changes_requested(
+                above or node, findings, of_a_session=store.opens_session(node)
+            ),
         )
         if store.opens_session(node):
             self._sent_back(node)
@@ -326,7 +338,10 @@ class Reviews(Requests):
                 requests.append(
                     (
                         session_work(
-                            team, store.session_title(team), self._asked_for(team)
+                            team,
+                            store.session_title(team),
+                            self._asked_for(team),
+                            self._contracts_written(team),
                         )
                         if store.opens_session(team)
                         else ""
@@ -335,7 +350,7 @@ class Reviews(Requests):
                         team, team.review, self._so_far(team), self.asked_of(team)
                     )
                 )
-        self.tell_ic(node.id, "\n\n---\n\n".join(requests), review=True)
+        self.tell_ic(node.id, "\n\n---\n\n".join(requests), division_lead=True)
 
     def _asked_for(self, team: SessionTeam) -> str:
         """What the session ``team`` belongs to was opened for."""
@@ -458,7 +473,7 @@ class Reviews(Requests):
         above = store.place(seat.parent_id or "") if seat else None
         if seat is None or above is None:
             return False
-        above_id = session.above_id if reviews_only(above) else above.team_id
+        above_id = session.above_id if is_division_lead(above) else above.team_id
         if above_id == team_id:
             # The top team of the org.
             return store.team(team_id) is not None
@@ -521,7 +536,7 @@ class Reviews(Requests):
     def _review_of(self, top: SessionTeam) -> SessionTeam | None:
         """The place a session's work is reviewed from."""
         review = self.store.place(top.parent_id or "")
-        return review if review is not None and reviews_only(review) else None
+        return review if review is not None and is_division_lead(review) else None
 
     def _merge_of(self, top: SessionTeam) -> Merge | None:
         review = self._review_of(top)
@@ -540,7 +555,13 @@ class Reviews(Requests):
             merge = self._merge_of(top)
             if merge is None and self._review_of(top) is not None:
                 seq = top.review.seq if top.review and top.review.seq else 0
-                merge = Merge(seq=seq or self.next_submission())
+                run = self._runs()
+                decided = run.marked(DECIDED).get(top.id)
+                run.unmark(DECIDED, top.id)
+                merge = Merge(
+                    seq=seq or self.next_submission(),
+                    items=_ITEMS.validate_json(decided) if decided else [],
+                )
                 self._keep_merge(top, merge)
             return merge
 
@@ -627,7 +648,7 @@ class Reviews(Requests):
                 clash.session is not None
                 and seat is not None
                 and above is not None
-                and not reviews_only(above)
+                and not is_division_lead(above)
                 and store.team(above.team_id) is None
             ):
                 moved_to = self._home_of(top, seat.boundary.path)
@@ -739,7 +760,7 @@ class Reviews(Requests):
             merge_request(
                 top, self.store.session_title(top), waiting, merge.code_landed
             ),
-            review=True,
+            division_lead=True,
         )
 
     def _check_managers(self) -> None:
@@ -778,7 +799,7 @@ class Reviews(Requests):
                     + merge_request(
                         top, self.store.session_title(top), waiting, merge.code_landed
                     ),
-                    review=True,
+                    division_lead=True,
                 )
                 return
             if not merge.code_landed or any(e.id == ORG_WAITS for e in top.escalations):
@@ -978,7 +999,7 @@ class Reviews(Requests):
         shapes = self._shapes(top)
         merge = self._merge_of(top)
         if session is None or shapes is None or merge is None:
-            return Landed(Taken([], [], []), [], [], [], [])
+            return Landed(Taken([], [], []), [], [], [], [], [])
         if org is None:
             take, items = self._manager_items(top, [])
             waits = {*take, *(item.key for item in items if item.kind == "team")}
@@ -997,7 +1018,7 @@ class Reviews(Requests):
                 ),
             )
             records = self._land_records(top, seen, waits=waits, held=agreements)
-            return Landed(records, [], [], [], [])
+            return Landed(records, [], [], [], [], [])
         take, items = org
         seats, theirs, _ = shapes
         places = {seat.team_id: seat for seat in seats}
@@ -1036,6 +1057,7 @@ class Reviews(Requests):
         texts: dict[str, str | None] = {}
         agreed: list[str] = []
         held: list[str] = []
+        others: list[tuple[str, str]] = []
         for item in items:
             if item.kind != "contracts":
                 continue
@@ -1045,13 +1067,16 @@ class Reviews(Requests):
             ):
                 self._undraft(top.session, file)
                 held.append(item.key or "the repository")
+                others.append((item.key, item.org))
                 continue
             text = item.text if item.take == "text" else item.session
             texts[file] = f"{text.strip()}\n" if text.strip() else None
             agreed.append(item.key or "the repository")
+            if item.take == "text":
+                others.append((item.key, text))
         self._keep_merge(top, None)
         records = self._land_records(top, seen, chosen=texts, tree=True)
-        return Landed(records, taken, kept, agreed, held)
+        return Landed(records, taken, kept, agreed, held, others)
 
     def _land_accepted(
         self, top: SessionTeam, seen: dict[str, str | None] | None
@@ -1088,9 +1113,26 @@ class Reviews(Requests):
             self.tell_ic(
                 top.id,
                 teams_settled(
-                    review.title, landed.taken, landed.kept, landed.agreed, landed.held
+                    review.title,
+                    landed.taken,
+                    landed.kept,
+                    landed.agreed,
+                    landed.held,
+                    landed.others,
                 )
                 + (f"\n\n{note}" if note else ""),
+            )
+        for directory, _ in landed.others:
+            # On record also when the session is closed and nobody is told.
+            self._land_event(
+                self._home_of(top, directory),
+                self._event(
+                    "not_taken",
+                    top,
+                    "the contracts it wrote for "
+                    f"{directory or 'the repository'}: its merged code was "
+                    "written to them",
+                ),
             )
         self._org_turn()
 
@@ -1172,16 +1214,34 @@ class Reviews(Requests):
             if merge is None or review is None or merge.code_landed:
                 return
             self._keep_merge(top, None)
+            decided = [
+                item for item in merge.items if item.gate == "manager" and item.take
+            ]
+            if decided:
+                # They hold again for whatever is unchanged when it comes back.
+                self._runs().mark(DECIDED, top.id, _ITEMS.dump_json(decided).decode())
             if merge.asked and any(
                 item.gate == "manager" and item.take is None for item in merge.items
             ):
                 self.tell_manager(
                     review.id,
                     f"The work of {top.title!r} was sent back to its team. "
-                    "What waited of it for you waits no longer.",
-                    review=True,
+                    "What waited of it for you waits no longer. What you "
+                    "decided of it holds again for whatever is unchanged "
+                    "when it is submitted again.",
+                    division_lead=True,
                 )
         self._org_turn()
+
+    def _contracts_written(self, top: SessionTeam) -> list[tuple[str, str]]:
+        """The contracts a session wrote that are not the org's: each
+        directory with the session's text."""
+        memory = self._memory()
+        return [
+            (file.rpartition("/")[0], text or "")
+            for file, (text, _) in sorted(self.drafts(top.session).items())
+            if file.endswith(CONTRACTS_FILE) and memory.read(file) != text
+        ]
 
     def _merged_as(self, node: SessionTeam) -> str:
         """What the commit that merges a team's work calls it: the session
@@ -1560,7 +1620,7 @@ class Reviews(Requests):
                 resolved = result.files if result.outcome == "merged" else ()
             else:
                 await asyncio.to_thread(self._drop_merge_checkout, node_id)
-            if result.outcome == "refused" and reviews_only(above):
+            if result.outcome == "refused" and is_division_lead(above):
                 # Only the human can clear their own checkout: they are
                 # asked, and their answer merges the work.
                 if all(e.id != MERGE_WAITS for e in node.escalations):
@@ -1653,7 +1713,7 @@ class Reviews(Requests):
             )
         self._runs().unmark(SHOWN, node_id)
         self._tell_turns()
-        if not reviews_only(above):
+        if not is_division_lead(above):
             self.count_accepted_review(above.id)
         self.notify(
             agent_conversation(node, "ic"),

@@ -52,10 +52,10 @@ from tests.agent_server.director.test_director_teams import (
     propose_and_approve,
 )
 from tests.agent_server.director.test_director_tools import (
+    division_lead_ic,
+    division_lead_of,
     ic,
     node,
-    review_place_of,
-    reviewer,
     split_root,
     use,
     woken,
@@ -108,7 +108,7 @@ def own_checkout(
     worktree = tmp_path / name
     run_git(repo, "worktree", "add", "--quiet", "-b", name, str(worktree))
     for team in service.store.session(session_id_of(node(service, node_id))):
-        if not team.review_only:
+        if not team.division_lead:
             service.store.update_place(
                 team.id, worktree_path=str(worktree), branch=name
             )
@@ -137,8 +137,8 @@ async def test_a_session_is_beside_the_org_tree_with_a_place_at_each_of_its_team
     assert isinstance(top, SessionTeam) and top.id == f"{API}@{found.id}"
     # Above the team it was opened at is the place its work is reviewed from,
     # where nobody stands until it submits.
-    assert (review.id, review.team_id) == (f"root@{found.id}@review", "root")
-    assert review.review_only and review.parent_id is None and review.agents == []
+    assert (review.id, review.team_id) == (f"root@{found.id}@lead", "root")
+    assert review.division_lead and review.parent_id is None and review.agents == []
     assert (top.team_id, top.parent_id, top.child_ids) == (API, review.id, [db.id])
     assert top.boundary == api.boundary
     assert (db.team_id, db.parent_id, db.agents) == (DB, top.id, [])
@@ -242,7 +242,7 @@ async def test_a_conversation_links_to_the_ones_a_level_from_it(
     await use(service, ic(service, top), SubmitReviewTool, DONE)
 
     assert links(ic(service, top))[0] == ("above", "root", "ic", "Refunds")
-    assert links(reviewer(service, top)) == [("below", API, "ic", "Refunds")]
+    assert links(division_lead_ic(service, top)) == [("below", API, "ic", "Refunds")]
 
 
 async def test_a_session_at_the_top_team_is_reviewed_from_a_place_of_that_team(
@@ -252,7 +252,7 @@ async def test_a_session_at_the_top_team_is_reviewed_from_a_place_of_that_team(
 
     found = session.session
     assert (found.team_id, found.above_id) == ("root", "root")
-    assert found.teams[0].parent_id == f"root@{found.id}@review"
+    assert found.teams[0].parent_id == f"root@{found.id}@lead"
     # It has a place at every team of the org and one it is reviewed from,
     # and only the first started.
     assert [team.team_id for team in found.teams] == ["root", API, WEB, DB, "root"]
@@ -322,17 +322,19 @@ async def test_each_session_has_a_reviewer_of_its_own_and_the_second_meets_the_f
     for team, content in ((first, "refunds\n"), (second, "vouchers\n")):
         worktree = own_checkout(service, repo, tmp_path, team)
         commit(worktree, "services/api/routes.ts", content)
-        assert reviewer(service, team) is None
+        assert division_lead_ic(service, team) is None
         await use(service, ic(service, team), SubmitReviewTool, DONE)
         # Its reviewer starts for it, with the request.
         start = launcher.derived[-1]
-        assert str(start.conversation_id) == reviewer(service, team)
+        assert str(start.conversation_id) == division_lead_ic(service, team)
         assert "submits its work" in start.task and team in start.task
-    assert reviewer(service, first) != reviewer(service, second)
+    assert division_lead_ic(service, first) != division_lead_ic(service, second)
     assert len(launcher.messages_to(ic(service))) == to_root
 
-    await use(service, reviewer(service, first), ReviewTeamTool, accept(first))
-    await use(service, reviewer(service, second), ReviewTeamTool, accept(second))
+    await use(service, division_lead_ic(service, first), ReviewTeamTool, accept(first))
+    await use(
+        service, division_lead_ic(service, second), ReviewTeamTool, accept(second)
+    )
 
     # What does not merge with the first is the second's reviewer's to
     # merge: its team is not sent back and keeps its turn.
@@ -341,14 +343,16 @@ async def test_each_session_has_a_reviewer_of_its_own_and_the_second_meets_the_f
     assert [review.state for review in reviews if review] == ["accepted", "pending"]
     merge = service.merge_checkout(second)
     assert merge is not None and merge.files == ["services/api/routes.ts"]
-    assert merge.where in launcher.messages_to(reviewer(service, second))[-1]
-    waits = node(service, review_place_of(service, second)).merge
+    assert merge.where in launcher.messages_to(division_lead_ic(service, second))[-1]
+    waits = node(service, division_lead_of(service, second)).merge
     assert waits is not None
     assert [(item.kind, item.key, item.gate) for item in waits.items] == [
         ("code", "services/api/routes.ts", "ic")
     ]
     (Path(merge.where) / "services/api/routes.ts").write_text("refunds\nvouchers\n")
-    await use(service, reviewer(service, second), ReviewTeamTool, accept(second))
+    await use(
+        service, division_lead_ic(service, second), ReviewTeamTool, accept(second)
+    )
     assert (repo / "services/api/routes.ts").read_text() == "refunds\nvouchers\n"
     review = node(service, second).review
     assert review is not None and review.state == "accepted"
@@ -375,14 +379,14 @@ async def test_work_uncommitted_beside_a_session_is_not_put_aside_for_it(
     (repo / "services/api/routes.ts").write_text("another's, not committed\n")
     await use(service, ic(service, top), SubmitReviewTool, DONE)
 
-    await use(service, reviewer(service, top), ReviewTeamTool, accept(top))
+    await use(service, division_lead_ic(service, top), ReviewTeamTool, accept(top))
 
     assert (repo / "services/api/routes.ts").read_text() == (
         "another's, not committed\n"
     )
     review = node(service, top).review
     assert review is not None and review.state == "pending"
-    told = launcher.messages_to(reviewer(service, top))[-1]
+    told = launcher.messages_to(division_lead_ic(service, top))[-1]
     assert "uncommitted changes are in the way of the merge" in told
 
 
@@ -403,7 +407,7 @@ async def test_a_session_that_changed_nothing_itself_is_accepted_with_its_sub_te
     assert accepted is not None and accepted.state == "accepted"
     passed = node(service, top).review
     assert passed is not None and (passed.state, passed.passed_up) == ("accepted", True)
-    assert reviewer(service, top) is None
+    assert division_lead_ic(service, top) is None
     assert "without another review" in launcher.messages_to(ic(service, top))[-1]
 
 
@@ -429,7 +433,7 @@ async def test_sub_teams_a_session_changes_are_its_own_until_its_work_is_accepte
     assert [team.title for team in service.store.below(node(service, API).id)] == ["DB"]
 
     await use(service, ic(service, top), SubmitReviewTool, DONE)
-    await use(service, reviewer(service, top), ReviewTeamTool, accept(top))
+    await use(service, division_lead_ic(service, top), ReviewTeamTool, accept(top))
 
     assert [team.id for team in service.store.sub_teams(API)] == [
         DB,
@@ -469,7 +473,7 @@ async def test_the_sessions_of_a_team_know_of_each_other_and_share_accepted_repo
     ]
 
     await use(service, ic(service, top), SubmitReviewTool, DONE)
-    await use(service, reviewer(service, top), ReviewTeamTool, accept(top))
+    await use(service, division_lead_ic(service, top), ReviewTeamTool, accept(top))
 
     assert reports(API) == [
         ("ic", "Routes are typed."),
@@ -701,14 +705,14 @@ async def test_work_is_accepted_in_the_order_it_was_submitted(
     first, second = await two_submitted(service, repo, tmp_path)
 
     refused = await use(
-        service, reviewer(service, second), ReviewTeamTool, accept(second)
+        service, division_lead_ic(service, second), ReviewTeamTool, accept(second)
     )
 
     assert "submitted before" in refused.text
     pending = node(service, second).review
     assert pending is not None and pending.state == "pending"
 
-    await use(service, reviewer(service, first), ReviewTeamTool, accept(first))
+    await use(service, division_lead_ic(service, first), ReviewTeamTool, accept(first))
     accepted = node(service, first).review
     assert accepted is not None and accepted.state == "accepted"
 
@@ -719,10 +723,12 @@ async def test_work_that_meets_merged_work_is_reconciled_before_it_is_merged(
     """git merges two changes to different lines of a file without a word.
     The reviewer is asked about them all the same."""
     first, second = await two_submitted(service, repo, tmp_path)
-    await use(service, reviewer(service, first), ReviewTeamTool, accept(first))
+    await use(service, division_lead_ic(service, first), ReviewTeamTool, accept(first))
 
     asked = (
-        await use(service, reviewer(service, second), ReviewTeamTool, accept(second))
+        await use(
+            service, division_lead_ic(service, second), ReviewTeamTool, accept(second)
+        )
     ).text
 
     assert "Not merged yet" in asked
@@ -732,7 +738,7 @@ async def test_work_that_meets_merged_work_is_reconciled_before_it_is_merged(
 
     await use(
         service,
-        reviewer(service, second),
+        division_lead_ic(service, second),
         ReviewTeamTool,
         ReviewTeamAction(
             node_id=second, decision="accept", reconciled="Both lines hold."
@@ -762,7 +768,7 @@ async def test_a_spec_a_session_writes_is_its_own_until_its_work_is_accepted(
 
     commit(own_checkout(service, repo, tmp_path, top), ROUTES, "refunds\n")
     await use(service, ic(service, top), SubmitReviewTool, DONE)
-    await use(service, reviewer(service, top), ReviewTeamTool, accept(top))
+    await use(service, division_lead_ic(service, top), ReviewTeamTool, accept(top))
 
     assert service.team_memory.read("services/api/spec.md") == "# Refunds"
     api = service.store.team(API)
@@ -781,12 +787,12 @@ async def test_a_spec_written_over_one_that_changed_meanwhile_is_reconciled(
         service, ic(service, other), WriteSpecTool, WriteSpecAction(text="# The API")
     )
     await use(service, ic(service, other), SubmitReviewTool, DONE)
-    await use(service, reviewer(service, other), ReviewTeamTool, accept(other))
+    await use(service, division_lead_ic(service, other), ReviewTeamTool, accept(other))
     commit(own_checkout(service, repo, tmp_path, top), ROUTES, "refunds\n")
     await use(service, ic(service, top), SubmitReviewTool, DONE)
 
     asked = (
-        await use(service, reviewer(service, top), ReviewTeamTool, accept(top))
+        await use(service, division_lead_ic(service, top), ReviewTeamTool, accept(top))
     ).text
 
     assert "It wrote a spec for services/api" in asked
@@ -795,7 +801,7 @@ async def test_a_spec_written_over_one_that_changed_meanwhile_is_reconciled(
 
     await use(
         service,
-        reviewer(service, top),
+        division_lead_ic(service, top),
         ReviewTeamTool,
         ReviewTeamAction(node_id=top, decision="accept", reconciled="Refunds holds."),
     )

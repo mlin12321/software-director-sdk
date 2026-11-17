@@ -18,7 +18,7 @@ from openhands.agent_server.director.models import (
     SplitChild,
 )
 from openhands.agent_server.director.org_store import (
-    review_place_id,
+    division_lead_id,
     session_id_of,
     team_id_of,
 )
@@ -118,7 +118,7 @@ def node(service: DirectorService, node_id: str) -> SessionTeam:
             (
                 place
                 for place in service.store.places()
-                if not place.review_only and place.team_id == node_id
+                if not place.division_lead and place.team_id == node_id
             ),
             None,
         )
@@ -126,17 +126,17 @@ def node(service: DirectorService, node_id: str) -> SessionTeam:
     return found
 
 
-def reviewer(service: DirectorService, node_id: str = "root") -> str | None:
+def division_lead_ic(service: DirectorService, node_id: str = "root") -> str | None:
     """The IC that reviews the session of the place ``node_id``."""
-    place = service.store.place(review_place_of(service, node_id))
+    place = service.store.place(division_lead_of(service, node_id))
     assert place is not None
     return agent_conversation(place, "ic")
 
 
-def review_place_of(service: DirectorService, node_id: str = "root") -> str:
+def division_lead_of(service: DirectorService, node_id: str = "root") -> str:
     session = service.store.session_of(node(service, node_id))
     assert session is not None
-    return review_place_id(session.above_id, session.id)
+    return division_lead_id(session.above_id, session.id)
 
 
 def ic(service: DirectorService, node_id: str = "root") -> str | None:
@@ -252,7 +252,7 @@ async def test_the_ic_writes_the_spec_its_sub_teams_inherit(service: DirectorSer
     )
     await use(
         service,
-        reviewer(service),
+        division_lead_ic(service),
         ReviewTeamTool,
         ReviewTeamAction(node_id=node(service, "root").id, decision="accept"),
     )

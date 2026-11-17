@@ -11,7 +11,7 @@ from openhands.agent_server.director.git_store import team_key
 from openhands.agent_server.director.models import OrgNode, RoutedRequest, SessionTeam
 from openhands.agent_server.director.org_store import (
     AGENT_LOST,
-    reviews_only,
+    is_division_lead,
 )
 from openhands.agent_server.director.prompts import misrouted_notice
 from openhands.agent_server.director.routing import Card, Choice
@@ -86,7 +86,7 @@ class Requests(Teams):
             # the session has, those it set up itself included, each as it
             # is there, under the team's own id.
             places = [
-                place for place in store.session(within) if not reviews_only(place)
+                place for place in store.session(within) if not is_division_lead(place)
             ]
             ids = {place.id: place.team_id for place in places}
             rebased = [

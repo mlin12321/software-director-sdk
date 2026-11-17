@@ -39,11 +39,11 @@ from tests.agent_server.director.conftest import (
 )
 from tests.agent_server.director.test_director_tools import (
     APPROVE,
+    division_lead_ic,
     ic,
     manager,
     node,
     proposing,
-    reviewer,
     split_root,
     use,
     woken,
@@ -108,7 +108,9 @@ async def reviewer_wakes(
 
 def requests(service: DirectorService, launcher: FakeLauncher) -> list[str]:
     """The review requests the top team's IC got."""
-    return [text for text in launcher.messages_to(ic(service)) if "Review mode" in text]
+    return [
+        text for text in launcher.messages_to(ic(service)) if "Review request" in text
+    ]
 
 
 def reject(node_id: str = "services.api") -> ReviewTeamAction:
@@ -142,7 +144,7 @@ async def test_submitted_work_goes_to_the_ic_above_with_the_teams_own_account(
     assert api.review.automated == [FINDING]
     request = launcher.messages_to(ic(service))[-1]
     assert api.review.description == ACCOUNT
-    assert "Review mode" in request and "Endpoint shipped." in request
+    assert "Review request" in request and "Endpoint shipped." in request
     assert f"git diff {base} HEAD -- services/api" in request
     assert ACCOUNT in request and "Returns a string." in request
     assert len(launcher.messages_to(manager(service))) == to_manager
@@ -203,7 +205,7 @@ async def test_without_review_instructions_the_team_is_only_asked_for_its_accoun
 
         asked = [WRITE_UP in question for _, question in launcher.agents_asked]
         assert asked == [True]
-        assert "Review mode" in launcher.messages_to(ic(service))[-1]
+        assert "Review request" in launcher.messages_to(ic(service))[-1]
     finally:
         await service.aclose()
 
@@ -366,7 +368,7 @@ async def test_an_escalation_brings_the_reviews_that_wait_with_it(
         launcher.messages_to(ic(service))[-2:], key=lambda text: "escalates" in text
     )
     assert "Which router?" in escalation
-    assert "Review mode" in review and "Team 'API'" in review
+    assert "Review request" in review and "Team 'API'" in review
 
 
 async def test_reviews_that_waited_through_a_pause_go_out_after_it(
@@ -651,7 +653,7 @@ async def test_the_top_team_is_done_once_it_submits_and_its_reviewer_gets_the_fi
     assert not done.is_error and root.status == "done"
     assert root.review is not None and root.review.state == "pending"
     start = launcher.derived[-1]
-    assert str(start.conversation_id) == reviewer(service)
+    assert str(start.conversation_id) == division_lead_ic(service)
     assert "Returns a string." in start.task
 
 
@@ -699,7 +701,7 @@ async def test_a_top_team_that_changed_nothing_is_accepted_when_all_below_is(
     assert root.review is not None and root.review.state == "accepted"
     assert root.review.passed_up and root.status == "done"
     # Each change was reviewed once already: nobody is asked again.
-    assert reviewer(service) is None
+    assert division_lead_ic(service) is None
     assert [team.id for team in service.store.teams()] == [
         "root",
         "services.api",
@@ -724,7 +726,7 @@ async def test_an_ic_that_changed_files_itself_submits_them_with_the_accepted_wo
 
     assert node(service, "services.api").review is None
     # Nothing since it was asked to review its sub-team.
-    assert "Review mode" in launcher.messages_to(ic(service, "services.api"))[-1]
+    assert "Review request" in launcher.messages_to(ic(service, "services.api"))[-1]
     assert requests(service, launcher) == []
 
     if not committed:

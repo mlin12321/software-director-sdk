@@ -29,16 +29,16 @@ from openhands.agent_server.director.models import (
 )
 from openhands.agent_server.director.org_store import (
     AGENT_LOST,
-    reviews_only,
+    is_division_lead,
     session_team_id,
 )
 from openhands.agent_server.director.pods import StartedAgent
 from openhands.agent_server.director.prompts import (
+    DIVISION_LEAD_IC_ROLE,
+    DIVISION_LEAD_MANAGER_ROLE,
     HAND_OVER_ROLE,
     MANAGER_ROLE,
     POD_PROTOCOL,
-    REVIEW_MANAGER_ROLE,
-    REVIEW_ROLE,
     brief,
     hand_over_brief,
     left_for_team,
@@ -115,13 +115,15 @@ class Teams(Delivery):
         )
         self.tell_ic(ic_node_id, f"{heading}\n{text}{note}")
 
-    def tell_manager(self, node_id: str, text: str, *, review: bool = False) -> None:
+    def tell_manager(
+        self, node_id: str, text: str, *, division_lead: bool = False
+    ) -> None:
         """Send a team's Manager a message from the director. A team has no
         Manager until something is sent to it: the first message starts
         one, and follows its briefing. Safe from any thread.
 
         Args:
-            review: The text asks it to settle a session's sub-teams.
+            division_lead: The text asks it to settle a session's sub-teams.
                 Nothing else reaches the Manager of the place a session's
                 work is reviewed from.
         """
@@ -130,7 +132,7 @@ class Teams(Delivery):
             node = store.place(node_id)
             if node is None:
                 return
-            if reviews_only(node) and not review:
+            if is_division_lead(node) and not division_lead:
                 return
             if agent_conversation(node, "manager") is None:
                 manager = AgentRef(
@@ -142,7 +144,12 @@ class Teams(Delivery):
         self.notify(agent_conversation(node, "manager"), text)
 
     def tell_ic(
-        self, node_id: str, text: str, *, human: bool = False, review: bool = False
+        self,
+        node_id: str,
+        text: str,
+        *,
+        human: bool = False,
+        division_lead: bool = False,
     ) -> str | None:
         """Send a team's IC a message. A team that was only set up has no IC
         until something is sent to it: the first message starts one and is
@@ -151,7 +158,7 @@ class Teams(Delivery):
         Args:
             human: The human's own words, which reach an agent at once and
                 are not marked as the director's.
-            review: The text asks for a review. Nothing else starts the IC
+            division_lead: The text asks for a review. Nothing else starts the IC
                 of the place a session's work is reviewed from.
 
         Returns:
@@ -163,8 +170,8 @@ class Teams(Delivery):
             if node is None:
                 return None
             conversation_id = agent_conversation(node, "ic")
-            reviewing = reviews_only(node)
-            if conversation_id is None and reviewing and not review:
+            leads = is_division_lead(node)
+            if conversation_id is None and leads and not division_lead:
                 return None
             if conversation_id is None:
                 [ic] = _new_pod(uuid4())
@@ -194,7 +201,7 @@ class Teams(Delivery):
         """Whether a team that starts works in the checkout it has: the
         place a session is reviewed from, and the team a session is opened
         at when sessions get no worktree or the session has one already."""
-        return reviews_only(node) or (
+        return is_division_lead(node) or (
             self.store.opens_session(node)
             and (
                 node.isolation != "worktree"
@@ -209,7 +216,7 @@ class Teams(Delivery):
         its reviewer, who of the session works already."""
         store = self.store
         opened = store.session_of(node)
-        if reviews_only(node) and opened:
+        if is_division_lead(node) and opened:
             return session_team_id(opened.team_id, opened.id)
         if store.opens_session(node):
             # A session that went a team higher has an IC below already.
@@ -614,7 +621,7 @@ class Teams(Delivery):
             else launcher.agent_kind(parent_id)
         )
         isolation = node.isolation if role == "ic" else "shared"
-        reviewing = reviews_only(node)
+        leads = is_division_lead(node)
         if kind == "acp" and role == "ic" and self._bwrap is None:
             # Nothing holds its process to the team's directory, so its
             # work is kept apart and checked when it is merged.
@@ -634,7 +641,7 @@ class Teams(Delivery):
             node.title,
             role,
             self.store.session_title(node),
-            review=reviews_only(node) and role == "ic",
+            division_lead=leads,
         )
 
         async def start() -> StartedAgent:
@@ -647,7 +654,10 @@ class Teams(Delivery):
                     title=title,
                     task=text,
                     isolation=isolation,
-                    suffixes=[POD_PROTOCOL, *([REVIEW_ROLE] if reviewing else [])],
+                    suffixes=[
+                        POD_PROTOCOL,
+                        *([DIVISION_LEAD_IC_ROLE] if leads else []),
+                    ],
                     tool_params=tool_params,
                     adapt_agent=adapt,
                     checkout=checkout,
@@ -659,8 +669,12 @@ class Teams(Delivery):
                 title=title,
                 task=text,
                 isolation=isolation,
-                suffixes=[REVIEW_ROLE if role == "ic" else REVIEW_MANAGER_ROLE]
-                if reviewing
+                suffixes=[
+                    DIVISION_LEAD_IC_ROLE
+                    if role == "ic"
+                    else DIVISION_LEAD_MANAGER_ROLE
+                ]
+                if leads
                 else []
                 if role == "ic"
                 else [MANAGER_ROLE],
@@ -693,7 +707,7 @@ class Teams(Delivery):
             # started: the session's own then stands in.
             derived_from = await self._started_ic(node) or (
                 await self._started_ic(self.store.place(self._derived_from(node) or ""))
-                if reviews_only(node)
+                if is_division_lead(node)
                 else None
             )
             await self._start_agent(node_id, "manager", derived_from, task)
@@ -720,7 +734,7 @@ class Teams(Delivery):
         # A session starts beside the team's own work: what is uncommitted
         # in the team's directory is not the session's.
         opens = started is not None and (
-            self.store.opens_session(started) or reviews_only(started)
+            self.store.opens_session(started) or is_division_lead(started)
         )
         if started is not None:
             # A team of the same name before it left nothing to count on.
@@ -741,7 +755,7 @@ class Teams(Delivery):
         )
         if above is not None and not opens:
             await asyncio.to_thread(self._pass_down, above, node_id)
-        if opens and not reviews_only(started):
+        if opens and not is_division_lead(started):
             self._checkout_for_session(node_id)
         purpose = intent.payload.get("purpose", task)
         self._enqueue(lambda: self._summarize(node_id, purpose, first=True), node_id)

@@ -8,9 +8,11 @@ from typing import Any
 import pytest
 
 from openhands.agent_server.director.context import (
+    CUT,
     UPDATE_HEADING,
     changed,
     steady,
+    update_block,
 )
 from openhands.agent_server.director.run_state import TOLD
 from openhands.agent_server.director.service import DirectorService
@@ -19,18 +21,28 @@ from openhands.agent_server.director.tools import (
     PruneTeamTool,
     RaiseEscalationTool,
     ReportTool,
+    ReviewTeamTool,
     SubmitReviewTool,
+    WriteSpecTool,
 )
 from openhands.agent_server.director.tools.definition import (
     MsgIcAction,
     PruneTeamAction,
     RaiseEscalationAction,
     ReportAction,
+    WriteSpecAction,
 )
 from openhands.sdk.conversation.state import ConversationExecutionStatus
 from tests.agent_server.director.conftest import FakeLauncher
 from tests.agent_server.director.test_director_pause import again
-from tests.agent_server.director.test_director_review import DONE, commit
+from tests.agent_server.director.test_director_review import (
+    DONE,
+    WRITE_UP,
+    accept,
+    commit,
+    reject,
+    reviewer_wakes,
+)
 from tests.agent_server.director.test_director_teams import started
 from tests.agent_server.director.test_director_tools import (
     ic,
@@ -101,7 +113,7 @@ def test_of_the_sub_teams_only_those_that_changed_or_went_are_told():
         "sub_teams": {"changed": [{**web, "status": "done"}]}
     }
     assert changed(before, replaced, "ic") == {
-        "sub_teams": {"changed": [db], "removed": ["web"]}
+        "sub_teams": {"added": [db], "removed": ["web"]}
     }
     # The first sub-teams a team gets are told as they are.
     assert changed(context(sub_teams=[]), before, "ic") == {
@@ -144,6 +156,83 @@ def test_an_agent_is_not_told_back_what_it_added_itself():
     }
 
 
+def test_of_a_list_known_by_id_only_what_was_added_changed_or_went_is_told():
+    first = {"escalation_id": "e1", "title": "Which router?"}
+    second = {"escalation_id": "e2", "title": "Which store?"}
+    before = context(escalations_for_you_to_settle=[first, second])
+    settled = context(escalations_for_you_to_settle=[second])
+    passed = context(
+        escalations_for_you_to_settle=[
+            first,
+            {**second, "passed_up": [{"by": "api", "reason": "Not ours."}]},
+        ]
+    )
+
+    assert changed(before, settled, "ic") == {
+        "escalations_for_you_to_settle": {"removed": ["e1"]}
+    }
+    assert changed(before, passed, "ic") == {
+        "escalations_for_you_to_settle": {
+            "changed": [passed["escalations_for_you_to_settle"][1]]
+        }
+    }
+
+
+def test_an_ic_is_not_told_the_status_its_own_acts_gave_its_team():
+    before, done = context(status="at work"), context(status="done")
+
+    assert changed(before, done, "ic") == {}
+    assert changed(before, done, "manager") == {"status": "done"}
+
+
+def test_a_long_text_is_cut_in_an_update():
+    block = update_block({"spec": "x" * (CUT + 500), "sub_teams": [{"summary": "ok"}]})
+    told = json.loads(block[block.index("{") :])
+
+    assert told["spec"].startswith("x" * CUT) and "read_node_context" in told["spec"]
+    assert len(told["spec"]) < CUT + 100
+    assert told["sub_teams"] == [{"summary": "ok"}]
+
+
+async def test_an_ic_is_not_sent_back_what_it_wrote_itself(
+    repo: Path, launcher: FakeLauncher
+):
+    account = "It adds the checkout endpoint and its tests. " * 200
+    launcher.agent_answers = {WRITE_UP: account}
+    service = await started(repo, launcher)
+    await split_root(service)
+    api = ic(service, "services.api")
+    assert api is not None
+
+    commit(repo, "services/api/app.py", "order_id = '1'\n")
+    await use(service, api, SubmitReviewTool, DONE)
+    await use(service, ic(service), ReviewTeamTool, reject())
+    commit(repo, "services/api/app.py", "order_id = 1\n")
+    await use(service, api, SubmitReviewTool, DONE)
+    await reviewer_wakes(service, launcher)
+    await use(service, ic(service), ReviewTeamTool, accept())
+    await service.settled()
+
+    updates = [
+        told for told in map(update_of, launcher.messages_to(api)) if told is not None
+    ]
+    assert updates
+    for told in updates:
+        assert account[:60] not in json.dumps(told)
+        assert len(json.dumps(told)) < 600
+        assert set(told.get("review_of_your_work") or {}) <= {"state", "round"}
+
+    # A spec it wrote itself is not told back to it either.
+    await use(
+        service,
+        await woken(service, "apps.web"),
+        WriteSpecTool,
+        WriteSpecAction(text="# Web\nThe router is server-side."),
+    )
+    assert "spec" not in (update_of(await tell(service, launcher, "apps/web")) or {})
+    await service.aclose()
+
+
 async def test_a_briefing_carries_the_teams_whole_context(
     repo: Path, launcher: FakeLauncher
 ):
@@ -163,7 +252,8 @@ async def test_a_briefing_carries_the_teams_whole_context(
         "session": "Checkout",
     }
     assert rest["team_above"] == node(service, "root").id
-    assert rest["sub_teams"] == []
+    # What is empty is left out.
+    assert "sub_teams" not in rest and "pending_split" not in rest
     # Said in the briefing's own words above, so not a second time.
     assert "spec" not in rest and "boundary" not in rest
     await service.aclose()

@@ -76,15 +76,15 @@ def session_team_id(team_id: str, session_id: str) -> str:
     return f"{team_id}@{session_id}"
 
 
-def review_place_id(team_id: str, session_id: str) -> str:
+def division_lead_id(team_id: str, session_id: str) -> str:
     """The id of the place a session's work is reviewed from, at the team
     ``team_id``."""
-    return f"{team_id}@{session_id}@review"
+    return f"{team_id}@{session_id}@lead"
 
 
-def reviews_only(node: OrgNodeInput | None) -> bool:
+def is_division_lead(node: OrgNodeInput | None) -> bool:
     """Whether ``node`` is the place a session's work is reviewed from."""
-    return isinstance(node, SessionTeamInput) and node.review_only
+    return isinstance(node, SessionTeamInput) and node.division_lead
 
 
 def session_id_of(node: OrgNodeInput) -> str:
@@ -181,7 +181,7 @@ class OrgStore:
             session = self._sessions.get(node.session)
             return (
                 session is not None
-                and not node.review_only
+                and not node.division_lead
                 and session.team_id == node.team_id
             )
 
@@ -208,7 +208,7 @@ class OrgStore:
             ]
             opened = self._sessions.get(session_id)
             top = session_team_id(opened.team_id, session_id) if opened else ""
-            return sorted(seats, key=lambda seat: (seat.review_only, seat.id != top))
+            return sorted(seats, key=lambda seat: (seat.division_lead, seat.id != top))
 
     def sessions(self) -> list[Session]:
         """The open sessions as a client reads them, oldest first."""
@@ -288,8 +288,8 @@ class OrgStore:
                 top.id != session_team_id(session.team_id, session.id)
                 or top.id in self._seats
                 or top.parent_id != review.id
-                or review.id != review_place_id(session.above_id, session.id)
-                or not review.review_only
+                or review.id != division_lead_id(session.above_id, session.id)
+                or not review.division_lead
             ):
                 raise OrgStoreError(f"Session {session.id} cannot go to {top.id}")
             self._sessions[session.id] = session
@@ -594,19 +594,19 @@ class OrgStore:
         session = self._sessions.get(seat_input.session)
         if session is None:
             raise OrgStoreError(f"Session {seat_input.session} is not open")
-        reviewing = review_place_id(session.above_id, session.id)
+        lead_id = division_lead_id(session.above_id, session.id)
         above = self._seats.get(parent_id or "")
-        if seat_input.review_only:
-            fits = seat_input.id == reviewing and parent_id is None
+        if seat_input.division_lead:
+            fits = seat_input.id == lead_id and parent_id is None
         elif seat_input.id != session_team_id(seat_input.team_id, session.id):
             raise OrgStoreError(f"{seat_input.id} is no team of session {session.id}")
         elif seat_input.team_id == session.team_id:
-            fits = parent_id == reviewing and above is not None
+            fits = parent_id == lead_id and above is not None
         else:
             fits = (
                 above is not None
                 and above.session == session.id
-                and not above.review_only
+                and not above.division_lead
             )
         if not fits:
             raise OrgStoreError(
@@ -686,8 +686,8 @@ class OrgStore:
             former = self._seats.get(seat.parent_id or "")
             if (
                 former is None
-                or former.review_only
-                or above.review_only
+                or former.division_lead
+                or above.division_lead
                 or above.session != seat.session
                 or node_id in [parent_id, *self._chain(parent_id)]
             ):
@@ -783,7 +783,7 @@ class OrgStore:
         """Remove what a session has at a team and at the teams below it.
         The place its work is reviewed from, and the team it was opened at,
         go only with the session."""
-        if seat.parent_id is None or reviews_only(self._seats.get(seat.parent_id)):
+        if seat.parent_id is None or is_division_lead(self._seats.get(seat.parent_id)):
             raise OrgStoreError(f"{seat.id} is removed by closing its session")
         doomed = [seat]
         for current in doomed:
@@ -865,7 +865,7 @@ class OrgStore:
                 self._sessions[session.id] = session
                 try:
                     # The place a session is reviewed from is above the rest.
-                    for team in sorted(teams, key=lambda team: not team.review_only):
+                    for team in sorted(teams, key=lambda team: not team.division_lead):
                         self._restore_seat(team)
                     _ = self._seats[session_team_id(session.team_id, session.id)]
                 except (OrgStoreError, KeyError):
@@ -877,7 +877,7 @@ class OrgStore:
     def _restore_seat(self, team: SessionTeamInput) -> None:
         """Put back what a session has at one team, without telling anyone."""
         above = self._seats.get(team.parent_id or "")
-        if above is None and not team.review_only:
+        if above is None and not team.division_lead:
             raise OrgStoreError(f"Nothing is above {team.id}")
         self._check_escalations(team, self._chain(team.parent_id))
         data = team.model_dump(exclude=_DERIVED_FIELDS)
@@ -1176,7 +1176,7 @@ class OrgStore:
         while current is not None and current in self._seats and current not in chain:
             # Nobody stands at the place a session's work is reviewed from:
             # what goes up from the session goes to the human.
-            if self._seats[current].review_only:
+            if self._seats[current].division_lead:
                 break
             chain.append(current)
             current = self._seats[current].parent_id

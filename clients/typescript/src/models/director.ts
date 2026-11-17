@@ -426,7 +426,7 @@ export interface DirectorSessionTeam extends DirectorOrgNode {
    * above the one the session was opened at (the top team itself for a
    * session opened there), whose IC only reviews here.
    */
-  review_only: boolean;
+  division_lead: boolean;
   /**
    * On the place a session is reviewed from: how the work the session
    * submitted becomes the org's, with what waits to be settled first.

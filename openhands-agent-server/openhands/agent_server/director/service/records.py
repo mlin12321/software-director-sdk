@@ -47,7 +47,7 @@ from openhands.agent_server.director.models import (
     Thread,
     ThreadMessage,
 )
-from openhands.agent_server.director.org_store import reviews_only, team_id_of
+from openhands.agent_server.director.org_store import is_division_lead, team_id_of
 from openhands.agent_server.director.prompts import (
     NEEDED_WORTH_SAYING,
     event_line,
@@ -606,7 +606,7 @@ class Records(ServiceState):
             if other.team_id == node.team_id
             and other.id != node.id
             and other.agents
-            and not reviews_only(other)
+            and not is_division_lead(other)
         ]
         title = store.session_title(node)
         context: dict[str, Any] = {
@@ -653,10 +653,24 @@ class Records(ServiceState):
                 }
                 for child in store.below(node.id)
             ],
-            "review_of_your_work": node.review.model_dump() if node.review else None,
+            # What it wrote of its work and what was found in it reach it in
+            # the messages of the review, not a second time here.
+            "review_of_your_work": (
+                {"state": node.review.state, "round": node.review.round}
+                if node.review
+                else None
+            ),
             "agent_profiles_a_sub_team_may_run_on": self.settings.allowed_profiles,
+            # The proposal itself is in the message that made it.
             "pending_split": (
-                node.pending_split.model_dump() if node.pending_split else None
+                None
+                if node.pending_split is None
+                else node.pending_split.model_dump()
+                if in_full
+                else {
+                    "status": node.pending_split.status,
+                    "teams": [child.title for child in node.pending_split.children],
+                }
             ),
             "escalations_you_raised": [
                 {
@@ -823,7 +837,7 @@ class Records(ServiceState):
         """What is above ``node``, a team of the org or a place: nobody
         stands at the place a session's work is reviewed from."""
         above = self.store.get(node.parent_id) if node.parent_id else None
-        return None if above is None or reviews_only(above) else above
+        return None if above is None or is_division_lead(above) else above
 
     def drafts(self, session: str) -> dict[str, tuple[str | None, str | None]]:
         """The files of team memory a session wrote, which are its own
@@ -946,7 +960,7 @@ class Records(ServiceState):
         found = []
         for place in store.session(top.session):
             if (
-                reviews_only(place)
+                is_division_lead(place)
                 or place.team_id not in began
                 or store.team(place.team_id) is not None
             ):
@@ -1039,7 +1053,9 @@ class Records(ServiceState):
         session = top.session
         review = store.place(top.parent_id or "")
         held = set(held) - set(chosen or {})
-        places = [place for place in store.session(session) if not reviews_only(place)]
+        places = [
+            place for place in store.session(session) if not is_division_lead(place)
+        ]
         by_path = {normalize_store_path(p.boundary.path): p for p in places}
         stamp = _now()
         left = {

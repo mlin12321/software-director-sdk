@@ -39,6 +39,7 @@ FORMER = "former"
 SHOWN = "shown"  # node id -> what its reviewer was shown to reconcile
 MERGING = "merging"  # node id -> the merge its reviewer finishes
 TURN = "turn"  # node id, its reviewer was told to wait for its turn
+DECIDED = "decided"  # node id -> what a Manager decided of work sent back
 # session id and team id -> what became of the teams below that team there
 EVENTS = "events"
 # who wrote, to whom and which of the two kinds -> what was written

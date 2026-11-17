@@ -32,7 +32,7 @@ class ReadNodeContextAction(Action):
 
 
 class WriteSpecAction(Action):
-    """Replace the spec of your team's boundary."""
+    """Replace the spec of your team's folder."""
 
     text: str = Field(description="The whole spec, in Markdown.")
 
@@ -72,7 +72,8 @@ class MsgManagerAction(Action):
             "name of every one that stays as it is; leave `keep` out when "
             "you have none. The sub-teams cannot see "
             "each other's work or your spec, so the contracts must hold "
-            "everything they have to respect."
+            "everything they have to respect. What teams promise each "
+            "other is written only there, not in a spec."
         )
     )
 
@@ -320,9 +321,10 @@ class ReadNodeContextTool(_DirectorTool[ReadNodeContextAction]):
 
 class WriteSpecTool(_DirectorTool[WriteSpecAction]):
     summary = (
-        "IC only. Replace the spec of your boundary. It is kept outside the "
-        "working tree and is your team's own: sub-teams do not see it, only "
-        "the contracts of the split that made them."
+        "IC only. Replace the spec of your folder: how your team works "
+        "inside it. It is kept outside the working tree and is your team's "
+        "own; sub-teams see only the contracts of the split that made them. "
+        "What teams promise each other goes in contracts, not here."
     )
 
     @classmethod
@@ -459,12 +461,12 @@ class ApproveTeamsTool(_DirectorTool[ApproveTeamsAction]):
 
 class SettleTeamsTool(_DirectorTool[SettleTeamsAction]):
     summary = (
-        "Manager in review mode only. Settle the sub-teams of an accepted "
-        "session, and the contracts between them, that the org made "
-        "something else of while it worked: for each you say whether the "
-        "org's holds or the session's, and you may place or name a team "
-        "you take from the session otherwise. It is the org's once the "
-        "session's code is accepted."
+        "Division Lead Manager only. Settle the teams and contracts that "
+        "both a session and other accepted work changed: for each, the "
+        "org's or the session's; a team taken from the session may go "
+        "under another team or get another name; contracts may be a text "
+        "you write. It becomes the org's once the session's code is "
+        "accepted and it is the session's turn."
     )
 
     @classmethod

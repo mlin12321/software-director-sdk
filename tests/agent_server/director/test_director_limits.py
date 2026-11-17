@@ -33,11 +33,11 @@ from tests.agent_server.director.conftest import (
 )
 from tests.agent_server.director.test_director_tools import (
     APPROVE,
+    division_lead_ic,
     ic,
     manager,
     node,
     proposing,
-    reviewer,
     split_root,
     use,
     woken,
@@ -92,7 +92,7 @@ async def accepted(service: DirectorService) -> None:
     )
     await use(
         service,
-        reviewer(service),
+        division_lead_ic(service),
         ReviewTeamTool,
         ReviewTeamAction(node_id=node(service, "root").id, decision="accept"),
     )

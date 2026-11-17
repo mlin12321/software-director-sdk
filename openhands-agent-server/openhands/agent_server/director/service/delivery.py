@@ -186,6 +186,23 @@ class Delivery(Records):
             self._delivering.discard(seq)
         run.delivered(seq)
 
+    def knows(self, node_id: str, role: AgentRole, *keys: str) -> None:
+        """Take as told to an agent the parts of its context it has just
+        written itself, so that they are not sent back to it. Safe from any
+        thread."""
+        node = self.store.place(node_id)
+        conversation_id = agent_conversation(node, role) if node else None
+        run = self._runs()
+        before = run.marked(TOLD).get(conversation_id or "")
+        if node is None or conversation_id is None or not before:
+            return
+        try:
+            now = steady(self.context_of(node, role))
+        except (GitError, OSError):
+            return
+        told = json.loads(before) | {key: now[key] for key in keys if key in now}
+        run.mark(TOLD, conversation_id, json.dumps(told))
+
     def _with_what_changed(
         self, conversation_id: str, text: str
     ) -> tuple[str, str | None]:

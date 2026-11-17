@@ -285,7 +285,7 @@ async def test_work_a_kept_sub_team_had_in_review_goes_to_the_ic_it_now_reports_
     [request] = [
         s.task for s in launcher.derived if s.title == "Services · Checkout (IC)"
     ]
-    assert "Review mode" in request and node(service, DB).id in request
+    assert "Review request" in request and node(service, DB).id in request
     await service.aclose()
 
 
@@ -568,5 +568,5 @@ async def test_a_team_given_no_task_owes_nothing(
 
     # The review of the team that works does not wait for the one that was
     # never started.
-    assert any("Review mode" in text for text in launcher.messages_to(ic(service)))
+    assert any("Review request" in text for text in launcher.messages_to(ic(service)))
     assert node(service, "apps.web").agents == []

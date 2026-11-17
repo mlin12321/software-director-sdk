@@ -47,10 +47,10 @@ from tests.agent_server.director.test_director_landing import (
     JOBS,
     accepted,
     at_api,
+    division_lead_manager,
     landed,
     org_gains,
     path_of,
-    review_manager,
     sets_up_jobs,
     waiting,
 )
@@ -389,7 +389,7 @@ async def test_a_review_request_cut_off_by_a_crash_reaches_the_reviewer_once(
     review = node(second, "services.api").review
     assert review is not None and review.state == "pending"
     [asked] = [
-        text for text in launcher.messages_to(ic(second)) if "Review mode" in text
+        text for text in launcher.messages_to(ic(second)) if "Review request" in text
     ]
     # Both teams have submitted, so the reviewer is woken once for the two.
     assert "Team 'Web'" in asked and "Team 'API'" in asked
@@ -730,6 +730,8 @@ async def test_teams_that_wait_are_still_there_after_a_restart(
     second = await again(repo, launcher)
 
     assert waiting(second, top) == [JOBS]
-    await use(second, review_manager(second, top), SettleTeamsTool, SettleTeamsAction())
+    await use(
+        second, division_lead_manager(second, top), SettleTeamsTool, SettleTeamsAction()
+    )
     assert path_of(second, JOBS) == "services/api/jobs"
     await second.aclose()

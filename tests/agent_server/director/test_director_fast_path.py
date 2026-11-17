@@ -33,10 +33,10 @@ from tests.agent_server.director.test_director_teams import (
     propose_and_approve,
 )
 from tests.agent_server.director.test_director_tools import (
+    division_lead_ic,
+    division_lead_of,
     ic,
     node,
-    review_place_of,
-    reviewer,
     split_root,
     use,
 )
@@ -145,8 +145,8 @@ async def test_it_is_on_the_record_of_the_team_above_and_told_to_its_reviewer(
     await use(service, sent.conversation_id, SubmitReviewTool, DONE)
 
     # The IC of the team above reviews it, and reads what the human asked.
-    asked = reviewer(service, sent.node_id)
-    assert team_id_of(node(service, review_place_of(service, sent.node_id))) == API
+    asked = division_lead_ic(service, sent.node_id)
+    assert team_id_of(node(service, division_lead_of(service, sent.node_id))) == API
     assert "Add an index on orders." in briefing(launcher, asked)
 
 
@@ -257,8 +257,8 @@ async def test_a_team_hands_back_what_is_not_its_own_and_the_model_is_told(
     assert agent_conversation(at_db, "ic") == asked
     # It is reviewed from the top now.
     assert {team_id_of(place) for place in lifted.teams} == {API, DB, "root"}
-    assert [place.id for place in lifted.teams if place.review_only] == [
-        f"root@{opened.id}@review"
+    assert [place.id for place in lifted.teams if place.division_lead] == [
+        f"root@{opened.id}@lead"
     ]
     taken = briefing(launcher, lifted.conversation_id)
     assert "Make the cart page faster." in taken
