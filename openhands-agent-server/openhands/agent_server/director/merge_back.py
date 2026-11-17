@@ -58,6 +58,10 @@ def _one_at_a_time(checkout: Path) -> Iterator[None]:
             fcntl.flock(lock, fcntl.LOCK_UN)
 
 
+def merge_message(title: str, directory: str) -> str:
+    return f"{MERGE_SUBJECT}{title} ({directory or '/'})"
+
+
 def merge_back(above: Path, team: Path, directory: str, title: str) -> MergeBack:
     """Merge what a team committed in its own worktree into the checkout of
     the team above.
@@ -102,7 +106,7 @@ def merge_back(above: Path, team: Path, directory: str, title: str) -> MergeBack
             git(
                 above,
                 ["merge", "--no-ff", "--no-verify", "--no-gpg-sign", "--quiet"]
-                + ["-m", f"{MERGE_SUBJECT}{title} ({directory or '/'})", tip],
+                + ["-m", merge_message(title, directory), tip],
                 env=DIRECTOR_IDENTITY,
                 timeout=_MERGE_TIMEOUT_SECONDS,
             )
@@ -114,6 +118,31 @@ def merge_back(above: Path, team: Path, directory: str, title: str) -> MergeBack
             )
         _bring_up_to_date(above, ours)
     return MergeBack("merged", tip)
+
+
+def take_merge(above: Path, commit: str) -> MergeBack:
+    """Move the checkout above on to a merge that was made on top of the
+    commit it is on.
+
+    Raises:
+        GitError: The checkout could not be read.
+    """
+    ours = head_of(above)
+    if ours is None:
+        raise GitError(["rev-parse", "HEAD"], 1, "A checkout has no commit", "")
+    with _one_at_a_time(above):
+        try:
+            git(
+                above,
+                ["merge", "--ff-only", "--no-verify", "--quiet", commit],
+                timeout=_MERGE_TIMEOUT_SECONDS,
+            )
+        except GitError as error:
+            return MergeBack(
+                "refused", commit, detail=(error.stderr or error.stdout).strip()
+            )
+        _bring_up_to_date(above, ours)
+    return MergeBack("merged", commit)
 
 
 def _bring_up_to_date(checkout: Path, before: str) -> None:

@@ -333,13 +333,19 @@ async def test_each_session_has_a_reviewer_of_its_own_and_the_second_meets_the_f
     await use(service, reviewer(service, first), ReviewTeamTool, accept(first))
     await use(service, reviewer(service, second), ReviewTeamTool, accept(second))
 
+    # What does not merge with the first is the second's reviewer's to
+    # merge: its team is not sent back and keeps its turn.
     assert (repo / "services/api/routes.ts").read_text() == "refunds\n"
     reviews = [node(service, team).review for team in (first, second)]
-    assert [review.state for review in reviews if review] == [
-        "accepted",
-        "changes_requested",
-    ]
-    assert "do not merge" in launcher.messages_to(ic(service, second))[-1]
+    assert [review.state for review in reviews if review] == ["accepted", "pending"]
+    merge = service.merge_checkout(second)
+    assert merge is not None and merge.files == ["services/api/routes.ts"]
+    assert merge.where in launcher.messages_to(reviewer(service, second))[-1]
+    (Path(merge.where) / "services/api/routes.ts").write_text("refunds\nvouchers\n")
+    await use(service, reviewer(service, second), ReviewTeamTool, accept(second))
+    assert (repo / "services/api/routes.ts").read_text() == "refunds\nvouchers\n"
+    review = node(service, second).review
+    assert review is not None and review.state == "accepted"
     # An accepted session stays open, with its conversation, until the human
     # closes it.
     await service.settled()

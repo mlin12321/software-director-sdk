@@ -24,7 +24,18 @@ from openhands.agent_server.director.git_store import (
     SPEC_FILE,
     normalize_store_path,
 )
-from openhands.agent_server.director.merge_back import merge_back
+from openhands.agent_server.director.merge_back import (
+    MergeBack,
+    merge_back,
+    merge_message,
+    take_merge,
+)
+from openhands.agent_server.director.merge_checkout import (
+    MergeCheckout,
+    Unfinished,
+    finish,
+    prepare,
+)
 from openhands.agent_server.director.models import (
     ContractsChoice,
     Merge,
@@ -42,6 +53,7 @@ from openhands.agent_server.director.prompts import (
     NEED_FINDING,
     accept_in_order,
     changes_requested,
+    merge_prepared,
     merge_request,
     put_aside_notice,
     reconcile_request,
@@ -52,6 +64,7 @@ from openhands.agent_server.director.prompts import (
 from openhands.agent_server.director.reconcile import changes_of
 from openhands.agent_server.director.run_state import (
     HELD,
+    MERGING,
     SHOWN,
     Intent,
 )
@@ -210,6 +223,7 @@ class Reviews(Requests):
         )
         above = store.place(node.parent_id) if node.parent_id else None
         store.set_review(node_id, review)
+        self._drop_merge_checkout(node_id)
         self.progressed(node_id)
         self.record_event(
             node.parent_id,
@@ -1219,6 +1233,18 @@ class Reviews(Requests):
                     f"checkout, and still waits for your review: {error}",
                 )
                 return
+            resolved: tuple[str, ...] = ()
+            if result.outcome == "conflicts":
+                finished = await asyncio.to_thread(
+                    self._finish_merge, node, above, result
+                )
+                if isinstance(finished, str):
+                    self.notify(reviewer, finished)
+                    return
+                result = finished
+                resolved = result.files if result.outcome == "merged" else ()
+            else:
+                await asyncio.to_thread(self._drop_merge_checkout, node_id)
             if result.outcome == "refused" and reviews_only(above):
                 # Only the human can clear their own checkout: they are
                 # asked, and their answer merges the work.
@@ -1258,20 +1284,9 @@ class Reviews(Requests):
                     ),
                 )
                 return
-            if result.outcome in ("conflicts", "outside"):
+            if result.outcome == "outside":
                 issue = (
-                    (
-                        "These files do not merge with what was merged into "
-                        f"the repository's checkout meanwhile. Merge its "
-                        f"branch ({above.branch}) into yours, resolve them "
-                        "and commit."
-                        if reviews_only(above)
-                        else "These files do not merge with the checkout of "
-                        "the team above. Merge its branch into yours, "
-                        "resolve them and commit."
-                    )
-                    if result.outcome == "conflicts"
-                    else f"These files are outside {where}, which is all your "
+                    f"These files are outside {where}, which is all your "
                     "team owns. Take them out of your commits."
                 )
                 self.request_changes(
@@ -1286,6 +1301,13 @@ class Reviews(Requests):
                 )
                 return
             merged = result.outcome == "merged"
+            if resolved:
+                self.notify(
+                    agent_conversation(node, "ic"),
+                    "Your team's work did not merge by itself. The IC that "
+                    "reviewed it finished the merge in these files, which are "
+                    f"now as it left them: {', '.join(resolved)}",
+                )
         tip = await asyncio.to_thread(head_of, team)
         store.set_review(
             node_id,
@@ -1331,6 +1353,61 @@ class Reviews(Requests):
                 f"{above.worktree_path}"
                 + (f" on branch {above.branch}." if above.branch else "."),
             )
+
+    def _finish_merge(
+        self, node: SessionTeam, above: SessionTeam, found: MergeBack
+    ) -> MergeBack | str:
+        """Take the merge the reviewer of a team's work finished, or lay
+        it out for it to finish.
+
+        Returns:
+            How taking it went, or what to tell the reviewer when there is
+            nothing to take yet.
+        """
+        checkout = Path(above.worktree_path)
+        ours = head_of(checkout)
+        merge = self.merge_checkout(node.id)
+        if (
+            ours is None
+            or merge is None
+            or (merge.ours, merge.tip) != (ours, found.tip)
+            or not Path(merge.where).is_dir()
+        ):
+            if ours is None:
+                return f"The checkout of {above.title!r} has no commit."
+            where = self._merging_root() / node.id.replace("@", "-")
+            merge = MergeCheckout(
+                where=str(where), ours=ours, tip=found.tip, files=list(found.files)
+            )
+            try:
+                prepare(self._repo_dir, where, ours, found.tip)
+            except (GitError, OSError) as error:
+                return (
+                    f"The work of {node.title!r} does not merge with your "
+                    f"checkout ({', '.join(found.files)}), and the merge could "
+                    f"not be laid out for you: {error}"
+                )
+            self._runs().mark(MERGING, node.id, merge.model_dump_json())
+            return merge_prepared(node, merge.where, merge.files)
+        try:
+            commit = finish(
+                merge, merge_message(self._merged_as(node), node.boundary.path)
+            )
+        except Unfinished as error:
+            return (
+                f"The merge of the work of {node.title!r} in {merge.where} is "
+                f"not taken yet, and the work still waits for you: {error}"
+            )
+        except (GitError, OSError) as error:
+            return (
+                f"The merge of the work of {node.title!r} in {merge.where} "
+                f"could not be committed: {error}"
+            )
+        taken = take_merge(checkout, commit)
+        if taken.outcome != "merged":
+            return taken
+        self._drop_merge_checkout(node.id)
+        return MergeBack("merged", found.tip, tuple(merge.files))
 
     def _own_changes(
         self, node: SessionTeam, teams: list[SessionTeam]

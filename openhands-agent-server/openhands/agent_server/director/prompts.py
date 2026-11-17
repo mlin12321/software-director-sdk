@@ -724,6 +724,26 @@ def reconcile_request(
     return "\n".join(lines)
 
 
+def merge_prepared(team: SessionTeam, where: str, files: list[str]) -> str:
+    """What a reviewer is told when the work it accepts does not merge by
+    itself: the merge is laid out for it to finish."""
+    return (
+        f"The work of {team.title!r} (node {team.id}) does not merge with your "
+        f"checkout by itself. These files do not merge: {', '.join(files)}\n\n"
+        f"The merge is laid out in {where}, with git's conflict markers in "
+        "those files and everything else merged. It is yours to finish, so "
+        "that the team does not lose its turn:\n"
+        "- Edit those files there until each is what both sides need, with "
+        "no conflict markers left. Change no other file there.\n"
+        "- Do not run git there: the merge is committed for you.\n"
+        "- Then accept the work again with `review_team`, and say in "
+        "`reconciled` what you made of them. The merge is taken as you left "
+        "it and the team is told what you changed.\n\n"
+        "If it is not yours to decide, send the work back with `review_team` "
+        "and decision 'reject' instead."
+    )
+
+
 def merge_request(
     team: SessionTeam, session: str, waiting: list[MergeItem], accepted: bool
 ) -> str:

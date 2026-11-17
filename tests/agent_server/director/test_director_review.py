@@ -3,6 +3,8 @@
 import json
 from collections.abc import AsyncIterator
 from pathlib import Path
+from types import SimpleNamespace
+from typing import cast
 from uuid import UUID
 
 import pytest
@@ -27,6 +29,8 @@ from openhands.agent_server.director.tools.definition import (
 )
 from openhands.agent_server.director.tools.impl import DirectorObservation
 from openhands.sdk.conversation.state import ConversationExecutionStatus
+from openhands.sdk.event import ActionEvent
+from openhands.tools.file_editor.definition import FileEditorAction
 from tests.agent_server.director.conftest import (
     FakeLauncher,
     root_conversation,
@@ -491,22 +495,13 @@ async def test_accepted_work_of_a_worktree_team_is_merged_into_the_checkout_abov
     assert "merged" in launcher.messages_to(ic(service))[-1]
 
 
-@pytest.mark.parametrize(
-    ("path", "said"),
-    [("apps/web/page.tsx", "do not merge"), ("README.md", "outside apps/web")],
-)
-async def test_work_that_cannot_be_taken_in_goes_back_to_the_team(
-    service: DirectorService,
-    launcher: FakeLauncher,
-    repo: Path,
-    tmp_path: Path,
-    path: str,
-    said: str,
+async def test_work_outside_the_teams_directory_goes_back_to_the_team(
+    service: DirectorService, launcher: FakeLauncher, repo: Path, tmp_path: Path
 ):
     await split_root(service)
     worktree = in_own_worktree(service, tmp_path, repo)
-    commit(worktree, path, "theirs\n")
-    commit(repo, path, "ours\n")
+    commit(worktree, "README.md", "theirs\n")
+    commit(repo, "README.md", "ours\n")
     head = run_git(repo, "rev-parse", "HEAD")
     await use(service, ic(service, "apps.web"), SubmitReviewTool, DONE)
 
@@ -515,9 +510,105 @@ async def test_work_that_cannot_be_taken_in_goes_back_to_the_team(
     web = node(service, "apps.web")
     assert web.review is not None and web.review.state == "changes_requested"
     assert run_git(repo, "rev-parse", "HEAD") == head
-    assert (repo / path).read_text() == "ours\n"
-    assert said in launcher.messages_to(ic(service, "apps.web"))[-1]
+    assert (repo / "README.md").read_text() == "ours\n"
+    assert "outside apps/web" in launcher.messages_to(ic(service, "apps.web"))[-1]
     assert "sent back" in launcher.messages_to(ic(service))[-1]
+
+
+PAGE = "apps/web/page.tsx"
+
+
+async def test_work_that_does_not_merge_is_merged_by_its_reviewer(
+    service: DirectorService, launcher: FakeLauncher, repo: Path, tmp_path: Path
+):
+    await split_root(service)
+    worktree = in_own_worktree(service, tmp_path, repo)
+    commit(worktree, PAGE, "theirs\n")
+    commit(worktree, "apps/web/cart.tsx", "cart\n")
+    commit(repo, PAGE, "ours\n")
+    head = run_git(repo, "rev-parse", "HEAD")
+    web = node(service, "apps.web")
+    await use(service, ic(service, "apps.web"), SubmitReviewTool, DONE)
+
+    await use(service, ic(service), ReviewTeamTool, accept("apps.web"))
+
+    # The team is not sent back: the merge is laid out for its reviewer.
+    merge = service.merge_checkout(web.id)
+    assert merge is not None and merge.files == [PAGE]
+    review = node(service, "apps.web").review
+    assert review is not None and review.state == "pending"
+    assert run_git(repo, "rev-parse", "HEAD") == head
+    told = launcher.messages_to(ic(service))[-1]
+    assert merge.where in told and PAGE in told and "yours to finish" in told
+    laid_out = Path(merge.where)
+    assert "<<<<<<< " in (laid_out / PAGE).read_text()
+    assert (laid_out / "apps/web/cart.tsx").read_text() == "cart\n"
+
+    # Only what does not merge is the reviewer's to write there.
+    def writing(conversation: str | None, path: Path) -> str | None:
+        action = FileEditorAction(command="create", path=str(path), file_text="x")
+        event = cast(
+            ActionEvent, SimpleNamespace(tool_name="file_editor", action=action)
+        )
+        return service.guard_action(UUID(conversation or ""), event)
+
+    assert writing(ic(service), laid_out / PAGE) is None
+    refused = writing(ic(service), laid_out / "apps/web/cart.tsx")
+    assert refused is not None and "merged by itself" in refused
+    other = writing(ic(service, "apps.web"), laid_out / PAGE)
+    assert other is not None and "another team's reviewer" in other
+
+    # It is taken only once it is finished, and as git merged the rest.
+    await use(service, ic(service), ReviewTeamTool, accept("apps.web"))
+    assert "still have conflict markers" in launcher.messages_to(ic(service))[-1]
+    (laid_out / PAGE).write_text("ours and theirs\n")
+    (laid_out / "apps/web/cart.tsx").write_text("changed\n")
+    await use(service, ic(service), ReviewTeamTool, accept("apps.web"))
+    assert "not yours to change" in launcher.messages_to(ic(service))[-1]
+    assert run_git(repo, "rev-parse", "HEAD") == head
+    (laid_out / "apps/web/cart.tsx").write_text("cart\n")
+
+    await use(service, ic(service), ReviewTeamTool, accept("apps.web"))
+
+    review = node(service, "apps.web").review
+    assert review is not None and review.state == "accepted"
+    assert (repo / PAGE).read_text() == "ours and theirs\n"
+    assert (repo / "apps/web/cart.tsx").read_text() == "cart\n"
+    assert run_git(repo, "status", "--porcelain") == ""
+    parents = run_git(repo, "log", "-1", "--format=%P").split()
+    assert parents == [head.strip(), run_git(worktree, "rev-parse", "HEAD").strip()]
+    assert service.merge_checkout(web.id) is None and not laid_out.exists()
+    said = [
+        text
+        for text in launcher.messages_to(ic(service, "apps.web"))
+        if "finished the merge" in text
+    ]
+    assert len(said) == 1 and PAGE in said[0]
+
+
+async def test_a_merge_laid_out_goes_with_work_that_is_sent_back(
+    service: DirectorService, repo: Path, tmp_path: Path
+):
+    await split_root(service)
+    worktree = in_own_worktree(service, tmp_path, repo)
+    commit(worktree, PAGE, "theirs\n")
+    commit(repo, PAGE, "ours\n")
+    web = node(service, "apps.web")
+    await use(service, ic(service, "apps.web"), SubmitReviewTool, DONE)
+    await use(service, ic(service), ReviewTeamTool, accept("apps.web"))
+    merge = service.merge_checkout(web.id)
+    assert merge is not None
+
+    await use(
+        service,
+        ic(service),
+        ReviewTeamTool,
+        ReviewTeamAction(node_id="apps.web", decision="reject", findings=[FINDING]),
+    )
+
+    assert service.merge_checkout(web.id) is None
+    assert not Path(merge.where).exists()
+    assert merge.where not in run_git(repo, "worktree", "list")
 
 
 async def test_what_the_ic_above_wrote_in_a_started_teams_directory_is_put_aside(

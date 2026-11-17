@@ -49,6 +49,7 @@ from openhands.agent_server.director.git_store import (
     taking_in,
 )
 from openhands.agent_server.director.headline import provisional_summary
+from openhands.agent_server.director.merge_checkout import MergeCheckout, discard
 from openhands.agent_server.director.models import (
     ROLE_NAMES,
     AgentKind,
@@ -83,6 +84,7 @@ from openhands.agent_server.director.org_store import (
 )
 from openhands.agent_server.director.pods import PodLauncher
 from openhands.agent_server.director.run_state import (
+    MERGING,
     PROGRESS,
     RUNNING,
     SESSION,
@@ -220,6 +222,8 @@ _RUN_STATE = "director/state.db"
 # Where, in the repository's git directory, the director keeps the shells
 # its agents' terminals start, and what those shells need.
 _SHELLS_DIR = "director-shells"
+# In the repository's git directory: the merges reviewers finish.
+_MERGING_DIR = "director-merging"
 # After a conversation id: the script an ACP agent's process is started by.
 _ACP_LAUNCHER = ".acp.sh"
 _REMEMBERED_FILE = "director.json"
@@ -650,6 +654,20 @@ class ServiceState:
             self._repo_dir, ["rev-parse", "--path-format=absolute", "--git-common-dir"]
         ).strip()
         return Path(git_dir) / _SHELLS_DIR
+
+    def _merging_root(self) -> Path:
+        return self._shells().parent / _MERGING_DIR
+
+    def merge_checkout(self, node_id: str) -> MergeCheckout | None:
+        """The merge of a team's work that its reviewer finishes."""
+        kept = self._runs().marked(MERGING).get(node_id)
+        return MergeCheckout.model_validate_json(kept) if kept else None
+
+    def _drop_merge_checkout(self, node_id: str) -> None:
+        merge = self.merge_checkout(node_id)
+        if merge is not None:
+            discard(self._repo_dir, Path(merge.where))
+            self._runs().unmark(MERGING, node_id)
 
     def _enforcement(self, kind: AgentKind) -> TeamEnforcement:
         if self._bwrap is not None:

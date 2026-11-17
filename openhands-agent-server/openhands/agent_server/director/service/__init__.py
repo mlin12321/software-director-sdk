@@ -17,6 +17,7 @@ from openhands.agent_server.director.git import (
     is_git_repository,
 )
 from openhands.agent_server.director.headline import provisional_summary
+from openhands.agent_server.director.merge_checkout import MergeCheckout
 from openhands.agent_server.director.models import (
     Boundary,
     ChosenBy,
@@ -39,6 +40,7 @@ from openhands.agent_server.director.recovery import (
     has_work,
 )
 from openhands.agent_server.director.run_state import (
+    MERGING,
     Intent,
 )
 from openhands.agent_server.director.runtime import bind_director
@@ -380,9 +382,36 @@ class DirectorService(Sync):
         # the IC above may finish what it has there.
         sub_teams = [team for team in store.below(node.id) if team.agents]
         top = _checkout_root(node.worktree_path)
+        merges = {
+            team_id: MergeCheckout.model_validate_json(kept)
+            for team_id, kept in self._runs().marked(MERGING).items()
+        }
         for named in paths:
             target = Path(os.path.realpath(Path(node.worktree_path) / named))
-            if _is_in(target, top):
+            merging = next(
+                (
+                    (team_id, merge)
+                    for team_id, merge in merges.items()
+                    if _is_in(target, Path(os.path.realpath(merge.where)))
+                ),
+                None,
+            )
+            if merging is not None:
+                # Only what does not merge is its reviewer's to write.
+                team = store.place(merging[0])
+                if role != "ic" or team is None or team.parent_id != node.id:
+                    return (
+                        f"{named!r} is in a merge another team's reviewer "
+                        "finishes, so it was not changed."
+                    )
+                files = merging[1].files
+                relative = target.relative_to(os.path.realpath(merging[1].where))
+                if relative.as_posix() not in files:
+                    return (
+                        f"{named!r} merged by itself, so it was not changed. "
+                        f"Yours to edit in that merge: {', '.join(files)}"
+                    )
+            elif _is_in(target, top):
                 relative = target.relative_to(top).as_posix()
                 refusal = write_refusal(
                     node, role, sub_teams, "" if relative == "." else relative

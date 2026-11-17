@@ -37,6 +37,7 @@ FILES = "files"
 # session id, team id and time -> the record of a team the session removed
 FORMER = "former"
 SHOWN = "shown"  # node id -> what its reviewer was shown to reconcile
+MERGING = "merging"  # node id -> the merge its reviewer finishes
 # session id and team id -> what became of the teams below that team there
 EVENTS = "events"
 # who wrote, to whom and which of the two kinds -> what was written

@@ -1182,6 +1182,7 @@ class Records(ServiceState):
         records = self.former_drafts(session)
         for place in places:
             run.unmark(REPORTS, place.id)
+            self._drop_merge_checkout(place.id)
         for file in files:
             self._undraft(session, file)
         for record in records:
