@@ -110,7 +110,7 @@ class _Subscription:
     escalations: list[OpenEscalation] = field(default_factory=list)
 
 
-def _now() -> str:
+def utc_now() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
 
 
@@ -927,7 +927,7 @@ class OrgStore:
                 raised_by=raised_by,
                 title=title,
                 detail=detail,
-                raised_at=at or _now(),
+                raised_at=at or utc_now(),
                 held_by=next(iter(self._chain(node.parent_id)), None),
             )
             self._set_escalations(node, [*node.escalations, escalation])
@@ -969,7 +969,7 @@ class OrgStore:
                     "handoffs": [
                         *escalation.handoffs,
                         EscalationHandoff(
-                            node_id=holder.id, reason=reason.strip(), at=at or _now()
+                            node_id=holder.id, reason=reason.strip(), at=at or utc_now()
                         ),
                     ],
                 }
@@ -1000,7 +1000,7 @@ class OrgStore:
             asked = escalation.model_copy(
                 update={
                     "asked_of": team_id,
-                    "asked_at": (at or _now()) if team_id else None,
+                    "asked_at": (at or utc_now()) if team_id else None,
                 }
             )
             self._set_escalations(

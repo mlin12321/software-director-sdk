@@ -11,7 +11,7 @@ from openhands.agent_server.director.changes import (
 )
 from openhands.agent_server.director.models import Boundary, SessionTeam
 from openhands.sdk.errors import Forbidden, Invalid, NotFound
-from tests.agent_server.director.conftest import make_node, make_place, run_git
+from tests.agent_server.director.conftest import commit, make_node, make_place, run_git
 
 
 def team(repo: Path, path: str, *, readonly: list[str] | None = None) -> SessionTeam:
@@ -28,14 +28,6 @@ def team(repo: Path, path: str, *, readonly: list[str] | None = None) -> Session
         boundary=boundary,
         base_commit=run_git(repo, "rev-parse", "HEAD").strip(),
     )
-
-
-def commit(repo: Path, path: str, text: str) -> None:
-    target = repo / path
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(text)
-    run_git(repo, "add", path)
-    run_git(repo, "commit", "--quiet", "-m", f"change {path}")
 
 
 def test_lists_what_a_team_committed_left_uncommitted_and_added(repo: Path):

@@ -12,7 +12,7 @@ from openhands.agent_server.director.models import (
     SessionTeam,
 )
 from openhands.agent_server.director.ownership import node_ownership
-from tests.agent_server.director.conftest import run_git
+from tests.agent_server.director.conftest import commit, run_git
 
 
 def team(
@@ -42,13 +42,6 @@ def tree_team(node_id: str, path: str, parent: str | None = "root") -> OrgNode:
         boundary=Boundary(path=path),
         isolation="shared",
     )
-
-
-def commit(checkout: Path, path: str, content: str) -> None:
-    (checkout / path).parent.mkdir(parents=True, exist_ok=True)
-    (checkout / path).write_text(content)
-    run_git(checkout, "add", path)
-    run_git(checkout, "commit", "--quiet", "-m", path)
 
 
 @pytest.fixture

@@ -596,3 +596,17 @@ def memory_of(service: DirectorService, file: str) -> str | None:
     there and nobody accepted yet, else the org's."""
     [session, *_] = service.store.sessions()
     return service.read_file(service.store.session(session.id)[0], file)
+
+
+def commit(checkout: Path, path: str, content: str) -> None:
+    """Write a file in a checkout and commit it."""
+    file = checkout / path
+    file.parent.mkdir(parents=True, exist_ok=True)
+    file.write_text(content)
+    run_git(checkout, "add", path)
+    run_git(checkout, "commit", "--quiet", "-m", f"Write {path}")
+
+
+@pytest.fixture
+def launcher() -> FakeLauncher:
+    return FakeLauncher()

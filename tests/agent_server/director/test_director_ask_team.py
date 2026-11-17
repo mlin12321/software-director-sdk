@@ -57,11 +57,6 @@ def clock() -> Clock:
 
 
 @pytest.fixture
-def launcher() -> FakeLauncher:
-    return FakeLauncher()
-
-
-@pytest.fixture
 async def service(repo: Path, launcher: FakeLauncher, clock: Clock):
     """An org of API (with DB below it) and Web, which the first session
     made and whose work is accepted, every team started."""

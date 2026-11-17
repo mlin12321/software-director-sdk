@@ -7,7 +7,7 @@ from itertools import count
 from pathlib import Path
 from uuid import UUID, uuid4
 
-from openhands.agent_server.director.git import GitError, git, head_of
+from openhands.agent_server.director.git import GitError, git, head_of, ref_stamp
 from openhands.agent_server.director.headline import provisional_summary
 from openhands.agent_server.director.launch import TeamLauncher
 from openhands.agent_server.director.models import (
@@ -496,7 +496,7 @@ class Sessions(Splits):
                     for agent in team.agents
                     if agent.conversation_id is not None
                 ],
-                stamp=datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ"),
+                stamp=ref_stamp(),
             )
         plan = intent.payload
         conversations = [UUID(agent) for agent in plan["conversations"]]

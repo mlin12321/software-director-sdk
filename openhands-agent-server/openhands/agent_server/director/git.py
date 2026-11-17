@@ -5,6 +5,7 @@ import re
 import subprocess
 import tempfile
 from collections.abc import Mapping
+from datetime import UTC, datetime
 from pathlib import Path
 
 
@@ -95,6 +96,29 @@ def enclosing_repository(repo_dir: Path) -> Path | None:
 def pathspec(path: str) -> str:
     """What names ``path`` of a checkout, from anywhere in it; '' is all of it."""
     return f":(top,literal){path}" if path else ":(top)"
+
+
+def top_of(directory: Path) -> str:
+    """The top of the checkout ``directory`` is in.
+
+    Raises:
+        GitError: It is in no checkout.
+    """
+    return git(directory, ["rev-parse", "--show-toplevel"]).strip()
+
+
+def common_dir(directory: Path) -> Path:
+    """The git directory a checkout shares with its repository's others."""
+    return Path(
+        git(
+            directory, ["rev-parse", "--path-format=absolute", "--git-common-dir"]
+        ).strip()
+    )
+
+
+def ref_stamp() -> str:
+    """The time now, as it is written into the name of a ref."""
+    return datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
 
 
 def head_of(checkout: Path) -> str | None:

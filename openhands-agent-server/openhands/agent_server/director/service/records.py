@@ -47,7 +47,11 @@ from openhands.agent_server.director.models import (
     Thread,
     ThreadMessage,
 )
-from openhands.agent_server.director.org_store import is_division_lead, team_id_of
+from openhands.agent_server.director.org_store import (
+    is_division_lead,
+    team_id_of,
+    utc_now,
+)
 from openhands.agent_server.director.prompts import (
     NEEDED_WORTH_SAYING,
     event_line,
@@ -78,7 +82,6 @@ from openhands.agent_server.director.service.state import (
     TOGETHER_WORTH_SAYING,
     ServiceState,
     _contracts_file,
-    _now,
     _spec_file,
 )
 from openhands.agent_server.director.split import (
@@ -180,7 +183,7 @@ class Records(ServiceState):
         other_gone: tuple[str, str] | None = None,
     ) -> TeamEvent:
         return TeamEvent(
-            at=_now(),
+            at=utc_now(),
             kind=kind,
             # The team of the org, whatever session it was the work of.
             team_id=team.team_id if team else "",
@@ -295,7 +298,7 @@ class Records(ServiceState):
         accepted. Safe from any thread."""
         request = RoutedRequest.model_validate(
             {
-                "at": _now(),
+                "at": utc_now(),
                 "kind": kind,
                 "team_id": team.id,
                 "team": team.title,
@@ -621,7 +624,11 @@ class Records(ServiceState):
             },
             "spec": own_spec.spec if own_spec else None,
             "specs_left_by_teams_before_you": [
-                {"directory": spec.path or ".", "team": spec.left_by, "spec": spec.spec}
+                {
+                    "directory": spec.path or "the repository",
+                    "team": spec.left_by,
+                    "spec": spec.spec,
+                }
                 for spec in specs
                 if spec.old
             ],
@@ -707,7 +714,7 @@ class Records(ServiceState):
                 {
                     "node_id": former.id,
                     "team": former.title,
-                    "directory": former.path or ".",
+                    "directory": former.path or "the repository",
                     "ended": former.ended,
                     "at": former.at,
                 }
@@ -1055,7 +1062,7 @@ class Records(ServiceState):
             place for place in store.session(session) if not is_division_lead(place)
         ]
         by_path = {normalize_store_path(p.boundary.path): p for p in places}
-        stamp = _now()
+        stamp = utc_now()
         left = {
             place.id: place
             for place in places

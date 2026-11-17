@@ -45,11 +45,6 @@ API, WEB = "services.api", "apps.web"
 
 
 @pytest.fixture
-def launcher() -> FakeLauncher:
-    return FakeLauncher()
-
-
-@pytest.fixture
 async def service(repo: Path, launcher: FakeLauncher):
     service = await started(repo, launcher, stall_poll=3600)
     await split_root(service)

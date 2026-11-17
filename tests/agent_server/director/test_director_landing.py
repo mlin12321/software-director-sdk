@@ -72,11 +72,6 @@ from tests.agent_server.director.test_director_tools import (
 
 
 @pytest.fixture
-def launcher() -> FakeLauncher:
-    return FakeLauncher()
-
-
-@pytest.fixture
 async def service(repo: Path, launcher: FakeLauncher) -> AsyncIterator[DirectorService]:
     service = await started(repo, launcher)
     yield service

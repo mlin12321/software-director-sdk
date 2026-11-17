@@ -4,7 +4,7 @@ import asyncio
 import hashlib
 import json
 import logging
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import NamedTuple
 from uuid import UUID
@@ -18,6 +18,7 @@ from openhands.agent_server.director.git import (
     git,
     head_of,
     pathspec,
+    ref_stamp,
     save_and_discard,
     uncommitted,
 )
@@ -51,7 +52,11 @@ from openhands.agent_server.director.models import (
     Take,
     TeamChoice,
 )
-from openhands.agent_server.director.org_store import OrgStoreError, is_division_lead
+from openhands.agent_server.director.org_store import (
+    OrgStoreError,
+    is_division_lead,
+    utc_now,
+)
 from openhands.agent_server.director.ownership import can_merge_in_memory, conflicts
 from openhands.agent_server.director.prompts import (
     NEED_FINDING,
@@ -88,7 +93,6 @@ from openhands.agent_server.director.service.state import (
     ORG_WAITS,
     _checkout_root,
     _contracts_file,
-    _now,
     _spec_file,
     agent_conversation,
 )
@@ -234,7 +238,7 @@ class Reviews(Requests):
         if node.review is None or node.review.state != "pending":
             raise Conflict(f"Team {node_id} has no work waiting for a review")
         review = node.review.model_copy(
-            update={"state": "changes_requested", "findings": findings, "at": _now()}
+            update={"state": "changes_requested", "findings": findings, "at": utc_now()}
         )
         above = store.place(node.parent_id) if node.parent_id else None
         store.set_review(node_id, review)
@@ -820,7 +824,7 @@ class Reviews(Requests):
                     "what the session wrote for a team that is not taken is "
                     "kept in that team's record."
                 ),
-                at=_now(),
+                at=utc_now(),
             )
         self._save_soon()
 
@@ -1633,7 +1637,7 @@ class Reviews(Requests):
                             f"{result.detail}\nCommit or put aside what is in "
                             "the way, then answer this: the work is merged then."
                         ),
-                        at=_now(),
+                        at=utc_now(),
                     )
                     self._save_soon()
                 self.notify(
@@ -1685,7 +1689,7 @@ class Reviews(Requests):
         tip = await asyncio.to_thread(head_of, team)
         store.set_review(
             node_id,
-            node.review.model_copy(update={"state": "accepted", "at": _now()}),
+            node.review.model_copy(update={"state": "accepted", "at": utc_now()}),
             base_commit=tip or node.base_commit,
         )
         self.progressed(above.id)
@@ -1918,7 +1922,7 @@ class Reviews(Requests):
                 summary="The accepted work of its sub-teams, with no changes of "
                 "its own.",
                 passed_up=True,
-                at=_now(),
+                at=utc_now(),
             ),
             base_commit=tip or node.base_commit,
         )
@@ -1940,7 +1944,7 @@ class Reviews(Requests):
         directory of a team with a checkout of its own, where it would stop
         the team's accepted work from coming in, and tell the IC above."""
         checkout, path = Path(above.worktree_path), team.boundary.path
-        ref = f"{ASIDE_REFS}/{team.id}/{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}"
+        ref = f"{ASIDE_REFS}/{team.id}/{ref_stamp()}"
         try:
             files = uncommitted(checkout, path)
             if not files or save_and_discard(checkout, path, ref) is None:

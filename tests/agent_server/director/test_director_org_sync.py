@@ -138,11 +138,6 @@ def test_teams_added_on_either_side_are_kept():
 
 
 @pytest.fixture
-def launcher() -> FakeLauncher:
-    return FakeLauncher()
-
-
-@pytest.fixture
 def remote(repo: Path, tmp_path: Path) -> Path:
     """A bare repository ``repo`` has as its ``origin``."""
     bare = tmp_path / "remote.git"

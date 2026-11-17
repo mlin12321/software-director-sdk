@@ -18,6 +18,7 @@ from openhands.agent_server.director.models import (
 from openhands.agent_server.director.org_store import (
     AGENT_LOST,
     is_division_lead,
+    utc_now,
 )
 from openhands.agent_server.director.prompts import (
     NEED_ASKED,
@@ -39,7 +40,6 @@ from openhands.agent_server.director.service.reviews import Reviews
 from openhands.agent_server.director.service.state import (
     ROLE_NAMES,
     STALL_LANE,
-    _now,
     _progress_of,
     agent_conversation,
 )
@@ -326,7 +326,7 @@ class Watch(Reviews):
             if conversation_id in self._running
         ]
         store.set_stopped(
-            node_id, Stopped(at=_now(), reason=reason, running=sorted(running))
+            node_id, Stopped(at=utc_now(), reason=reason, running=sorted(running))
         )
         if self._loop is not None:
             self._enqueue(lambda: self._stop(node_id), node_id)

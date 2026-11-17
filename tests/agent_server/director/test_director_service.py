@@ -52,11 +52,6 @@ from tests.agent_server.director.test_director_tools import division_lead_of, no
 
 
 @pytest.fixture
-def launcher() -> FakeLauncher:
-    return FakeLauncher()
-
-
-@pytest.fixture
 async def service(repo: Path, launcher: FakeLauncher) -> AsyncIterator[DirectorService]:
     service = DirectorService(repo, save_delay=0, run_limit_retry=0)
     await service.start(launcher)

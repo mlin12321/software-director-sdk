@@ -29,10 +29,12 @@ from openhands.agent_server.director.acp import (
 )
 from openhands.agent_server.director.git import (
     GitError,
+    common_dir,
     enclosing_repository,
     git,
     head_of,
     is_git_repository,
+    top_of,
 )
 from openhands.agent_server.director.git_index import (
     excludes_file,
@@ -304,7 +306,7 @@ def _summary_of(text: str) -> str:
 def _checkout_root(workspace: str) -> Path:
     """The top of the git checkout ``workspace`` is in, symlinks resolved."""
     try:
-        top = git(Path(workspace), ["rev-parse", "--show-toplevel"]).strip()
+        top = top_of(Path(workspace))
     except (GitError, OSError):
         top = workspace
     return Path(os.path.realpath(top))
@@ -655,10 +657,7 @@ class ServiceState:
         return adapt
 
     def _shells(self) -> Path:
-        git_dir = git(
-            self._repo_dir, ["rev-parse", "--path-format=absolute", "--git-common-dir"]
-        ).strip()
-        return Path(git_dir) / _SHELLS_DIR
+        return common_dir(self._repo_dir) / _SHELLS_DIR
 
     def _merging_root(self) -> Path:
         return self._shells().parent / _MERGING_DIR
@@ -1366,10 +1365,6 @@ def _progress_of(kept: str | None) -> dict[str, Any]:
 
 def _base_of(workspace: str) -> str:
     return head_of(Path(workspace)) or ""
-
-
-def _now() -> str:
-    return datetime.now(UTC).isoformat(timespec="seconds")
 
 
 def _instant() -> str:

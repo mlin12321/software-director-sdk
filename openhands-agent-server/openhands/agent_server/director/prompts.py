@@ -188,12 +188,12 @@ def report_line(report: Report) -> str:
 
 def _now_with(team: FormerTeam, children: list[SplitChild]) -> str:
     """Who has a replaced team's directory under the new boundaries."""
-    where = team.path or "."
+    where = team.path or "the repository"
     inside = [c for c in children if is_inside(c.path, team.path)]
     over = [c for c in children if c.path == team.path or is_inside(team.path, c.path)]
     if over:
         [child] = over[:1]
-        return f"Its directory is now in the boundary of {child.title} ({child.path})."
+        return f"Its directory is now in the folder of {child.title} ({child.path})."
     if inside:
         names = ", ".join(f"{child.title} ({child.path})" for child in inside)
         return (
@@ -219,7 +219,7 @@ def left_behind(
     for team in former:
         lines += [
             "",
-            f"Team {team.title!r} (node {team.id}, {team.path or '.'}), "
+            f"Team {team.title!r} (node {team.id}, {team.path or 'the repository'}), "
             f"{team.ended}. It was for: {team.purpose or 'nothing that was kept'}",
             "Its reports, as one:",
             team.compacted_report or "It recorded nothing.",
@@ -231,7 +231,7 @@ def left_behind(
         spec = (specs or {}).get(team.path, "").strip()
         if spec:
             lines += [
-                f"The spec it wrote (old; it stays in {team.path or '.'}):",
+                f"The spec it wrote (old; it stays in {team.path or 'the repository'}):",
                 spec,
             ]
     return lines
@@ -260,7 +260,7 @@ def _split_effects(children: list[SplitChild], unfinished: dict[str, list[str]])
     """
     lines = [
         "How the split changes your own work:",
-        "- What remains in your boundary outside those directories is yours as before.",
+        "- What remains in your folder outside those directories is yours as before.",
         "- What you committed in those directories is where each team "
         "starts. Your `git` no longer shows or commits anything there.",
     ]
@@ -379,7 +379,9 @@ def approved_notice(
     lines = [_approved(children), "", _split_effects(children, unfinished)]
     todo = []
     if former:
-        gone = ", ".join(f"{team.title} ({team.path or '.'})" for team in former)
+        gone = ", ".join(
+            f"{team.title} ({team.path or 'the repository'})" for team in former
+        )
         lines += [
             "",
             f"The teams they replaced are gone: {gone}. What those had "
@@ -566,7 +568,7 @@ def hand_over_brief(
         "its own. Your main conversation carries on with the team's work and "
         "sees nothing of this one, and you see nothing of it: what follows "
         "is everything you are given.",
-        f"Folder of your team: {node.boundary.path or 'the whole repository'}",
+        f"Folder of your team: {node.boundary.path or 'the repository'}",
         "",
         job,
         "",
@@ -593,7 +595,7 @@ def brief(
     Args:
         context: The rest of the team's context, as the agent is to read it.
     """
-    boundary = node.boundary.path or "the whole repository"
+    boundary = node.boundary.path or "the repository"
     lines = [
         f"{DIRECTOR_PREFIX} You are the {'Division Lead ' * node.division_lead}"
         f"{'IC' if role == 'ic' else 'Manager'} of the team {node.title!r} "
@@ -991,7 +993,7 @@ def review_request(
         asked: What the human asked the team directly since its work was
             last accepted.
     """
-    directory = team.boundary.path or "."
+    directory = team.boundary.path or "the repository"
     lines = [
         f"Review request. Team {team.title!r} (node {team.id}) submits its work in "
         f"{directory}"
@@ -1153,7 +1155,7 @@ def _span(minutes: int) -> str:
 def unstarted_notice(team: SessionTeam, minutes: int) -> str:
     """What the IC above is told of a team it set up and gave no task."""
     return (
-        f"Team {team.title!r} (node {team.id}, {team.boundary.path or '.'}) "
+        f"Team {team.title!r} (node {team.id}, {team.boundary.path or 'the repository'}) "
         f"was set up {_span(minutes)} ago and has been given no task. Nobody "
         "works in its directory, and nothing there is committed. Give it its "
         "task with `msg_team`. If it is not needed, write to your Manager to "
@@ -1173,7 +1175,7 @@ def stall_notice(
         account: What the team's IC said when asked; None when it gave no
             answer or was not asked.
     """
-    directory = team.boundary.path or "."
+    directory = team.boundary.path or "the repository"
     sent_back = team.review is not None and team.review.state == "changes_requested"
     lines = [
         f"Team {team.title!r} (node {team.id}) has shown no progress for "
@@ -1483,8 +1485,8 @@ def manager_check(
         if rate:
             facts.append(rate)
         lines.append(
-            f"- {team.title!r} (node {team.id}, {team.boundary.path or '.'}): "
-            + "; ".join(facts)
+            f"- {team.title!r} (node {team.id}, "
+            f"{team.boundary.path or 'the repository'}): " + "; ".join(facts)
         )
     here = {team.id for team in teams}
     gone = [

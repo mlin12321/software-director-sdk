@@ -67,11 +67,6 @@ REFUNDS = "Add refunds to the checkout API."
 
 
 @pytest.fixture
-def launcher() -> FakeLauncher:
-    return FakeLauncher()
-
-
-@pytest.fixture
 async def service(repo: Path, launcher: FakeLauncher) -> AsyncIterator[DirectorService]:
     """An org of API (with DB below it) and Web, which the first session
     made and whose work is accepted."""

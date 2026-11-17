@@ -63,11 +63,6 @@ PRUNE = PruneTeamAction(node_id=API, reason="It holds everything up.")
 
 
 @pytest.fixture
-def launcher() -> FakeLauncher:
-    return FakeLauncher()
-
-
-@pytest.fixture
 async def service(repo: Path, launcher: FakeLauncher):
     service = await started(repo, launcher, stall_poll=3600)
     await split_root(service)

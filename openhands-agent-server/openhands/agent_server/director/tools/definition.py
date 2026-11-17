@@ -137,7 +137,7 @@ class RaiseEscalationAction(Action):
     category: EscalationKind | Literal["misrouted"] = Field(
         description=(
             "`critical_issue`: the work cannot continue. `design_decision`: a "
-            "choice that reaches beyond your boundary. `misrouted`: what the "
+            "choice that reaches beyond your folder. `misrouted`: what the "
             "human sent your team directly is not your team's; it goes to "
             "the team above and you do not wait on it."
         )
@@ -301,7 +301,7 @@ class _DirectorTool[ActionT: Action](ToolDefinition[ActionT, DirectorObservation
 
 class ReadNodeContextTool(_DirectorTool[ReadNodeContextAction]):
     summary = (
-        "Read your place in the org: your team, role and boundary, your spec, "
+        "Read your place in the org: your team, role and folder, your spec, "
         "the contracts you keep and what your team has reported, your sub-teams "
         "and their status, a split that "
         "is waiting, and the escalations you raised or must settle."

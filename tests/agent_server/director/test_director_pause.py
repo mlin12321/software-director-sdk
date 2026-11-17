@@ -84,11 +84,6 @@ class ServerEnded(BaseException):
     """Ends whatever the director was doing, as a killed server does."""
 
 
-@pytest.fixture
-def launcher() -> FakeLauncher:
-    return FakeLauncher()
-
-
 async def again(repo: Path, launcher: FakeLauncher, **options) -> DirectorService:
     """The director of the server's next start, on the same org."""
     launcher.listeners.clear()

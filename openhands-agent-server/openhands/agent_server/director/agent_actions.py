@@ -6,13 +6,13 @@ node does not allow, so a tool cannot reach past its own team.
 
 import json
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 from uuid import UUID, uuid4
 
 from openhands.agent_server.director.boundary import owns
 from openhands.agent_server.director.git import uncommitted
+from openhands.agent_server.director.git_store import team_key
 from openhands.agent_server.director.models import (
     ROLE_NAMES,
     AgentRole,
@@ -25,6 +25,7 @@ from openhands.agent_server.director.models import (
     SplitProposal,
     TeamChoice,
 )
+from openhands.agent_server.director.org_store import utc_now
 from openhands.agent_server.director.service import (
     DirectorService,
     agent_conversation,
@@ -141,7 +142,7 @@ def _checked(
         reason=proposed.reason,
         replaces=[team.id for team in split.replaces],
         keeps=[team.id for team in split.keeps],
-        proposed_at=datetime.now(UTC).isoformat(timespec="seconds"),
+        proposed_at=utc_now(),
     )
 
 
@@ -479,7 +480,7 @@ def submit_review(service: DirectorService, caller: Caller, summary: str) -> str
             state="pending",
             round=review.round + 1 if review is not None and again else 1,
             summary=summary,
-            at=datetime.now(UTC).isoformat(timespec="seconds"),
+            at=utc_now(),
             seq=service.next_submission(),
         ),
     )
@@ -540,10 +541,8 @@ def settle_teams(
         [
             choice.model_copy(
                 update={
-                    "team": choice.team.strip().split("@")[0],
-                    "under": choice.under.strip().split("@")[0]
-                    if choice.under
-                    else None,
+                    "team": team_key(choice.team.strip()),
+                    "under": team_key(choice.under.strip()) if choice.under else None,
                     "title": choice.title.strip() if choice.title else None,
                 }
             )

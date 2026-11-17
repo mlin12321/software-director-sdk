@@ -10,6 +10,7 @@ from openhands.agent_server.director.git import (
     GitError,
     git,
     pathspec,
+    top_of,
 )
 from openhands.agent_server.director.models import (
     ChangedFile,
@@ -31,7 +32,7 @@ def checkout_top(node: SessionTeam) -> Path:
     """The top of the checkout the team works in, symlinks resolved."""
     workspace = Path(node.worktree_path)
     try:
-        top = git(workspace, ["rev-parse", "--show-toplevel"]).strip()
+        top = top_of(workspace)
     except (GitError, OSError) as error:
         raise NotFound(f"Team {node.id} has no checkout on this server") from error
     return Path(os.path.realpath(top))
