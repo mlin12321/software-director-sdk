@@ -32,7 +32,7 @@ class ReadNodeContextAction(Action):
 
 
 class WriteSpecAction(Action):
-    """Replace the spec of your team's boundary."""
+    """Replace the spec of your team's folder."""
 
     text: str = Field(description="The whole spec, in Markdown.")
 
@@ -72,7 +72,8 @@ class MsgManagerAction(Action):
             "name of every one that stays as it is; leave `keep` out when "
             "you have none. The sub-teams cannot see "
             "each other's work or your spec, so the contracts must hold "
-            "everything they have to respect."
+            "everything they have to respect. What teams promise each "
+            "other is written only there, not in a spec."
         )
     )
 

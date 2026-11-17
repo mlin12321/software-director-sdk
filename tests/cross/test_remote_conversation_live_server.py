@@ -3588,7 +3588,7 @@ def _scripted_org_llm(
             )
             if given < len(tasked):
                 return tool_call("msg_team", {"team": tasked[given], "text": "Begin."})
-        asked = [at for at, m in enumerate(messages) if "Review mode." in text_of(m)]
+        asked = [at for at, m in enumerate(messages) if "Review request." in text_of(m)]
         if asked:
             # One call a turn: the teams of the request, in its order.
             request = text_of(messages[asked[-1]])

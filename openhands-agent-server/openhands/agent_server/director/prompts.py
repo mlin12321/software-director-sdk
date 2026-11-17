@@ -566,7 +566,7 @@ def hand_over_brief(
         "its own. Your main conversation carries on with the team's work and "
         "sees nothing of this one, and you see nothing of it: what follows "
         "is everything you are given.",
-        f"Boundary of your team: {node.boundary.path or 'the whole repository'}",
+        f"Folder of your team: {node.boundary.path or 'the whole repository'}",
         "",
         job,
         "",
@@ -595,9 +595,10 @@ def brief(
     """
     boundary = node.boundary.path or "the whole repository"
     lines = [
-        f"{DIRECTOR_PREFIX} You are the {'IC' if role == 'ic' else 'Manager'} of "
-        f"the team {node.title!r} (node {node.id}).",
-        f"Boundary: {boundary}",
+        f"{DIRECTOR_PREFIX} You are the {'Division Lead ' * node.division_lead}"
+        f"{'IC' if role == 'ic' else 'Manager'} of the team {node.title!r} "
+        f"(node {node.id}).",
+        f"Folder: {boundary}",
         f"Writable: {', '.join(node.boundary.writable) or 'nothing'}",
     ]
     if node.boundary.readonly:
@@ -977,7 +978,7 @@ def review_request(
     """
     directory = team.boundary.path or "."
     lines = [
-        f"Review mode. Team {team.title!r} (node {team.id}) submits its work in "
+        f"Review request. Team {team.title!r} (node {team.id}) submits its work in "
         f"{directory}"
         + (f" (review round {review.round})." if review.round > 1 else "."),
     ]
