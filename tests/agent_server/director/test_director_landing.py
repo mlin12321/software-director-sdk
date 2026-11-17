@@ -47,7 +47,12 @@ from tests.agent_server.director.conftest import (
     take_in,
 )
 from tests.agent_server.director.test_director_limits import started
-from tests.agent_server.director.test_director_review import DONE, accept, commit
+from tests.agent_server.director.test_director_review import (
+    DONE,
+    FINDING,
+    accept,
+    commit,
+)
 from tests.agent_server.director.test_director_tools import (
     PRUNE_API,
     ic,
@@ -366,7 +371,12 @@ async def test_work_is_accepted_and_a_team_the_org_lost_meanwhile_stays_gone(
 JOBS = "services.api.jobs"
 
 
-def sets_up_jobs(service: DirectorService, top: str, path: str = "services/api/jobs"):
+def sets_up_jobs(
+    service: DirectorService,
+    top: str,
+    path: str = "services/api/jobs",
+    team_id: str = JOBS,
+):
     """Have a session set up a team for a directory under the team it was
     opened at."""
     place = service.store.place(top)
@@ -376,8 +386,8 @@ def sets_up_jobs(service: DirectorService, top: str, path: str = "services/api/j
             **place.model_dump(include={"session", "title", "isolation", "status"}),
             worktree_path=place.worktree_path,
             branch=place.branch,
-            id=f"{JOBS}@{place.session}",
-            team_id=JOBS,
+            id=f"{team_id}@{place.session}",
+            team_id=team_id,
             parent_id=top,
             agents=[],
             boundary=place.boundary.model_copy(update={"path": path}),
@@ -405,7 +415,11 @@ def waiting(service: DirectorService, top: str) -> list[str]:
     """The teams of a session that wait to be settled."""
     place = service.store.place(review_place_of(service, top))
     assert isinstance(place, SessionTeam)
-    return [team.team_id for team in place.org_change.teams] if place.org_change else []
+    return [
+        item.key
+        for item in (place.merge.items if place.merge else [])
+        if item.kind == "team"
+    ]
 
 
 def review_manager(service: DirectorService, top: str) -> str | None:
@@ -478,8 +492,8 @@ async def test_a_team_both_made_something_else_of_waits_for_the_manager_above(
     assert waiting(service, top) == [JOBS]
     asked = review_manager(service, top)
     assert asked is not None
-    start = launcher.derived[-1]
-    assert str(start.conversation_id) == asked
+    # It was asked when the work was submitted, beside the review.
+    [start] = [d for d in launcher.derived if str(d.conversation_id) == asked]
     assert "Manager of your team in review mode" in "".join(start.suffixes or [])
     told = launcher.messages_to(asked)[-1]
     assert "the session: 'API' in services/api/jobs, under services.api" in told
@@ -663,7 +677,7 @@ async def test_contracts_both_changed_wait_for_the_manager_above(
     assert not settled.is_error
     assert service.team_memory.read(API_CONTRACTS) == holds
     place = service.store.place(review_place_of(service, top))
-    assert place is not None and place.org_change is None
+    assert place is not None and place.merge is None
     # The session reads what holds now, not what it wrote.
     assert [c.contracts for c in service.contracts_of(api_place(service, top))] == [
         holds
@@ -799,3 +813,131 @@ async def test_a_team_a_session_prunes_is_the_orgs_until_its_work_is_accepted(
     [record] = service.team_memory.former("services.api")
     assert (record.ended, record.reports) == ("pruned", [kept])
     assert service.team_memory.reports("services.api", "ic") == []
+
+
+def merge_of(service: DirectorService, top: str):
+    place = service.store.place(review_place_of(service, top))
+    assert isinstance(place, SessionTeam)
+    return place.merge
+
+
+def refs(repo: Path) -> dict[str, str]:
+    """What the org shares, as it is stored."""
+    return {
+        ref: run_git(repo, "rev-parse", ref).strip()
+        for ref in ("refs/agents/org", "refs/agents/memory")
+    }
+
+
+WORKERS = "services.api.workers"
+
+
+async def test_what_later_work_makes_of_the_org_waits_for_earlier_work(
+    service: DirectorService, launcher: FakeLauncher, repo: Path
+):
+    first, conversation = await at_api(service)
+    opened = await service.open_session(
+        OpenSessionRequest(text="Add workers.", node_id="services.api")
+    )
+    await service.settled()
+    second, other = opened.session.teams[0].id, opened.conversation_id
+    sets_up_jobs(service, first)
+    org_gains(service, JOBS, "services/api/queue")
+    sets_up_jobs(service, second, "services/api/workers", WORKERS)
+    await use(service, conversation, SubmitReviewTool, DONE)
+    await use(service, other, SubmitReviewTool, DONE)
+
+    # Work is accepted in the order it was submitted.
+    early = await use(
+        service, reviewer(service, second), ReviewTeamTool, accept(second)
+    )
+    assert early.is_error
+    await use(service, reviewer(service, first), ReviewTeamTool, accept(first))
+    await use(service, reviewer(service, second), ReviewTeamTool, accept(second))
+    await service.settled()
+
+    # The code of the later work is in although the Manager of the earlier
+    # has not decided; the team it set up waits for that.
+    for top in (first, second):
+        review = node(service, top).review
+        assert review is not None and review.state == "accepted"
+    waits = merge_of(service, second)
+    assert waits is not None and waits.code_landed and waits.org_queued
+    assert service.store.team(WORKERS) is None
+    assert review_manager(service, second) is None
+    late = await use(
+        service, reviewer(service, second), SettleTeamsTool, SettleTeamsAction()
+    )
+    assert late.is_error
+
+    await use(
+        service, review_manager(service, first), SettleTeamsTool, SettleTeamsAction()
+    )
+
+    # Then both are the org's, the earlier first.
+    assert path_of(service, JOBS) == "services/api/jobs"
+    assert path_of(service, WORKERS) == "services/api/workers"
+    assert merge_of(service, first) is None and merge_of(service, second) is None
+    log = run_git(repo, "log", "--format=%s", "refs/agents/memory").splitlines()
+    sessions = [first.split("@")[1], second.split("@")[1]]
+    landings = [
+        name for line in reversed(log) for name in sessions if line.endswith(name)
+    ]
+    assert landings[-2:] == sessions
+
+
+async def test_settled_before_the_code_is_accepted_it_all_lands_in_one_step(
+    service: DirectorService, repo: Path
+):
+    top, conversation = await at_api(service)
+    sets_up_jobs(service, top)
+    org_gains(service, JOBS, "services/api/workers")
+    await use(service, conversation, ReportTool, ReportAction(text="Refunds are in."))
+    await use(service, conversation, SubmitReviewTool, DONE)
+
+    # The Manager is asked beside the review, and what it settles is not
+    # the org's before the code is accepted.
+    asked = review_manager(service, top)
+    settled = await use(service, asked, SettleTeamsTool, SettleTeamsAction())
+    assert not settled.is_error and "when the IC" in settled.text
+    assert path_of(service, JOBS) == "services/api/workers"
+    assert service.team_memory.reports("services.api", "ic") == []
+    before = refs(repo)
+
+    await use(service, reviewer(service, top), ReviewTeamTool, accept(top))
+    await service.settled()
+
+    assert path_of(service, JOBS) == "services/api/jobs"
+    assert merge_of(service, top) is None
+    after = refs(repo)
+    # The tree and team memory changed together: one commit each, made of
+    # the same landing.
+    for ref in before:
+        assert run_git(repo, "rev-parse", f"{after[ref]}~1").strip() == before[ref]
+    assert f"session {top.split('@')[1]}" in run_git(
+        repo, "log", "-1", "--format=%s", "refs/agents/org"
+    )
+
+
+async def test_work_that_is_sent_back_waits_for_no_manager(
+    service: DirectorService, launcher: FakeLauncher
+):
+    top, conversation = await at_api(service)
+    sets_up_jobs(service, top)
+    org_gains(service, JOBS, "services/api/workers")
+    await use(service, conversation, SubmitReviewTool, DONE)
+    asked = review_manager(service, top)
+    assert waiting(service, top) == [JOBS]
+
+    await use(
+        service,
+        reviewer(service, top),
+        ReviewTeamTool,
+        ReviewTeamAction(node_id=top, decision="reject", findings=[FINDING]),
+    )
+
+    assert merge_of(service, top) is None
+    assert "waits no longer" in launcher.messages_to(asked)[-1]
+    gone = await use(service, asked, SettleTeamsTool, SettleTeamsAction())
+    assert gone.is_error
+    assert path_of(service, JOBS) == "services/api/workers"

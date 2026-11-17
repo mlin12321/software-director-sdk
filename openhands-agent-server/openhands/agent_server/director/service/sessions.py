@@ -543,6 +543,9 @@ class Sessions(Splits):
                     event.kind != "session_opened" or event.team_id != top.team_id
                     for event in self.own_events(plan["session"], plan["parent"])
                 )
+                await self._in_base(
+                    lambda: asyncio.to_thread(self._settle_on_close, top)
+                )
                 gone = await asyncio.to_thread(self._leave, top)
                 if known:
                     await asyncio.to_thread(
@@ -567,6 +570,7 @@ class Sessions(Splits):
                         ),
                     )
             store.close_session(plan["session"])
+            await asyncio.to_thread(self._org_turn)
             await self._save()
             intent = run.step_done(intent, "removed")
         self._settling.pop(intent.id, None)

@@ -11,7 +11,7 @@ from openhands.agent_server.director.models import (
     Escalation,
     FormerTeam,
     InheritedSpec,
-    OrgChange,
+    MergeItem,
     Report,
     Review,
     ReviewFinding,
@@ -724,60 +724,80 @@ def reconcile_request(
     return "\n".join(lines)
 
 
-def org_change_request(team: SessionTeam, session: str, change: OrgChange) -> str:
+def merge_request(
+    team: SessionTeam, session: str, waiting: list[MergeItem], accepted: bool
+) -> str:
     """What the Manager of the place a session is reviewed from is told
-    when sub-teams of the session wait for it."""
+    when teams or contracts of the session wait for it.
+
+    Args:
+        waiting: What waits for it, with what it decided before of what is
+            unchanged.
+        accepted: Whether the session's code is accepted and merged.
+    """
     lines = [
         f"The work of {team.title!r} (node {team.id}) in the session "
-        f"{session!r} is accepted and merged. What it made of its sub-teams "
-        "is the org's now, but for this, which the org made something else "
-        "of while the session worked:",
+        f"{session!r} "
+        + (
+            "is accepted and its code is merged."
+            if accepted
+            else "is submitted and its IC reviews the code."
+        )
+        + " This of its teams and contracts the org made something else of "
+        "while the session worked:",
     ]
-    for waiting in change.teams:
-        lines += [
-            "",
-            f"- {waiting.title or waiting.team_id} (team {waiting.team_id})",
-            f"  the session: {waiting.session}",
-            f"  the org now: {waiting.org}",
-        ]
-        if waiting.moved_to is not None:
-            lines.append(
-                "  the team it was set up under is not in the org any more: "
-                f"taken, it goes under team {waiting.moved_to}, and that "
-                "team's sub-teams inside its directory go under it. The "
-                "team that is gone is not put back."
-            )
-    for agreed in change.contracts:
-        lines += [
-            "",
-            f"- the contracts between the sub-teams of "
-            f"{agreed.path or 'the repository'}"
-            + (
-                f" (they come with team {agreed.with_team} and hold only if "
-                "it is taken)"
-                if agreed.with_team
-                else ""
-            ),
-            "  the session's:",
-            *(f"    {line}" for line in (agreed.session or "(none)").splitlines()),
-            "  the org's now:",
-            *(f"    {line}" for line in (agreed.org or "(none)").splitlines()),
-        ]
+    for item in waiting:
+        if item.kind == "team":
+            lines += [
+                "",
+                f"- {item.title or item.key} (team {item.key})",
+                f"  the session: {item.session}",
+                f"  the org now: {item.org}",
+            ]
+            if item.moved_to is not None:
+                lines.append(
+                    "  the team it was set up under is not in the org any more: "
+                    f"taken, it goes under team {item.moved_to}, and that "
+                    "team's sub-teams inside its directory go under it. The "
+                    "team that is gone is not put back."
+                )
+        else:
+            lines += [
+                "",
+                f"- the contracts between the sub-teams of "
+                f"{item.key or 'the repository'}"
+                + (
+                    f" (they come with team {item.with_team} and hold only if "
+                    "it is taken)"
+                    if item.with_team
+                    else ""
+                ),
+                "  the session's:",
+                *(f"    {line}" for line in (item.session or "(none)").splitlines()),
+                "  the org's now:",
+                *(f"    {line}" for line in (item.org or "(none)").splitlines()),
+            ]
+        if item.take is not None:
+            lines.append(f"  you decided: {item.take}")
+    contracts = any(item.kind == "contracts" for item in waiting)
     lines += [
         "",
-        "Until you settle it the org's stay. Call `settle_teams` once: name "
-        "in `org_teams` every team above for which the org's holds; the "
-        "others become what the session made of them."
+        "Nothing the session made of its teams and contracts is the org's "
+        "until you settle this. Call `settle_teams` once: name in "
+        "`org_teams` every team above for which the org's holds; the others "
+        "become what the session made of them."
         + (
             " For each contracts above say in `contracts` which holds: "
             "'org', 'session', or 'text' with the contracts you write from "
             "both. Unnamed, the session's hold."
-            if change.contracts
+            if contracts
             else ""
         ),
-        "What the session wrote for a team the org does not take is kept "
-        "as that team's record with the nearest team that holds its "
-        "directory.",
+        "What you settle becomes the org's together, once the session's "
+        "code is accepted and what sessions that submitted earlier made of "
+        "the org is in. What the session wrote for a team the org does not "
+        "take is kept as that team's record with the nearest team that "
+        "holds its directory.",
     ]
     return "\n".join(lines)
 

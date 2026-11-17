@@ -7,7 +7,7 @@ builds a tree in a throwaway index file and lands with a compare-and-swap
 
 import json
 import tempfile
-from collections.abc import Callable, Collection
+from collections.abc import Callable, Collection, Sequence
 from pathlib import Path
 from typing import NamedTuple
 
@@ -95,6 +95,31 @@ class Landing(NamedTuple):
     events: dict[str, list[TeamEvent]]
     # Its requests that went straight to a team.
     routed: list[RoutedRequest]
+
+
+class Staged(NamedTuple):
+    """A commit made for a ref that the ref does not point at yet."""
+
+    ref: str
+    commit: str
+    parent: str | None
+
+
+def swap_together(repo_dir: Path, staged: Sequence[Staged]) -> bool:
+    """Move every ref to the commit staged for it, all of them or none.
+
+    Returns:
+        False when one of them was moved by someone else meanwhile.
+    """
+    moves = "".join(
+        f"update {move.ref} {move.commit} {move.parent or _ZERO_OID}\n"
+        for move in staged
+    )
+    try:
+        git(repo_dir, ["update-ref", "--stdin"], stdin=moves)
+    except GitError:
+        return False
+    return True
 
 
 class Clash(NamedTuple):
@@ -189,6 +214,77 @@ def _settle(path: str, ours: str | None, theirs: str | None) -> tuple[str | None
     except ValidationError:
         pass
     return ours, True
+
+
+def taking_in(
+    landing: Landing,
+) -> tuple[Callable[[StoreReader], list[StoreChange]], dict[str, str | None]]:
+    """What taking a landing in changes of team memory.
+
+    Returns:
+        The mutation, and the files it did not write with the text each
+        has, filled in whenever the mutation is run.
+    """
+    left: dict[str, str | None] = {}
+
+    def mutate(read: StoreReader) -> list[StoreChange]:
+        left.clear()
+        out: dict[str, str | None] = {}
+
+        def now(path: str) -> str | None:
+            return out[path] if path in out else read(path)
+
+        for team in landing.forget:
+            for file in (
+                *(_reports_file(team, role) for role in AGENT_ROLES),
+                _history_file(team),
+            ):
+                if read(file) is not None:
+                    out[file] = None
+        for record in landing.former:
+            path = _former_file(record.id, record.at)
+            if read(path) is None:
+                out[path] = record.model_dump_json(indent=2) + "\n"
+        for team, reports in landing.reports.items():
+            for role in AGENT_ROLES:
+                path = _reports_file(team, role)
+                kept = _parse_reports(now(path))
+                known = {report.id for report in kept if report.id}
+                added = [
+                    report
+                    for report in reports
+                    if report.role == role and report.id not in known
+                ]
+                if added:
+                    out[path] = _serialize(_REPORTS.dump_python([*kept, *added]))
+        for team, events in landing.events.items():
+            path = _history_file(team)
+            raw = now(path)
+            had = _EVENTS.validate_json(raw) if raw else []
+            known = {event.id for event in had if event.id}
+            more = [event for event in events if event.id not in known]
+            if more:
+                kept = [*had, *more][-HISTORY_KEPT:]
+                out[path] = _serialize(_EVENTS.dump_python(kept))
+        if landing.routed:
+            raw = read(ROUTED_FILE)
+            asked = _ROUTED.validate_json(raw) if raw else []
+            known = {request.id for request in asked if request.id}
+            new = [r for r in landing.routed if r.id not in known]
+            if new:
+                asked = sorted([*asked, *new], key=lambda r: r.at)[-ROUTED_KEPT:]
+                out[ROUTED_FILE] = _serialize(_ROUTED.dump_python(asked))
+        for path, (text, over) in landing.files.items():
+            has = read(path)
+            if has == text:
+                continue
+            if has == over or (path in landing.seen and landing.seen[path] == has):
+                out[path] = text
+            else:
+                left[path] = has
+        return [StoreChange(path, content) for path, content in out.items()]
+
+    return mutate, left
 
 
 class GitStore:
@@ -291,68 +387,25 @@ class GitStore:
         Returns:
             The files that were not written, with the text each has now.
         """
-        left: dict[str, str | None] = {}
-
-        def mutate(read: StoreReader) -> list[StoreChange]:
-            nonlocal left
-            left = {}
-            out: dict[str, str | None] = {}
-
-            def now(path: str) -> str | None:
-                return out[path] if path in out else read(path)
-
-            for team in landing.forget:
-                for file in (
-                    *(_reports_file(team, role) for role in AGENT_ROLES),
-                    _history_file(team),
-                ):
-                    if read(file) is not None:
-                        out[file] = None
-            for record in landing.former:
-                path = _former_file(record.id, record.at)
-                if read(path) is None:
-                    out[path] = record.model_dump_json(indent=2) + "\n"
-            for team, reports in landing.reports.items():
-                for role in AGENT_ROLES:
-                    path = _reports_file(team, role)
-                    kept = _parse_reports(now(path))
-                    known = {report.id for report in kept if report.id}
-                    added = [
-                        report
-                        for report in reports
-                        if report.role == role and report.id not in known
-                    ]
-                    if added:
-                        out[path] = _serialize(_REPORTS.dump_python([*kept, *added]))
-            for team, events in landing.events.items():
-                path = _history_file(team)
-                raw = now(path)
-                had = _EVENTS.validate_json(raw) if raw else []
-                known = {event.id for event in had if event.id}
-                more = [event for event in events if event.id not in known]
-                if more:
-                    kept = [*had, *more][-HISTORY_KEPT:]
-                    out[path] = _serialize(_EVENTS.dump_python(kept))
-            if landing.routed:
-                raw = read(ROUTED_FILE)
-                asked = _ROUTED.validate_json(raw) if raw else []
-                known = {request.id for request in asked if request.id}
-                new = [r for r in landing.routed if r.id not in known]
-                if new:
-                    asked = sorted([*asked, *new], key=lambda r: r.at)[-ROUTED_KEPT:]
-                    out[ROUTED_FILE] = _serialize(_ROUTED.dump_python(asked))
-            for path, (text, over) in landing.files.items():
-                has = read(path)
-                if has == text:
-                    continue
-                if has == over or (path in landing.seen and landing.seen[path] == has):
-                    out[path] = text
-                else:
-                    left[path] = has
-            return [StoreChange(path, content) for path, content in out.items()]
-
+        mutate, left = taking_in(landing)
         self.commit(mutate, message)
         return left
+
+    def stage(
+        self, mutate: Callable[[StoreReader], list[StoreChange]], message: str
+    ) -> Staged | None:
+        """Make the commit ``mutate`` asks for without moving the ref to it.
+
+        Returns:
+            None when ``mutate`` produced no changes.
+        """
+        parent = self.head()
+        changes = mutate(lambda path: self._read_at(parent, path))
+        if not changes:
+            return None
+        tree = self._build_tree(parent, changes)
+        commit = self._commit_tree(tree, [parent] if parent else [], message)
+        return Staged(self.ref, commit, parent)
 
     def history(self, node_id: str) -> list[TeamEvent]:
         """What became of the teams directly below a team, oldest first."""

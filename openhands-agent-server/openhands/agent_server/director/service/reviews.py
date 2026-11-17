@@ -4,8 +4,6 @@ import asyncio
 import hashlib
 import json
 import logging
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import NamedTuple
@@ -22,20 +20,21 @@ from openhands.agent_server.director.git import (
     uncommitted,
 )
 from openhands.agent_server.director.git_store import (
+    CONTRACTS_FILE,
     SPEC_FILE,
     normalize_store_path,
 )
 from openhands.agent_server.director.merge_back import merge_back
 from openhands.agent_server.director.models import (
     ContractsChoice,
-    OrgChange,
-    OrgChangeContracts,
-    OrgChangeTeam,
+    Merge,
+    MergeItem,
     OrgNodeInput,
     Review,
     ReviewFinding,
     SessionInput,
     SessionTeam,
+    Take,
 )
 from openhands.agent_server.director.org_store import OrgStoreError, reviews_only
 from openhands.agent_server.director.ownership import can_merge_in_memory, conflicts
@@ -43,7 +42,7 @@ from openhands.agent_server.director.prompts import (
     NEED_FINDING,
     accept_in_order,
     changes_requested,
-    org_change_request,
+    merge_request,
     put_aside_notice,
     reconcile_request,
     review_request,
@@ -56,12 +55,15 @@ from openhands.agent_server.director.run_state import (
     SHOWN,
     Intent,
 )
+from openhands.agent_server.director.service.records import Taken
 from openhands.agent_server.director.service.requests import Requests
 from openhands.agent_server.director.service.state import (
+    _LANE,
     _REST_CHECK_SECONDS,
     _REST_CHECKS,
     ASIDE_REFS,
     ASKED_KEPT,
+    BASE_LANE,
     MERGE_WAITS,
     _checkout_root,
     _contracts_file,
@@ -70,7 +72,6 @@ from openhands.agent_server.director.service.state import (
 )
 from openhands.agent_server.director.split import (
     Shape,
-    ShapeConflict,
     Side,
     is_inside,
     merge_shapes,
@@ -112,6 +113,39 @@ class Meets(NamedTuple):
     mark: str
     # The spec each file had when it was shown.
     seen: dict[str, str | None]
+    items: list[MergeItem]
+
+
+class Landed(NamedTuple):
+    """What became of a session's work when it landed."""
+
+    records: Taken
+    # The teams that waited and are the org's as the session has them.
+    taken: list[str]
+    # The teams that waited and stay as the org has them.
+    kept: list[str]
+    # The directories whose contracts waited and are settled.
+    agreed: list[str]
+    # The directories whose contracts waited and stay the org's.
+    held: list[str]
+
+
+def _submitted(team: SessionTeam) -> tuple[int, str]:
+    """When a team's work was submitted, to put work in order by."""
+    return (team.review.seq, team.review.at) if team.review else (0, "")
+
+
+def _same(item: MergeItem) -> tuple[str | None, ...]:
+    """What a decision about something that waits was made of: it holds
+    for as long as this is unchanged."""
+    return (
+        item.kind,
+        item.key,
+        item.session,
+        item.org,
+        item.moved_to,
+        item.with_team,
+    )
 
 
 class Reviews(Requests):
@@ -119,6 +153,9 @@ class Reviews(Requests):
 
     def request_review(self, node_id: str) -> None:
         """Have the work a team submitted reviewed. Safe from any thread."""
+        node = self.store.place(node_id)
+        if node is not None and self.store.opens_session(node):
+            self._open_merge(node)
         self._begin("request_review", node_id)
 
     def rest(self, node_id: str) -> None:
@@ -199,6 +236,8 @@ class Reviews(Requests):
         self.notify(
             agent_conversation(node, "ic"), changes_requested(above or node, findings)
         )
+        if store.opens_session(node):
+            self._sent_back(node)
 
     def release_reviews(self, node_id: str | None, *, now: bool = False) -> None:
         """Hand a team's IC the reviews its sub-teams wait for, if it is
@@ -261,9 +300,7 @@ class Reviews(Requests):
         requests = []
         # In the order the work was submitted, which is the order it is
         # accepted in.
-        for team in sorted(
-            waiting, key=lambda team: team.review.at if team.review else ""
-        ):
+        for team in sorted(waiting, key=_submitted):
             run.unmark(HELD, team.id)
             if team.review is not None:
                 requests.append(
@@ -297,39 +334,15 @@ class Reviews(Requests):
             reconciled: What the reviewer decided about what the work meets
                 in the checkout above; '' when it was asked nothing.
         """
-        self._begin("accept", node_id, needed_above=needed_above, reconciled=reconciled)
-
-    @asynccontextmanager
-    async def _one_landing(self) -> AsyncIterator[None]:
-        """Hold what an acceptance checks, merges and makes the org's to
-        one acceptance at a time, so that nothing comes in between the
-        check and the merge."""
-        await asyncio.to_thread(self._landing.acquire)
-        try:
-            yield
-        finally:
-            self._landing.release()
-
-    async def _landed(
-        self, node: SessionTeam, seen: dict[str, str | None] | None = None
-    ) -> None:
-        """Make what a session kept to itself the org's, now that its work
-        is in the repository's checkout: the sub-teams it set up, the specs
-        and contracts it wrote and what its agents recorded.
-
-        Args:
-            seen: The specs the reviewer was shown, by file.
-        """
-        if not self.store.opens_session(node):
-            return
-        # The sub-teams first: what a team the org does not have wrote is
-        # kept as that team's record.
-        await self._land_shape(node)
-        taken = await asyncio.to_thread(self._land_records, node, seen)
-        for team_id, role in taken.grown:
-            self.reports_grew(team_id, role)
-        self._wait_for_manager(node, taken.contracts)
-        await self._save()
+        node = self.store.place(node_id)
+        self._begin(
+            "accept",
+            node_id,
+            needed_above=needed_above,
+            reconciled=reconciled,
+            # The work of a session goes into what the org shares.
+            base=node is not None and self.store.opens_session(node),
+        )
 
     def _shapes(
         self, top: SessionTeam
@@ -349,34 +362,6 @@ class Reviews(Requests):
         for team in teams:
             teams.extend(store.sub_teams(team.id))
         return seats, shape_of(seats), shape_of(teams)
-
-    async def _land_shape(self, top: SessionTeam) -> None:
-        """Make of the org's sub-teams what a session's accepted work makes
-        of them, team by team: a team the session left alone stays as the
-        org has it now, one only the session changed becomes the org's, and
-        one both changed waits for the Manager of the place the session is
-        reviewed from. The code is merged whatever becomes of them."""
-        store = self.store
-        session = store.session_of(top)
-        shapes = self._shapes(top)
-        if session is None or shapes is None:
-            return
-        seats, theirs, now = shapes
-        take, conflicts = merge_shapes(session.shape, theirs, now)
-        places = {seat.team_id: seat for seat in seats}
-        # Those above before those below, and what goes after what moved.
-        for team in places:
-            if take.get(team) is not None:
-                self._put_team(session, places, team)
-        for team, side in take.items():
-            if side is None:
-                store.remove(team)
-        # What it has now is what it is next compared by: a team the org
-        # keeps otherwise is not brought up again unless the session changes
-        # it once more.
-        store.set_shape(session.id, theirs)
-        if conflicts:
-            self._keep_waiting(top, places, conflicts)
 
     def _put_team(
         self, session: SessionInput, places: dict[str, SessionTeam], team_id: str
@@ -447,100 +432,211 @@ class Reviews(Requests):
             )
         return True
 
-    def _keep_waiting(
-        self,
-        top: SessionTeam,
-        places: dict[str, SessionTeam],
-        conflicts: list[ShapeConflict],
-    ) -> None:
-        """Keep the sub-teams of a session that it and the org each made
-        something else of, for the Manager of the place the session is
-        reviewed from to settle. A team whose team above is not in the org
-        waits with where it would go and the contracts it comes with."""
+    def _review_of(self, top: SessionTeam) -> SessionTeam | None:
+        """The place a session's work is reviewed from."""
+        review = self.store.place(top.parent_id or "")
+        return review if review is not None and reviews_only(review) else None
+
+    def _merge_of(self, top: SessionTeam) -> Merge | None:
+        review = self._review_of(top)
+        return review.merge if review else None
+
+    def _keep_merge(self, top: SessionTeam, merge: Merge | None) -> None:
+        review = self._review_of(top)
+        if review is not None:
+            self.store.update_place(review.id, merge=merge)
+
+    def _open_merge(self, top: SessionTeam) -> Merge | None:
+        """Give the work a session submits its place in the order it goes
+        into the org in. Work whose teams and contracts still wait from
+        an earlier acceptance keeps the place it has."""
+        with self._weighing:
+            merge = self._merge_of(top)
+            if merge is None and self._review_of(top) is not None:
+                seq = top.review.seq if top.review and top.review.seq else 0
+                merge = Merge(seq=seq or self.next_submission())
+                self._keep_merge(top, merge)
+            return merge
+
+    def _in_order(self) -> list[SessionTeam]:
+        """The places sessions were opened at whose work is on its way
+        into the org, in the order it was submitted."""
         store = self.store
-        review = store.place(top.parent_id or "")
-        if not isinstance(review, SessionTeam):
-            return
-        before = review.org_change
-        waiting = {team.team_id: team for team in (before.teams if before else [])}
-        agreed = {found.path: found for found in (before.contracts if before else [])}
-        for conflict in conflicts:
-            known = places.get(conflict.team) or store.team(conflict.team)
-            seat = places.get(conflict.team)
+        found: list[tuple[int, SessionTeam]] = []
+        for session in store.sessions():
+            places = store.session(session.id)
+            merge = self._merge_of(places[0]) if places else None
+            if merge is not None:
+                found.append((merge.seq, places[0]))
+        return [top for _, top in sorted(found, key=lambda one: one[0])]
+
+    def _contracts_with(
+        self,
+        lost: SessionTeam,
+        home_id: str,
+        team_id: str,
+        before: MergeItem | None,
+    ) -> MergeItem | None:
+        """The contracts a lost team set between its sub-teams, to wait
+        with the sub-team that would go under ``home_id``: they would be
+        added to the contracts of that team.
+
+        Args:
+            before: What waited of them when this was last worked out.
+                The lost team's own record may have landed since, and
+                then this is where its contracts are kept.
+        """
+        home = self.store.team(home_id)
+        theirs = self.read_file(lost, _contracts_file(lost.boundary.path))
+        if before is not None and not (theirs and theirs.strip()):
+            theirs = before.session[len(before.org.rstrip()) :]
+        if home is None or not theirs or not theirs.strip():
+            return None
+        path = normalize_store_path(home.boundary.path)
+        org = self._memory().read(_contracts_file(path)) or ""
+        if theirs.strip() in org:
+            return None
+        both = f"{org.rstrip()}\n\n{theirs.strip()}\n" if org.strip() else theirs
+        return MergeItem(
+            kind="contracts",
+            key=path,
+            gate="manager",
+            session=both,
+            org=org,
+            with_team=team_id,
+        )
+
+    def _manager_items(
+        self, top: SessionTeam, before: list[MergeItem]
+    ) -> tuple[dict[str, Side], list[MergeItem]]:
+        """What a session's work makes of the org's teams and contracts as
+        the org is now.
+
+        Args:
+            before: What waited when this was last worked out. What was
+                decided of something holds while it is unchanged.
+
+        Returns:
+            The teams to take from the session as they are (None to remove
+            one), and what the session and the org each made something
+            else of, for the Manager of the place it is reviewed from.
+        """
+        store = self.store
+        session = store.session_of(top)
+        shapes = self._shapes(top)
+        if session is None or shapes is None:
+            return {}, []
+        seats, theirs, now = shapes
+        take, clashes = merge_shapes(session.shape, theirs, now)
+        places = {seat.team_id: seat for seat in seats}
+        items: list[MergeItem] = []
+        coming: dict[str, MergeItem] = {}
+        came = {item.with_team: item for item in before if item.with_team}
+        for clash in clashes:
+            seat = places.get(clash.team)
+            known = seat or store.team(clash.team)
             above = store.place(seat.parent_id or "") if seat else None
             moved_to = None
             if (
-                conflict.session is not None
+                clash.session is not None
                 and seat is not None
                 and above is not None
                 and not reviews_only(above)
                 and store.team(above.team_id) is None
             ):
                 moved_to = self._home_of(top, seat.boundary.path)
-                self._contracts_with(top, above, moved_to, conflict.team, agreed)
-            waiting[conflict.team] = OrgChangeTeam(
-                team_id=conflict.team,
-                title=known.title if known else "",
-                session=_in_words(conflict.session),
-                org=_in_words(conflict.org),
-                moved_to=moved_to,
+                agreed = self._contracts_with(
+                    above, moved_to, clash.team, came.get(clash.team)
+                )
+                if agreed is not None:
+                    coming.setdefault(agreed.key, agreed)
+            items.append(
+                MergeItem(
+                    kind="team",
+                    key=clash.team,
+                    gate="manager",
+                    title=known.title if known else "",
+                    session=_in_words(clash.session),
+                    org=_in_words(clash.org),
+                    moved_to=moved_to,
+                )
             )
-        store.update_place(
-            review.id,
-            org_change=OrgChange(
-                teams=list(waiting.values()), contracts=list(agreed.values())
-            ),
-        )
+        memory = self._memory()
+        for file, (text, over) in sorted(self.drafts(top.session).items()):
+            path = file.rpartition("/")[0]
+            if not file.endswith(CONTRACTS_FILE) or path in coming:
+                continue
+            has = memory.read(file)
+            if has != over and has != text:
+                items.append(
+                    MergeItem(
+                        kind="contracts",
+                        key=path,
+                        gate="manager",
+                        session=text or "",
+                        org=has or "",
+                    )
+                )
+        items += coming.values()
+        decided = {_same(item): item for item in before if item.take}
+        return take, [
+            item.model_copy(update={"take": known.take, "text": known.text})
+            if (known := decided.get(_same(item))) is not None
+            else item
+            for item in items
+        ]
 
-    def _contracts_with(
-        self,
-        top: SessionTeam,
-        lost: SessionTeam,
-        home_id: str,
-        team_id: str,
-        agreed: dict[str, OrgChangeContracts],
-    ) -> None:
-        """Have the contracts a lost team set between its sub-teams wait
-        with the sub-team that would go under ``home_id``: they would be
-        added to the contracts of that team."""
-        home = self.store.team(home_id)
-        theirs = self.read_file(lost, _contracts_file(lost.boundary.path))
-        if home is None or not theirs or not theirs.strip():
-            return
-        path = normalize_store_path(home.boundary.path)
-        org = self._memory().read(_contracts_file(path)) or ""
-        if path in agreed or theirs.strip() in org:
-            return
-        both = f"{org.rstrip()}\n\n{theirs.strip()}\n" if org.strip() else theirs
-        self._draft(top.session, _contracts_file(path), both)
-        agreed[path] = OrgChangeContracts(
-            path=path, session=both, org=org, with_team=team_id
-        )
+    def _org_turn(self) -> None:
+        """Move on what the sessions' work makes of the org's teams and
+        contracts, strictly in the order the work was submitted: only the
+        first in order is worked out, asked about and landed. Safe from
+        any thread, and to call again."""
+        with self._weighing:
+            for index, top in enumerate(self._in_order()):
+                merge = self._merge_of(top)
+                if merge is None:
+                    continue
+                if index:
+                    if not merge.org_queued:
+                        self._keep_merge(
+                            top, merge.model_copy(update={"org_queued": True})
+                        )
+                    continue
+                _, items = self._manager_items(top, merge.items)
+                merge = merge.model_copy(
+                    update={
+                        "items": [
+                            *(item for item in merge.items if item.gate == "ic"),
+                            *items,
+                        ],
+                        "org_queued": False,
+                    }
+                )
+                self._keep_merge(top, merge)
+                if any(item.take is None for item in items):
+                    self._ask_manager(top, merge)
+                elif merge.code_landed and all(
+                    intent.kind != "land_org" or intent.node_id != top.id
+                    for intent in self._runs().open_intents()
+                ):
+                    self._begin("land_org", top.id)
 
-    def _wait_for_manager(
-        self, top: SessionTeam, contracts: list[OrgChangeContracts]
-    ) -> None:
+    def _ask_manager(self, top: SessionTeam, merge: Merge) -> None:
         """Ask the Manager of the place a session is reviewed from to
-        settle what waits there, once for all that came to wait with this
-        acceptance."""
-        store = self.store
-        review = store.place(top.parent_id or "")
-        if not isinstance(review, SessionTeam):
+        settle what waits there, once for each state of it."""
+        review = self._review_of(top)
+        waiting = [item for item in merge.items if item.gate == "manager"]
+        mark = hashlib.sha256(
+            json.dumps([_same(item) for item in waiting if item.take is None]).encode()
+        ).hexdigest()
+        if review is None or merge.asked == mark:
             return
-        change = review.org_change or OrgChange()
-        if contracts:
-            agreed = {found.path: found for found in change.contracts}
-            agreed |= {found.path: found for found in contracts}
-            change = change.model_copy(update={"contracts": list(agreed.values())})
-            store.update_place(review.id, org_change=change)
-        asked = self._runs().marked(SHOWN).get(review.id)
-        mark = change.model_dump_json()
-        if not (change.teams or change.contracts) or asked == mark:
-            return
-        self._runs().mark(SHOWN, review.id, mark)
+        self._keep_merge(top, merge.model_copy(update={"asked": mark}))
         self.tell_manager(
             review.id,
-            org_change_request(top, store.session_title(top), change),
+            merge_request(
+                top, self.store.session_title(top), waiting, merge.code_landed
+            ),
             review=True,
         )
 
@@ -551,125 +647,288 @@ class Reviews(Requests):
         note: str,
         contracts: list[ContractsChoice] | None = None,
     ) -> str:
-        """Settle what a session changed of its teams that waits at the
-        place it is reviewed from: the org's stay for ``org_teams``, and
-        the others become what the session has. Of contracts that wait,
-        the session's hold unless ``contracts`` says otherwise. Safe from
-        any thread.
+        """Settle what a session's work makes of the org's teams and
+        contracts that waits at the place it is reviewed from: the org's
+        stay for ``org_teams``, and the others become what the session
+        has. Of contracts that wait, the session's hold unless
+        ``contracts`` says otherwise. Nothing is the org's by this alone:
+        it lands when the session's code is accepted and it is its turn.
+        Safe from any thread.
 
         Raises:
-            Conflict: Nothing waits there, or contracts changed since the
-                Manager was shown them.
+            Conflict: Nothing waits there, or it changed since the Manager
+                was shown it.
             Invalid: A team or a directory named does not wait.
         """
-        with self._landing:
-            return self._settle(review_id, org_teams, note, contracts or [])
-
-    def _settle(
-        self,
-        review_id: str,
-        org_teams: list[str],
-        note: str,
-        choices: list[ContractsChoice],
-    ) -> str:
         store = self.store
-        review = store.place(review_id)
-        if not isinstance(review, SessionTeam):
-            raise Conflict("Nothing of a session waits for you to settle")
-        change, session = review.org_change, store.session_of(review)
-        if change is None or session is None or not (change.teams or change.contracts):
-            raise Conflict("Nothing of a session waits for you to settle")
-        waiting = [team.team_id for team in change.teams]
-        unknown = [team for team in org_teams if team not in waiting]
-        if unknown:
-            raise Invalid(
-                f"Not waiting: {', '.join(unknown)}. The teams that wait: "
-                f"{', '.join(waiting) or 'none'}"
-            )
-        agreed = {found.path: found for found in change.contracts}
-        chosen = {normalize_store_path(choice.path): choice for choice in choices}
-        unknown = [path for path in chosen if path not in agreed]
-        if unknown:
-            raise Invalid(
-                f"No contracts wait for: {', '.join(unknown)}. The directories "
-                f"whose contracts wait: {', '.join(agreed) or 'none'}"
-            )
-        top = store.session(session.id)[0]
-        changed = [
-            found.model_copy(update={"org": now})
-            for found in agreed.values()
-            if (now := self._memory().read(_contracts_file(found.path)) or "")
-            != found.org
-        ]
-        if changed:
-            # What it decided on is not what the org has any more.
-            agreed |= {found.path: found for found in changed}
-            shown = change.model_copy(update={"contracts": list(agreed.values())})
-            store.update_place(review.id, org_change=shown)
-            raise Conflict(
-                "The org's contracts changed since you were shown them. "
-                "Nothing is settled yet.\n\n"
-                + org_change_request(top, store.session_title(top), shown)
-            )
-        seats: list[SessionTeam] = [top]
-        for seat in seats:
-            seats.extend(store.below(seat.id))
-        places = {seat.team_id: seat for seat in seats}
-        taken: list[str] = []
-        kept = list(org_teams)
-        # Those above before those below.
-        for team in [*(team for team in places if team in waiting), *waiting]:
-            if team in org_teams or team in taken or team in kept:
-                continue
-            if team in places:
-                done = self._put_team(session, places, team)
-            else:
-                store.remove(team)
-                done = True
-            (taken if done else kept).append(team)
-        texts: dict[str, str | None] = {}
-        held: list[str] = []
-        for path, found in agreed.items():
-            choice = chosen.get(path)
-            take = choice.take if choice else "session"
-            if found.with_team is not None and found.with_team not in taken:
-                take = "org"
-            if take == "org":
-                self._undraft(session.id, _contracts_file(path))
-                held.append(path or "the repository")
-            else:
-                text = choice.text if choice and take == "text" else found.session
-                texts[_contracts_file(path)] = (
-                    f"{text.strip()}\n" if text.strip() else None
+        with self._weighing:
+            review = store.place(review_id)
+            session = store.session_of(review) if review else None
+            merge = review.merge if review else None
+            waiting = [
+                item
+                for item in (merge.items if merge else [])
+                if item.gate == "manager"
+            ]
+            if merge is None or session is None or merge.org_queued or not waiting:
+                raise Conflict("Nothing of a session waits for you to settle")
+            top = store.session(session.id)[0]
+            teams = [item.key for item in waiting if item.kind == "team"]
+            unknown = [team for team in org_teams if team not in teams]
+            if unknown:
+                raise Invalid(
+                    f"Not waiting: {', '.join(unknown)}. The teams that wait: "
+                    f"{', '.join(teams) or 'none'}"
                 )
-        store.update_place(review.id, org_change=None)
-        self._runs().unmark(SHOWN, review.id)
-        landed = self._land_records(top, chosen=texts)
-        for team_id, role in landed.grown:
-            self.reports_grew(team_id, role)
-        self.tell_ic(
-            top.id,
-            teams_settled(
-                review.title,
-                taken,
-                kept,
-                [path or "the repository" for path in agreed if path not in held],
-                held,
+            agreed = [item.key for item in waiting if item.kind == "contracts"]
+            chosen = {
+                normalize_store_path(choice.path): choice for choice in contracts or []
+            }
+            unknown = [path for path in chosen if path not in agreed]
+            if unknown:
+                raise Invalid(
+                    f"No contracts wait for: {', '.join(unknown)}. The directories "
+                    f"whose contracts wait: {', '.join(agreed) or 'none'}"
+                )
+            others = [item for item in merge.items if item.gate == "ic"]
+            _, now = self._manager_items(top, merge.items)
+            if {_same(item) for item in now} != {_same(item) for item in waiting}:
+                # What it decided on is not what the org has any more.
+                shown = merge.model_copy(update={"items": [*others, *now]})
+                self._keep_merge(top, shown)
+                raise Conflict(
+                    "What waits changed since you were shown it. Nothing is "
+                    "settled yet.\n\n"
+                    + merge_request(
+                        top, store.session_title(top), now, merge.code_landed
+                    )
+                )
+            settled = []
+            for item in waiting:
+                choice = chosen.get(item.key) if item.kind == "contracts" else None
+                take: Take = "session"
+                if item.kind == "team" and item.key in org_teams:
+                    take = "org"
+                elif choice is not None:
+                    take = choice.take
+                settled.append(
+                    item.model_copy(
+                        update={
+                            "take": take,
+                            "text": choice.text if choice and take == "text" else "",
+                        }
+                    )
+                )
+            self._keep_merge(
+                top,
+                merge.model_copy(update={"items": [*others, *settled], "note": note}),
             )
-            + (f"\n\n{note}" if note else ""),
-        )
+            landed = merge.code_landed
+        self._org_turn()
         self._save_soon()
-        return (
-            f"Settled. From the session: {', '.join(taken) or 'none'}. "
-            f"The org's stay: {', '.join(kept) or 'none'}."
-            + (
-                f" Contracts from the session: "
-                f"{', '.join(p for p in agreed if p not in held) or 'none'}; "
-                f"the org's stay: {', '.join(held) or 'none'}."
-                if agreed
-                else ""
-            )
+        return "Settled. " + (
+            "It is the org's as soon as it is its turn."
+            if landed
+            else "It becomes the org's when the IC that reviews the session's "
+            "work has accepted it."
         )
+
+    def _land(
+        self,
+        top: SessionTeam,
+        seen: dict[str, str | None] | None,
+        org: tuple[dict[str, Side], list[MergeItem]] | None,
+    ) -> Landed:
+        """Make what a session kept to itself the org's, now that its code
+        is in the repository's checkout.
+
+        Args:
+            seen: The specs the reviewer was shown, by file.
+            org: What its work makes of the org's teams and contracts, all
+                of it settled; None when that waits. Then only its specs
+                and the records of the teams the org has land, and the
+                rest stays the session's.
+        """
+        store = self.store
+        session = store.session_of(top)
+        shapes = self._shapes(top)
+        merge = self._merge_of(top)
+        if session is None or shapes is None or merge is None:
+            return Landed(Taken([], [], []), [], [], [], [])
+        if org is None:
+            take, items = self._manager_items(top, [])
+            waits = {*take, *(item.key for item in items if item.kind == "team")}
+            agreements = {
+                file
+                for file in self.drafts(top.session)
+                if file.endswith(CONTRACTS_FILE)
+            }
+            self._keep_merge(
+                top,
+                merge.model_copy(
+                    update={
+                        "code_landed": True,
+                        "items": [i for i in merge.items if i.gate == "manager"],
+                    }
+                ),
+            )
+            records = self._land_records(top, seen, waits=waits, held=agreements)
+            return Landed(records, [], [], [], [])
+        take, items = org
+        seats, theirs, _ = shapes
+        places = {seat.team_id: seat for seat in seats}
+        decided = {item.key: item for item in items if item.kind == "team"}
+        taken: list[str] = []
+        kept = [team for team, item in decided.items() if item.take != "session"]
+        # Those above before those below, and what goes after what moved.
+        for team in places:
+            settled = team in decided and decided[team].take == "session"
+            if take.get(team) is not None or settled:
+                done = self._put_team(session, places, team)
+                if settled:
+                    (taken if done else kept).append(team)
+        for team in [
+            *(team for team, side in take.items() if side is None),
+            *(
+                team
+                for team, item in decided.items()
+                if item.take == "session" and team not in places
+            ),
+        ]:
+            store.remove(team)
+            if team in decided:
+                taken.append(team)
+        # What it has now is what it is next compared by: a team the org
+        # keeps otherwise is not brought up again unless the session changes
+        # it once more.
+        store.set_shape(session.id, theirs)
+        texts: dict[str, str | None] = {}
+        agreed: list[str] = []
+        held: list[str] = []
+        for item in items:
+            if item.kind != "contracts":
+                continue
+            file = _contracts_file(item.key)
+            if item.take == "org" or (
+                item.with_team is not None and item.with_team not in taken
+            ):
+                self._undraft(top.session, file)
+                held.append(item.key or "the repository")
+                continue
+            text = item.text if item.take == "text" else item.session
+            texts[file] = f"{text.strip()}\n" if text.strip() else None
+            agreed.append(item.key or "the repository")
+        self._keep_merge(top, None)
+        records = self._land_records(top, seen, chosen=texts, tree=True)
+        return Landed(records, taken, kept, agreed, held)
+
+    def _land_accepted(
+        self, top: SessionTeam, seen: dict[str, str | None] | None
+    ) -> None:
+        """Land the work of a session whose code was just merged: with
+        what it makes of the org's teams and contracts when that is
+        settled and it is its turn, and without it otherwise."""
+        with self._weighing:
+            merge = self._open_merge(top)
+            order = self._in_order()
+            org = None
+            if merge is not None and order and order[0].id == top.id:
+                take, items = self._manager_items(top, merge.items)
+                if all(item.take for item in items):
+                    org = (take, items)
+            landed = self._land(top, seen, org)
+        self._after_landing(top, landed, merge.note if merge and org else "")
+
+    def _after_landing(self, top: SessionTeam, landed: Landed, note: str) -> None:
+        for team_id, role in landed.records.grown:
+            self.reports_grew(team_id, role)
+        review = self._review_of(top)
+        if review is not None and (
+            landed.taken or landed.kept or landed.agreed or landed.held
+        ):
+            self.tell_ic(
+                top.id,
+                teams_settled(
+                    review.title, landed.taken, landed.kept, landed.agreed, landed.held
+                )
+                + (f"\n\n{note}" if note else ""),
+            )
+        self._org_turn()
+
+    async def _do_land_org(self, intent: Intent) -> None:
+        """Land what a session's accepted work makes of the org's teams
+        and contracts, when it is its turn and all of it is settled."""
+        top = self.store.place(intent.node_id)
+        if top is None:
+            return
+        landed = await asyncio.to_thread(self._land_org, top)
+        if landed is not None:
+            self._after_landing(top, *landed)
+
+    def _land_org(self, top: SessionTeam) -> tuple[Landed, str] | None:
+        with self._weighing:
+            merge = self._merge_of(top)
+            order = self._in_order()
+            if (
+                merge is None
+                or not merge.code_landed
+                or not order
+                or order[0].id != top.id
+            ):
+                return None
+            take, items = self._manager_items(top, merge.items)
+            if any(item.take is None for item in items):
+                return None
+            return self._land(top, None, (take, items)), merge.note
+
+    def _settle_on_close(self, top: SessionTeam) -> None:
+        """Settle what waits of a session that is being closed: of work
+        whose code is in the repository, the org's teams and contracts
+        stay wherever nobody decided otherwise, and what the session wrote
+        lands where the org has the team and is that team's record where
+        it has not."""
+        with self._weighing:
+            merge = self._merge_of(top)
+            if merge is None:
+                return
+            if not merge.code_landed:
+                self._keep_merge(top, None)
+                return
+            take, items = self._manager_items(top, merge.items)
+            landed = self._land(
+                top,
+                None,
+                (
+                    take,
+                    [
+                        item if item.take else item.model_copy(update={"take": "org"})
+                        for item in items
+                    ],
+                ),
+            )
+        for team_id, role in landed.records.grown:
+            self.reports_grew(team_id, role)
+
+    def _sent_back(self, top: SessionTeam) -> None:
+        """The work of a session was sent back: it has no place in the
+        order any more, unless teams and contracts of work accepted before
+        still wait."""
+        with self._weighing:
+            merge = self._merge_of(top)
+            review = self._review_of(top)
+            if merge is None or review is None or merge.code_landed:
+                return
+            self._keep_merge(top, None)
+            if merge.asked and any(
+                item.gate == "manager" and item.take is None for item in merge.items
+            ):
+                self.tell_manager(
+                    review.id,
+                    f"The work of {top.title!r} was sent back to its team. "
+                    "What waited of it for you waits no longer.",
+                    review=True,
+                )
+        self._org_turn()
 
     def _merged_as(self, node: SessionTeam) -> str:
         """What the commit that merges a team's work calls it: the session
@@ -728,6 +987,15 @@ class Reviews(Requests):
                 (f"{directory}/{SPEC_FILE}" if directory else SPEC_FILE): now or None
                 for directory, now, _ in specs
             },
+            [
+                *(MergeItem(kind="code", key=path, gate="ic") for path in files),
+                *(
+                    MergeItem(
+                        kind="spec", key=directory, gate="ic", session=mine, org=now
+                    )
+                    for directory, now, mine in specs
+                ),
+            ],
         )
 
     def check_accept(self, node_id: str, reconciled: str) -> None:
@@ -763,13 +1031,10 @@ class Reviews(Requests):
             and other.id not in accepting
             and other.review is not None
             and other.review.state == "pending"
-            and other.review.at < node.review.at
+            and _submitted(other) < _submitted(node)
         ]
         if waiting:
-            first = min(
-                waiting, key=lambda other: other.review.at if other.review else ""
-            )
-            raise Conflict(accept_in_order(node, first))
+            raise Conflict(accept_in_order(node, min(waiting, key=_submitted)))
         try:
             meets = self._to_reconcile(node, above)
         except (GitError, OSError):
@@ -788,6 +1053,8 @@ class Reviews(Requests):
             What to tell the reviewer when the work meets something it has
             not been shown as it is now; None when it may be accepted.
         """
+        if self.store.opens_session(node):
+            self._show_reviewer_items(node, meets)
         if meets is None:
             return None
         run = self._runs()
@@ -801,6 +1068,20 @@ class Reviews(Requests):
                 "is merged yet.\n\n" + meets.text
             )
         return meets.text
+
+    def _show_reviewer_items(self, top: SessionTeam, meets: Meets | None) -> None:
+        """Keep, with what waits of a session's work, what its reviewer
+        has to reconcile."""
+        with self._weighing:
+            merge = self._merge_of(top)
+            if merge is None:
+                return
+            items = [
+                *(meets.items if meets else []),
+                *(item for item in merge.items if item.gate == "manager"),
+            ]
+            if items != merge.items:
+                self._keep_merge(top, merge.model_copy(update={"items": items}))
 
     async def _do_request_review(self, intent: Intent) -> None:
         await self._request_review(intent.node_id)
@@ -876,6 +1157,9 @@ class Reviews(Requests):
             }
         )
         node = store.set_review(node_id, review)
+        if store.opens_session(node):
+            # Its Manager is asked what waits for it beside the review.
+            await asyncio.to_thread(self._org_turn)
         if node.parent_id is not None:
             self._runs().mark(HELD, node_id)
             self._release_reviews(node.parent_id)
@@ -906,123 +1190,125 @@ class Reviews(Requests):
         team, checkout = Path(node.worktree_path), Path(above.worktree_path)
         merged = False
         opens = store.opens_session(node)
-        async with self._one_landing():
+        try:
+            meets = await asyncio.to_thread(self._to_reconcile, node, above)
+        except (GitError, OSError):
+            meets = None
+        refusal = self._not_reconciled(node, meets, reconciled)
+        if refusal is not None:
+            # Something came into the checkout between the review and now.
+            self.notify(reviewer, refusal)
+            return
+        if _checkout_root(str(team)) != _checkout_root(str(checkout)):
+            if not opens:
+                # What is uncommitted in a session's directory is the work
+                # of the team it was opened beside, and stays.
+                await asyncio.to_thread(self._put_aside, above, node)
             try:
-                meets = await asyncio.to_thread(self._to_reconcile, node, above)
-            except (GitError, OSError):
-                meets = None
-            refusal = self._not_reconciled(node, meets, reconciled)
-            if refusal is not None:
-                # Something came into the checkout between the review and now.
-                self.notify(reviewer, refusal)
+                result = await asyncio.to_thread(
+                    merge_back,
+                    checkout,
+                    team,
+                    node.boundary.path,
+                    self._merged_as(node),
+                )
+            except (GitError, OSError) as error:
+                self.notify(
+                    reviewer,
+                    f"The work of {node.title!r} could not be merged into your "
+                    f"checkout, and still waits for your review: {error}",
+                )
                 return
-            if _checkout_root(str(team)) != _checkout_root(str(checkout)):
-                if not opens:
-                    # What is uncommitted in a session's directory is the work
-                    # of the team it was opened beside, and stays.
-                    await asyncio.to_thread(self._put_aside, above, node)
-                try:
-                    result = await asyncio.to_thread(
-                        merge_back,
-                        checkout,
-                        team,
-                        node.boundary.path,
-                        self._merged_as(node),
-                    )
-                except (GitError, OSError) as error:
-                    self.notify(
-                        reviewer,
-                        f"The work of {node.title!r} could not be merged into your "
-                        f"checkout, and still waits for your review: {error}",
-                    )
-                    return
-                if result.outcome == "refused" and reviews_only(above):
-                    # Only the human can clear their own checkout: they are
-                    # asked, and their answer merges the work.
-                    if all(e.id != MERGE_WAITS for e in node.escalations):
-                        store.raise_escalation(
-                            node_id,
-                            MERGE_WAITS,
-                            kind="critical_issue",
-                            title="Accepted work cannot be merged into your checkout",
-                            detail=(
-                                f"git would not merge it as the checkout is:\n"
-                                f"{result.detail}\nCommit or put aside what is in "
-                                "the way, then answer this: the work is merged then."
-                            ),
-                            at=_now(),
-                        )
-                        self._save_soon()
-                    self.notify(
-                        reviewer,
-                        f"The work of {node.title!r} is accepted and waits for "
-                        "the human, whose uncommitted changes are in the way of "
-                        "the merge. There is nothing more for you to do.",
-                    )
-                    return
-                if result.outcome == "refused":
-                    self.notify(
-                        reviewer,
-                        f"git would not merge the work of {node.title!r} into your "
-                        f"checkout as it is:\n{result.detail}\n"
-                        + (
-                            "What is in the way is work that is not committed "
-                            "yet in the same files. Accept it again with "
-                            "`review_team` once that is committed."
-                            if opens
-                            else "Commit or put aside what is in the way, then "
-                            "accept it again with `review_team`."
-                        ),
-                    )
-                    return
-                if result.outcome in ("conflicts", "outside"):
-                    issue = (
-                        (
-                            "These files do not merge with what was merged into "
-                            f"the repository's checkout meanwhile. Merge its "
-                            f"branch ({above.branch}) into yours, resolve them "
-                            "and commit."
-                            if reviews_only(above)
-                            else "These files do not merge with the checkout of "
-                            "the team above. Merge its branch into yours, "
-                            "resolve them and commit."
-                        )
-                        if result.outcome == "conflicts"
-                        else f"These files are outside {where}, which is all your "
-                        "team owns. Take them out of your commits."
-                    )
-                    self.request_changes(
+            if result.outcome == "refused" and reviews_only(above):
+                # Only the human can clear their own checkout: they are
+                # asked, and their answer merges the work.
+                if all(e.id != MERGE_WAITS for e in node.escalations):
+                    store.raise_escalation(
                         node_id,
-                        [ReviewFinding(path=", ".join(result.files), issue=issue)],
+                        MERGE_WAITS,
+                        kind="critical_issue",
+                        title="Accepted work cannot be merged into your checkout",
+                        detail=(
+                            f"git would not merge it as the checkout is:\n"
+                            f"{result.detail}\nCommit or put aside what is in "
+                            "the way, then answer this: the work is merged then."
+                        ),
+                        at=_now(),
                     )
-                    self.notify(
-                        reviewer,
-                        f"The work of {node.title!r} was not taken into your "
-                        f"checkout: {issue} ({', '.join(result.files)}) "
-                        "It was sent back to the team.",
+                    self._save_soon()
+                self.notify(
+                    reviewer,
+                    f"The work of {node.title!r} is accepted and waits for "
+                    "the human, whose uncommitted changes are in the way of "
+                    "the merge. There is nothing more for you to do.",
+                )
+                return
+            if result.outcome == "refused":
+                self.notify(
+                    reviewer,
+                    f"git would not merge the work of {node.title!r} into your "
+                    f"checkout as it is:\n{result.detail}\n"
+                    + (
+                        "What is in the way is work that is not committed "
+                        "yet in the same files. Accept it again with "
+                        "`review_team` once that is committed."
+                        if opens
+                        else "Commit or put aside what is in the way, then "
+                        "accept it again with `review_team`."
+                    ),
+                )
+                return
+            if result.outcome in ("conflicts", "outside"):
+                issue = (
+                    (
+                        "These files do not merge with what was merged into "
+                        f"the repository's checkout meanwhile. Merge its "
+                        f"branch ({above.branch}) into yours, resolve them "
+                        "and commit."
+                        if reviews_only(above)
+                        else "These files do not merge with the checkout of "
+                        "the team above. Merge its branch into yours, "
+                        "resolve them and commit."
                     )
-                    return
-                merged = result.outcome == "merged"
-            tip = await asyncio.to_thread(head_of, team)
-            store.set_review(
-                node_id,
-                node.review.model_copy(update={"state": "accepted", "at": _now()}),
-                base_commit=tip or node.base_commit,
+                    if result.outcome == "conflicts"
+                    else f"These files are outside {where}, which is all your "
+                    "team owns. Take them out of your commits."
+                )
+                self.request_changes(
+                    node_id,
+                    [ReviewFinding(path=", ".join(result.files), issue=issue)],
+                )
+                self.notify(
+                    reviewer,
+                    f"The work of {node.title!r} was not taken into your "
+                    f"checkout: {issue} ({', '.join(result.files)}) "
+                    "It was sent back to the team.",
+                )
+                return
+            merged = result.outcome == "merged"
+        tip = await asyncio.to_thread(head_of, team)
+        store.set_review(
+            node_id,
+            node.review.model_copy(update={"state": "accepted", "at": _now()}),
+            base_commit=tip or node.base_commit,
+        )
+        self.progressed(above.id)
+        self._work_accepted(node)
+        if meets is not None:
+            self.record_event(above.id, "reconciled", node, reconciled[:ASKED_KEPT])
+        self.record_event(
+            above.id,
+            "accepted",
+            node,
+            "at the first review"
+            if node.review.round <= 1
+            else f"at review {node.review.round}",
+        )
+        if opens:
+            await asyncio.to_thread(
+                self._land_accepted, node, meets.seen if meets else None
             )
-            self.progressed(above.id)
-            self._work_accepted(node)
-            if meets is not None:
-                self.record_event(above.id, "reconciled", node, reconciled[:ASKED_KEPT])
-            self.record_event(
-                above.id,
-                "accepted",
-                node,
-                "at the first review"
-                if node.review.round <= 1
-                else f"at review {node.review.round}",
-            )
-            await self._landed(node, meets.seen if meets else None)
-            self._runs().unmark(SHOWN, node_id)
+        self._runs().unmark(SHOWN, node_id)
         if not reviews_only(above):
             self.count_accepted_review(above.id)
         self.notify(
@@ -1108,74 +1394,79 @@ class Reviews(Requests):
             return
         if node.review is not None and node.review.state == "pending":
             return
+        opens = store.opens_session(node)
+        if opens and _LANE.get() != BASE_LANE:
+            # The work of a session goes into what the org shares.
+            await self._in_base(lambda: self._pass_up(node_id, acted=acted))
+            return
         ic = agent_conversation(node, "ic")
         above = store.place(node.parent_id) if node.parent_id else None
-        async with self._one_landing():
-            own = await asyncio.to_thread(self._own_changes, node, teams)
-            if own is None:
+        own = await asyncio.to_thread(self._own_changes, node, teams)
+        if own is None:
+            return
+        # The work of a session meets what other sessions delivered: where
+        # it does, the reviewer is asked even if the team changed nothing.
+        meets = False
+        if not own and above is not None and store.opens_session(node):
+            try:
+                meets = (
+                    await asyncio.to_thread(self._to_reconcile, node, above)
+                ) is not None
+            except (GitError, OSError):
+                meets = True
+        if own or above is None or meets:
+            if not acted:
+                self.notify(
+                    ic,
+                    "The work of all your sub-teams is accepted and in your "
+                    "checkout. "
+                    + (
+                        "Your team also changed files itself that nobody has "
+                        f"reviewed ({', '.join(own[:10])}). "
+                        if own
+                        else ""
+                    )
+                    + "Call `submit_review` when your team's work is complete.",
+                )
+            return
+        team, checkout = Path(node.worktree_path), Path(above.worktree_path)
+        if _checkout_root(str(team)) != _checkout_root(str(checkout)):
+            try:
+                result = await asyncio.to_thread(
+                    merge_back, checkout, team, node.boundary.path, node.title
+                )
+                problem = (
+                    f"{result.outcome}: {', '.join(result.files) or result.detail}"
+                    if result.outcome in ("refused", "conflicts", "outside")
+                    else None
+                )
+            except (GitError, OSError) as error:
+                problem = str(error)
+            if problem is not None:
+                self.notify(
+                    ic,
+                    "The work of all your sub-teams is accepted, but your "
+                    "team's checkout does not merge into the checkout of "
+                    f"{above.title!r} ({problem}). Merge its branch into "
+                    "yours, resolve what is in the way, commit, and call "
+                    "`submit_review`.",
+                )
                 return
-            # The work of a session meets what other sessions delivered: where
-            # it does, the reviewer is asked even if the team changed nothing.
-            meets = False
-            if not own and above is not None and store.opens_session(node):
-                try:
-                    meets = (
-                        await asyncio.to_thread(self._to_reconcile, node, above)
-                    ) is not None
-                except (GitError, OSError):
-                    meets = True
-            if own or above is None or meets:
-                if not acted:
-                    self.notify(
-                        ic,
-                        "The work of all your sub-teams is accepted and in your "
-                        "checkout. "
-                        + (
-                            "Your team also changed files itself that nobody has "
-                            f"reviewed ({', '.join(own[:10])}). "
-                            if own
-                            else ""
-                        )
-                        + "Call `submit_review` when your team's work is complete.",
-                    )
-                return
-            team, checkout = Path(node.worktree_path), Path(above.worktree_path)
-            if _checkout_root(str(team)) != _checkout_root(str(checkout)):
-                try:
-                    result = await asyncio.to_thread(
-                        merge_back, checkout, team, node.boundary.path, node.title
-                    )
-                    problem = (
-                        f"{result.outcome}: {', '.join(result.files) or result.detail}"
-                        if result.outcome in ("refused", "conflicts", "outside")
-                        else None
-                    )
-                except (GitError, OSError) as error:
-                    problem = str(error)
-                if problem is not None:
-                    self.notify(
-                        ic,
-                        "The work of all your sub-teams is accepted, but your "
-                        "team's checkout does not merge into the checkout of "
-                        f"{above.title!r} ({problem}). Merge its branch into "
-                        "yours, resolve what is in the way, commit, and call "
-                        "`submit_review`.",
-                    )
-                    return
-            tip = await asyncio.to_thread(head_of, team)
-            store.set_review(
-                node_id,
-                Review(
-                    state="accepted",
-                    summary="The accepted work of its sub-teams, with no changes of "
-                    "its own.",
-                    passed_up=True,
-                    at=_now(),
-                ),
-                base_commit=tip or node.base_commit,
-            )
-            self._work_accepted(node)
-            await self._landed(node)
+        tip = await asyncio.to_thread(head_of, team)
+        store.set_review(
+            node_id,
+            Review(
+                state="accepted",
+                summary="The accepted work of its sub-teams, with no changes of "
+                "its own.",
+                passed_up=True,
+                at=_now(),
+            ),
+            base_commit=tip or node.base_commit,
+        )
+        self._work_accepted(node)
+        if opens:
+            await asyncio.to_thread(self._land_accepted, node, None)
         if acted:
             self.notify(
                 ic,

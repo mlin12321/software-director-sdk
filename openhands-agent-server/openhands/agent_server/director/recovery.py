@@ -302,6 +302,9 @@ def _unfit(intent: Intent, nodes: Mapping[str, SessionTeam]) -> str | None:
     elif intent.kind == "request_review":
         if review is None or review.state != "pending":
             return "its work no longer waits for a review"
+    elif intent.kind == "land_org":
+        if review is None or review.state != "accepted":
+            return "its work is not accepted"
     elif intent.kind == "accept":
         # Accepted already: what follows the acceptance may still be owed.
         if review is None or review.state not in ("pending", "accepted"):

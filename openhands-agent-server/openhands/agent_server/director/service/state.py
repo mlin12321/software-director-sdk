@@ -11,6 +11,7 @@ import shutil
 import threading
 from collections import deque
 from collections.abc import Awaitable, Callable, Sequence
+from contextvars import ContextVar
 from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path
@@ -42,7 +43,10 @@ from openhands.agent_server.director.git_store import (
     CONTRACTS_FILE,
     SPEC_FILE,
     GitStore,
+    Landing,
     normalize_store_path,
+    swap_together,
+    taking_in,
 )
 from openhands.agent_server.director.headline import provisional_summary
 from openhands.agent_server.director.models import (
@@ -70,6 +74,7 @@ from openhands.agent_server.director.org_persistence import (
     create_org_board,
     load_org,
     save_org,
+    saving,
 )
 from openhands.agent_server.director.org_store import (
     OrgStore,
@@ -105,6 +110,7 @@ from openhands.sdk.conversation.state import ConversationExecutionStatus
 from openhands.sdk.errors import (
     DomainError,
     NotFound,
+    OperationFailed,
     Unavailable,
     Unprocessable,
 )
@@ -219,6 +225,9 @@ _ACP_LAUNCHER = ".acp.sh"
 _REMEMBERED_FILE = "director.json"
 # The lane of what concerns the org as a whole, such as saving its tree.
 ORG_LANE = "org"
+# The lane of everything that changes what the org shares: the repository's
+# checkout, the tree and team memory. One thing at a time, in order.
+BASE_LANE = "base"
 # The lane reports are rewritten shorter in.
 MODELS_LANE = "models"
 # The lane agents are paused in, so that nothing waits for their last step.
@@ -242,6 +251,10 @@ _REST_CHECKS = 600
 _REST_CHECK_SECONDS = 0.05
 
 type Effect = Callable[[], Awaitable[None]]
+# The lane the running step is carried out in; '' outside the lanes.
+_LANE: ContextVar[str] = ContextVar("director_lane", default="")
+# How often a landing is tried when another writer moves a ref first.
+_LANDING_ATTEMPTS = 8
 
 
 class _Held(Exception):
@@ -388,7 +401,8 @@ class ServiceState:
         # Held while one of a session's own records is read and added to.
         self._keeping = threading.Lock()
         self._saving = threading.Lock()
-        self._landing = threading.Lock()
+        # Held while what waits of a session's work is read and changed.
+        self._weighing = threading.RLock()
         self._adding_manager = threading.Lock()
         self._counting = threading.Lock()
         self._clock = clock
@@ -998,6 +1012,7 @@ class ServiceState:
 
     async def _work(self, lane: str) -> None:
         waiting = self._lanes[lane]
+        _LANE.set(lane)
         try:
             while waiting:
                 effect = waiting.popleft()
@@ -1011,6 +1026,30 @@ class ServiceState:
                         self._quiet.set()
         finally:
             del self._lanes[lane]
+
+    def next_submission(self) -> int:
+        """The place in the order of the work that is submitted now."""
+        return self._runs().count("submitted")
+
+    async def _in_base(self, effect: Effect) -> None:
+        """Carry ``effect`` out in the lane of what the org shares and wait
+        for it: after everything that was asked for there before."""
+        if _LANE.get() == BASE_LANE:
+            await effect()
+            return
+        loop = asyncio.get_running_loop()
+        done: asyncio.Future[None] = loop.create_future()
+
+        async def carried_out() -> None:
+            try:
+                await effect()
+            except Exception as error:
+                done.set_exception(error)
+            else:
+                done.set_result(None)
+
+        self._put(carried_out, BASE_LANE)
+        await done
 
     def _begin(self, kind: str, node_id: str, **payload: object) -> None:
         """Record something of several steps the director does for a team,
@@ -1100,6 +1139,42 @@ class ServiceState:
             await asyncio.to_thread(self._save_tree, store)
         except GitError:
             logger.exception("Could not save the org tree to %s", self._repo_dir)
+
+    def _commit_landing(
+        self, landing: Landing, message: str, tree: bool
+    ) -> dict[str, str | None]:
+        """Take a landing into team memory, and with ``tree`` save the org
+        tree as it is now with it: both refs move together or neither.
+
+        Returns:
+            The files that were not written, with the text each has now.
+
+        Raises:
+            OperationFailed: Another writer kept moving a ref first.
+        """
+        memory = self._memory()
+        if not tree:
+            return memory.take_in(landing, message)
+        store = self.store
+        with self._saving:
+            for _ in range(_LANDING_ATTEMPTS):
+                mutate, left = taking_in(landing)
+                board = create_org_board(self._repo_dir)
+                staged = [
+                    made
+                    for made in (
+                        memory.stage(mutate, message),
+                        board.stage(saving(store), f"org: {message}"),
+                    )
+                    if made is not None
+                ]
+                if not staged or swap_together(self._repo_dir, staged):
+                    self._runs().replace_marks(SESSION, kept_sessions(store))
+                    return dict(left)
+        raise OperationFailed(
+            f"Gave up landing in {self._repo_dir} after {_LANDING_ATTEMPTS} "
+            "contended attempts"
+        )
 
     def _save_tree(self, store: OrgStore) -> None:
         with self._saving:
@@ -1203,10 +1278,14 @@ def _child_node(
 
 # Steps whose outcome is in the tree alone. The steps that start agents are
 # not among them: their outcome is the conversation.
-_SAVED_BEFORE_FORGOTTEN = frozenset({"accept", "finish_split", "request_review"})
+_SAVED_BEFORE_FORGOTTEN = frozenset(
+    {"accept", "finish_split", "request_review", "land_org"}
+)
 
 
 def _lane_for(intent: Intent) -> str:
+    if intent.kind == "land_org" or intent.payload.get("base"):
+        return BASE_LANE
     if intent.kind in _REVIEW_STEPS:
         return f"review:{intent.node_id}"
     return intent.node_id

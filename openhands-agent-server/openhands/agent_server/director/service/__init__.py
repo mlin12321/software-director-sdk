@@ -449,6 +449,7 @@ class DirectorService(Sync):
             "hand_over": self._do_hand_over,
             "request_review": self._do_request_review,
             "accept": self._do_accept,
+            "land_org": self._do_land_org,
             "prune": self._prune,
             "close_session": self._close_session,
         }

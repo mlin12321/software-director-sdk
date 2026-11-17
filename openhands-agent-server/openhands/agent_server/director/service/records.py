@@ -3,7 +3,7 @@ records and what they needed of each other."""
 
 import json
 import logging
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from pathlib import Path
 from typing import Any, NamedTuple
 from uuid import uuid4
@@ -18,7 +18,6 @@ from openhands.agent_server.director.git import (
     tracked_files,
 )
 from openhands.agent_server.director.git_store import (
-    CONTRACTS_FILE,
     SPEC_FILE,
     GitStore,
     Landing,
@@ -37,7 +36,6 @@ from openhands.agent_server.director.models import (
     HistoryEvent,
     InheritedSpec,
     OldSpec,
-    OrgChangeContracts,
     OrgHistory,
     OrgNode,
     Report,
@@ -122,7 +120,8 @@ class Taken(NamedTuple):
     """What became of a session's records when its work was accepted."""
 
     grown: list[tuple[str, AgentRole]]
-    contracts: list[OrgChangeContracts]
+    # The files that were not written: someone else changed them meanwhile.
+    left: list[str]
     not_taken: list[FormerTeam]
 
 
@@ -947,14 +946,6 @@ class Records(ServiceState):
                 found.append((_directory_of(file), now or "", text))
         return found
 
-    def _waits(self, top: SessionTeam) -> set[str]:
-        """The teams of a session that wait to be settled before they are
-        the org's."""
-        review = self.store.place(top.parent_id or "")
-        if review is None or review.org_change is None:
-            return set()
-        return {team.team_id for team in review.org_change.teams}
-
     def _home_of(self, top: SessionTeam, path: str) -> str:
         """The team of the org that has what a session's team the org does
         not have left: the nearest one that holds its directory."""
@@ -984,39 +975,39 @@ class Records(ServiceState):
         top: SessionTeam,
         seen: dict[str, str | None] | None = None,
         chosen: dict[str, str | None] | None = None,
+        *,
+        waits: Collection[str] = (),
+        held: Collection[str] = (),
+        tree: bool = False,
     ) -> Taken:
         """Make what a session kept to itself the org's, now that its work
         is accepted: the specs and contracts it wrote, what its agents
         recorded and the records of the teams it removed. All of it is one
         commit of team memory.
 
-        What is of a team that waits to be settled stays the session's
-        until then. What is of a team the org does not have, or has another
-        team in place of, is kept as that team's record with the nearest
-        team of the org that holds its directory. Contracts the org
-        changed meanwhile wait to be settled, and a spec is put in place
-        of one that changed only where its reviewer was shown that one.
+        What is of a team that waits stays the session's until then. What
+        is of a team the org does not have, or has another team in place
+        of, is kept as that team's record with the nearest team of the org
+        that holds its directory. A spec is put in place of one that
+        changed only where its reviewer was shown that one.
 
         Args:
             seen: The specs the reviewer was shown, by file.
             chosen: The contracts that were settled, by file: the text
                 that holds.
+            waits: The teams whose records stay the session's for now.
+            held: The files that stay the session's for now.
+            tree: Whether the org tree as it is now lands with it.
 
         Returns:
-            The records that grew, the contracts that wait, and the
-            records of the teams that were not taken.
+            The records that grew, the files that were not written, and
+            the records of the teams that were not taken.
         """
         store = self.store
         run = self._runs()
         session = top.session
-        waits = self._waits(top)
         review = store.place(top.parent_id or "")
-        held = {
-            _contracts_file(agreed.path)
-            for agreed in (
-                review.org_change.contracts if review and review.org_change else []
-            )
-        } - set(chosen or {})
+        held = set(held) - set(chosen or {})
         places = [place for place in store.session(session) if not reviews_only(place)]
         by_path = {normalize_store_path(p.boundary.path): p for p in places}
         stamp = _now()
@@ -1027,8 +1018,12 @@ class Records(ServiceState):
         }
         files: dict[str, tuple[str | None, str | None]] = {}
         of_left: dict[str, dict[str, str]] = {}
-        waiting: list[OrgChangeContracts] = []
-        for file, (text, over) in self.drafts(session).items():
+        drafts = self.drafts(session)
+        for file, text in (chosen or {}).items():
+            if file not in drafts:
+                # Contracts that came with a team: there is no draft of them.
+                files[file] = (text, self._memory().read(file))
+        for file, (text, over) in drafts.items():
             owner = by_path.get(_directory_of(file))
             if file in held or (owner is not None and owner.team_id in waits):
                 continue
@@ -1122,7 +1117,7 @@ class Records(ServiceState):
             for key, raw in run.marked(ROUTED).items()
             if key.startswith(f"{session}\n")
         }
-        conflicts = self._memory().take_in(
+        conflicts = self._commit_landing(
             Landing(
                 files=files,
                 seen=seen or {},
@@ -1133,6 +1128,7 @@ class Records(ServiceState):
                 routed=list(routed.values()),
             ),
             f"memory: the accepted work of session {session}",
+            tree,
         )
         for key in kept_events:
             run.unmark(EVENTS, key)
@@ -1142,14 +1138,6 @@ class Records(ServiceState):
             run.unmark(REPORTS, review.id)
         for file in files:
             if file in conflicts:
-                if file.endswith(CONTRACTS_FILE):
-                    waiting.append(
-                        OrgChangeContracts(
-                            path=_directory_of(file),
-                            session=files[file][0] or "",
-                            org=conflicts[file] or "",
-                        )
-                    )
                 continue
             self._undraft(session, file)
             owner = by_path.get(_directory_of(file))
@@ -1176,14 +1164,11 @@ class Records(ServiceState):
             for role in AGENT_ROLES
             if any(report.role == role for report in kept)
         ]
-        return Taken(grown, waiting, not_taken)
+        return Taken(grown, sorted(conflicts), not_taken)
 
     def _leave(self, top: SessionTeam) -> str:
-        """Settle what a session that is being closed kept to itself. Of
-        work that was accepted and only waited to be settled, the org's
-        stay, and what the session wrote for it is the org's where the org
-        has the team and that team's record where it has not. What it
-        wrote for work that was never accepted goes with the session.
+        """Drop what a session that is being closed kept to itself: what
+        it wrote for work that was never accepted goes with it.
 
         Returns:
             What went with the session, in words; '' when nothing did.
@@ -1191,11 +1176,6 @@ class Records(ServiceState):
         store = self.store
         run = self._runs()
         session = top.session
-        review = store.place(top.parent_id or "")
-        if review is not None and review.org_change is not None:
-            with self._landing:
-                store.update_place(review.id, org_change=None)
-                self._land_records(top)
         places = store.session(session)
         reports = sum(len(self.own_reports(place)) for place in places)
         files = sorted(self.drafts(session))

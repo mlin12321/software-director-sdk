@@ -145,6 +145,20 @@ class RunState:
                 (key, value),
             )
 
+    def count(self, key: str) -> int:
+        """Count one more under ``key`` and return the count."""
+        with self._lock:
+            row = self._db.execute(
+                "SELECT value FROM meta WHERE key = ?", (key,)
+            ).fetchone()
+            counted = int(row[0]) + 1 if row else 1
+            self._db.execute(
+                "INSERT INTO meta (key, value) VALUES (?, ?) "
+                "ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+                (key, str(counted)),
+            )
+        return counted
+
     def mark(self, kind: str, key: str, value: str = "") -> None:
         self._run(
             "INSERT INTO marks (kind, key, value) VALUES (?, ?, ?) "

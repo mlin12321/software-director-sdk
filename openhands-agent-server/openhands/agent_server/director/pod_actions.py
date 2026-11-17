@@ -475,6 +475,7 @@ def submit_review(service: DirectorService, caller: Caller, summary: str) -> str
             round=review.round + 1 if review is not None and again else 1,
             summary=summary,
             at=datetime.now(UTC).isoformat(timespec="seconds"),
+            seq=service.next_submission(),
         ),
     )
     service.progressed(node.id)

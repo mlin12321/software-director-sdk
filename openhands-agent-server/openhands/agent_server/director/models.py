@@ -268,6 +268,10 @@ class Review(BaseModel):
     """
 
     state: ReviewState
+    seq: int = Field(
+        default=0,
+        description="Counts up with every piece of work submitted in the org.",
+    )
     round: int = Field(
         default=1,
         description="1 for the first time this work is reviewed, one more "
@@ -1195,37 +1199,6 @@ class OpenSessionRequest(BaseModel):
     )
 
 
-class OrgChangeTeam(BaseModel):
-    """A team a session and the org each made something else of."""
-
-    team_id: str = Field(description="The team, by its id in the org.")
-    title: str = Field(default="", description="What the team is called.")
-    session: str = Field(description="What the session made of it, in words.")
-    org: str = Field(description="What the org has there now, in words.")
-    moved_to: str | None = Field(
-        default=None,
-        description=(
-            "The team of the org it would be put under, when the team the "
-            "session has above it is not in the org any more."
-        ),
-    )
-
-
-class OrgChangeContracts(BaseModel):
-    """Contracts of one directory that a session and the org each changed."""
-
-    path: str = Field(description="The directory whose sub-teams they bind.")
-    session: str = Field(description="The contracts as the session has them.")
-    org: str = Field(description="The contracts as the org has them now.")
-    with_team: str | None = Field(
-        default=None,
-        description=(
-            "The waiting team they come with: they are the session's only "
-            "if that team becomes the org's."
-        ),
-    )
-
-
 class ContractsChoice(BaseModel):
     """What a Manager decides about contracts that wait for it."""
 
@@ -1239,13 +1212,84 @@ class ContractsChoice(BaseModel):
     text: str = Field(default="", description="The contracts, for 'text'.")
 
 
-class OrgChange(BaseModel):
-    """What a session changed of its teams that waits to be settled before
-    it is the org's. Everything else the session changed of its teams is
-    the org's already."""
+# What a session and the org each made something else of. `code`: a file
+# both changed. `spec`, `contracts`: the text of one directory. `team`: a
+# sub-team.
+MergeKind = Literal["code", "spec", "contracts", "team"]
+# Who settles it: the IC that reviews the session's work, before its code
+# is merged, or the Manager of the place it is reviewed from.
+Gate = Literal["ic", "manager"]
+Take = Literal["org", "session", "text"]
 
-    teams: list[OrgChangeTeam] = Field(default_factory=list)
-    contracts: list[OrgChangeContracts] = Field(default_factory=list)
+
+class MergeItem(BaseModel):
+    """One thing a session and the org each made something else of since
+    the session began, which someone has to settle before it is the org's."""
+
+    kind: MergeKind
+    key: str = Field(
+        description=(
+            "What it is about: a file for `code`, a directory for `spec` and "
+            "`contracts`, a team's id for `team`."
+        )
+    )
+    gate: Gate
+    title: str = Field(default="", description="What a team is called.")
+    session: str = Field(
+        default="", description="What the session has: a text, or a team in words."
+    )
+    org: str = Field(default="", description="What the org has there now.")
+    take: Take | None = Field(
+        default=None,
+        description=(
+            "What was decided: the org's stays, the session's holds, or "
+            "`text` does. None while nobody has decided."
+        ),
+    )
+    text: str = Field(default="", description="What holds when `take` is 'text'.")
+    moved_to: str | None = Field(
+        default=None,
+        description=(
+            "The team of the org a team would be put under, when the team "
+            "the session has above it is not in the org any more."
+        ),
+    )
+    with_team: str | None = Field(
+        default=None,
+        description=(
+            "The waiting team contracts come with: they are the session's "
+            "only if that team becomes the org's."
+        ),
+    )
+
+
+class Merge(BaseModel):
+    """How the work a session submitted becomes the org's: what waits to be
+    settled, and how far it has come. Its code and specs go in when the
+    reviewing IC accepts; its teams and contracts when it is their turn and
+    the review Manager has settled what waits of them."""
+
+    seq: int = Field(
+        description=(
+            "Its place in the order: work submitted earlier goes into the org first."
+        )
+    )
+    items: list[MergeItem] = Field(default_factory=list)
+    code_landed: bool = Field(
+        default=False,
+        description="Whether the code of its accepted work is in the repository.",
+    )
+    org_queued: bool = Field(
+        default=False,
+        description=(
+            "Whether its teams and contracts wait for those of a session "
+            "that submitted earlier. What waits of them is not known yet."
+        ),
+    )
+    asked: str = Field(
+        default="", description="What names the state its Manager was last asked of."
+    )
+    note: str = Field(default="", description="What the Manager said in settling.")
 
 
 class SessionTeamInput(OrgNodeInput):
@@ -1316,13 +1360,11 @@ class SessionTeamInput(OrgNodeInput):
             "itself for a session opened at the top. Its IC only reviews."
         ),
     )
-    org_change: OrgChange | None = Field(
+    merge: Merge | None = Field(
         default=None,
         description=(
-            "On the place a session is reviewed from: the sub-teams of the "
-            "session that wait for this place's Manager, because the org "
-            "made something else of them while the session worked. The "
-            "session's code is merged all the same."
+            "On the place a session is reviewed from: how the work it "
+            "submitted becomes the org's. None when nothing of it waits."
         ),
     )
 
