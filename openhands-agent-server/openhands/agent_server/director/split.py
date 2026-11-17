@@ -410,7 +410,7 @@ def shape_of(teams: Sequence[OrgNodeInput]) -> Shape:
     return sorted(
         (
             team_id_of(team),
-            "" if team.id == top else (team.parent_id or "").split("@")[0],
+            "" if team.id == top else team_key(team.parent_id or ""),
             team.boundary.path,
             made_of(team),
         )

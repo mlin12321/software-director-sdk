@@ -65,11 +65,6 @@ SERVICES = proposing(
 
 
 @pytest.fixture
-def launcher() -> FakeLauncher:
-    return FakeLauncher()
-
-
-@pytest.fixture
 async def service(repo: Path, launcher: FakeLauncher):
     """An org of API (with DB below it) and Web, Web in its own checkout."""
     service = await started(repo, launcher)

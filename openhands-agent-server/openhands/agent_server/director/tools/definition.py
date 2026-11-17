@@ -5,7 +5,8 @@ from typing import TYPE_CHECKING, ClassVar, Literal, Self
 
 from pydantic import Field
 
-from openhands.agent_server.director import pod_actions
+from openhands.agent_server.director import agent_actions
+from openhands.agent_server.director.agent_actions import Caller
 from openhands.agent_server.director.models import (
     ContractsChoice,
     EscalationKind,
@@ -13,7 +14,6 @@ from openhands.agent_server.director.models import (
     SpecChoice,
     TeamChoice,
 )
-from openhands.agent_server.director.pod_actions import Caller
 from openhands.agent_server.director.service import DirectorService
 from openhands.agent_server.director.tools.impl import (
     DirectorExecutor,
@@ -137,7 +137,7 @@ class RaiseEscalationAction(Action):
     category: EscalationKind | Literal["misrouted"] = Field(
         description=(
             "`critical_issue`: the work cannot continue. `design_decision`: a "
-            "choice that reaches beyond your boundary. `misrouted`: what the "
+            "choice that reaches beyond your folder. `misrouted`: what the "
             "human sent your team directly is not your team's; it goes to "
             "the team above and you do not wait on it."
         )
@@ -301,7 +301,7 @@ class _DirectorTool[ActionT: Action](ToolDefinition[ActionT, DirectorObservation
 
 class ReadNodeContextTool(_DirectorTool[ReadNodeContextAction]):
     summary = (
-        "Read your place in the org: your team, role and boundary, your spec, "
+        "Read your place in the org: your team, role and folder, your spec, "
         "the contracts you keep and what your team has reported, your sub-teams "
         "and their status, a split that "
         "is waiting, and the escalations you raised or must settle."
@@ -314,7 +314,7 @@ class ReadNodeContextTool(_DirectorTool[ReadNodeContextAction]):
 
     @classmethod
     def act(cls):
-        return lambda service, caller, _action: pod_actions.node_context(
+        return lambda service, caller, _action: agent_actions.node_context(
             service, caller
         )
 
@@ -333,7 +333,7 @@ class WriteSpecTool(_DirectorTool[WriteSpecAction]):
 
     @classmethod
     def act(cls):
-        return lambda service, caller, action: pod_actions.write_spec(
+        return lambda service, caller, action: agent_actions.write_spec(
             service, caller, action.text
         )
 
@@ -355,7 +355,7 @@ class MsgManagerTool(_DirectorTool[MsgManagerAction]):
 
     @classmethod
     def act(cls):
-        return lambda service, caller, action: pod_actions.msg_manager(
+        return lambda service, caller, action: agent_actions.msg_manager(
             service, caller, action.text
         )
 
@@ -374,7 +374,7 @@ class MsgIcTool(_DirectorTool[MsgIcAction]):
 
     @classmethod
     def act(cls):
-        return lambda service, caller, action: pod_actions.msg_ic(
+        return lambda service, caller, action: agent_actions.msg_ic(
             service, caller, action.text, action.team
         )
 
@@ -395,7 +395,7 @@ class MsgTeamTool(_DirectorTool[MsgTeamAction]):
 
     @classmethod
     def act(cls):
-        return lambda service, caller, action: pod_actions.msg_team(
+        return lambda service, caller, action: agent_actions.msg_team(
             service, caller, action.team, action.text
         )
 
@@ -415,7 +415,7 @@ class HandOverTool(_DirectorTool[HandOverAction]):
 
     @classmethod
     def act(cls):
-        return lambda service, caller, action: pod_actions.hand_over(
+        return lambda service, caller, action: agent_actions.hand_over(
             service, caller, action.team, action.notes, action.contracts
         )
 
@@ -436,7 +436,7 @@ class StopTeamTool(_DirectorTool[StopTeamAction]):
 
     @classmethod
     def act(cls):
-        return lambda service, caller, action: pod_actions.stop_team(
+        return lambda service, caller, action: agent_actions.stop_team(
             service, caller, action.team, action.reason
         )
 
@@ -454,7 +454,7 @@ class ApproveTeamsTool(_DirectorTool[ApproveTeamsAction]):
 
     @classmethod
     def act(cls):
-        return lambda service, caller, _action: pod_actions.approve_teams(
+        return lambda service, caller, _action: agent_actions.approve_teams(
             service, caller
         )
 
@@ -475,7 +475,7 @@ class SettleTeamsTool(_DirectorTool[SettleTeamsAction]):
 
     @classmethod
     def act(cls):
-        return lambda service, caller, action: pod_actions.settle_teams(
+        return lambda service, caller, action: agent_actions.settle_teams(
             service, caller, action.teams, action.note, action.contracts
         )
 
@@ -495,7 +495,7 @@ class DeclineTeamsTool(_DirectorTool[DeclineTeamsAction]):
 
     @classmethod
     def act(cls):
-        return lambda service, caller, action: pod_actions.decline_teams(
+        return lambda service, caller, action: agent_actions.decline_teams(
             service, caller, action.reason
         )
 
@@ -514,7 +514,7 @@ class RaiseEscalationTool(_DirectorTool[RaiseEscalationAction]):
 
     @classmethod
     def act(cls):
-        return lambda service, caller, action: pod_actions.raise_escalation(
+        return lambda service, caller, action: agent_actions.raise_escalation(
             service,
             caller,
             action.category,
@@ -537,7 +537,7 @@ class ResolveEscalationTool(_DirectorTool[ResolveEscalationAction]):
 
     @classmethod
     def act(cls):
-        return lambda service, caller, action: pod_actions.resolve_escalation(
+        return lambda service, caller, action: agent_actions.resolve_escalation(
             service,
             caller,
             action.node_id,
@@ -561,7 +561,7 @@ class SubmitReviewTool(_DirectorTool[SubmitReviewAction]):
 
     @classmethod
     def act(cls):
-        return lambda service, caller, action: pod_actions.submit_review(
+        return lambda service, caller, action: agent_actions.submit_review(
             service, caller, action.summary
         )
 
@@ -585,7 +585,7 @@ class ReviewTeamTool(_DirectorTool[ReviewTeamAction]):
 
     @classmethod
     def act(cls):
-        return lambda service, caller, action: pod_actions.review_team(
+        return lambda service, caller, action: agent_actions.review_team(
             service,
             caller,
             action.node_id,
@@ -611,7 +611,7 @@ class ReportTool(_DirectorTool[ReportAction]):
 
     @classmethod
     def act(cls):
-        return lambda service, caller, action: pod_actions.report(
+        return lambda service, caller, action: agent_actions.report(
             service, caller, action.text
         )
 
@@ -632,7 +632,7 @@ class PruneTeamTool(_DirectorTool[PruneTeamAction]):
 
     @classmethod
     def act(cls):
-        return lambda service, caller, action: pod_actions.prune_team(
+        return lambda service, caller, action: agent_actions.prune_team(
             service,
             caller,
             action.node_id,

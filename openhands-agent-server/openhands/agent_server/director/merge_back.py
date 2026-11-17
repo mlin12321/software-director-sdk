@@ -11,8 +11,10 @@ from typing import Literal
 from openhands.agent_server.director.git import (
     DIRECTOR_IDENTITY,
     GitError,
+    common_dir,
     git,
     head_of,
+    top_of,
 )
 from openhands.agent_server.director.git_index import LOCK_FILE
 from openhands.agent_server.director.ownership import can_merge_in_memory, conflicts
@@ -47,10 +49,7 @@ def _one_at_a_time(checkout: Path) -> Iterator[None]:
     if sys.platform == "win32":
         yield
         return
-    common = git(
-        checkout, ["rev-parse", "--path-format=absolute", "--git-common-dir"]
-    ).strip()
-    with open(Path(common) / LOCK_FILE, "a") as lock:
+    with open(common_dir(checkout) / LOCK_FILE, "a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         try:
             yield
@@ -161,7 +160,7 @@ def _bring_up_to_date(checkout: Path, before: str) -> None:
         return
     git_dir = Path(git(checkout, ["rev-parse", "--absolute-git-dir"]).strip())
     # The names are relative to the top of the checkout.
-    top = Path(git(checkout, ["rev-parse", "--show-toplevel"]).strip())
+    top = Path(top_of(checkout))
     for index in git_dir.glob("agent-index-*"):
         if index.suffix:
             # What the agent's git keeps beside its index.

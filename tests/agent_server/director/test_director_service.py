@@ -10,7 +10,7 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from openhands.agent_server.director import pod_actions
+from openhands.agent_server.director import agent_actions
 from openhands.agent_server.director.headline import TeamSummary
 from openhands.agent_server.director.models import (
     AgentRole,
@@ -20,7 +20,7 @@ from openhands.agent_server.director.models import (
 )
 from openhands.agent_server.director.org_persistence import ORG_REF
 from openhands.agent_server.director.org_store import AGENT_LOST, team_id_of
-from openhands.agent_server.director.prompts import MANAGER_ROLE, POD_PROTOCOL
+from openhands.agent_server.director.prompts import MANAGER_ROLE, ORG_PROTOCOL
 from openhands.agent_server.director.service import (
     DIRECTOR_TOOL_NAMES,
     HAND_OVER_TOOLS,
@@ -49,11 +49,6 @@ from tests.agent_server.director.conftest import (
 )
 from tests.agent_server.director.test_director_landing import landed
 from tests.agent_server.director.test_director_tools import division_lead_of, node
-
-
-@pytest.fixture
-def launcher() -> FakeLauncher:
-    return FakeLauncher()
 
 
 @pytest.fixture
@@ -128,7 +123,7 @@ async def test_the_org_protocol_is_added_to_what_the_caller_appends(
 
     assert launcher.root is not None and launcher.root.agent_launch_additions
     suffix = launcher.root.agent_launch_additions.system_message_suffix_append
-    assert suffix == f"Prefer small commits.\n\n{POD_PROTOCOL}"
+    assert suffix == f"Prefer small commits.\n\n{ORG_PROTOCOL}"
 
 
 def test_every_director_tool_is_offered_to_the_role_that_may_use_it():
@@ -136,7 +131,7 @@ def test_every_director_tool_is_offered_to_the_role_that_may_use_it():
     assert "approve_teams" not in TOOLS_OF["ic"]
     assert "submit_review" not in TOOLS_OF["manager"]
     assert set(HAND_OVER_TOOLS) <= set(TOOLS_OF["ic"])
-    # Only a Manager where a session is reviewed from settles its teams.
+    # Only a Manager at a session's Division Lead place settles its teams.
     assert "settle_teams" not in {*TOOLS_OF["ic"], *TOOLS_OF["manager"]}
     # A tool an agent is given and the server cannot find stops its first turn.
     assert set(DIRECTOR_TOOL_NAMES) <= set(list_registered_tools())
@@ -166,11 +161,11 @@ async def test_a_manager_derived_from_its_ic_gets_its_own_tools_in_their_place(
 
 
 def test_an_ic_is_not_told_what_only_a_manager_does():
-    assert "approve_teams" not in POD_PROTOCOL and "prune_team" not in POD_PROTOCOL
+    assert "approve_teams" not in ORG_PROTOCOL and "prune_team" not in ORG_PROTOCOL
     assert "approve_teams" in MANAGER_ROLE and "prune_team" in MANAGER_ROLE
     # What an IC needs before its first event is still there.
     for tool in ("write_spec", "submit_review", "msg_manager", "raise_escalation"):
-        assert tool in POD_PROTOCOL
+        assert tool in ORG_PROTOCOL
 
 
 async def test_a_team_started_again_is_briefed_with_what_it_reported(
@@ -433,13 +428,13 @@ async def woken_manager(service: DirectorService, node_id: str = "root") -> str:
 async def split_root(service: DirectorService, *children: SplitChild) -> None:
     """Have the root IC propose ``children`` and its Manager approve them."""
 
-    def caller(role: AgentRole) -> pod_actions.Caller:
+    def caller(role: AgentRole) -> agent_actions.Caller:
         conversation_id = agent_conversation(node(service, "root"), role)
         assert conversation_id is not None
-        return pod_actions.caller_of(service, UUID(conversation_id))
+        return agent_actions.caller_of(service, UUID(conversation_id))
 
-    pod_actions.msg_manager(service, caller("ic"), teams_block(list(children)))
-    pod_actions.approve_teams(service, caller("manager"))
+    agent_actions.msg_manager(service, caller("ic"), teams_block(list(children)))
+    agent_actions.approve_teams(service, caller("manager"))
     await service.settled()
     await tasked(service)
 

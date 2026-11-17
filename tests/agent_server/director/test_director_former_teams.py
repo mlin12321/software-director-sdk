@@ -10,9 +10,9 @@ from uuid import UUID
 import pytest
 
 from openhands.agent_server.director import compaction
+from openhands.agent_server.director.launch import StartedAgent
 from openhands.agent_server.director.models import OldSpec, SplitChild
 from openhands.agent_server.director.org_store import team_id_of
-from openhands.agent_server.director.pods import StartedAgent
 from openhands.agent_server.director.prompts import HAND_OVER_ROLE, left_behind
 from openhands.agent_server.director.run_state import TASK
 from openhands.agent_server.director.service import (
@@ -77,11 +77,6 @@ TWO = proposing(
     ],
     "POST /checkout returns {order_id}",
 )
-
-
-@pytest.fixture
-def launcher() -> FakeLauncher:
-    return FakeLauncher()
 
 
 @pytest.fixture
@@ -265,9 +260,7 @@ async def test_the_ic_is_told_who_has_each_replaced_teams_directory_now(
     )
 
     told = given_aside(service, launcher)
-    assert (
-        told.count("Its directory is now in the boundary of Services (services).") == 3
-    )
+    assert told.count("Its directory is now in the folder of Services (services).") == 3
 
     # Teams that take none of a removed team's directory.
     [api] = former_of(service, API)[-1:]
@@ -524,7 +517,7 @@ async def test_a_hand_over_is_a_side_conversation_of_the_ic_with_its_own_briefin
     assert [agent.role for agent in node(service, "root").agents] == ["ic", "manager"]
     orders = node(service, API).id
     assert f"- Orders (node {orders}, services/api): Keep the orders" in told
-    assert "Its directory is now in the boundary of Orders (services/api)." in told
+    assert "Its directory is now in the folder of Orders (services/api)." in told
     assert "Its reports, as one:\nSQLite, no cache." in told
     assert "The spec it wrote (old; it stays in services/api):\n# API by hand" in told
     assert "Your team's spec:\n# Shop" in told

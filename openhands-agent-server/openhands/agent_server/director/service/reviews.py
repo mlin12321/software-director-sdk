@@ -4,7 +4,7 @@ import asyncio
 import hashlib
 import json
 import logging
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import NamedTuple
 from uuid import UUID
@@ -18,6 +18,7 @@ from openhands.agent_server.director.git import (
     git,
     head_of,
     pathspec,
+    ref_stamp,
     save_and_discard,
     uncommitted,
 )
@@ -51,12 +52,17 @@ from openhands.agent_server.director.models import (
     Take,
     TeamChoice,
 )
-from openhands.agent_server.director.org_store import OrgStoreError, is_division_lead
+from openhands.agent_server.director.org_store import (
+    OrgStoreError,
+    is_division_lead,
+    utc_now,
+)
 from openhands.agent_server.director.ownership import can_merge_in_memory, conflicts
 from openhands.agent_server.director.prompts import (
     NEED_FINDING,
     accept_in_order,
     changes_requested,
+    files_not_written,
     merge_prepared,
     merge_request,
     put_aside_notice,
@@ -87,7 +93,6 @@ from openhands.agent_server.director.service.state import (
     ORG_WAITS,
     _checkout_root,
     _contracts_file,
-    _now,
     _spec_file,
     agent_conversation,
 )
@@ -233,7 +238,7 @@ class Reviews(Requests):
         if node.review is None or node.review.state != "pending":
             raise Conflict(f"Team {node_id} has no work waiting for a review")
         review = node.review.model_copy(
-            update={"state": "changes_requested", "findings": findings, "at": _now()}
+            update={"state": "changes_requested", "findings": findings, "at": utc_now()}
         )
         above = store.place(node.parent_id) if node.parent_id else None
         store.set_review(node_id, review)
@@ -440,13 +445,13 @@ class Reviews(Requests):
         session = store.session_of(top)
         if session is None:
             return None
-        seats = [top]
-        for seat in seats:
-            seats.extend(store.below(seat.id))
+        session_places = [top]
+        for place in session_places:
+            session_places.extend(store.below(place.id))
         teams = [team for team in [store.team(session.team_id)] if team]
         for team in teams:
             teams.extend(store.sub_teams(team.id))
-        return seats, shape_of(seats), shape_of(teams)
+        return session_places, shape_of(session_places), shape_of(teams)
 
     def _put_team(
         self,
@@ -469,15 +474,15 @@ class Reviews(Requests):
             Whether the org has it now.
         """
         store = self.store
-        seat = places.get(team_id)
-        above = store.place(seat.parent_id or "") if seat else None
-        if seat is None or above is None:
+        place = places.get(team_id)
+        above = store.place(place.parent_id or "") if place else None
+        if place is None or above is None:
             return False
         above_id = session.above_id if is_division_lead(above) else above.team_id
         if above_id == team_id:
             # The top team of the org.
             return store.team(team_id) is not None
-        path = normalize_store_path(seat.boundary.path)
+        path = normalize_store_path(place.boundary.path)
         moved = under is not None or store.team(above_id) is None
         if under is not None:
             above_id = under
@@ -494,14 +499,14 @@ class Reviews(Requests):
                 OrgNodeInput(
                     id=team_id,
                     parent_id=above_id,
-                    title=title or seat.title,
-                    boundary=seat.boundary,
-                    isolation=seat.isolation,
-                    agent_profile=seat.agent_profile,
-                    headline=seat.headline,
-                    spec_summary=seat.spec_summary,
-                    old_specs=seat.old_specs,
-                    since=seat.since,
+                    title=title or place.title,
+                    boundary=place.boundary,
+                    isolation=place.isolation,
+                    agent_profile=place.agent_profile,
+                    headline=place.headline,
+                    spec_summary=place.spec_summary,
+                    old_specs=place.old_specs,
+                    since=place.since,
                 )
             )
         else:
@@ -512,12 +517,12 @@ class Reviews(Requests):
                 return False
             store.update_team(
                 team_id,
-                title=title or seat.title,
-                boundary=seat.boundary,
-                agent_profile=seat.agent_profile,
-                spec_summary=seat.spec_summary,
-                old_specs=seat.old_specs,
-                since=seat.since,
+                title=title or place.title,
+                boundary=place.boundary,
+                agent_profile=place.agent_profile,
+                spec_summary=place.spec_summary,
+                old_specs=place.old_specs,
+                since=place.since,
             )
         if moved:
             for other in store.sub_teams(above_id):
@@ -526,7 +531,7 @@ class Reviews(Requests):
             self.record_event(
                 above_id,
                 "moved",
-                seat,
+                place,
                 "its Manager put it here"
                 if under is not None
                 else "the team it was set up under is gone",
@@ -534,7 +539,7 @@ class Reviews(Requests):
         return True
 
     def _review_of(self, top: SessionTeam) -> SessionTeam | None:
-        """The place a session's work is reviewed from."""
+        """A session's Division Lead place."""
         review = self.store.place(top.parent_id or "")
         return review if review is not None and is_division_lead(review) else None
 
@@ -626,32 +631,32 @@ class Reviews(Requests):
         Returns:
             The teams to take from the session as they are (None to remove
             one), and what the session and the org each made something
-            else of, for the Manager of the place it is reviewed from.
+            else of, for the Manager of its Division Lead place.
         """
         store = self.store
         session = store.session_of(top)
         shapes = self._shapes(top)
         if session is None or shapes is None:
             return {}, []
-        seats, theirs, now = shapes
+        session_places, theirs, now = shapes
         take, clashes = merge_shapes(session.shape, theirs, now)
-        places = {seat.team_id: seat for seat in seats}
+        places = {place.team_id: place for place in session_places}
         items: list[MergeItem] = []
         coming: dict[str, MergeItem] = {}
         came = {item.with_team: item for item in before if item.with_team}
         for clash in clashes:
-            seat = places.get(clash.team)
-            known = seat or store.team(clash.team)
-            above = store.place(seat.parent_id or "") if seat else None
+            place = places.get(clash.team)
+            known = place or store.team(clash.team)
+            above = store.place(place.parent_id or "") if place else None
             moved_to = None
             if (
                 clash.session is not None
-                and seat is not None
+                and place is not None
                 and above is not None
                 and not is_division_lead(above)
                 and store.team(above.team_id) is None
             ):
-                moved_to = self._home_of(top, seat.boundary.path)
+                moved_to = self._home_of(top, place.boundary.path)
                 agreed = self._contracts_with(
                     above, moved_to, clash.team, came.get(clash.team)
                 )
@@ -736,7 +741,7 @@ class Reviews(Requests):
                     self._begin("land_org", top.id)
 
     def _ask_manager(self, top: SessionTeam, merge: Merge) -> None:
-        """Ask the Manager of the place a session is reviewed from to
+        """Ask the Manager of a session's Division Lead place to
         settle what waits there, once for each state of it."""
         review = self._review_of(top)
         waiting = [item for item in merge.items if item.gate == "manager"]
@@ -819,7 +824,7 @@ class Reviews(Requests):
                     "what the session wrote for a team that is not taken is "
                     "kept in that team's record."
                 ),
-                at=_now(),
+                at=utc_now(),
             )
         self._save_soon()
 
@@ -831,7 +836,7 @@ class Reviews(Requests):
         contracts: list[ContractsChoice] | None = None,
     ) -> str:
         """Settle what a session's work makes of the org's teams and
-        contracts that waits at the place it is reviewed from. A team
+        contracts that waits at its Division Lead place. A team
         becomes what the session has unless ``teams`` says the org's
         stays; taken from the session, it may be put under another team
         of the org or called otherwise. Of contracts that wait, the
@@ -944,16 +949,16 @@ class Reviews(Requests):
         if choice.under is None:
             return
         shapes = self._shapes(top)
-        seat = next(
+        place = next(
             (
-                seat
-                for seat in (shapes[0] if shapes else [])
-                if seat.team_id == choice.team
+                place
+                for place in (shapes[0] if shapes else [])
+                if place.team_id == choice.team
             ),
             None,
         )
         home = store.team(choice.under)
-        if seat is None or home is None or choice.under == choice.team:
+        if place is None or home is None or choice.under == choice.team:
             raise Invalid(
                 f"{choice.under} is not a team of the org that team "
                 f"{choice.team} can go under."
@@ -963,7 +968,7 @@ class Reviews(Requests):
                 f"Team {choice.under} is below team {choice.team} in the org, "
                 "so that one cannot go under it."
             )
-        path = normalize_store_path(seat.boundary.path)
+        path = normalize_store_path(place.boundary.path)
         if not is_inside(path, normalize_store_path(home.boundary.path)):
             raise Invalid(
                 f"The directory of team {choice.team} ({path}) is not inside "
@@ -999,7 +1004,7 @@ class Reviews(Requests):
         shapes = self._shapes(top)
         merge = self._merge_of(top)
         if session is None or shapes is None or merge is None:
-            return Landed(Taken([], [], []), [], [], [], [], [])
+            return Landed(Taken([], []), [], [], [], [], [])
         if org is None:
             take, items = self._manager_items(top, [])
             waits = {*take, *(item.key for item in items if item.kind == "team")}
@@ -1020,8 +1025,8 @@ class Reviews(Requests):
             records = self._land_records(top, seen, waits=waits, held=agreements)
             return Landed(records, [], [], [], [], [])
         take, items = org
-        seats, theirs, _ = shapes
-        places = {seat.team_id: seat for seat in seats}
+        session_places, theirs, _ = shapes
+        places = {place.team_id: place for place in session_places}
         decided = {item.key: item for item in items if item.kind == "team"}
         taken: list[str] = []
         kept = [team for team, item in decided.items() if item.take != "session"]
@@ -1107,6 +1112,11 @@ class Reviews(Requests):
             # Its Manager answered after all.
             self.store.settle_escalation(top.id, ORG_WAITS)
         review = self._review_of(top)
+        if review is not None and landed.records.left:
+            self.notify(
+                agent_conversation(review, "ic"),
+                files_not_written(top.title, landed.records.left),
+            )
         if review is not None and (
             landed.taken or landed.kept or landed.agreed or landed.held
         ):
@@ -1546,13 +1556,6 @@ class Reviews(Requests):
         if node.parent_id is not None:
             self._runs().mark(HELD, node_id)
             self._release_reviews(node.parent_id)
-        elif found:
-            self.notify(
-                agent_conversation(node, "ic"),
-                "Asked to review your team's work by the code review "
-                "instructions, you found, for you to verify:\n"
-                + "\n".join(f"- {finding.issue}" for finding in found),
-            )
 
     async def _accept(
         self,
@@ -1634,7 +1637,7 @@ class Reviews(Requests):
                             f"{result.detail}\nCommit or put aside what is in "
                             "the way, then answer this: the work is merged then."
                         ),
-                        at=_now(),
+                        at=utc_now(),
                     )
                     self._save_soon()
                 self.notify(
@@ -1686,7 +1689,7 @@ class Reviews(Requests):
         tip = await asyncio.to_thread(head_of, team)
         store.set_review(
             node_id,
-            node.review.model_copy(update={"state": "accepted", "at": _now()}),
+            node.review.model_copy(update={"state": "accepted", "at": utc_now()}),
             base_commit=tip or node.base_commit,
         )
         self.progressed(above.id)
@@ -1919,7 +1922,7 @@ class Reviews(Requests):
                 summary="The accepted work of its sub-teams, with no changes of "
                 "its own.",
                 passed_up=True,
-                at=_now(),
+                at=utc_now(),
             ),
             base_commit=tip or node.base_commit,
         )
@@ -1941,7 +1944,7 @@ class Reviews(Requests):
         directory of a team with a checkout of its own, where it would stop
         the team's accepted work from coming in, and tell the IC above."""
         checkout, path = Path(above.worktree_path), team.boundary.path
-        ref = f"{ASIDE_REFS}/{team.id}/{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}"
+        ref = f"{ASIDE_REFS}/{team.id}/{ref_stamp()}"
         try:
             files = uncommitted(checkout, path)
             if not files or save_and_discard(checkout, path, ref) is None:

@@ -18,7 +18,6 @@ from openhands.agent_server.director.models import OrgConflict, Side
 
 
 type Nodes = dict[str, dict[str, Any]]
-_REMOVED = "The team is removed."
 _KEPT = "The team is kept, with what was changed in it or below it."
 
 

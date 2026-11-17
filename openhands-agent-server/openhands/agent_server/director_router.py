@@ -569,7 +569,10 @@ def answer_session_escalation(
     """Answer an escalation a team raised in a session and that waits on
     the human, which settles it.
 
-    The answer is sent to the session's IC at that team.
+    The answer is sent to the agent that raised it. For a wait the
+    director raised itself (a merge that could not go into the checkout,
+    a Division Lead Manager that does not answer) it only lets the work
+    go on.
     """
     session = _require_session(service, session_id)
     team = next((team for team in session.teams if team.team_id == node_id), None)
@@ -957,7 +960,7 @@ def list_agent_tools(
     request: Request, conversation_id: UUID = Depends(_calling_agent)
 ) -> list[RemoteTool]:
     """The director's tools the calling agent is offered: its role's, or
-    the few of an agent that only reviews a session's work."""
+    the few of a session's Division Lead."""
     service: DirectorService = request.app.state.director_service
     try:
         return list_tools(service, conversation_id)

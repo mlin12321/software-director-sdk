@@ -48,7 +48,7 @@ from openhands.agent_server.director.org_store import (
     is_division_lead,
 )
 from openhands.agent_server.director.prompts import (
-    POD_PROTOCOL,
+    ORG_PROTOCOL,
 )
 from openhands.agent_server.director.recovery import (
     STARTING,
@@ -72,7 +72,7 @@ from openhands.agent_server.director.service.state import (
     TOOLS_OF,
     _agent_title,
     _lane_for,
-    _new_pod,
+    _new_agents,
     agent_conversation,
     apart,
     hand_over_of,
@@ -437,7 +437,7 @@ class Sync(Sessions):
         ic_id = uuid4()
         task = await asyncio.to_thread(self._task_of, node)
         if conversation is None:
-            store.update_place(node_id, agents=_new_pod(ic_id), status="idle")
+            store.update_place(node_id, agents=_new_agents(ic_id), status="idle")
             self._begin(
                 "start_team",
                 node_id,
@@ -451,10 +451,10 @@ class Sync(Sessions):
         additions = conversation.agent_launch_additions or AgentLaunchAdditions()
         suffix = "\n\n".join(
             part
-            for part in (additions.system_message_suffix_append, POD_PROTOCOL)
+            for part in (additions.system_message_suffix_append, ORG_PROTOCOL)
             if part
         )
-        store.update_place(node_id, agents=_new_pod(ic_id), status="idle")
+        store.update_place(node_id, agents=_new_agents(ic_id), status="idle")
         try:
             started = await launcher.start_root(
                 conversation.model_copy(

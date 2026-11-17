@@ -4,8 +4,8 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING
 from uuid import UUID
 
+from openhands.agent_server.director.agent_actions import Caller, caller_of
 from openhands.agent_server.director.git import GitError
-from openhands.agent_server.director.pod_actions import Caller, caller_of
 from openhands.agent_server.director.runtime import current_director
 from openhands.agent_server.director.service import DirectorService
 from openhands.sdk.errors import DomainError

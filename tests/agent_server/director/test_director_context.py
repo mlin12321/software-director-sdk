@@ -5,8 +5,6 @@ import json
 from pathlib import Path
 from typing import Any
 
-import pytest
-
 from openhands.agent_server.director.context import (
     CUT,
     UPDATE_HEADING,
@@ -52,11 +50,6 @@ from tests.agent_server.director.test_director_tools import (
     use,
     woken,
 )
-
-
-@pytest.fixture
-def launcher() -> FakeLauncher:
-    return FakeLauncher()
 
 
 def context(**changes: Any) -> dict[str, Any]:

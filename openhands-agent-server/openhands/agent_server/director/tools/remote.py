@@ -10,8 +10,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, ValidationError
 
+from openhands.agent_server.director.agent_actions import Caller, caller_of
 from openhands.agent_server.director.git import GitError
-from openhands.agent_server.director.pod_actions import Caller, caller_of
 from openhands.agent_server.director.service import (
     HAND_OVER_TOOLS,
     DirectorService,

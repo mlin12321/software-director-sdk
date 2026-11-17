@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 from openhands.agent_server.models import StartConversationRequest
 
 
-# A pod has an IC and a Manager. The IC of a team leads it, is a report of
+# A team has an IC and a Manager. The IC of a team leads it, is a report of
 # the team above, and does the code work in its boundary that no sub-team
 # has taken on.
 AgentRole = Literal["ic", "manager"]
@@ -1254,7 +1254,7 @@ class TeamChoice(BaseModel):
 # sub-team.
 MergeKind = Literal["code", "spec", "contracts", "team"]
 # Who settles it: the IC that reviews the session's work, before its code
-# is merged, or the Manager of the place it is reviewed from.
+# is merged, or the Manager of its Division Lead place.
 Gate = Literal["ic", "manager"]
 Take = Literal["org", "session", "text"]
 
@@ -1311,7 +1311,7 @@ class Merge(BaseModel):
     """How the work a session submitted becomes the org's: what waits to be
     settled, and how far it has come. Its code and specs go in when the
     reviewing IC accepts; its teams and contracts when it is their turn and
-    the review Manager has settled what waits of them."""
+    the Division Lead Manager has settled what waits of them."""
 
     seq: int = Field(
         description=(
@@ -1349,7 +1349,7 @@ class SessionTeamInput(OrgNodeInput):
     boundary are the team's, as they were when the session was opened.
     ``parent_id`` is what is above it in the session: the same session's
     place for the team above, or, for the team the session was opened at,
-    the place the session's work is reviewed from, which has none.
+    the session's Division Lead place, which has none.
     """
 
     session: str = Field(description="The session it belongs to.")
@@ -1404,7 +1404,7 @@ class SessionTeamInput(OrgNodeInput):
     division_lead: bool = Field(
         default=False,
         description=(
-            "Whether this is the place the session's work is reviewed from: "
+            "Whether this is the session's Division Lead place: "
             "the team above the one the session was opened at, or that team "
             "itself for a session opened at the top. Its IC only reviews."
         ),
@@ -1412,7 +1412,7 @@ class SessionTeamInput(OrgNodeInput):
     merge: Merge | None = Field(
         default=None,
         description=(
-            "On the place a session is reviewed from: how the work it "
+            "On a session's Division Lead place: how the work it "
             "submitted becomes the org's. None when nothing of it waits."
         ),
     )
@@ -1508,7 +1508,7 @@ class Session(SessionInput):
     teams: list[SessionTeam] = Field(
         description=(
             "What it has at the team it was opened at, then at each team "
-            "below it, and last the place it is reviewed from. One whose "
+            "below it, and last its Division Lead place. One whose "
             "`agents` is empty was given no task in this session yet."
         )
     )

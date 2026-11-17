@@ -138,11 +138,6 @@ def test_teams_added_on_either_side_are_kept():
 
 
 @pytest.fixture
-def launcher() -> FakeLauncher:
-    return FakeLauncher()
-
-
-@pytest.fixture
 def remote(repo: Path, tmp_path: Path) -> Path:
     """A bare repository ``repo`` has as its ``origin``."""
     bare = tmp_path / "remote.git"
@@ -211,7 +206,7 @@ async def test_a_pushed_org_is_whole_in_another_clone_except_for_its_sessions(
     assert team(there, API).title == "API" and team(there, API).spec_summary
     [carried] = there.reports_of(team(there, API))
     assert carried.text == "Never log card numbers"
-    assert there.team_memory.applies_to("services/api", "")[1]
+    assert there.team_memory.read("contracts.md")
     # Who works on it is the first machine's alone.
     assert there.store.sessions() == [] and len(here.store.sessions()) == 1
     assert there.store.places() == []

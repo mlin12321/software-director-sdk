@@ -72,11 +72,6 @@ from tests.agent_server.director.test_director_tools import (
 
 
 @pytest.fixture
-def launcher() -> FakeLauncher:
-    return FakeLauncher()
-
-
-@pytest.fixture
 async def service(repo: Path, launcher: FakeLauncher) -> AsyncIterator[DirectorService]:
     service = await started(repo, launcher)
     yield service
@@ -660,6 +655,11 @@ async def test_contracts_both_changed_wait_for_the_manager_above(
     assert asked is not None
     told = launcher.messages_to(asked)[-1]
     assert "Refunds go through Jobs." in told and "Orders go through Jobs." in told
+    # It is derived from the session's IC, so it has one role, its own.
+    [started] = [
+        start for start in launcher.derived if str(start.conversation_id) == asked
+    ]
+    assert str(started.parent_id) == conversation
     assert "the contracts between the sub-teams of services/api" in told
     # Its Division Lead IC judged the code by the contracts it was written to.
     request = [
@@ -1029,6 +1029,28 @@ async def test_work_that_is_sent_back_joins_the_end_and_keeps_what_was_decided(
         (JOBS, "org")
     ]
     assert len(launcher.messages_to(asked)) == heard
+
+
+async def test_the_division_lead_ic_is_told_of_a_spec_that_could_not_be_written(
+    service: DirectorService,
+    launcher: FakeLauncher,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    top, conversation = await at_api(service)
+    await use(service, conversation, WriteSpecTool, WriteSpecAction(text="# Refunds"))
+    commit_landing = service._commit_landing
+
+    def changed_meanwhile(landing, message, tree):
+        return {**commit_landing(landing, message, tree), API_SPEC: "# Orders"}
+
+    monkeypatch.setattr(service, "_commit_landing", changed_meanwhile)
+
+    await accepted(service, top, conversation)
+
+    told = launcher.messages_to(division_lead_ic(service, top))[-1]
+    assert API_SPEC in told and "was not written" in told
+    # The session keeps its text, to be shown with the org's next time.
+    assert API_SPEC in service.drafts(node(service, top).session)
 
 
 async def test_a_reviewer_writes_the_spec_that_holds(service: DirectorService):

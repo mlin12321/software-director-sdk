@@ -4,13 +4,13 @@ import asyncio
 import json
 import logging
 from contextlib import suppress
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 from uuid import UUID, uuid4
 
 from openhands.agent_server.director.git import (
     GitError,
+    ref_stamp,
     save_and_discard,
     uncommitted,
 )
@@ -210,7 +210,7 @@ class Splits(Watch):
                     }
                 ),
                 was_stopped=any(team.stopped is not None for team in split.replaces),
-                stamp=datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ"),
+                stamp=ref_stamp(),
             )
         plan = intent.payload
         moves: dict[str, str] = plan["moves"]
@@ -361,7 +361,6 @@ class Splits(Watch):
             teams = [node]
             for team in teams:
                 teams.extend(store.below(team.id))
-            now = datetime.now(UTC)
             # Fixed before anything is removed, so that pruning again after
             # a restart removes the same things and records them once.
             intent = run.step_done(
@@ -377,7 +376,7 @@ class Splits(Watch):
                     for agent in team.agents
                     if agent.conversation_id is not None
                 ],
-                stamp=now.strftime("%Y%m%dT%H%M%SZ"),
+                stamp=ref_stamp(),
             )
         plan = intent.payload
         where = plan["path"]

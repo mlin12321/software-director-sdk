@@ -22,9 +22,7 @@ from openhands.agent_server.director.git import (
 from openhands.agent_server.director.models import (
     AGENT_ROLES,
     AgentRole,
-    BoundaryContracts,
     FormerTeam,
-    InheritedSpec,
     Report,
     RoutedRequest,
     TeamEvent,
@@ -308,32 +306,6 @@ class GitStore:
     def read(self, path: str) -> str | None:
         """The content of ``path`` at the ref head, or None if it is absent."""
         return self._read_at(self.head(), path)
-
-    def applies_to(
-        self, boundary_path: str, above: str | None
-    ) -> tuple[list[InheritedSpec], list[BoundaryContracts]]:
-        """The spec and the contracts a team works to.
-
-        That is the spec of its own boundary, the contracts between its own
-        sub-teams, and the contracts the team above set between this team
-        and the ones beside it. The specs of the teams above are theirs
-        alone.
-
-        Args:
-            above: The boundary of the team above; None for the root team.
-        """
-        own = normalize_store_path(boundary_path)
-        commit = self.head()
-        spec = self._read_at(commit, _join(own, SPEC_FILE))
-        contracts = [
-            BoundaryContracts(path=path, contracts=text, own=path == own)
-            for path in ([] if above is None else [normalize_store_path(above)]) + [own]
-            if (text := self._read_at(commit, _join(path, CONTRACTS_FILE)))
-        ]
-        specs = (
-            [] if spec is None else [InheritedSpec(path=own, spec=spec, readonly=False)]
-        )
-        return specs, contracts
 
     def write(self, scope_path: str, file: str, content: str) -> str | None:
         """Write one file inside ``scope_path`` and return the new commit.

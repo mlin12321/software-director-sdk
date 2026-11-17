@@ -33,6 +33,7 @@ from openhands.sdk.event import ActionEvent
 from openhands.tools.file_editor.definition import FileEditorAction
 from tests.agent_server.director.conftest import (
     FakeLauncher,
+    commit,
     root_conversation,
     run_git,
     tasked,
@@ -58,11 +59,6 @@ DONE = SubmitReviewAction(summary="Endpoint shipped.")
 
 
 @pytest.fixture
-def launcher() -> FakeLauncher:
-    return FakeLauncher()
-
-
-@pytest.fixture
 async def service(repo: Path, launcher: FakeLauncher) -> AsyncIterator[DirectorService]:
     service = DirectorService(
         repo,
@@ -81,14 +77,6 @@ async def service(repo: Path, launcher: FakeLauncher) -> AsyncIterator[DirectorS
     await service.settled()
     yield service
     await service.aclose()
-
-
-def commit(checkout: Path, path: str, content: str) -> None:
-    file = checkout / path
-    file.parent.mkdir(parents=True, exist_ok=True)
-    file.write_text(content)
-    run_git(checkout, "add", path)
-    run_git(checkout, "commit", "--quiet", "-m", f"Write {path}")
 
 
 async def api_submits(service: DirectorService, repo: Path) -> DirectorObservation:

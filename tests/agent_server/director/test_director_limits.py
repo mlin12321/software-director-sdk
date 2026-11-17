@@ -44,11 +44,6 @@ from tests.agent_server.director.test_director_tools import (
 )
 
 
-@pytest.fixture
-def launcher() -> FakeLauncher:
-    return FakeLauncher()
-
-
 async def started(repo: Path, launcher: FakeLauncher, **options) -> DirectorService:
     service = DirectorService(
         repo,

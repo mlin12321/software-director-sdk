@@ -43,7 +43,7 @@ from openhands.agent_server.conversation_registry import (
 )
 from openhands.agent_server.conversation_service import ConversationService
 from openhands.agent_server.director import DirectorService
-from openhands.agent_server.director.pods import ConversationPodLauncher
+from openhands.agent_server.director.launch import ConversationTeamLauncher
 from openhands.agent_server.persistence import reencrypt_stale_stores, reset_stores
 from openhands.agent_server.server_details_router import mark_initialization_complete
 from openhands.agent_server.telemetry import (
@@ -324,7 +324,7 @@ class InitService:
             self._app.state.conversation_registry = conversation_registry
             self._app.state.bash_event_service = bash_svc
             director = DirectorService.from_config(new_config)
-            await director.start(ConversationPodLauncher(service))
+            await director.start(ConversationTeamLauncher(service))
             self._app.state.director_service = director
             self._entered_director = director
 

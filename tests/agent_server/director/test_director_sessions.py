@@ -67,11 +67,6 @@ REFUNDS = "Add refunds to the checkout API."
 
 
 @pytest.fixture
-def launcher() -> FakeLauncher:
-    return FakeLauncher()
-
-
-@pytest.fixture
 async def service(repo: Path, launcher: FakeLauncher) -> AsyncIterator[DirectorService]:
     """An org of API (with DB below it) and Web, which the first session
     made and whose work is accepted."""
@@ -135,7 +130,7 @@ async def test_a_session_is_beside_the_org_tree_with_a_place_at_each_of_its_team
     assert (found.team, found.request) == ("API", REFUNDS)
     top, db, review = found.teams
     assert isinstance(top, SessionTeam) and top.id == f"{API}@{found.id}"
-    # Above the team it was opened at is the place its work is reviewed from,
+    # Above the team it was opened at is its Division Lead place,
     # where nobody stands until it submits.
     assert (review.id, review.team_id) == (f"root@{found.id}@lead", "root")
     assert review.division_lead and review.parent_id is None and review.agents == []
@@ -253,7 +248,7 @@ async def test_a_session_at_the_top_team_is_reviewed_from_a_place_of_that_team(
     found = session.session
     assert (found.team_id, found.above_id) == ("root", "root")
     assert found.teams[0].parent_id == f"root@{found.id}@lead"
-    # It has a place at every team of the org and one it is reviewed from,
+    # It has a place at every team of the org and its Division Lead place,
     # and only the first started.
     assert [team.team_id for team in found.teams] == ["root", API, WEB, DB, "root"]
     assert [bool(team.agents) for team in found.teams] == [

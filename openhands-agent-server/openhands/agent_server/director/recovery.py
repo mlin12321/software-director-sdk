@@ -45,6 +45,9 @@ _WHAT: dict[str, str] = {
     "request_review": "Its work is put up for review",
     "accept": "Its accepted work is merged into the team above",
     "prune": "Pruning it is finished",
+    "hand_over": "What its removed teams left is handed over",
+    "land_org": "Its accepted teams and contracts become the org's",
+    "close_session": "Its session is closed",
 }
 
 
