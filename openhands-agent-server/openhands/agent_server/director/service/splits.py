@@ -1,12 +1,11 @@
 """Setting up, replacing and pruning teams."""
 
 import asyncio
-import json
 import logging
 from contextlib import suppress
 from pathlib import Path
 from typing import Literal
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from openhands.agent_server.director.git import (
     GitError,
@@ -21,27 +20,19 @@ from openhands.agent_server.director.git_store import (
 from openhands.agent_server.director.merge_back import merge_back
 from openhands.agent_server.director.models import (
     FormerTeam,
-    HandOverMode,
     SessionTeam,
     SessionTeamInput,
-    SplitChild,
 )
 from openhands.agent_server.director.org_store import (
-    AGENT_LOST,
     OrgStoreError,
 )
 from openhands.agent_server.director.prompts import (
-    HAND_OVER_FAILED,
     approved_notice,
-    handed_over_notice,
-    pruned_job,
     pruned_notice,
-    replaced_job,
     review_request,
 )
 from openhands.agent_server.director.run_state import (
     CHECKS,
-    HANDING,
     PROGRESS,
     REPORTS,
     TASK,
@@ -54,16 +45,12 @@ from openhands.agent_server.director.service.state import (
     _contracts_file,
     _spec_file,
     agent_conversation,
-    hand_over_of,
 )
 from openhands.agent_server.director.service.watch import Watch
 from openhands.agent_server.director.split import (
     check_limits,
     home_of,
     normalize_split,
-)
-from openhands.sdk.errors import (
-    NotFound,
 )
 
 
@@ -327,6 +314,7 @@ class Splits(Watch):
                 unfinished[child.path] = await asyncio.to_thread(
                     uncommitted, Path(node.worktree_path), child.path
                 )
+        paths = {child.path for child in proposal.children}
         self.notify(
             agent_conversation(node, "ic"),
             approved_notice(
@@ -334,18 +322,27 @@ class Splits(Watch):
                 former,
                 contracts_replaced=replaced,
                 unfinished=unfinished,
+                teams=[
+                    team
+                    for team in self.store.below(node_id)
+                    if team.boundary.path in paths
+                ],
+                specs=await self._specs_left(node, former),
             ),
         )
-        if former:
-            self._begin(
-                "hand_over",
-                node_id,
-                conversation=str(uuid4()),
-                ended="replaced",
-                former=[[team.id, team.at] for team in former],
-                children=[child.model_dump(mode="json") for child in proposal.children],
-                contracts_replaced=replaced,
+
+    async def _specs_left(
+        self, node: SessionTeam, former: list[FormerTeam]
+    ) -> dict[str, str]:
+        """The spec each removed team wrote, by its directory, as it is in
+        the checkout of the team that has the directory again."""
+        return {
+            team.path: await asyncio.to_thread(
+                self.read_file, node, _spec_file(normalize_store_path(team.path))
             )
+            or ""
+            for team in former
+        }
 
     async def _prune(self, intent: Intent) -> None:
         store = self.store
@@ -438,97 +435,14 @@ class Splits(Watch):
         ]
         self.notify(
             parent_ic,
-            pruned_notice(plan["title"], where, plan["reason"], saved, former),
-        )
-        if former and parent_ic is not None:
-            self._begin(
-                "hand_over",
-                plan["parent"],
-                conversation=str(uuid4()),
-                ended="pruned",
-                former=[[team.id, team.at] for team in former],
-                title=plan["title"],
-                where=where,
-                reason=plan["reason"],
-            )
-
-    async def _do_hand_over(self, intent: Intent) -> None:
-        """Put a team's IC in hand-over mode: start the side conversation
-        in which it passes on what removed teams left."""
-        store, run, payload = self.store, self._runs(), intent.payload
-        node = store.place(intent.node_id)
-        if node is None:
-            return
-        conversation = payload["conversation"]
-        wanted = {(team_id, at) for team_id, at in payload["former"]}
-        # The records are the session's own until its work is accepted.
-        former = [
-            record
-            for record in self.former_drafts(node.session)
-            if (record.id, record.at) in wanted
-        ]
-        specs = {
-            team.path: await asyncio.to_thread(
-                self.read_file, node, _spec_file(normalize_store_path(team.path))
-            )
-            or ""
-            for team in former
-        }
-        children = [SplitChild(**child) for child in payload.get("children", [])]
-        if payload["ended"] == "replaced":
-            paths = {child.path for child in children}
-            job = replaced_job(
-                [team for team in store.below(node.id) if team.boundary.path in paths],
-                children,
+            pruned_notice(
+                plan["title"],
+                where,
+                plan["reason"],
+                saved,
                 former,
-                specs,
-                contracts_replaced=payload["contracts_replaced"],
-            )
-        else:
-            job = pruned_job(
-                payload["title"], payload["where"], payload["reason"], former, specs
-            )
-        mode = hand_over_of(node)
-        before = mode.conversation_id if mode else None
-        if before != conversation:
-            store.set_hand_over(
-                node.id, HandOverMode(conversation_id=conversation, status="idle")
-            )
-            run.mark(
-                HANDING,
-                node.id,
-                json.dumps({"conversation": conversation, "given": [], "spec": False}),
-            )
-            if before is not None:
-                # One hand-over at a time: the one before it ends here.
-                with suppress(NotFound):
-                    await self._require_launcher().pause(UUID(before))
-        if await self._start_hand_over(node, conversation, job):
-            return
-        # Once more, after what a full server is given to make room.
-        await asyncio.sleep(self._run_limit_retry)
-        if await self._start_hand_over(node, conversation, job):
-            return
-        run.unmark(HANDING, node.id)
-        # The mode stays on the IC as lost, for whoever looks at the team.
-        store.set_hand_over(
-            node.id, HandOverMode(conversation_id=conversation, status=AGENT_LOST)
-        )
-        self.notify(agent_conversation(node, "ic"), HAND_OVER_FAILED)
-
-    def _hand_over_ended(self, node_id: str) -> None:
-        """Tell a team's IC, in its main conversation, what its hand-over
-        conversation did. Safe from any thread."""
-        run = self._runs()
-        kept = run.marked(HANDING).get(node_id)
-        node = self.store.place(node_id)
-        if kept is None or node is None or self._loop is None:
-            return
-        run.unmark(HANDING, node_id)
-        done = json.loads(kept)
-        self.notify(
-            agent_conversation(node, "ic"),
-            handed_over_notice(done["given"], done["spec"]),
+                await self._specs_left(above, former) if above else None,
+            ),
         )
 
     async def _archive(

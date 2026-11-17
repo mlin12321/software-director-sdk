@@ -36,17 +36,14 @@ from openhands.agent_server.director.org_store import (
 from openhands.agent_server.director.prompts import (
     DIVISION_LEAD_IC_ROLE,
     DIVISION_LEAD_MANAGER_ROLE,
-    HAND_OVER_ROLE,
     MANAGER_ROLE,
     ORG_PROTOCOL,
     brief,
-    hand_over_brief,
     left_for_team,
     manager_check,
 )
 from openhands.agent_server.director.run_state import (
     CHECKS,
-    HANDING,
     PROGRESS,
     TASK,
     TOLD,
@@ -55,7 +52,6 @@ from openhands.agent_server.director.run_state import (
 from openhands.agent_server.director.service.delivery import Delivery
 from openhands.agent_server.director.service.state import (
     _STARTED_WITH,
-    HAND_OVER_TOOLS,
     LEFT_REFS,
     _agent_title,
     _base_of,
@@ -469,65 +465,6 @@ class Teams(Delivery):
         )
         return text, json.dumps(steady(context))
 
-    def _hand_over_briefing(self, node: SessionTeam, job: str) -> str:
-        """The first message of an IC's hand-over conversation."""
-        contracts = self.contracts_of(node)
-        return hand_over_brief(
-            node,
-            job,
-            self.specs_of(node),
-            contracts,
-            self.reports_of(node),
-            briefing_block(self.context_of(node, "ic")),
-        )
-
-    async def _start_hand_over(
-        self, node: SessionTeam, conversation_id: str, job: str
-    ) -> bool:
-        """Start the hand-over conversation of a node's IC, derived from its
-        main one.
-
-        Returns:
-            Whether it runs.
-        """
-        launcher = self._require_launcher()
-        try:
-            if await launcher.started(UUID(conversation_id)) is not None:
-                return True
-            parent = await self._started_ic(node)
-            if parent is None:
-                raise NotFound(f"Node {node.id} has no IC to hand over")
-            text = await asyncio.to_thread(self._hand_over_briefing, node, job)
-            tool_params = await asyncio.to_thread(
-                self._confine, node.id, "ic", conversation_id
-            )
-            adapt = await asyncio.to_thread(
-                self._adapter, conversation_id, HAND_OVER_TOOLS
-            )
-
-            async def start() -> StartedAgent:
-                return await launcher.start_derived(
-                    UUID(parent),
-                    UUID(conversation_id),
-                    title=f"{node.title} (IC, hand-over)",
-                    task=text,
-                    isolation="shared",
-                    suffixes=[HAND_OVER_ROLE],
-                    tool_params=tool_params,
-                    adapt_agent=adapt,
-                )
-
-            await self._when_there_is_room(node.id, start)
-            if self._paused is not None:
-                self._note_running(conversation_id, node.id, True)
-                await launcher.pause(UUID(conversation_id))
-        except _Held:
-            raise
-        except Exception:
-            logger.exception("Could not start the hand-over of node %s", node.id)
-            return False
-        return True
-
     async def _brief(self, node_id: str, role: AgentRole, task: str) -> None:
         node = self.store.place(node_id)
         if node is None:
@@ -792,18 +729,3 @@ class Teams(Delivery):
             bring_over(source, target, team.boundary.path, f"{LEFT_REFS}/{team.id}")
         except (GitError, OSError):
             logger.exception("Could not pass what was left to node %s", team.id)
-
-    def note_hand_over(
-        self, node_id: str, *, team: str | None = None, spec: bool = False
-    ) -> None:
-        """Keep what a team's hand-over conversation did, for its IC to be
-        told when it ends. Safe from any thread."""
-        run = self._runs()
-        kept = run.marked(HANDING).get(node_id)
-        if kept is None:
-            return
-        done = json.loads(kept)
-        if team is not None and team not in done["given"]:
-            done["given"].append(team)
-        done["spec"] = done["spec"] or spec
-        run.mark(HANDING, node_id, json.dumps(done))

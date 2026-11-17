@@ -75,7 +75,6 @@ from openhands.agent_server.director.service.state import (
     _new_agents,
     agent_conversation,
     apart,
-    hand_over_of,
 )
 from openhands.sdk.conversation.request import AgentLaunchAdditions
 from openhands.sdk.conversation.state import ConversationExecutionStatus
@@ -191,11 +190,7 @@ class Sync(Sessions):
                     UUID(conversation_id)
                     for node in store.places()
                     for agent in node.agents
-                    for conversation_id in (
-                        agent.conversation_id,
-                        # A hand-over is paused and run again as an agent is.
-                        agent.hand_over.conversation_id if agent.hand_over else None,
-                    )
+                    for conversation_id in (agent.conversation_id,)
                     if conversation_id is not None
                 ]
             )
@@ -690,26 +685,6 @@ class Sync(Sessions):
             with suppress(NotFound):
                 store.set_agent(node_id, role, status=AGENT_PAUSED)
             stopping.append(conversation_id)
-        # An IC in hand-over mode is paused in that conversation too.
-        modes = [
-            (node.id, mode)
-            for node in store.places()
-            if (mode := hand_over_of(node)) is not None
-        ]
-        running = await launcher.statuses(
-            [UUID(mode.conversation_id) for _, mode in modes]
-        )
-        for node_id, mode in modes:
-            aside = UUID(mode.conversation_id)
-            if running.get(aside) != ConversationExecutionStatus.RUNNING:
-                continue
-            run.mark(RUNNING, mode.conversation_id, node_id)
-            self._running.add(mode.conversation_id)
-            with suppress(NotFound):
-                store.set_hand_over(
-                    node_id, mode.model_copy(update={"status": AGENT_PAUSED})
-                )
-            stopping.append(aside)
         await asyncio.gather(*(launcher.pause(agent) for agent in stopping))
 
     def _on_status(
@@ -723,7 +698,6 @@ class Sync(Sessions):
         agent = str(conversation_id)
         found = store.find_by_conversation(agent)
         if found is None:
-            self._on_hand_over_status(store, agent, status)
             return
         node, role = found
         if self._paused is None:
@@ -738,26 +712,6 @@ class Sync(Sessions):
                 self.release_reviews(node.parent_id)
             if role == "ic" and status == ConversationExecutionStatus.RUNNING:
                 self.release_reviews(node.id, now=True)
-
-    def _on_hand_over_status(
-        self, store: OrgStore, conversation_id: str, status: ConversationExecutionStatus
-    ) -> None:
-        """Follow the hand-over conversation of an IC. When it stops
-        working, the IC is told in its main conversation what it did."""
-        node = store.find_hand_over(conversation_id)
-        mode = hand_over_of(node) if node else None
-        if node is None or mode is None:
-            return
-        if self._paused is None:
-            self._note_running(
-                conversation_id, node.id, status == ConversationExecutionStatus.RUNNING
-            )
-        shown = self._shown(conversation_id, status)
-        store.set_hand_over(node.id, mode.model_copy(update={"status": shown}))
-        # One that was held while it worked may have ended while it was held.
-        at_work = ("working", AGENT_PAUSED)
-        if mode.status in at_work and shown not in at_work:
-            self._hand_over_ended(node.id)
 
     async def _resync(self) -> None:
         """Read every agent's status back from its conversation."""
@@ -794,33 +748,3 @@ class Sync(Sessions):
                 shown = "idle" if node_id in starting else AGENT_LOST
             with suppress(NotFound):
                 store.set_agent(node_id, role, status=shown)
-        await self._resync_hand_overs()
-
-    async def _resync_hand_overs(self) -> None:
-        """Read back how each IC's hand-over conversation stands. One that
-        ended or was lost while nothing followed it is ended here."""
-        store = self.store
-        modes = [
-            (node.id, mode)
-            for node in store.places()
-            if (mode := hand_over_of(node)) is not None
-        ]
-        if not modes:
-            return
-        statuses = await self._require_launcher().statuses(
-            [UUID(mode.conversation_id) for _, mode in modes]
-        )
-        starting = {
-            intent.node_id
-            for intent in self._runs().open_intents()
-            if intent.kind == "hand_over"
-        }
-        for node_id, mode in modes:
-            status = statuses.get(UUID(mode.conversation_id))
-            if status is not None:
-                self._on_hand_over_status(store, mode.conversation_id, status)
-            elif node_id not in starting and mode.status != AGENT_LOST:
-                store.set_hand_over(
-                    node_id, mode.model_copy(update={"status": AGENT_LOST})
-                )
-                self._hand_over_ended(node_id)

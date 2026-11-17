@@ -3598,9 +3598,7 @@ def _scripted_org_llm(
                 return tool_call(
                     "review_team", {"team": waiting[reviewed], "decision": "accept"}
                 )
-        if last.role == "user" and "in hand-over mode" in text:
-            return {"role": "assistant", "content": "Nothing to pass on."}
-        if last.role == "user" and "Your hand-over mode has ended" in text:
+        if last.role == "user" and "Your Manager pruned the team" in text:
             return tool_call("submit_review", {"summary": "Shown, not served."})
         if last.role == "user" and "You are the IC of the team 'Checkout'" in text:
             return tool_call(

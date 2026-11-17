@@ -62,7 +62,6 @@ from openhands.agent_server.director.models import (
     DirectorSettingsState,
     DirectorSettingsUpdate,
     FormerTeam,
-    HandOverMode,
     OrgStateEvent,
     OrgSummary,
     PauseReason,
@@ -153,7 +152,6 @@ TOOLS_OF: dict[AgentRole, tuple[str, ...]] = {
         "prune_team",
     ),
 }
-HAND_OVER_TOOLS = ("read_team_context", "hand_over", "write_spec")
 # What an IC has of the director's tools where it only reviews the work of
 # a session.
 DIVISION_LEAD_IC_TOOLS = ("read_team_context", "report", "review_team")
@@ -276,14 +274,6 @@ def agent_conversation(node: SessionTeam, role: AgentRole) -> str | None:
     for agent in node.agents:
         if agent.role == role:
             return agent.conversation_id
-    return None
-
-
-def hand_over_of(node: SessionTeam) -> HandOverMode | None:
-    """The hand-over mode of the node's IC, if it is or was in it."""
-    for agent in node.agents:
-        if agent.role == "ic":
-            return agent.hand_over
     return None
 
 
@@ -714,10 +704,7 @@ class ServiceState:
             conversation_id
             for found in teams
             for agent in found.agents
-            for conversation_id in (
-                agent.conversation_id,
-                agent.hand_over.conversation_id if agent.hand_over else None,
-            )
+            for conversation_id in (agent.conversation_id,)
             if conversation_id is not None
         ]
 
@@ -852,9 +839,7 @@ class ServiceState:
         relative = target.relative_to(top).as_posix()
         return "" if relative == "." else relative
 
-    def _confine(
-        self, node_id: str, role: AgentRole, hand_over: str | None = None
-    ) -> ToolParams | None:
+    def _confine(self, node_id: str, role: AgentRole) -> ToolParams | None:
         """Write the shell an agent's terminal starts.
 
         Where the server can, the shell holds the agent to its team's
@@ -866,13 +851,10 @@ class ServiceState:
             no shell of its own.
         """
         node = self.store.place(node_id)
-        conversation_id = hand_over or (
-            agent_conversation(node, role) if node else None
-        )
+        conversation_id = agent_conversation(node, role) if node else None
         if node is None or conversation_id is None:
             return None
-        # An IC writes in its boundary from its main conversation alone.
-        writes = role == "ic" and hand_over is None
+        writes = role == "ic"
         bash, real_git = shutil.which("bash"), shutil.which("git")
         own_git = writes and os.name != "nt" and bash and real_git
         if self._bwrap is None and not own_git:

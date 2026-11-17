@@ -13,7 +13,6 @@ from pydantic import BaseModel, Field, ValidationError
 from openhands.agent_server.director.agent_actions import Caller, caller_of
 from openhands.agent_server.director.git import GitError
 from openhands.agent_server.director.service import (
-    HAND_OVER_TOOLS,
     DirectorService,
     tools_of,
 )
@@ -39,8 +38,6 @@ class ToolAnswer(BaseModel):
 
 
 def _offered(caller: Caller) -> tuple[str, ...]:
-    if caller.hand_over:
-        return HAND_OVER_TOOLS
     return tools_of(caller.node, caller.role)
 
 
