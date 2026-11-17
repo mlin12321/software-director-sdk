@@ -427,10 +427,7 @@ class Teams(Delivery):
     def _task_of(self, node: SessionTeam) -> str:
         """What a team that is started again is to do, from what the org
         kept of it."""
-        above = self.store.place(node.parent_id) if node.parent_id else None
-        specs, _ = self.team_memory.applies_to(
-            node.boundary.path, above.boundary.path if above else None
-        )
+        specs = [spec for spec in self.specs_of(node) if not spec.old]
         task = specs[0].spec if specs else node.spec_summary
         if node.headline and node.headline not in task:
             task = f"{task}\n\nWhere the team last was: {node.headline}"

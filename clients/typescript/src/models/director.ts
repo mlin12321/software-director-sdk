@@ -218,6 +218,12 @@ export interface DirectorOrgNode {
    * they were derived from the team above.
    */
   agent_profile: string | null;
+  /**
+   * When the team was set up. Two teams with one id are the same team only
+   * when this is the same: an id comes from the directory, so a team that
+   * replaces another has its id.
+   */
+  since?: string;
 }
 
 export interface DirectorOrgNodeDetail {
@@ -436,11 +442,35 @@ export interface DirectorOrgChangeTeam {
   session: string;
   /** What the org has there now, in words. */
   org: string;
+  /**
+   * The team of the org it would be put under, when the team the session
+   * has above it is not in the org any more.
+   */
+  moved_to?: string | null;
 }
 
-/** Sub-teams of a session that wait to be settled before they are the org's. */
+/** Contracts of one directory that a session and the org each changed. */
+export interface DirectorOrgChangeContracts {
+  /** The directory whose sub-teams they bind. */
+  path: string;
+  /** The contracts as the session has them. */
+  session: string;
+  /** The contracts as the org has them now. */
+  org: string;
+  /**
+   * The waiting team they come with: they are the session's only if that
+   * team becomes the org's.
+   */
+  with_team?: string | null;
+}
+
+/**
+ * What a session changed of its teams that waits to be settled before it is
+ * the org's.
+ */
 export interface DirectorOrgChange {
   teams: DirectorOrgChangeTeam[];
+  contracts?: DirectorOrgChangeContracts[];
 }
 
 /**
@@ -562,6 +592,11 @@ export interface DirectorReport {
    * there before this one. The team's own agents did not write it.
    */
   handed_over?: boolean;
+  /**
+   * Names the report, so that it is added to a team's record once however
+   * often that is tried. `''` for one a model rewrote.
+   */
+  id?: string;
 }
 
 /** One message between a Manager and an IC. */
@@ -648,7 +683,9 @@ export type DirectorTeamEventKind =
   | 'asked_team'
   | 'answered'
   | 'session_opened'
-  | 'session_closed';
+  | 'session_closed'
+  | 'not_taken'
+  | 'moved';
 
 /** Something that became of a team directly below a team. */
 export interface DirectorTeamEvent {
@@ -693,10 +730,18 @@ export interface DirectorFormerTeam {
   title: string;
   path: string;
   purpose: string;
-  ended: 'replaced' | 'pruned';
+  /**
+   * How it ended. `not_taken`: a session set it up or changed it, and when
+   * the session's work was accepted the org did not make it its own.
+   */
+  ended: 'replaced' | 'pruned' | 'not_taken';
   at: string;
   compacted_report?: string;
   contracts?: string;
+  /** The spec a session wrote for it that the org did not take. */
+  spec?: string;
+  /** The title of the session it was a team of; `''` when none. */
+  session?: string;
 }
 
 export interface DirectorNodeMemory {

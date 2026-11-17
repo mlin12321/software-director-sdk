@@ -1,5 +1,6 @@
 """GitStore against real temporary git repositories."""
 
+from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -14,10 +15,15 @@ from openhands.agent_server.director.git import (
 from openhands.agent_server.director.git_store import (
     MEMORY_REF,
     GitStore,
+    Landing,
     StoreChange,
     StoreScopeError,
 )
-from openhands.agent_server.director.models import Report, ThreadMessage
+from openhands.agent_server.director.models import (
+    FormerTeam,
+    Report,
+    ThreadMessage,
+)
 from openhands.sdk.errors import NotSupported
 from tests.agent_server.director.conftest import run_git
 
@@ -172,6 +178,113 @@ def test_messages_are_kept_in_order_and_apart_by_manager_and_ic(board: GitStore)
     assert board.thread("root", "root") == [first, second]
     assert [message.text for message in board.thread("root", "svc.a")] == ["Status?"]
     assert board.thread("svc.a", "svc.a") == []
+
+
+def a_landing(
+    files: Mapping[str, tuple[str | None, str | None]] | None = None,
+    seen: Mapping[str, str | None] | None = None,
+    reports: dict[str, list[Report]] | None = None,
+    former: list[FormerTeam] | None = None,
+    forget: list[str] | None = None,
+) -> Landing:
+    return Landing(
+        dict(files or {}), dict(seen or {}), reports or {}, former or [], forget or []
+    )
+
+
+def test_a_file_is_taken_in_only_over_the_text_it_was_written_over(board: GitStore):
+    board.write("api", "spec.md", "v1")
+    board.write("web", "contracts.md", "c1")
+    board.write("web", "contracts.md", "c2")
+
+    left = board.take_in(
+        a_landing(
+            {
+                "api/spec.md": ("mine", "v1"),
+                "web/contracts.md": ("mine", "c1"),
+                "db/spec.md": ("new", None),
+                "db/contracts.md": (None, None),
+            }
+        ),
+        "accepted",
+    )
+
+    # What someone else changed meanwhile is left and told, not overwritten.
+    assert left == {"web/contracts.md": "c2"}
+    assert board.read("api/spec.md") == "mine"
+    assert board.read("web/contracts.md") == "c2"
+    assert board.read("db/spec.md") == "new"
+
+
+def test_a_file_is_put_in_place_of_the_text_its_reviewer_was_shown(board: GitStore):
+    board.write("api", "spec.md", "v2")
+    files = {"api/spec.md": ("mine", "v1")}
+
+    assert board.take_in(a_landing(files, seen={"api/spec.md": "v1.5"}), "a") == {
+        "api/spec.md": "v2"
+    }
+    assert board.take_in(a_landing(files, seen={"api/spec.md": "v2"}), "a") == {}
+    assert board.read("api/spec.md") == "mine"
+    # Taking in what is there already writes nothing.
+    head = board.head()
+    assert board.take_in(a_landing(files), "a") == {}
+    assert board.head() == head
+
+
+def test_a_file_a_session_removed_is_removed_where_it_still_stands(board: GitStore):
+    board.write("api", "contracts.md", "c1")
+
+    assert board.take_in(a_landing({"api/contracts.md": (None, "c1")}), "a") == {}
+    assert board.read("api/contracts.md") is None
+
+
+def test_taking_in_the_same_reports_twice_adds_them_once(board: GitStore):
+    board.append_report("api", "ic", a_report("Before."))
+    mine = [
+        a_report("Chose REST.").model_copy(update={"id": "r1"}),
+        Report(at="2026-11-02T00:00:00+00:00", role="manager", text="Agreed.", id="r2"),
+    ]
+
+    board.take_in(a_landing(reports={"api": mine}), "accepted")
+    board.take_in(a_landing(reports={"api": mine}), "accepted again")
+
+    assert [r.text for r in board.reports("api", "ic")] == ["Before.", "Chose REST."]
+    assert [r.text for r in board.reports("api", "manager")] == ["Agreed."]
+
+
+def test_a_team_that_is_forgotten_leaves_its_record_and_none_of_its_reports(
+    board: GitStore,
+):
+    board.append_report("api", "ic", a_report("The old team's."))
+    record = FormerTeam(
+        id="api",
+        title="API",
+        path="services/api",
+        purpose="Serve orders",
+        ended="replaced",
+        at="20261116T100000Z",
+    )
+    mine = [a_report("The new team's.").model_copy(update={"id": "r1"})]
+
+    board.take_in(
+        a_landing(reports={"api": mine}, former=[record], forget=["api"]), "accepted"
+    )
+    board.take_in(a_landing(former=[record.model_copy(update={"title": "x"})]), "again")
+
+    assert [r.text for r in board.reports("api", "ic")] == ["The new team's."]
+    assert board.former("api") == [record]
+
+
+def test_what_a_place_said_is_taken_out_with_it(board: GitStore):
+    board.append_message("api@s1", "api@s1", said("To my IC."))
+    board.append_message("api@s2", "api@s2", said("Another session's."))
+
+    taken = board.take_threads("api@s1")
+
+    assert [m.text for thread in taken for m in thread.messages] == ["To my IC."]
+    assert board.thread("api@s1", "api@s1") == []
+    assert [m.text for m in board.thread("api@s2", "api@s2")] == ["Another session's."]
+    assert board.take_threads("api@s1") == []
 
 
 def test_racing_writers_lose_no_update(board: GitStore):

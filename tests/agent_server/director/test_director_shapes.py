@@ -6,8 +6,12 @@ from openhands.agent_server.director.split import (
     Shape,
     ShapeConflict,
     Side,
+    home_of_lost,
     merge_shapes,
+    settle,
+    shape_of,
 )
+from tests.agent_server.director.conftest import make_node
 
 
 TOP = ("api", "", "services/api")
@@ -101,3 +105,62 @@ def test_what_hangs_on_a_conflict_waits_with_it():
 
     assert take == {}
     assert [conflict.team for conflict in conflicts] == ["jobs", "nightly"]
+
+
+@pytest.mark.parametrize(
+    ("base", "theirs", "now", "take", "conflicts"),
+    [
+        pytest.param({"a": 1}, {"a": 1}, {"a": 2}, {}, [], id="only-the-org-changed"),
+        pytest.param({"a": 1}, {"a": 2}, {"a": 1}, {"a": 2}, [], id="only-the-session"),
+        pytest.param({"a": 1}, {"a": 2}, {"a": 2}, {}, [], id="both-the-same"),
+        pytest.param({"a": 1}, {"a": 2}, {"a": 3}, {}, ["a"], id="both-differently"),
+        pytest.param({"a": 1}, {}, {"a": 1}, {"a": None}, [], id="session-removed"),
+        pytest.param({"a": 1}, {}, {"a": 2}, {}, ["a"], id="removed-and-changed"),
+        pytest.param({}, {"a": 1}, {}, {"a": 1}, [], id="session-added"),
+        pytest.param({}, {"a": 1}, {"a": 2}, {}, ["a"], id="both-added-differently"),
+    ],
+)
+def test_what_a_session_made_is_settled_against_what_the_org_has_now(
+    base: dict[str, int],
+    theirs: dict[str, int],
+    now: dict[str, int],
+    take: dict[str, int | None],
+    conflicts: list[str],
+):
+    assert settle(base, theirs, now) == (take, conflicts)
+
+
+def test_a_team_is_also_compared_by_its_name_its_globs_and_when_it_was_set_up():
+    api = make_node("api", None, path="services/api")
+    renamed = api.model_copy(update={"title": "Payments"})
+    widened = api.model_copy(
+        update={"boundary": api.boundary.model_copy(update={"readonly": ["docs/**"]})}
+    )
+    another = api.model_copy(update={"since": "2026-11-16T10:00:00+00:00"})
+    base = shape_of([api])
+
+    for changed, by_the_org in (
+        (renamed, another),
+        (widened, renamed),
+        (another, renamed),
+    ):
+        theirs = shape_of([changed])
+        # Changed by the session alone it is taken; by both, it waits.
+        assert list(merge_shapes(base, theirs, base)[0]) == ["api"]
+        _, conflicts = merge_shapes(base, theirs, shape_of([by_the_org]))
+        assert [conflict.team for conflict in conflicts] == ["api"]
+    # A headline or a summary a model wrote does not make another team of it.
+    assert shape_of([api.model_copy(update={"headline": "Busy"})]) == base
+
+
+def test_what_a_lost_team_left_goes_to_the_nearest_team_holding_its_directory():
+    teams = [
+        make_node("root", None, path=""),
+        make_node("services", "root", path="services"),
+        make_node("web", "root", path="apps/web"),
+    ]
+
+    assert home_of_lost("services/api/jobs", teams, "root") == "services"
+    assert home_of_lost("apps/web", teams, "root") == "web"
+    assert home_of_lost("tools", teams, "root") == "root"
+    assert home_of_lost("tools", teams[1:], "services") == "services"

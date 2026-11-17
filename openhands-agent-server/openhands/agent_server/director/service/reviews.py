@@ -604,18 +604,12 @@ class Reviews(Requests):
         if changed:
             # What it decided on is not what the org has any more.
             agreed |= {found.path: found for found in changed}
-            store.update_place(
-                review.id,
-                org_change=change.model_copy(
-                    update={"contracts": list(agreed.values())}
-                ),
-            )
+            shown = change.model_copy(update={"contracts": list(agreed.values())})
+            store.update_place(review.id, org_change=shown)
             raise Conflict(
                 "The org's contracts changed since you were shown them. "
                 "Nothing is settled yet.\n\n"
-                + org_change_request(
-                    top, store.session_title(top), review.org_change or change
-                )
+                + org_change_request(top, store.session_title(top), shown)
             )
         seats: list[SessionTeam] = [top]
         for seat in seats:

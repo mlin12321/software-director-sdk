@@ -662,13 +662,9 @@ def get_node_memory(
     between its sub-teams and the ones the team above set for it, and
     what its two agents reported."""
     node = _require_any(service, node_id)
-    above = service._works_above(node)
-    _, contracts = service.team_memory.applies_to(
-        node.boundary.path, above.boundary.path if above else None
-    )
     return NodeMemory(
         specs=service.specs_of(node),
-        contracts=contracts,
+        contracts=service.contracts_of(node),
         reports=service.reports_of(node),
         former_teams=[
             FormerTeamSummary.model_validate(former.model_dump())
