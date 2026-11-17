@@ -24,7 +24,7 @@ from openhands.agent_server.director.models import (
 from openhands.agent_server.director.split import is_inside
 
 
-POD_PROTOCOL = """\
+ORG_PROTOCOL = """\
 <ORG_PROTOCOL>
 You are one agent among teams of agents that build software in one repository.
 
@@ -791,7 +791,7 @@ def merge_prepared(team: SessionTeam, where: str, files: list[str]) -> str:
 def merge_request(
     team: SessionTeam, session: str, waiting: list[MergeItem], accepted: bool
 ) -> str:
-    """What the Manager of the place a session is reviewed from is told
+    """What the Manager of a session's Division Lead place is told
     when teams or contracts of the session wait for it.
 
     Args:
@@ -871,6 +871,21 @@ def merge_request(
         "holds its directory.",
     ]
     return "\n".join(lines)
+
+
+def files_not_written(title: str, files: list[str]) -> str:
+    """What a Division Lead IC is told when files of accepted work could
+    not be written to team memory."""
+    return "\n".join(
+        [
+            f"Accepted work of team {title!r}: these files of team memory "
+            "changed while it was merged, so what the session wrote for "
+            "them was not written. The session still has its text.",
+            *(f"- {file}" for file in files),
+            "Nothing is asked of you now: you are shown both texts when "
+            "the session next submits work.",
+        ]
+    )
 
 
 def teams_settled(

@@ -28,7 +28,7 @@ from openhands.agent_server.director.models import (
     DirectorSettingsUpdate,
     SplitChild,
 )
-from openhands.agent_server.director.prompts import POD_PROTOCOL
+from openhands.agent_server.director.prompts import ORG_PROTOCOL
 from openhands.agent_server.director.sandbox import (
     command_script,
     find_bwrap,
@@ -541,7 +541,7 @@ async def test_a_sub_team_runs_on_another_agent_profile_when_the_org_allows_it(
     starts = starts_of(launcher)
     api_ic = starts[ic(service, "svc.api")]
     assert api_ic.profile == "codex"
-    assert api_ic.suffixes == [POD_PROTOCOL]
+    assert api_ic.suffixes == [ORG_PROTOCOL]
     assert api_ic.parent_id == UUID(str(ic(service)))
     # Its Manager is derived from it, so it runs on the same agent.
     assert starts[its_manager].profile is None

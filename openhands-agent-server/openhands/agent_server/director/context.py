@@ -28,7 +28,6 @@ _OWN = {"escalations_you_raised": None, "reports_of_your_team": "by"}
 _BY_TEAM = (
     "sub_teams",
     "other_sessions_of_your_team",
-    "sessions_whose_work_you_review",
 )
 # Lists whose entries are known by an id: what was added, changed and
 # removed is told, never the whole list again.

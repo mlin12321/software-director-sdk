@@ -10,7 +10,7 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from openhands.agent_server.director import pod_actions
+from openhands.agent_server.director import agent_actions
 from openhands.agent_server.director.models import (
     AgentRole,
     CreateOrgRequest,
@@ -245,7 +245,7 @@ async def test_the_ic_writes_the_spec_its_sub_teams_inherit(service: DirectorSer
     read = await use(service, ic(service), ReadNodeContextTool, ReadNodeContextAction())
     assert "integer cents" in json.loads(read.text)["spec"]
     # It is the team's once the work it was written with is accepted.
-    assert service.team_memory.applies_to("", None)[0] == []
+    assert service.team_memory.read("spec.md") is None
 
     await use(
         service, ic(service), SubmitReviewTool, SubmitReviewAction(summary="Done.")
@@ -257,8 +257,7 @@ async def test_the_ic_writes_the_spec_its_sub_teams_inherit(service: DirectorSer
         ReviewTeamAction(node_id=node(service, "root").id, decision="accept"),
     )
 
-    [spec], _ = service.team_memory.applies_to("", None)
-    assert not spec.readonly and "integer cents" in spec.spec
+    assert "integer cents" in (service.team_memory.read("spec.md") or "")
 
 
 async def test_proposed_sub_teams_wait_for_the_manager(
@@ -559,7 +558,7 @@ async def test_each_agent_sees_the_threads_it_takes_part_in(service: DirectorSer
     assert threads("apps.web") == []
 
 
-async def test_an_approved_split_starts_a_pod_for_each_sub_team(
+async def test_an_approved_split_sets_up_each_sub_team(
     service: DirectorService, launcher: FakeLauncher
 ):
     await split_root(service)
@@ -858,8 +857,8 @@ async def test_reports_are_for_the_two_agents_of_one_team(service: DirectorServi
     )
 
     def read_by(conversation_id: str | None) -> list[str]:
-        caller = pod_actions.caller_of(service, UUID(conversation_id or ""))
-        context = json.loads(pod_actions.node_context(service, caller))
+        caller = agent_actions.caller_of(service, UUID(conversation_id or ""))
+        context = json.loads(agent_actions.node_context(service, caller))
         return [report["text"] for report in context["reports_of_your_team"]]
 
     assert read_by(await woken(service, "services.api")) == [

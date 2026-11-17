@@ -19,6 +19,7 @@ from openhands.agent_server.director.git import (
     head_of,
     uncommitted,
 )
+from openhands.agent_server.director.launch import StartedAgent
 from openhands.agent_server.director.models import (
     AgentRef,
     AgentRole,
@@ -32,13 +33,12 @@ from openhands.agent_server.director.org_store import (
     is_division_lead,
     session_team_id,
 )
-from openhands.agent_server.director.pods import StartedAgent
 from openhands.agent_server.director.prompts import (
     DIVISION_LEAD_IC_ROLE,
     DIVISION_LEAD_MANAGER_ROLE,
     HAND_OVER_ROLE,
     MANAGER_ROLE,
-    POD_PROTOCOL,
+    ORG_PROTOCOL,
     brief,
     hand_over_brief,
     left_for_team,
@@ -63,7 +63,7 @@ from openhands.agent_server.director.service.state import (
     _checkout_root,
     _Held,
     _instant,
-    _new_pod,
+    _new_agents,
     _progress_of,
     agent_conversation,
     tools_of,
@@ -124,8 +124,7 @@ class Teams(Delivery):
 
         Args:
             division_lead: The text asks it to settle a session's sub-teams.
-                Nothing else reaches the Manager of the place a session's
-                work is reviewed from.
+                Nothing else reaches the Manager of a session's Division Lead place.
         """
         store = self.store
         with self._adding_manager:
@@ -159,7 +158,7 @@ class Teams(Delivery):
             human: The human's own words, which reach an agent at once and
                 are not marked as the director's.
             division_lead: The text asks for a review. Nothing else starts the IC
-                of the place a session's work is reviewed from.
+                of a session's Division Lead place.
 
         Returns:
             The IC's conversation; None when the team is gone.
@@ -174,7 +173,7 @@ class Teams(Delivery):
             if conversation_id is None and leads and not division_lead:
                 return None
             if conversation_id is None:
-                [ic] = _new_pod(uuid4())
+                [ic] = _new_agents(uuid4())
                 store.update_place(node_id, agents=[ic, *node.agents])
                 purpose = self._purpose(node)
                 self._begin(
@@ -198,8 +197,8 @@ class Teams(Delivery):
         return conversation_id
 
     def _in_place(self, node: SessionTeam) -> bool:
-        """Whether a team that starts works in the checkout it has: the
-        place a session is reviewed from, and the team a session is opened
+        """Whether a team that starts works in the checkout it has: a
+        session's Division Lead place, and the team a session is opened
         at when sessions get no worktree or the session has one already."""
         return is_division_lead(node) or (
             self.store.opens_session(node)
@@ -655,7 +654,7 @@ class Teams(Delivery):
                     task=text,
                     isolation=isolation,
                     suffixes=[
-                        POD_PROTOCOL,
+                        ORG_PROTOCOL,
                         *([DIVISION_LEAD_IC_ROLE] if leads else []),
                     ],
                     tool_params=tool_params,
@@ -703,12 +702,12 @@ class Teams(Delivery):
     async def _launch_manager(self, node_id: str, task: str) -> None:
         node = self.store.place(node_id)
         if node is not None:
-            # Where a session is reviewed from, its IC may never have
-            # started: the session's own then stands in.
-            derived_from = await self._started_ic(node) or (
-                await self._started_ic(self.store.place(self._derived_from(node) or ""))
+            # A Division Lead Manager is derived from the session's IC,
+            # never from the Division Lead IC, whose role it would inherit.
+            derived_from = await self._started_ic(
+                self.store.place(self._derived_from(node) or "")
                 if is_division_lead(node)
-                else None
+                else node
             )
             await self._start_agent(node_id, "manager", derived_from, task)
 

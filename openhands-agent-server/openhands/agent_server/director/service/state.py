@@ -49,6 +49,7 @@ from openhands.agent_server.director.git_store import (
     taking_in,
 )
 from openhands.agent_server.director.headline import provisional_summary
+from openhands.agent_server.director.launch import TeamLauncher
 from openhands.agent_server.director.merge_checkout import MergeCheckout, discard
 from openhands.agent_server.director.models import (
     ROLE_NAMES,
@@ -82,7 +83,6 @@ from openhands.agent_server.director.org_store import (
     is_division_lead,
     session_team_id,
 )
-from openhands.agent_server.director.pods import PodLauncher
 from openhands.agent_server.director.run_state import (
     MERGING,
     PROGRESS,
@@ -130,7 +130,7 @@ _TOOLS_OF_BOTH = (
     "report",
 )
 # The director's tools an agent is offered, by its role; they register in
-# ``director.tools``. `pod_actions` refuses the rest whatever is offered.
+# ``director.tools``. `agent_actions` refuses the rest whatever is offered.
 TOOLS_OF: dict[AgentRole, tuple[str, ...]] = {
     "ic": (
         *_TOOLS_OF_BOTH,
@@ -420,7 +420,7 @@ class ServiceState:
         self._remember_lock = threading.Lock()
         self._store: OrgStore | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
-        self._launcher: PodLauncher | None = None
+        self._launcher: TeamLauncher | None = None
         self._max_concurrent_runs = max_concurrent_runs
         self._settings: DirectorSettings | None = None
         self._configured_url = server_url
@@ -944,7 +944,7 @@ class ServiceState:
                 except (GitError, OSError):
                     logger.exception("Could not write the shell of node %s", node.id)
 
-    def _require_launcher(self) -> PodLauncher:
+    def _require_launcher(self) -> TeamLauncher:
         if self._launcher is None:
             raise Unavailable("The director is not running agents on this server")
         return self._launcher
@@ -1347,7 +1347,7 @@ def _lane_for(intent: Intent) -> str:
     return intent.node_id
 
 
-def _new_pod(ic_id: UUID) -> list[AgentRef]:
+def _new_agents(ic_id: UUID) -> list[AgentRef]:
     """The agents a team starts with. Its Manager joins when something is
     first sent to it (see :meth:`DirectorService.tell_manager`)."""
     return [AgentRef(role="ic", conversation_id=str(ic_id), status="idle")]

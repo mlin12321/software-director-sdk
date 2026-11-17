@@ -55,7 +55,6 @@ def test_a_plain_or_missing_directory_is_not_a_repository(tmp_path: Path, repo: 
 def test_reads_nothing_before_the_first_write(board: GitStore):
     assert board.head() is None
     assert board.read("spec.md") is None
-    assert board.applies_to("svc/a", "svc") == ([], [])
     assert board.reports("api", "ic") == []
 
 
@@ -88,38 +87,6 @@ def test_content_round_trips_byte_for_byte(board: GitStore):
     board.write("", "notes.txt", content)
 
     assert board.read("notes.txt") == content
-
-
-def test_a_team_works_to_its_own_spec_and_the_contracts_around_it(
-    board: GitStore,
-):
-    board.write("", "spec.md", "root spec")
-    board.write("", "contracts.md", "set at the root")
-    board.write("svc", "spec.md", "spec of the team above")
-    board.write("svc", "contracts.md", "between a and b")
-    board.write("svc/a", "spec.md", "own spec")
-    board.write("svc/a", "contracts.md", "between the teams below a")
-    board.write("svc/b", "spec.md", "spec of the team beside")
-    board.write("svc/a/one", "spec.md", "spec of a team below")
-
-    specs, contracts = board.applies_to("svc/a", "svc")
-
-    assert [(spec.path, spec.spec, spec.readonly) for spec in specs] == [
-        ("svc/a", "own spec", False)
-    ]
-    assert [(agreed.path, agreed.contracts, agreed.own) for agreed in contracts] == [
-        ("svc", "between a and b", False),
-        ("svc/a", "between the teams below a", True),
-    ]
-
-
-def test_the_root_team_has_nothing_from_above(board: GitStore):
-    board.write("", "contracts.md", "between the first teams")
-
-    specs, contracts = board.applies_to("", None)
-
-    assert specs == []
-    assert [(agreed.path, agreed.own) for agreed in contracts] == [("", True)]
 
 
 @pytest.mark.parametrize(

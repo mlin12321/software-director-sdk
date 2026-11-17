@@ -388,8 +388,8 @@ export type DirectorChosenBy = 'path' | 'named' | 'model' | 'top';
  * What a session has at one team of the org: agents, a checkout, a review
  * and escalations of its own. It is no node of the org tree. `id` is its
  * own (`<team id>@<session id>`), `parent_id` what the session has at the
- * team above, or for the team it was opened at the place its work is
- * reviewed from, and `child_ids` what it has at the team's sub-teams.
+ * team above, or for the team it was opened at its Division Lead place,
+ * and `child_ids` what it has at the team's sub-teams.
  */
 export interface DirectorSessionTeam extends DirectorOrgNode {
   /** The session. */
@@ -422,13 +422,13 @@ export interface DirectorSessionTeam extends DirectorOrgNode {
   /** How this team is held to its boundary; `null` until its IC ran. */
   boundary_enforcement: DirectorTeamEnforcement | null;
   /**
-   * Whether this is the place the session's work is reviewed from: the team
+   * Whether this is the session's Division Lead place: the team
    * above the one the session was opened at (the top team itself for a
    * session opened there), whose IC only reviews here.
    */
   division_lead: boolean;
   /**
-   * On the place a session is reviewed from: how the work the session
+   * On a session's Division Lead place: how the work the session
    * submitted becomes the org's, with what waits to be settled first.
    */
   merge?: DirectorMerge | null;
@@ -485,7 +485,7 @@ export interface DirectorMergeItem {
 /**
  * How the work a session submitted becomes the org's. Its code and specs go
  * in when the reviewing IC accepts; its teams and contracts when it is their
- * turn and the review Manager has settled what waits of them.
+ * turn and the Division Lead Manager has settled what waits of them.
  */
 export interface DirectorMerge {
   /** Its place in the order: work submitted earlier goes in first. */
@@ -510,8 +510,8 @@ export interface DirectorMerge {
  * A line of work at a team. All of an org's work is done in sessions: a team
  * of the org tree is reference only, and a session has agents and a checkout
  * of its own at the team it was opened at and, once they are given a task
- * in it, at the teams below. Its work is reviewed by the IC of the team
- * above in review mode and, once accepted, merged into the repository's
+ * in it, at the teams below. Its work is reviewed by its Division Lead IC
+ * and, once accepted, merged into the repository's
  * checkout, where it becomes the org's.
  */
 export interface DirectorSession {
@@ -535,7 +535,7 @@ export interface DirectorSession {
   conversation_id: string | null;
   /**
    * What it has at each of its teams, the one it was opened at first, and
-   * last the place it is reviewed from.
+   * last its Division Lead place.
    */
   teams: DirectorSessionTeam[];
 }

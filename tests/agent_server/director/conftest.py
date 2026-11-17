@@ -15,6 +15,7 @@ from openhands.agent_server.conversation_service import (
 )
 from openhands.agent_server.director.git_store import GitStore, Landing, team_key
 from openhands.agent_server.director.headline import TeamSummary
+from openhands.agent_server.director.launch import StartedAgent
 from openhands.agent_server.director.models import (
     AgentKind,
     AgentRef,
@@ -37,7 +38,6 @@ from openhands.agent_server.director.org_store import (
     division_lead_id,
     session_team_id,
 )
-from openhands.agent_server.director.pods import StartedAgent
 from openhands.agent_server.director.service import DirectorService
 from openhands.agent_server.event_service import (
     ActionGuard,
@@ -182,7 +182,7 @@ def make_place(
 ) -> SessionTeamInput:
     """What the session ``session_id`` has at ``team``, below the place
     ``parent_id``: an idle IC unless ``agents`` says otherwise, and nobody
-    at the place the session is reviewed from."""
+    at the session's Division Lead place."""
     standing = [] if division_lead else [AgentRef(role="ic", status="idle")]
     return SessionTeamInput(
         id=(division_lead_id if division_lead else session_team_id)(
@@ -211,7 +211,7 @@ def session_places(
     checkout: str = ".",
 ) -> tuple[SessionInput, list[SessionTeamInput]]:
     """A session opened at ``team_id`` of the tree ``teams`` (parents before
-    children): the place it is reviewed from, the place it is opened at and
+    children): its Division Lead place, the place it is opened at and
     a place at every team below, in that order."""
     by_id = {team.id: team for team in teams}
     top = by_id[team_id]

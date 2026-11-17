@@ -67,7 +67,7 @@ class StartedAgent:
     acp_server: str | None = None
 
 
-class PodLauncher(Protocol):
+class TeamLauncher(Protocol):
     """What the director needs from the conversations of its agents."""
 
     async def start_root(
@@ -278,7 +278,7 @@ class PodLauncher(Protocol):
         ...
 
 
-class ConversationPodLauncher:
+class ConversationTeamLauncher:
     """Runs the org's agents as conversations of this server."""
 
     def __init__(self, conversations: ConversationService) -> None:

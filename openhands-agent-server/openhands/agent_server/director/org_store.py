@@ -77,13 +77,13 @@ def session_team_id(team_id: str, session_id: str) -> str:
 
 
 def division_lead_id(team_id: str, session_id: str) -> str:
-    """The id of the place a session's work is reviewed from, at the team
+    """The id of a session's Division Lead place, at the team
     ``team_id``."""
     return f"{team_id}@{session_id}@lead"
 
 
 def is_division_lead(node: OrgNodeInput | None) -> bool:
-    """Whether ``node`` is the place a session's work is reviewed from."""
+    """Whether ``node`` is a session's Division Lead place."""
     return isinstance(node, SessionTeamInput) and node.division_lead
 
 
@@ -136,7 +136,7 @@ class OrgStore:
         self._lock = threading.RLock()
         self._nodes: dict[str, OrgNode] = {}
         self._sessions: dict[str, SessionInput] = {}
-        self._seats: dict[str, SessionTeam] = {}
+        self._places: dict[str, SessionTeam] = {}
         self._root_id: str | None = None
         self._listeners: dict[OrgListener, _Subscription] = {}
         self._change_listeners: list[Callable[[], None]] = []
@@ -153,7 +153,7 @@ class OrgStore:
 
     def get(self, node_id: str) -> OrgNode | None:
         """A team of the org, or a place of a session, by its id."""
-        return self._nodes.get(node_id) or self._seats.get(node_id)
+        return self._nodes.get(node_id) or self._places.get(node_id)
 
     def team(self, node_id: str) -> OrgNode | None:
         """A node of the org tree; None for anything else."""
@@ -161,7 +161,7 @@ class OrgStore:
 
     def place(self, node_id: str) -> SessionTeam | None:
         """A place of a session; None for anything else."""
-        return self._seats.get(node_id)
+        return self._places.get(node_id)
 
     def sub_teams(self, node_id: str) -> list[OrgNode]:
         """The teams of the org directly below the team ``node_id``."""
@@ -172,8 +172,8 @@ class OrgStore:
     def below(self, node_id: str) -> list[SessionTeam]:
         """The places directly below the place ``node_id`` in its session."""
         with self._lock:
-            seat = self._seats.get(node_id)
-            return [self._seats[child] for child in seat.child_ids] if seat else []
+            place = self._places.get(node_id)
+            return [self._places[child] for child in place.child_ids] if place else []
 
     def opens_session(self, node: SessionTeam) -> bool:
         """Whether ``node`` is the place a session was opened at."""
@@ -203,12 +203,14 @@ class OrgStore:
     def session(self, session_id: str) -> list[SessionTeam]:
         """The teams of a session, the one it was opened at first."""
         with self._lock:
-            seats = [
-                seat for seat in self._seats.values() if seat.session == session_id
+            places = [
+                place for place in self._places.values() if place.session == session_id
             ]
             opened = self._sessions.get(session_id)
             top = session_team_id(opened.team_id, session_id) if opened else ""
-            return sorted(seats, key=lambda seat: (seat.division_lead, seat.id != top))
+            return sorted(
+                places, key=lambda place: (place.division_lead, place.id != top)
+            )
 
     def sessions(self) -> list[Session]:
         """The open sessions as a client reads them, oldest first."""
@@ -217,12 +219,12 @@ class OrgStore:
             return [
                 self._session_view(session)
                 for session in self._sessions.values()
-                if session_team_id(session.team_id, session.id) in self._seats
+                if session_team_id(session.team_id, session.id) in self._places
             ]
 
     def instance(self, team_id: str, session_id: str) -> SessionTeam | None:
         """The place a session has at the team ``team_id``."""
-        return self._seats.get(session_team_id(team_id, session_id))
+        return self._places.get(session_team_id(team_id, session_id))
 
     def teams_below(self, node_id: str) -> int:
         """How many places are below the place ``node_id``, at any depth."""
@@ -249,7 +251,7 @@ class OrgStore:
             try:
                 for team in teams:
                     self.upsert(team)
-                return self._seats[session_team_id(session.team_id, session.id)]
+                return self._places[session_team_id(session.team_id, session.id)]
             except (OrgStoreError, KeyError) as error:
                 self.close_session(session.id)
                 raise OrgStoreError(
@@ -280,32 +282,34 @@ class OrgStore:
             was = self._sessions.get(session.id)
             if was is None:
                 raise OrgStoreError(f"Session {session.id} is not open")
-            before = self._seats[session_team_id(was.team_id, was.id)]
-            reviewed_from = self._seats[before.parent_id or ""]
+            before = self._places[session_team_id(was.team_id, was.id)]
+            reviewed_from = self._places[before.parent_id or ""]
             if reviewed_from.agents or before.review is not None:
                 raise OrgStoreError(f"The work of session {session.id} is in review")
             if (
                 top.id != session_team_id(session.team_id, session.id)
-                or top.id in self._seats
+                or top.id in self._places
                 or top.parent_id != review.id
                 or review.id != division_lead_id(session.above_id, session.id)
                 or not review.division_lead
             ):
                 raise OrgStoreError(f"Session {session.id} cannot go to {top.id}")
             self._sessions[session.id] = session
-            del self._seats[reviewed_from.id]
-            self._seats[review.id] = SessionTeam(
+            del self._places[reviewed_from.id]
+            self._places[review.id] = SessionTeam(
                 **review.model_dump(), child_ids=[top.id]
             )
-            self._seats[top.id] = SessionTeam(**top.model_dump(), child_ids=[before.id])
-            self._seats[before.id] = before.model_copy(update={"parent_id": top.id})
+            self._places[top.id] = SessionTeam(
+                **top.model_dump(), child_ids=[before.id]
+            )
+            self._places[before.id] = before.model_copy(update={"parent_id": top.id})
             moved = [before.id]
             for current in moved:
-                moved.extend(self._seats[current].child_ids)
+                moved.extend(self._places[current].child_ids)
             for current in moved:
-                below = self._seats[current]
+                below = self._places[current]
                 chain = self._chain(below.parent_id)
-                self._seats[current] = below.model_copy(
+                self._places[current] = below.model_copy(
                     update={
                         "escalations": [
                             self._rerouted(escalation, chain)
@@ -314,11 +318,11 @@ class OrgStore:
                     }
                 )
             for other in others:
-                self._upsert_seat(other)
+                self._upsert_place(other)
             self._announce_sessions()
             self._announce_escalations()
             self._changed()
-            return self._seats[top.id]
+            return self._places[top.id]
 
     def set_shape(
         self, session_id: str, shape: list[tuple[str, str, str, str]]
@@ -349,9 +353,9 @@ class OrgStore:
         with self._lock:
             if self._sessions.pop(session_id, None) is None:
                 return False
-            for seat in self.session(session_id):
-                self._index_agents(seat, None)
-                del self._seats[seat.id]
+            for place in self.session(session_id):
+                self._index_agents(place, None)
+                del self._places[place.id]
             self._announce_sessions()
             self._announce_escalations()
             self._changed()
@@ -371,19 +375,19 @@ class OrgStore:
 
     def above(self, node_id: str) -> list[SessionTeam]:
         """The places above the place ``node_id`` in its session, the one
-        the session was opened at first. Nobody stands at the place a
-        session is reviewed from, so it is not one of them."""
+        the session was opened at first. Nobody stands at a session's
+        Division Lead place, so it is not one of them."""
         with self._lock:
             return (
-                [self._seats[above] for above in reversed(self._chain(node_id))][:-1]
-                if node_id in self._seats
+                [self._places[above] for above in reversed(self._chain(node_id))][:-1]
+                if node_id in self._places
                 else []
             )
 
     def places(self) -> list[SessionTeam]:
         """Every place of every session."""
         with self._lock:
-            return list(self._seats.values())
+            return list(self._places.values())
 
     def find_by_conversation(
         self, conversation_id: str
@@ -394,14 +398,14 @@ class OrgStore:
             if found is None:
                 return None
             node_id, role = found
-            return self._seats[node_id], role
+            return self._places[node_id], role
 
     def find_hand_over(self, conversation_id: str) -> SessionTeam | None:
         """The place whose IC has ``conversation_id`` as its hand-over
         conversation."""
         with self._lock:
             node_id = self._hand_overs.get(conversation_id)
-            return self._seats[node_id] if node_id is not None else None
+            return self._places[node_id] if node_id is not None else None
 
     def set_hand_over(self, node_id: str, mode: HandOverMode | None) -> SessionTeam:
         """Put a place's IC in hand-over mode, change how that stands, or
@@ -463,9 +467,9 @@ class OrgStore:
             OrgStoreError: The changed place would not fit into its session.
         """
         with self._lock:
-            seat = self._require_place(node_id)
-            current = seat.model_dump(exclude=_DERIVED_FIELDS)
-            return self._upsert_seat(
+            place = self._require_place(node_id)
+            current = place.model_dump(exclude=_DERIVED_FIELDS)
+            return self._upsert_place(
                 SessionTeamInput.model_validate({**current, **changes})
             )
 
@@ -546,7 +550,7 @@ class OrgStore:
         """
         with self._lock:
             if isinstance(node_input, SessionTeamInput):
-                return self._upsert_seat(node_input)
+                return self._upsert_place(node_input)
             existing = self._nodes.get(node_input.id)
             parent_id = node_input.parent_id
             if existing is not None:
@@ -587,20 +591,20 @@ class OrgStore:
             self._changed()
             return node
 
-    def _upsert_seat(self, seat_input: SessionTeamInput) -> SessionTeam:
+    def _upsert_place(self, place_input: SessionTeamInput) -> SessionTeam:
         """Insert or change what a session has at one team."""
-        existing = self._seats.get(seat_input.id)
-        parent_id = seat_input.parent_id
-        session = self._sessions.get(seat_input.session)
+        existing = self._places.get(place_input.id)
+        parent_id = place_input.parent_id
+        session = self._sessions.get(place_input.session)
         if session is None:
-            raise OrgStoreError(f"Session {seat_input.session} is not open")
+            raise OrgStoreError(f"Session {place_input.session} is not open")
         lead_id = division_lead_id(session.above_id, session.id)
-        above = self._seats.get(parent_id or "")
-        if seat_input.division_lead:
-            fits = seat_input.id == lead_id and parent_id is None
-        elif seat_input.id != session_team_id(seat_input.team_id, session.id):
-            raise OrgStoreError(f"{seat_input.id} is no team of session {session.id}")
-        elif seat_input.team_id == session.team_id:
+        above = self._places.get(parent_id or "")
+        if place_input.division_lead:
+            fits = place_input.id == lead_id and parent_id is None
+        elif place_input.id != session_team_id(place_input.team_id, session.id):
+            raise OrgStoreError(f"{place_input.id} is no team of session {session.id}")
+        elif place_input.team_id == session.team_id:
             fits = parent_id == lead_id and above is not None
         else:
             fits = (
@@ -610,30 +614,30 @@ class OrgStore:
             )
         if not fits:
             raise OrgStoreError(
-                f"{seat_input.id} cannot be below {parent_id} in session {session.id}"
+                f"{place_input.id} cannot be below {parent_id} in session {session.id}"
             )
         if existing is not None and existing.parent_id != parent_id:
-            raise OrgStoreError(f"{seat_input.id} cannot change what is above it")
-        self._check_escalations(seat_input, self._chain(parent_id))
-        seat = SessionTeam(
-            **seat_input.model_dump(),
+            raise OrgStoreError(f"{place_input.id} cannot change what is above it")
+        self._check_escalations(place_input, self._chain(parent_id))
+        place = SessionTeam(
+            **place_input.model_dump(),
             child_ids=existing.child_ids if existing else [],
         )
-        self._seats[seat.id] = seat
-        self._index_agents(existing, seat)
+        self._places[place.id] = place
+        self._index_agents(existing, place)
         if existing is None and isinstance(above, SessionTeam):
-            self._seats[above.id] = above.model_copy(
-                update={"child_ids": [*above.child_ids, seat.id]}
+            self._places[above.id] = above.model_copy(
+                update={"child_ids": [*above.child_ids, place.id]}
             )
         self._announce_sessions()
         if (
             existing is None
-            or existing.escalations != seat.escalations
-            or existing.title != seat.title
+            or existing.escalations != place.escalations
+            or existing.title != place.title
         ):
             self._announce_escalations()
         self._changed()
-        return seat
+        return place
 
     def move(self, node_id: str, parent_id: str) -> OrgNode:
         """Put a team of the org, with everything below it, under another
@@ -681,32 +685,32 @@ class OrgStore:
                 place itself or below it.
         """
         with self._lock:
-            seat = self._require_place(node_id)
+            place = self._require_place(node_id)
             above = self._require_place(parent_id)
-            former = self._seats.get(seat.parent_id or "")
+            former = self._places.get(place.parent_id or "")
             if (
                 former is None
                 or former.division_lead
                 or above.division_lead
-                or above.session != seat.session
+                or above.session != place.session
                 or node_id in [parent_id, *self._chain(parent_id)]
             ):
                 raise OrgStoreError(f"Node {node_id} cannot move under {parent_id}")
             if former.id == parent_id:
-                return seat
-            self._unlink(self._seats, former.id, node_id)
-            above = self._seats[parent_id]
-            self._seats[parent_id] = above.model_copy(
+                return place
+            self._unlink(self._places, former.id, node_id)
+            above = self._places[parent_id]
+            self._places[parent_id] = above.model_copy(
                 update={"child_ids": [*above.child_ids, node_id]}
             )
-            self._seats[node_id] = seat.model_copy(update={"parent_id": parent_id})
+            self._places[node_id] = place.model_copy(update={"parent_id": parent_id})
             moved = [node_id]
             for current in moved:
-                moved.extend(self._seats[current].child_ids)
+                moved.extend(self._places[current].child_ids)
             for current in moved:
-                below = self._seats[current]
+                below = self._places[current]
                 chain = self._chain(below.parent_id)
-                self._seats[current] = below.model_copy(
+                self._places[current] = below.model_copy(
                     update={
                         "escalations": [
                             self._rerouted(escalation, chain)
@@ -717,7 +721,7 @@ class OrgStore:
             self._announce_sessions()
             self._announce_escalations()
             self._changed()
-            return self._seats[node_id]
+            return self._places[node_id]
 
     @staticmethod
     def _unlink[T: OrgNode](nodes: dict[str, T], parent_id: str, child_id: str) -> None:
@@ -748,7 +752,7 @@ class OrgStore:
             if node is None:
                 return False
             if isinstance(node, SessionTeam):
-                return self._remove_seat(node)
+                return self._remove_place(node)
 
             doomed: list[OrgNode] = []
             stack = [node]
@@ -779,19 +783,21 @@ class OrgStore:
             self._changed()
             return True
 
-    def _remove_seat(self, seat: SessionTeam) -> bool:
+    def _remove_place(self, place: SessionTeam) -> bool:
         """Remove what a session has at a team and at the teams below it.
-        The place its work is reviewed from, and the team it was opened at,
+        Its Division Lead place, and the team it was opened at,
         go only with the session."""
-        if seat.parent_id is None or is_division_lead(self._seats.get(seat.parent_id)):
-            raise OrgStoreError(f"{seat.id} is removed by closing its session")
-        doomed = [seat]
+        if place.parent_id is None or is_division_lead(
+            self._places.get(place.parent_id)
+        ):
+            raise OrgStoreError(f"{place.id} is removed by closing its session")
+        doomed = [place]
         for current in doomed:
-            doomed.extend(self._seats[child_id] for child_id in current.child_ids)
+            doomed.extend(self._places[child_id] for child_id in current.child_ids)
         for gone in doomed:
             self._index_agents(gone, None)
-            del self._seats[gone.id]
-        self._unlink(self._seats, seat.parent_id, seat.id)
+            del self._places[gone.id]
+        self._unlink(self._places, place.parent_id, place.id)
         self._announce_sessions()
         self._announce_escalations()
         self._changed()
@@ -843,7 +849,7 @@ class OrgStore:
             self._nodes = nodes
             self._root_id = root_id
             self._sessions = {}
-            self._seats = {}
+            self._places = {}
             self._agents = {}
             self._hand_overs = {}
             self.restore_sessions(kept)
@@ -864,28 +870,28 @@ class OrgStore:
                     continue
                 self._sessions[session.id] = session
                 try:
-                    # The place a session is reviewed from is above the rest.
+                    # A session's Division Lead place is above the rest.
                     for team in sorted(teams, key=lambda team: not team.division_lead):
-                        self._restore_seat(team)
-                    _ = self._seats[session_team_id(session.team_id, session.id)]
+                        self._restore_place(team)
+                    _ = self._places[session_team_id(session.team_id, session.id)]
                 except (OrgStoreError, KeyError):
-                    for seat in self.session(session.id):
-                        self._index_agents(seat, None)
-                        del self._seats[seat.id]
+                    for place in self.session(session.id):
+                        self._index_agents(place, None)
+                        del self._places[place.id]
                     del self._sessions[session.id]
 
-    def _restore_seat(self, team: SessionTeamInput) -> None:
+    def _restore_place(self, team: SessionTeamInput) -> None:
         """Put back what a session has at one team, without telling anyone."""
-        above = self._seats.get(team.parent_id or "")
+        above = self._places.get(team.parent_id or "")
         if above is None and not team.division_lead:
             raise OrgStoreError(f"Nothing is above {team.id}")
         self._check_escalations(team, self._chain(team.parent_id))
         data = team.model_dump(exclude=_DERIVED_FIELDS)
-        seat = SessionTeam(**data)
-        self._seats[seat.id] = seat
-        self._index_agents(None, seat)
+        place = SessionTeam(**data)
+        self._places[place.id] = place
+        self._index_agents(None, place)
         if isinstance(above, SessionTeam):
-            above.child_ids.append(seat.id)
+            above.child_ids.append(place.id)
 
     def raise_escalation(
         self,
@@ -956,7 +962,7 @@ class OrgStore:
                 )
             if not reason.strip():
                 raise OrgStoreError("Passing an escalation up needs a reason")
-            holder = self._seats[escalation.held_by]
+            holder = self._places[escalation.held_by]
             passed = escalation.model_copy(
                 update={
                     "held_by": next(iter(self._chain(holder.parent_id)), None),
@@ -1023,22 +1029,22 @@ class OrgStore:
         """
         with self._lock:
             found: list[OpenEscalation] = []
-            for seat in self._seats.values():
+            for place in self._places.values():
                 # A team a session set up may not be the org's yet: the way
                 # to it is the one inside the session.
                 path = [
                     EscalationPathStep(id=step.team_id, title=step.title)
-                    for step in (*self.above(seat.id), seat)
+                    for step in (*self.above(place.id), place)
                 ]
                 found.extend(
                     OpenEscalation(
-                        node_id=seat.team_id,
-                        session_id=seat.session,
-                        session=self._sessions[seat.session].title,
+                        node_id=place.team_id,
+                        session_id=place.session,
+                        session=self._sessions[place.session].title,
                         escalation=e,
                         path=path,
                     )
-                    for e in seat.escalations
+                    for e in place.escalations
                     if e.held_by is None
                 )
             found.sort(
@@ -1145,7 +1151,7 @@ class OrgStore:
 
     def _session_view(self, session: SessionInput) -> Session:
         teams = self.session(session.id)
-        top = self._seats[session_team_id(session.team_id, session.id)]
+        top = self._places[session_team_id(session.team_id, session.id)]
         return Session(
             **session.model_dump(),
             team=top.title,
@@ -1173,13 +1179,13 @@ class OrgStore:
         """
         chain: list[str] = []
         current = parent_id
-        while current is not None and current in self._seats and current not in chain:
-            # Nobody stands at the place a session's work is reviewed from:
+        while current is not None and current in self._places and current not in chain:
+            # Nobody stands at a session's Division Lead place:
             # what goes up from the session goes to the human.
-            if self._seats[current].division_lead:
+            if self._places[current].division_lead:
                 break
             chain.append(current)
-            current = self._seats[current].parent_id
+            current = self._places[current].parent_id
         return chain
 
     @staticmethod
@@ -1201,10 +1207,10 @@ class OrgStore:
                 )
 
     def _require_place(self, node_id: str) -> SessionTeam:
-        seat = self._seats.get(node_id)
-        if seat is None:
+        place = self._places.get(node_id)
+        if place is None:
             raise NotFound(f"Unknown place: {node_id}")
-        return seat
+        return place
 
     @staticmethod
     def _require_escalation(node: SessionTeam, escalation_id: str) -> Escalation:

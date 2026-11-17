@@ -10,9 +10,9 @@ from uuid import UUID
 import pytest
 
 from openhands.agent_server.director import compaction
+from openhands.agent_server.director.launch import StartedAgent
 from openhands.agent_server.director.models import OldSpec, SplitChild
 from openhands.agent_server.director.org_store import team_id_of
-from openhands.agent_server.director.pods import StartedAgent
 from openhands.agent_server.director.prompts import HAND_OVER_ROLE, left_behind
 from openhands.agent_server.director.run_state import TASK
 from openhands.agent_server.director.service import (

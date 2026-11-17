@@ -324,7 +324,7 @@ class TestEscalationChain:
     def test_an_escalation_of_the_place_a_session_was_opened_at_waits_on_the_human(
         self, store: OrgStore
     ):
-        # The place the session is reviewed from is above, and nobody
+        # The session's Division Lead place is above, and nobody
         # stands there.
         raised = store.raise_escalation(
             at("root"), "budget", kind="critical_issue", title="t"
@@ -386,7 +386,7 @@ class TestEscalationChain:
             make_escalation("x", passed_up_by=(at("a"),), held_by=at("a")),
             # Held by a place that is not above it.
             make_escalation("x", held_by=at("b")),
-            # Held by the place the session is reviewed from.
+            # Held by the session's Division Lead place.
             make_escalation(
                 "x",
                 passed_up_by=(at("a"), at("root")),
@@ -627,7 +627,7 @@ class TestPersistence:
             load_org(board, OrgStore())
 
 
-def give_pod(store: OrgStore, place_id: str, ic: str, manager: str) -> None:
+def give_agents(store: OrgStore, place_id: str, ic: str, manager: str) -> None:
     store.update_place(
         place_id,
         agents=[
@@ -638,7 +638,7 @@ def give_pod(store: OrgStore, place_id: str, ic: str, manager: str) -> None:
 
 
 def test_an_agents_conversation_leads_back_to_its_place_and_role(working: OrgStore):
-    give_pod(working, at("root"), "conv-ic", "conv-mgr")
+    give_agents(working, at("root"), "conv-ic", "conv-mgr")
 
     found = working.find_by_conversation("conv-mgr")
 
@@ -651,8 +651,8 @@ def test_an_agents_conversation_leads_back_to_its_place_and_role(working: OrgSto
 def test_a_removed_or_replaced_conversation_no_longer_leads_to_a_place(
     working: OrgStore,
 ):
-    give_pod(working, at("root"), "conv-ic", "conv-mgr")
-    give_pod(working, at("a"), "conv-a-ic", "conv-a-mgr")
+    give_agents(working, at("root"), "conv-ic", "conv-mgr")
+    give_agents(working, at("a"), "conv-a-ic", "conv-a-mgr")
 
     working.set_agent(at("root"), "ic", conversation_id="conv-ic-2")
     working.remove(at("a"))
@@ -664,7 +664,7 @@ def test_a_removed_or_replaced_conversation_no_longer_leads_to_a_place(
 
 
 def test_a_closed_sessions_conversations_lead_nowhere(working: OrgStore):
-    give_pod(working, at("a"), "conv-a-ic", "conv-a-mgr")
+    give_agents(working, at("a"), "conv-a-ic", "conv-a-mgr")
 
     working.close_session(SESSION)
 
@@ -673,7 +673,7 @@ def test_a_closed_sessions_conversations_lead_nowhere(working: OrgStore):
 
 
 def test_a_replaced_tree_keeps_its_sessions_and_their_agents(working: OrgStore):
-    give_pod(working, at("a"), "conv-a-ic", "conv-a-mgr")
+    give_agents(working, at("a"), "conv-a-ic", "conv-a-mgr")
 
     working.replace_all(small_tree())
 
@@ -893,7 +893,7 @@ def test_a_node_moves_only_to_where_the_tree_stays_a_tree(
             at("a1"),
             division_lead_id("root", SESSION),
             OrgStoreError,
-            id="under where it is reviewed from",
+            id="under its Division Lead place",
         ),
         pytest.param(
             at("a1"),
@@ -936,7 +936,7 @@ def test_saving_does_not_record_the_sessions_or_their_agents(
     save_org(board, working)
     saved = run_git(repo, "rev-parse", ORG_REF)
 
-    give_pod(working, at("root"), "conv-ic", "conv-mgr")
+    give_agents(working, at("root"), "conv-ic", "conv-mgr")
     working.set_agent(at("root"), "ic", status="working")
     save_org(board, working)
 

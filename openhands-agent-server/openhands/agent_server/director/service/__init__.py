@@ -17,6 +17,7 @@ from openhands.agent_server.director.git import (
     is_git_repository,
 )
 from openhands.agent_server.director.headline import provisional_summary
+from openhands.agent_server.director.launch import TeamLauncher
 from openhands.agent_server.director.merge_checkout import MergeCheckout
 from openhands.agent_server.director.models import (
     Boundary,
@@ -32,7 +33,6 @@ from openhands.agent_server.director.models import (
 from openhands.agent_server.director.org_store import (
     is_division_lead,
 )
-from openhands.agent_server.director.pods import PodLauncher
 from openhands.agent_server.director.prompts import (
     NEED_WRITE,
 )
@@ -108,7 +108,7 @@ class DirectorService(Sync):
     was asked for, and lanes do not wait for each other.
     """
 
-    async def start(self, launcher: PodLauncher) -> None:
+    async def start(self, launcher: TeamLauncher) -> None:
         """Begin running agents through ``launcher``, on the running loop."""
         self._loop = asyncio.get_running_loop()
         self._launcher = launcher
@@ -434,7 +434,9 @@ class DirectorService(Sync):
     ) -> SessionTeam:
         """Settle an escalation that waits on the human with their answer.
 
-        The answer goes to the agent that raised it.
+        The answer goes to the agent that raised it. An escalation the
+        director raised itself (a merge or a Manager that waits) has
+        nobody to send it to: answering only lets the work go on.
 
         Raises:
             NotFound: The node or the escalation does not exist.
@@ -461,7 +463,7 @@ class DirectorService(Sync):
         if escalation_id == MERGE_WAITS:
             # The way into the checkout was cleared: the accepted work is
             # merged now, with nobody asked again.
-            self._begin("accept", node_id, needed_above="", reconciled="")
+            self.accept_review(node_id, "")
             return store.place(node_id) or node
         if escalation_id == ORG_WAITS:
             # The human goes on without the Manager.

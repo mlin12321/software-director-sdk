@@ -60,7 +60,7 @@ from openhands.agent_server.dependencies import (
     check_workspace_session,
 )
 from openhands.agent_server.director import DirectorService
-from openhands.agent_server.director.pods import ConversationPodLauncher
+from openhands.agent_server.director.launch import ConversationTeamLauncher
 from openhands.agent_server.director_router import (
     director_router,
     director_tools_router,
@@ -445,7 +445,7 @@ async def api_lifespan(api: FastAPI) -> AsyncIterator[None]:
                 api.state, "director_service", None
             )
             if director is not None:
-                await director.start(ConversationPodLauncher(service))
+                await director.start(ConversationTeamLauncher(service))
 
             config = api.state.config
             retention_task: asyncio.Task | None = None

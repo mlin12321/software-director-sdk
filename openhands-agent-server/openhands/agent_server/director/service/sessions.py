@@ -9,6 +9,7 @@ from uuid import UUID, uuid4
 
 from openhands.agent_server.director.git import GitError, git, head_of
 from openhands.agent_server.director.headline import provisional_summary
+from openhands.agent_server.director.launch import TeamLauncher
 from openhands.agent_server.director.models import (
     ChosenBy,
     OpenedSession,
@@ -26,9 +27,8 @@ from openhands.agent_server.director.org_store import (
     is_division_lead,
     session_team_id,
 )
-from openhands.agent_server.director.pods import PodLauncher
 from openhands.agent_server.director.prompts import (
-    POD_PROTOCOL,
+    ORG_PROTOCOL,
     handed_up,
     session_brief,
 )
@@ -46,7 +46,7 @@ from openhands.agent_server.director.service.state import (
     _agent_title,
     _base_of,
     _branch_of,
-    _new_pod,
+    _new_agents,
     apart,
 )
 from openhands.agent_server.director.split import shape_of
@@ -88,7 +88,7 @@ class Sessions(Splits):
 
         All work of the org is done in sessions. One has a place of its own
         for the team it is opened at and for every team the org has below
-        that one, and a place its work is reviewed from: the team above, or
+        that one, and a Division Lead place: the team above, or
         the top team itself for a session opened there. Only the team it is
         opened at starts; a team below starts when that IC gives it a task,
         and the reviewer when the session submits its work.
@@ -242,7 +242,7 @@ class Sessions(Splits):
         conversation: StartConversationRequest,
         text: str,
         brief: str,
-        launcher: PodLauncher,
+        launcher: TeamLauncher,
         rename: bool = False,
     ) -> str:
         """Start a session's IC as the conversation the human began the
@@ -253,11 +253,11 @@ class Sessions(Splits):
         """
         store = self.store
         ic_id = conversation.conversation_id or uuid4()
-        store.update_place(top.id, agents=_new_pod(ic_id))
+        store.update_place(top.id, agents=_new_agents(ic_id))
         additions = conversation.agent_launch_additions or AgentLaunchAdditions()
         suffix = "\n\n".join(
             part
-            for part in (additions.system_message_suffix_append, POD_PROTOCOL)
+            for part in (additions.system_message_suffix_append, ORG_PROTOCOL)
             if part
         )
         apart = top.isolation == "worktree"
@@ -513,7 +513,7 @@ class Sessions(Splits):
                 if team is not None and team.agents
             ]
             top = store.place(node_id)
-            # The place it is reviewed from is in the repository's checkout.
+            # Its Division Lead place is in the repository's checkout.
             above = store.place(top.parent_id or "") if top else None
             kept = None
             # A session whose IC never started has no checkout of its own:

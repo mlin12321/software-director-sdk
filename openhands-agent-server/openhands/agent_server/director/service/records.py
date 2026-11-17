@@ -122,7 +122,6 @@ class Taken(NamedTuple):
     grown: list[tuple[str, AgentRole]]
     # The files that were not written: someone else changed them meanwhile.
     left: list[str]
-    not_taken: list[FormerTeam]
 
 
 def _written_by(report: Report, session: str) -> str:
@@ -835,7 +834,7 @@ class Records(ServiceState):
 
     def _works_above(self, node: OrgNode) -> OrgNode | None:
         """What is above ``node``, a team of the org or a place: nobody
-        stands at the place a session's work is reviewed from."""
+        stands at a session's Division Lead place."""
         above = self.store.get(node.parent_id) if node.parent_id else None
         return None if above is None or is_division_lead(above) else above
 
@@ -1045,8 +1044,7 @@ class Records(ServiceState):
             tree: Whether the org tree as it is now lands with it.
 
         Returns:
-            The records that grew, the files that were not written, and
-            the records of the teams that were not taken.
+            The records that grew and the files that were not written.
         """
         store = self.store
         run = self._runs()
@@ -1247,7 +1245,7 @@ class Records(ServiceState):
             for role in AGENT_ROLES
             if any(report.role == role for report in kept)
         ]
-        return Taken(grown, sorted(conflicts), not_taken)
+        return Taken(grown, sorted(conflicts))
 
     def _leave(self, top: SessionTeam) -> str:
         """Drop what a session that is being closed kept to itself: what
