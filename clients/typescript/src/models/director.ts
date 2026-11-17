@@ -936,8 +936,6 @@ export interface DirectorSettings {
    * may go straight to the team the director chooses.
    */
   route_requests: boolean;
-  /** Whether a session works in a git worktree of its own. */
-  session_worktrees: boolean;
 }
 
 /** The settings, beside what the org has now. */

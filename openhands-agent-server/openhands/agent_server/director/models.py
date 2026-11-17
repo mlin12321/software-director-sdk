@@ -828,14 +828,6 @@ class DirectorSettings(BaseModel):
             "teams. 0 turns the check off."
         ),
     )
-    session_worktrees: bool = Field(
-        default=True,
-        description=(
-            "Whether a session works in a worktree of its own, made from "
-            "the repository's checkout. Without it a session works in that "
-            "checkout itself."
-        ),
-    )
     route_requests: bool = Field(
         default=True,
         description=(
@@ -858,7 +850,6 @@ class DirectorSettingsUpdate(BaseModel):
     manager_check_accepted_reviews: int | None = Field(default=None, ge=0)
     manager_check_ic_setbacks: int | None = Field(default=None, ge=0)
     route_requests: bool | None = None
-    session_worktrees: bool | None = None
 
 
 class DirectorSettingsState(DirectorSettings):

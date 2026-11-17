@@ -3533,6 +3533,12 @@ def _scripted_org_llm(
     scripted = {"API": api_ic or [], "Web": web_ic or [], "Checkout": top_ic or []}
 
     def tool_call(name: str, arguments: dict) -> dict:
+        # A value the script can know only when the call is made is given
+        # as a function.
+        arguments = {
+            key: value() if callable(value) else value
+            for key, value in arguments.items()
+        }
         return {
             "role": "assistant",
             "content": None,
@@ -4175,6 +4181,18 @@ def test_director_starts_an_org_from_a_message_and_holds_teams_to_their_director
     server_env, monkeypatch: pytest.MonkeyPatch
 ):
     repo = server_env["workspace_path"]
+
+    def checkout() -> Path:
+        """The worktree the session works in."""
+        listed = run_git_command(["git", "worktree", "list", "--porcelain"], repo)
+        [other] = [
+            Path(line.removeprefix("worktree "))
+            for line in listed.splitlines()
+            if line.startswith("worktree ")
+            and Path(line.removeprefix("worktree ")).resolve() != repo.resolve()
+        ]
+        return other
+
     _scripted_org_llm(
         monkeypatch,
         api_ic=[
@@ -4182,7 +4200,7 @@ def test_director_starts_an_org_from_a_message_and_holds_teams_to_their_director
                 "file_editor",
                 {
                     "command": "create",
-                    "path": str(repo / "by-editor.txt"),
+                    "path": lambda: str(checkout() / "by-editor.txt"),
                     "file_text": "x",
                 },
             ),
@@ -4190,7 +4208,9 @@ def test_director_starts_an_org_from_a_message_and_holds_teams_to_their_director
                 "file_editor",
                 {
                     "command": "create",
-                    "path": str(repo / "services" / "api" / "by-editor.txt"),
+                    "path": lambda: str(
+                        checkout() / "services" / "api" / "by-editor.txt"
+                    ),
                     "file_text": "x",
                 },
             ),
@@ -4224,11 +4244,6 @@ def test_director_starts_an_org_from_a_message_and_holds_teams_to_their_director
     )
 
     with httpx.Client(base_url=server_env["host"], timeout=30) as client:
-        # The teams write where the script says: in the repository's checkout.
-        settings = client.patch(
-            "/api/director/settings", json={"session_worktrees": False}
-        )
-        assert settings.status_code == 200, settings.text
         started = client.post(
             "/api/director/org/messages",
             json={
@@ -4296,17 +4311,18 @@ def test_director_starts_an_org_from_a_message_and_holds_teams_to_their_director
         ]
         assert len(rejections) == 1
         assert "outside your team's boundary (services/api)" in rejections[0]
-        assert not (repo / "by-editor.txt").exists()
-        assert (repo / "services" / "api" / "by-editor.txt").read_text() == "x"
+        work = checkout()
+        assert not (work / "by-editor.txt").exists()
+        assert (work / "services" / "api" / "by-editor.txt").read_text() == "x"
 
         if confined != "sandbox":
             pytest.skip(
                 "this machine cannot confine a shell; only file tools are checked"
             )
         # The shell starts in the team's directory and can write nowhere else.
-        assert (repo / "services" / "api" / "by-shell.txt").exists()
-        assert not (repo / "by-shell.txt").exists()
-        assert not (repo / "apps" / "by-shell.txt").exists()
+        assert (work / "services" / "api" / "by-shell.txt").exists()
+        assert not (work / "by-shell.txt").exists()
+        assert not (work / "apps" / "by-shell.txt").exists()
 
         # What is said from a team's directory opens a session at that team,
         # which the org has once the work of its first session is accepted.

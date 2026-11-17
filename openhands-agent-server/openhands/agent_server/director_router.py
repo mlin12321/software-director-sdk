@@ -600,7 +600,7 @@ async def open_session(
     """Open a session at a team and start it with a request.
 
     The team gets an IC for the request, in a git worktree and on a branch
-    of its own (unless `session_worktrees` is off), so that it can work on
+    of its own, so that it can work on
     the team's directory while other sessions do. The session has a place
     for each team below, which starts when that IC gives it a task. An IC
     at the team above, started for it and only reviewing, reviews the

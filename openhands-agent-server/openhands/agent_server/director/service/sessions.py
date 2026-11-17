@@ -191,9 +191,7 @@ class Sessions(Splits):
                         boundary=current.boundary,
                         # Its work is kept apart from the repository's
                         # checkout until it is reviewed.
-                        isolation=(
-                            "worktree" if self.settings.session_worktrees else "shared"
-                        )
+                        isolation="worktree"
                         if current.id == team.id
                         else current.isolation,
                         agent_profile=current.agent_profile,

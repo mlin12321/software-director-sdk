@@ -52,8 +52,6 @@ async def started(repo: Path, launcher: FakeLauncher, **options) -> DirectorServ
         **{"run_limit_retry": 0, **options},
     )
     await service.start(launcher)
-    # A session works in the repository's checkout, as the tests commit there.
-    service.update_settings(DirectorSettingsUpdate(session_worktrees=False))
     await service.create_org(
         CreateOrgRequest(
             title="Checkout", task="Build", conversation=root_conversation(repo)
@@ -201,7 +199,6 @@ async def test_settings_are_kept_for_the_next_start_beside_the_repository(
         "manager_check_accepted_reviews": 5,
         "manager_check_ic_setbacks": 3,
         "route_requests": True,
-        "session_worktrees": False,
     }
     assert kept["repo_path"] == str(repo)
     assert again.settings.max_depth == 3 and again.store.root_id == "root"
