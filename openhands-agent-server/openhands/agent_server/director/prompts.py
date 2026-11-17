@@ -127,14 +127,18 @@ REVIEW_MANAGER_ROLE = """\
 You are the Manager of your team in review mode, not its IC: what is said
 above of the IC is not yours to do. You do not write files, give tasks or
 review code. A session's code was accepted and merged already. The session
-also changed its sub-teams while the org's teams there were changed by
-other accepted work, and you decide, team by team, which holds. The
-director tells you each such team with what the session made of it and what
-the org has now; everything else of the session's teams is settled.
+also changed its sub-teams, or the contracts between them, while the org's
+were changed by other accepted work, and you decide, one by one, which
+holds. The director tells you each such team and each such contracts with
+what the session made of it and what the org has now; everything else of
+the session's teams is settled.
 Decide by your team's spec, contracts and records, which `read_node_context`
-returns, and settle all of them with one call of `settle_teams`: name in
+returns, and settle all of it with one call of `settle_teams`: name in
 `org_teams` the teams for which the org's stays, and the others become what
-the session made of them. Use `report` for what the team must remember.
+the session made of them. For contracts, say in `contracts` which holds, or
+write the text that keeps what both need: taking one side whole often
+breaks what the other side's teams rely on. Use `report` for what the team
+must remember.
 </ORG_ROLE>"""
 
 MANAGER_ROLE = """\
@@ -725,9 +729,9 @@ def org_change_request(team: SessionTeam, session: str, change: OrgChange) -> st
     when sub-teams of the session wait for it."""
     lines = [
         f"The work of {team.title!r} (node {team.id}) in the session "
-        f"{session!r} is accepted and merged. Its sub-teams are the org's "
-        "now, but for these, which the org made something else of while "
-        "the session worked:",
+        f"{session!r} is accepted and merged. What it made of its sub-teams "
+        "is the org's now, but for this, which the org made something else "
+        "of while the session worked:",
     ]
     for waiting in change.teams:
         lines += [
@@ -736,27 +740,80 @@ def org_change_request(team: SessionTeam, session: str, change: OrgChange) -> st
             f"  the session: {waiting.session}",
             f"  the org now: {waiting.org}",
         ]
+        if waiting.moved_to is not None:
+            lines.append(
+                "  the team it was set up under is not in the org any more: "
+                f"taken, it goes under team {waiting.moved_to}, and that "
+                "team's sub-teams inside its directory go under it. The "
+                "team that is gone is not put back."
+            )
+    for agreed in change.contracts:
+        lines += [
+            "",
+            f"- the contracts between the sub-teams of "
+            f"{agreed.path or 'the repository'}"
+            + (
+                f" (they come with team {agreed.with_team} and hold only if "
+                "it is taken)"
+                if agreed.with_team
+                else ""
+            ),
+            "  the session's:",
+            *(f"    {line}" for line in (agreed.session or "(none)").splitlines()),
+            "  the org's now:",
+            *(f"    {line}" for line in (agreed.org or "(none)").splitlines()),
+        ]
     lines += [
         "",
-        "Until you settle them the org's stay. Call `settle_teams` once: "
-        "name in `org_teams` every team above for which the org's holds; "
-        "the others become what the session made of them.",
+        "Until you settle it the org's stay. Call `settle_teams` once: name "
+        "in `org_teams` every team above for which the org's holds; the "
+        "others become what the session made of them."
+        + (
+            " For each contracts above say in `contracts` which holds: "
+            "'org', 'session', or 'text' with the contracts you write from "
+            "both. Unnamed, the session's hold."
+            if change.contracts
+            else ""
+        ),
+        "What the session wrote for a team the org does not take is kept "
+        "as that team's record with the nearest team that holds its "
+        "directory.",
     ]
     return "\n".join(lines)
 
 
-def teams_settled(above: str, taken: list[str], kept: list[str]) -> str:
-    """What a session's IC is told when its waiting sub-teams are settled."""
+def teams_settled(
+    above: str,
+    taken: list[str],
+    kept: list[str],
+    agreed: list[str],
+    held: list[str],
+) -> str:
+    """What a session's IC is told when what waited of its teams is
+    settled.
+
+    Args:
+        agreed: The directories whose contracts are the session's or what
+            the Manager wrote from both.
+        held: The directories whose contracts stay the org's.
+    """
     return (
-        f"The Manager of {above!r} settled the sub-teams of your session "
-        "that the org had made something else of. "
-        + (f"The org has yours now: {', '.join(taken)}. " if taken else "")
+        f"The Manager of {above!r} settled what the org had made something "
+        "else of than your session. "
+        + (f"The org has your teams now: {', '.join(taken)}. " if taken else "")
         + (
-            f"The org's stay, and what your session has there is only the "
-            f"session's: {', '.join(kept)}."
+            f"The org's teams stay, and what your session has there is only "
+            f"the session's: {', '.join(kept)}. "
             if kept
             else ""
         )
+        + (
+            f"Contracts settled for: {', '.join(agreed)}; read them with "
+            "`read_node_context`. "
+            if agreed
+            else ""
+        )
+        + (f"The org's contracts stay for: {', '.join(held)}." if held else "")
     ).strip()
 
 
@@ -1051,6 +1108,8 @@ _EVENT_WORDS: dict[TeamEventKind, str] = {
     "answered": "had its request to another team",
     "session_opened": "session opened",
     "session_closed": "session closed",
+    "not_taken": "not made the org's",
+    "moved": "moved here",
 }
 # What is counted of a team, in the order it is told.
 _COUNTED: tuple[TeamEventKind, ...] = ("accepted", "sent_back", "stalled", "stopped")

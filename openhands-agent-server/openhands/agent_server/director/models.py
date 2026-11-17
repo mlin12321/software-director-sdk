@@ -339,6 +339,14 @@ class OrgNodeInput(BaseModel):
             "when they were derived from the team above."
         ),
     )
+    since: str = Field(
+        default="",
+        description=(
+            "When the team was set up. Two teams with one id are the same "
+            "team only when this is the same: an id comes from the "
+            "directory, so a team that replaces another has its id."
+        ),
+    )
 
 
 class OrgNode(OrgNodeInput):
@@ -413,6 +421,8 @@ TeamEventKind = Literal[
     "answered",
     "session_opened",
     "session_closed",
+    "not_taken",
+    "moved",
 ]
 
 
@@ -479,6 +489,13 @@ class Report(BaseModel):
             "write it."
         ),
     )
+    id: str = Field(
+        default="",
+        description=(
+            "Names the report, so that it is added to a team's record once "
+            "however often that is tried. '' for one a model rewrote."
+        ),
+    )
 
 
 class InheritedSpec(BaseModel):
@@ -511,6 +528,11 @@ class FormerThread(BaseModel):
     messages: list[ThreadMessage]
 
 
+# How a team ended. ``not_taken``: a session set it up or changed it, and
+# when the session's work was accepted the org did not make it its own.
+FormerEnd = Literal["replaced", "pruned", "not_taken"]
+
+
 class FormerTeam(BaseModel):
     """What a team that was replaced or pruned left, kept apart from the
     teams that come after it."""
@@ -522,7 +544,7 @@ class FormerTeam(BaseModel):
     )
     path: str = Field(description="The directory the team owned.")
     purpose: str = Field(description="What the team was for.")
-    ended: Literal["replaced", "pruned"]
+    ended: FormerEnd
     at: str = Field(description="When it was removed; the name of the record.")
     review: ReviewState | None = Field(
         default=None, description="How the review of its work stood."
@@ -539,6 +561,20 @@ class FormerTeam(BaseModel):
     )
     contracts: str = Field(
         default="", description="The contracts between its own sub-teams."
+    )
+    spec: str = Field(
+        default="",
+        description=(
+            "The spec a session wrote for it that the org did not take. '' "
+            "for a team whose spec is in its directory."
+        ),
+    )
+    session: str = Field(
+        default="",
+        description="The title of the session it was a team of; '' when none.",
+    )
+    since: str = Field(
+        default="", description="When the team was set up, which tells it apart."
     )
     threads: list[FormerThread] = Field(default_factory=list)
 
@@ -564,10 +600,12 @@ class FormerTeamSummary(BaseModel):
     title: str
     path: str
     purpose: str
-    ended: Literal["replaced", "pruned"]
+    ended: FormerEnd
     at: str
     compacted_report: str = ""
     contracts: str = ""
+    spec: str = ""
+    session: str = ""
 
 
 class NodeMemory(BaseModel):
@@ -1153,14 +1191,50 @@ class OrgChangeTeam(BaseModel):
     title: str = Field(default="", description="What the team is called.")
     session: str = Field(description="What the session made of it, in words.")
     org: str = Field(description="What the org has there now, in words.")
+    moved_to: str | None = Field(
+        default=None,
+        description=(
+            "The team of the org it would be put under, when the team the "
+            "session has above it is not in the org any more."
+        ),
+    )
+
+
+class OrgChangeContracts(BaseModel):
+    """Contracts of one directory that a session and the org each changed."""
+
+    path: str = Field(description="The directory whose sub-teams they bind.")
+    session: str = Field(description="The contracts as the session has them.")
+    org: str = Field(description="The contracts as the org has them now.")
+    with_team: str | None = Field(
+        default=None,
+        description=(
+            "The waiting team they come with: they are the session's only "
+            "if that team becomes the org's."
+        ),
+    )
+
+
+class ContractsChoice(BaseModel):
+    """What a Manager decides about contracts that wait for it."""
+
+    path: str = Field(description="The directory whose contracts wait.")
+    take: Literal["org", "session", "text"] = Field(
+        description=(
+            "'org': the org's stay. 'session': the session's hold. 'text': "
+            "what is written in `text` holds."
+        )
+    )
+    text: str = Field(default="", description="The contracts, for 'text'.")
 
 
 class OrgChange(BaseModel):
-    """Sub-teams of a session that wait to be settled before they are the
-    org's. Everything else the session changed of its teams is the org's
-    already."""
+    """What a session changed of its teams that waits to be settled before
+    it is the org's. Everything else the session changed of its teams is
+    the org's already."""
 
     teams: list[OrgChangeTeam] = Field(default_factory=list)
+    contracts: list[OrgChangeContracts] = Field(default_factory=list)
 
 
 class SessionTeamInput(OrgNodeInput):
@@ -1257,11 +1331,12 @@ class SessionInput(BaseModel):
     above_id: str = Field(description="The team whose IC reviews its work.")
     request: str = Field(default="", description="What the human asked of it.")
     opened_at: str = Field(default="", description="ISO 8601 timestamp.")
-    shape: list[tuple[str, str, str]] = Field(
+    shape: list[tuple[str, str, str, str]] = Field(
         default_factory=list,
         description=(
-            "The sub-teams the org had under the team when the session was "
-            "opened: each team, the team above it and its directory."
+            "The sub-teams the org had under the team when the session's "
+            "work was last made the org's: each team, the team above it, "
+            "its directory and what else makes it that team."
         ),
     )
 

@@ -14,7 +14,10 @@ from openhands.agent_server.director.git import (
     save_and_discard,
     uncommitted,
 )
-from openhands.agent_server.director.git_store import SPEC_FILE, team_key
+from openhands.agent_server.director.git_store import (
+    normalize_store_path,
+    team_key,
+)
 from openhands.agent_server.director.merge_back import merge_back
 from openhands.agent_server.director.models import (
     FormerTeam,
@@ -38,7 +41,6 @@ from openhands.agent_server.director.prompts import (
 )
 from openhands.agent_server.director.run_state import (
     CHECKS,
-    DRAFT,
     HANDING,
     PROGRESS,
     REPORTS,
@@ -49,6 +51,7 @@ from openhands.agent_server.director.run_state import (
 from openhands.agent_server.director.service.state import (
     PRUNED_REFS,
     _child_node,
+    _contracts_file,
     _spec_file,
     agent_conversation,
     hand_over_of,
@@ -168,7 +171,10 @@ class Splits(Watch):
                 team.model_copy(
                     update={
                         "old_specs": await asyncio.to_thread(
-                            self._specs_left_in, team.boundary.path, split.replaces
+                            self._specs_left_in,
+                            node,
+                            team.boundary.path,
+                            split.replaces,
                         )
                     }
                 )
@@ -307,12 +313,12 @@ class Splits(Watch):
         # The shell the IC starts next can no longer write what it gave away.
         with suppress(GitError, OSError):
             await asyncio.to_thread(self._confine, node_id, "ic")
-        team_memory = self._memory()
         # The record each replaced team left last: the one just made.
+        kept = self.former_drafts(node.session)
         former = [
             records[-1]
             for team_id in proposal.replaces
-            if (records := await asyncio.to_thread(team_memory.former, team_id))
+            if (records := [r for r in kept if r.id == team_key(team_id)])
         ]
         replaced = bool(proposal.contracts.strip())
         unfinished: dict[str, list[str]] = {}
@@ -409,7 +415,7 @@ class Splits(Watch):
                 # The directory is the team above's again, with a spec that
                 # says how the pruned team worked.
                 left = await asyncio.to_thread(
-                    self._specs_left_in, pruned.boundary.path, [pruned]
+                    self._specs_left_in, above, pruned.boundary.path, [pruned]
                 )
                 known = {old.path for old in above.old_specs}
                 store.update_place(
@@ -426,8 +432,11 @@ class Splits(Watch):
             await self._save()
             intent = run.step_done(intent, "removed")
         self._settling.pop(intent.id, None)
-        records = await asyncio.to_thread(self._memory().former, node_id)
-        former = [record for record in records if record.at == plan["stamp"]]
+        former = [
+            record
+            for record in self.former_drafts(above.session if above else "")
+            if record.id == team_key(node_id) and record.at == plan["stamp"]
+        ]
         self.notify(
             parent_ic,
             pruned_notice(plan["title"], where, plan["reason"], saved, former),
@@ -452,16 +461,17 @@ class Splits(Watch):
         if node is None:
             return
         conversation = payload["conversation"]
-        team_memory = self._memory()
         wanted = {(team_id, at) for team_id, at in payload["former"]}
+        # The records are the session's own until its work is accepted.
         former = [
             record
-            for team_id in dict.fromkeys(team_id for team_id, _ in payload["former"])
-            for record in await asyncio.to_thread(team_memory.former, team_id)
+            for record in self.former_drafts(node.session)
             if (record.id, record.at) in wanted
         ]
         specs = {
-            team.path: await asyncio.to_thread(team_memory.read, _spec_file(team.path))
+            team.path: await asyncio.to_thread(
+                self.read_file, node, _spec_file(normalize_store_path(team.path))
+            )
             or ""
             for team in former
         }
@@ -529,37 +539,37 @@ class Splits(Watch):
         teams that come after it, and forget what was counted for it. A
         team of the same name or directory then starts from nothing but
         the old team's spec. Doing it again changes nothing."""
-        team_memory = self._memory()
-        kept = await asyncio.to_thread(team_memory.former, team.team_id)
-        record = next((former for former in kept if former.at == at), None)
+        kept = self.former_drafts(team.session)
+        record = next((f for f in kept if f.id == team.team_id and f.at == at), None)
         if record is None:
             reports = await asyncio.to_thread(self.reports_of, team)
-            record = await asyncio.to_thread(
-                team_memory.record_former,
-                FormerTeam(
-                    id=team.team_id,
-                    title=team.title,
-                    above=team_key(team.parent_id or ""),
-                    path=team.boundary.path,
-                    purpose=self._purpose(team),
-                    ended=ended,
-                    at=at,
-                    review=team.review.state if team.review else None,
-                    reports=reports,
-                    compacted_report=await self._as_one_report(reports),
-                ),
-                team.id,
+            agreed = _contracts_file(normalize_store_path(team.boundary.path))
+            contracts = await asyncio.to_thread(self.read_file, team, agreed)
+            record = FormerTeam(
+                id=team.team_id,
+                title=team.title,
+                above=team_key(team.parent_id or ""),
+                path=team.boundary.path,
+                purpose=self._purpose(team),
+                ended=ended,
+                at=at,
+                review=team.review.state if team.review else None,
+                reports=reports,
+                compacted_report=await self._as_one_report(reports),
+                contracts=contracts or "",
+                session=self.store.session_title(team),
+                since=team.since,
+                threads=await asyncio.to_thread(self._memory().take_threads, team.id),
             )
-        # What a session wrote for the team is the removed team's: its spec
-        # stays in the directory as an old one, and nothing of it is a
-        # later team's at the same place.
-        draft = await asyncio.to_thread(self.spec_draft, team)
-        if draft is not None:
-            await asyncio.to_thread(
-                team_memory.write, team.boundary.path, SPEC_FILE, draft[0]
-            )
+            # The record is the session's until its work is accepted, and
+            # so is the directory without the contracts of a team that is
+            # gone. The spec the team wrote stays the session's too: an
+            # old one for whoever has the directory next.
+            self._keep_former(team.session, record)
+            if contracts:
+                await asyncio.to_thread(self._draft, team.session, agreed, None)
         run = self._runs()
-        for kind in (TASK, PROGRESS, CHECKS, DRAFT, REPORTS):
+        for kind in (TASK, PROGRESS, CHECKS, REPORTS):
             run.unmark(kind, team.id)
         self._work_accepted(team)
         return record

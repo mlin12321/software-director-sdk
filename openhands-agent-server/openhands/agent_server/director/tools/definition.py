@@ -7,6 +7,7 @@ from pydantic import Field
 
 from openhands.agent_server.director import pod_actions
 from openhands.agent_server.director.models import (
+    ContractsChoice,
     EscalationKind,
     ReviewFinding,
 )
@@ -102,6 +103,13 @@ class SettleTeamsAction(Action):
             "of it. Empty to take all from the session."
         ),
     )
+    contracts: list[ContractsChoice] = Field(
+        default_factory=list,
+        description=(
+            "For contracts that wait: which holds for each directory. "
+            "Unnamed, the session's hold."
+        ),
+    )
     note: str = Field(
         default="",
         description="Why, in a sentence or two; the session's IC is told.",
@@ -187,8 +195,9 @@ class ReviewTeamAction(Action):
         default="",
         description=(
             "Only when you were told this work meets other work that was "
-            "merged since it began: what you decided, having read both. "
-            "Leave empty otherwise."
+            "merged since it began: what you decided, having read both. It "
+            "holds for what you were shown: if that changed since, you are "
+            "shown it again. Leave empty otherwise."
         ),
     )
 
@@ -438,10 +447,10 @@ class ApproveTeamsTool(_DirectorTool[ApproveTeamsAction]):
 
 class SettleTeamsTool(_DirectorTool[SettleTeamsAction]):
     summary = (
-        "Manager in review mode only. Settle, team by team, the sub-teams "
-        "of an accepted session that the org made something else of while "
-        "it worked: the org's stay for the teams you name, and the others "
-        "become what the session made of them."
+        "Manager in review mode only. Settle the sub-teams of an accepted "
+        "session, and the contracts between them, that the org made "
+        "something else of while it worked: the org's stay for the teams "
+        "you name, and the others become what the session made of them."
     )
 
     @classmethod
@@ -451,7 +460,7 @@ class SettleTeamsTool(_DirectorTool[SettleTeamsAction]):
     @classmethod
     def act(cls):
         return lambda service, caller, action: pod_actions.settle_teams(
-            service, caller, action.org_teams, action.note
+            service, caller, action.org_teams, action.note, action.contracts
         )
 
 

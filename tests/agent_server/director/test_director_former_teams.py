@@ -42,7 +42,12 @@ from openhands.agent_server.director.tools.definition import (
 )
 from openhands.agent_server.director_router import get_node_memory
 from openhands.sdk.conversation.state import ConversationExecutionStatus
-from tests.agent_server.director.conftest import FakeLauncher, tasked
+from tests.agent_server.director.conftest import (
+    FakeLauncher,
+    former_of,
+    memory_of,
+    tasked,
+)
 from tests.agent_server.director.test_director_limits import started
 from tests.agent_server.director.test_director_pause import (
     ServerEnded,
@@ -138,7 +143,7 @@ async def test_a_team_put_in_another_teams_directory_gets_none_of_its_memory(
     assert service.reports_of(orders) == []
     assert service.threads_of(orders) == []
     assert service._runs().marked(TASK)[orders.id] == "Keep the orders"
-    [former] = service.team_memory.former(API)
+    [former] = former_of(service, API)
     assert (former.title, former.ended, former.path) == (
         "API",
         "replaced",
@@ -218,7 +223,7 @@ async def test_teams_that_split_or_merge_directories_are_shown_the_specs_left_th
         OldSpec(path="services/api", team="API")
     ]
     assert node(service, WEB).old_specs == [OldSpec(path="services/web", team="Web")]
-    assert len(service.team_memory.former("services")) == 1
+    assert len(former_of(service, "services")) == 1
 
 
 async def test_the_ic_is_told_who_has_each_replaced_teams_directory_now(
@@ -265,7 +270,7 @@ async def test_the_ic_is_told_who_has_each_replaced_teams_directory_now(
     )
 
     # Teams that take none of a removed team's directory.
-    [api] = service.team_memory.former(API)[-1:]
+    [api] = former_of(service, API)[-1:]
     elsewhere = left_behind([api], [SplitChild(title="Apps", path="apps", task="Apps")])
     assert "No new team has its directory: services/api is yours again." in elsewhere
 
@@ -275,7 +280,7 @@ async def test_reports_that_no_model_shortens_are_kept_in_full(
 ):
     await replace(service, ORDERS, keep=["Web"])
 
-    [former] = service.team_memory.former(API)
+    [former] = former_of(service, API)
     assert former.compacted_report == "Chose SQLite.\n\nDropped the cache."
 
 
@@ -285,17 +290,14 @@ async def test_a_pruned_team_is_recorded_and_its_spec_is_old_for_the_team_above(
     await use(service, manager(service), PruneTeamTool, PRUNE_API)
 
     assert not has_place(service, API)
-    [former] = service.team_memory.former(API)
+    [former] = former_of(service, API)
     assert (former.ended, len(former.reports)) == ("pruned", 2)
     assert node(service, "root").old_specs == [OldSpec(path="services/api", team="API")]
     context = service.context_of(node(service, "root"), "ic")
     [left] = context["specs_left_by_teams_before_you"]
     assert left["spec"] == "# API by hand"
-    # Recording the same removal again changes nothing.
-    again = service.team_memory.record_former(
-        former.model_copy(update={"reports": [], "compacted_report": ""})
-    )
-    assert again == former
+    # The record is the session's own until its work is accepted.
+    assert service.team_memory.former(API) == []
 
 
 async def test_sub_teams_of_a_stopped_team_that_is_replaced_go_on(
@@ -340,7 +342,7 @@ async def test_what_was_said_to_a_manager_is_archived_with_its_team(
 
     await replace(service, ORDERS, keep=["Web"])
 
-    [former] = service.team_memory.former(API)
+    [former] = former_of(service, API)
     assert f".threads/{api}/{api}.json" in [thread.file for thread in former.threads]
     assert service.threads_of(node(service, API)) == []
 
@@ -443,7 +445,7 @@ async def test_contracts_are_handed_to_a_team_for_its_own_sub_teams(
             service, ic(service), HandOverTool, HandOverAction(team=WEB, contracts=text)
         )
 
-    kept = service.team_memory.read("services/web/contracts.md")
+    kept = memory_of(service, "services/web/contracts.md")
     assert kept == "DB serves HTTP over a socket.\n"
 
 
@@ -452,7 +454,7 @@ async def test_the_contracts_of_a_block_that_replaces_teams_take_the_place_of_th
 ):
     await replace(service, ORDERS, keep=["Web"], contracts="Orders serves Web.")
 
-    assert service.team_memory.read("contracts.md") == "Orders serves Web.\n"
+    assert memory_of(service, "contracts.md") == "Orders serves Web.\n"
     told = launcher.messages_to(ic(service))[-1]
     assert "are now the ones of this proposal alone" in told
 
@@ -462,7 +464,7 @@ async def test_the_contracts_of_a_block_that_replaces_teams_take_the_place_of_th
         keep=["Web"],
     )
 
-    assert service.team_memory.read("contracts.md") == "Orders serves Web.\n"
+    assert memory_of(service, "contracts.md") == "Orders serves Web.\n"
     told = launcher.messages_to(ic(service))[-1]
     assert "If they name teams that are gone, restate them" in told
 

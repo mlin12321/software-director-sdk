@@ -7,9 +7,11 @@ from pathlib import Path
 import pytest
 
 from openhands.agent_server.director.models import (
+    ContractsChoice,
     DirectorSettingsUpdate,
     OpenSessionRequest,
     OrgNodeInput,
+    Report,
     RouteMessageRequest,
     SessionTeam,
     SessionTeamInput,
@@ -22,23 +24,29 @@ from openhands.agent_server.director.service.state import (
     agent_conversation,
 )
 from openhands.agent_server.director.tools import (
+    PruneTeamTool,
     RaiseEscalationTool,
     ReportTool,
     ReviewTeamTool,
     SettleTeamsTool,
     SubmitReviewTool,
+    WriteSpecTool,
 )
 from openhands.agent_server.director.tools.definition import (
     RaiseEscalationAction,
     ReportAction,
+    ReviewTeamAction,
     SettleTeamsAction,
+    WriteSpecAction,
 )
 from openhands.sdk.errors import NotFound
 from tests.agent_server.director.conftest import FakeLauncher, run_git
 from tests.agent_server.director.test_director_limits import started
 from tests.agent_server.director.test_director_review import DONE, accept, commit
 from tests.agent_server.director.test_director_tools import (
+    PRUNE_API,
     ic,
+    manager,
     node,
     review_place_of,
     reviewer,
@@ -271,14 +279,21 @@ async def test_work_is_accepted_and_a_team_the_org_lost_meanwhile_stays_gone(
     await use(service, conversation, SubmitReviewTool, DONE)
     accepted = await use(service, reviewer(service, top), ReviewTeamTool, accept(top))
 
-    # The session set up no teams of its own, so nothing is asked and what
-    # it has of the org's teams is dropped; its code is merged all the same.
+    # The session set up no teams of its own, so nothing is asked and the
+    # team stays gone; its code is merged all the same.
     assert "Accepting the work of 'API'" in accepted.text
     assert service.store.team("services.api") is None
     place = service.store.place(top)
     assert place is not None and place.review is not None
     assert place.review.state == "accepted"
     assert service.own_reports(place) == []
+    # What it recorded is not dropped with the team: it is that team's
+    # record, with the nearest team that holds its directory.
+    [left] = service.team_memory.former("services.api")
+    assert (left.ended, left.above) == ("not_taken", "root")
+    assert [report.text for report in left.reports] == ["Refunds are in."]
+    assert service.team_memory.reports("services.api", "ic") == []
+    assert "not_taken" in [e.kind for e in service.team_memory.history("root")]
 
 
 JOBS = "services.api.jobs"
@@ -299,6 +314,7 @@ def sets_up_jobs(service: DirectorService, top: str, path: str = "services/api/j
             parent_id=top,
             agents=[],
             boundary=place.boundary.model_copy(update={"path": path}),
+            since="set up by the session",
         )
     )
 
@@ -313,6 +329,7 @@ def org_gains(service: DirectorService, team_id: str, path: str) -> None:
             id=team_id,
             parent_id=api.id,
             boundary=api.boundary.model_copy(update={"path": path}),
+            since="set up by other work",
         )
     )
 
@@ -398,8 +415,8 @@ async def test_a_team_both_made_something_else_of_waits_for_the_manager_above(
     assert str(start.conversation_id) == asked
     assert "Manager of your team in review mode" in "".join(start.suffixes or [])
     told = launcher.messages_to(asked)[-1]
-    assert "the session: services/api/jobs, under services.api" in told
-    assert "the org now: services/api/workers, under services.api" in told
+    assert "the session: 'API' in services/api/jobs, under services.api" in told
+    assert "the org now: 'API' in services/api/workers, under services.api" in told
     # What the session wrote for it waits with it.
     assert service.spec_draft(place) is not None
 
@@ -427,14 +444,24 @@ async def test_a_team_both_made_something_else_of_waits_for_the_manager_above(
     assert service.spec_draft(place) is None
     said = launcher.messages_to(conversation)[-1]
     assert "One queue." in said
-    assert ("The org's stay" in said) is org_holds
+    assert ("The org's teams stay" in said) is org_holds
+    # What the session wrote for the team is never dropped: it is the
+    # team's spec where the org took the team, and that team's record with
+    # the team above where it did not.
+    written = service.team_memory.read("services/api/jobs/spec.md")
+    assert written == (None if org_holds else "Run the refund jobs.")
+    kept = service.team_memory.former(JOBS)
+    assert [(left.ended, left.above, left.spec) for left in kept] == (
+        [("not_taken", "services.api", "Run the refund jobs.")] if org_holds else []
+    )
 
 
-async def test_a_team_set_up_under_one_the_org_lost_waits_and_brings_it_back(
-    service: DirectorService,
+async def test_a_team_set_up_under_one_the_org_lost_goes_under_the_nearest_team(
+    service: DirectorService, launcher: FakeLauncher
 ):
     top, conversation = await at_api(service)
     sets_up_jobs(service, top)
+    service.hand_over(api_place(service, top), "", IDEMPOTENT)
     service.store.remove("services.api")
 
     answer = await accepted(service, top, conversation)
@@ -442,11 +469,270 @@ async def test_a_team_set_up_under_one_the_org_lost_waits_and_brings_it_back(
     assert "Accepting the work of 'API'" in answer
     assert service.store.team("services.api") is None
     assert waiting(service, top) == [JOBS]
+    asked = review_manager(service, top)
+    assert asked is not None
+    told = launcher.messages_to(asked)[-1]
+    assert "it goes under team root" in told and "is not put back" in told
+    # The contracts the lost team set for it come with it, and nothing of
+    # them is the org's before it is settled.
+    assert f"they come with team {JOBS}" in told and IDEMPOTENT in told
+    before = service.team_memory.read("contracts.md")
+    assert before is not None and IDEMPOTENT not in before
 
-    await use(
-        service, review_manager(service, top), SettleTeamsTool, SettleTeamsAction()
+    await use(service, asked, SettleTeamsTool, SettleTeamsAction())
+
+    # The team the org removed stays removed.
+    assert service.store.team("services.api") is None
+    jobs = service.store.team(JOBS)
+    assert jobs is not None and jobs.parent_id == "root"
+    assert path_of(service, JOBS) == "services/api/jobs"
+    assert "moved" in [event.kind for event in service.team_memory.history("root")]
+    # They are added to the contracts of the team it went under.
+    assert service.team_memory.read("contracts.md") == (
+        f"{before.rstrip()}\n\n{IDEMPOTENT}\n"
     )
 
-    back = service.store.team("services.api")
-    assert back is not None and back.parent_id == "root"
-    assert path_of(service, JOBS) == "services/api/jobs"
+
+API_CONTRACTS = "services/api/contracts.md"
+API_SPEC = "services/api/spec.md"
+IDEMPOTENT = "Jobs are idempotent."
+
+
+def api_place(service: DirectorService, top: str) -> SessionTeam:
+    place = service.store.place(top)
+    assert isinstance(place, SessionTeam)
+    return place
+
+
+async def test_contracts_and_notes_a_session_hands_over_are_the_orgs_on_accept(
+    service: DirectorService,
+):
+    top, conversation = await at_api(service)
+    place = api_place(service, top)
+
+    service.hand_over(
+        place, "The old jobs team retried forever.", "Jobs are idempotent."
+    )
+
+    # Until its work is accepted they are the session's alone.
+    assert service.team_memory.read(API_CONTRACTS) is None
+    assert service.team_memory.reports("services.api", "ic") == []
+    assert [c.contracts for c in service.contracts_of(place) if c.own] == [
+        "Jobs are idempotent.\n"
+    ]
+    assert [r.text for r in service.reports_of(place)] == [
+        "The old jobs team retried forever."
+    ]
+
+    await accepted(service, top, conversation)
+
+    assert service.team_memory.read(API_CONTRACTS) == "Jobs are idempotent.\n"
+    [note] = service.team_memory.reports("services.api", "ic")
+    assert (note.text, note.handed_over) == ("The old jobs team retried forever.", True)
+    assert waiting(service, top) == []
+
+
+@pytest.mark.parametrize(
+    ("take", "holds"),
+    [
+        ("org", "Orders and carts go through Jobs.\n"),
+        ("session", "Refunds go through Jobs.\n"),
+        ("text", "Orders, carts and refunds go through Jobs.\n"),
+    ],
+)
+async def test_contracts_both_changed_wait_for_the_manager_above(
+    service: DirectorService, launcher: FakeLauncher, take: str, holds: str
+):
+    top, conversation = await at_api(service)
+    service.hand_over(api_place(service, top), "", "Refunds go through Jobs.")
+    # Other accepted work set the contracts of the same directory meanwhile.
+    service.team_memory.write(
+        "services/api", "contracts.md", "Orders go through Jobs.\n"
+    )
+
+    answer = await accepted(service, top, conversation)
+
+    # The code is merged; of the contracts the org's stay until they are
+    # settled, and nothing is overwritten.
+    assert "Accepting the work of 'API'" in answer
+    assert service.team_memory.read(API_CONTRACTS) == "Orders go through Jobs.\n"
+    asked = review_manager(service, top)
+    assert asked is not None
+    told = launcher.messages_to(asked)[-1]
+    assert "Refunds go through Jobs." in told and "Orders go through Jobs." in told
+    assert "the contracts between the sub-teams of services/api" in told
+
+    # What the Manager decided on is held to what it was shown.
+    service.team_memory.write(
+        "services/api", "contracts.md", "Orders and carts go through Jobs.\n"
+    )
+    choice = ContractsChoice.model_validate(
+        {
+            "path": "services/api",
+            "take": take,
+            "text": "Orders, carts and refunds go through Jobs.",
+        }
+    )
+    unknown = await use(
+        service,
+        asked,
+        SettleTeamsTool,
+        SettleTeamsAction(contracts=[ContractsChoice(path="apps/web", take="org")]),
+    )
+    stale = await use(
+        service, asked, SettleTeamsTool, SettleTeamsAction(contracts=[choice])
+    )
+    assert unknown.is_error and "services/api" in unknown.text
+    assert stale.is_error and "changed since you were shown" in stale.text
+    assert "Orders and carts go through Jobs." in stale.text
+    assert service.team_memory.read(API_CONTRACTS) == (
+        "Orders and carts go through Jobs.\n"
+    )
+
+    settled = await use(
+        service, asked, SettleTeamsTool, SettleTeamsAction(contracts=[choice])
+    )
+
+    assert not settled.is_error
+    assert service.team_memory.read(API_CONTRACTS) == holds
+    place = service.store.place(review_place_of(service, top))
+    assert place is not None and place.org_change is None
+    # The session reads what holds now, not what it wrote.
+    assert [c.contracts for c in service.contracts_of(api_place(service, top))] == [
+        holds
+    ]
+
+
+async def test_what_a_reviewer_reconciled_holds_only_for_what_it_was_shown(
+    service: DirectorService,
+):
+    top, conversation = await at_api(service)
+    await use(service, conversation, WriteSpecTool, WriteSpecAction(text="# Refunds"))
+    service.team_memory.write("services/api", "spec.md", "# Orders")
+    await use(service, conversation, SubmitReviewTool, DONE)
+    decided = ReviewTeamAction(node_id=top, decision="accept", reconciled="Refunds.")
+
+    # Saying it is reconciled before being shown anything settles nothing.
+    unseen = await use(service, reviewer(service, top), ReviewTeamTool, decided)
+    assert unseen.is_error and "# Orders" in unseen.text
+
+    # The org's spec changes again before the reviewer answers.
+    service.team_memory.write("services/api", "spec.md", "# Orders and carts")
+    stale = await use(service, reviewer(service, top), ReviewTeamTool, decided)
+
+    assert stale.is_error
+    assert "changed since you were shown it" in stale.text
+    assert "# Orders and carts" in stale.text
+    assert service.team_memory.read(API_SPEC) == "# Orders and carts"
+
+    again = await use(service, reviewer(service, top), ReviewTeamTool, decided)
+    await service.settled()
+
+    assert not again.is_error
+    assert service.team_memory.read(API_SPEC) == "# Refunds"
+
+
+async def test_what_a_session_wrote_for_a_team_that_was_replaced_is_not_the_new_teams(
+    service: DirectorService,
+):
+    top, conversation = await at_api(service)
+    await use(service, conversation, WriteSpecTool, WriteSpecAction(text="# Refunds"))
+    await use(service, conversation, ReportTool, ReportAction(text="Chose a ledger."))
+    # Other accepted work put another team in the same directory, which has
+    # the same id.
+    service.store.update_team("services.api", since="set up by other work")
+
+    await accepted(service, top, conversation)
+
+    assert service.team_memory.read(API_SPEC) is None
+    assert service.team_memory.reports("services.api", "ic") == []
+    [left] = service.team_memory.former("services.api")
+    # It is kept for the team that has its directory now.
+    assert (left.ended, left.above) == ("not_taken", "services.api")
+    assert left.spec == "# Refunds"
+    assert [report.text for report in left.reports] == ["Chose a ledger."]
+    # The session no longer reads the other team's records as its own.
+    assert service.reports_of(api_place(service, top)) == []
+
+
+async def test_a_team_only_the_session_renamed_is_renamed_in_the_org(
+    service: DirectorService,
+):
+    top, conversation = await at_api(service)
+    service.store.update_place(top, title="Payments API")
+
+    await accepted(service, top, conversation)
+
+    team = service.store.team("services.api")
+    assert team is not None and team.title == "Payments API"
+    assert waiting(service, top) == []
+
+
+async def test_closing_a_session_names_what_it_wrote_and_never_had_accepted(
+    service: DirectorService,
+):
+    top, conversation = await at_api(service)
+    await use(service, conversation, WriteSpecTool, WriteSpecAction(text="# Refunds"))
+    await use(service, conversation, ReportTool, ReportAction(text="Chose a ledger."))
+    place = api_place(service, top)
+
+    service.close_session(place.session)
+    await service.settled()
+
+    assert service.team_memory.read(API_SPEC) is None
+    assert service.team_memory.reports("services.api", "ic") == []
+    [closed] = [
+        event
+        for event in service.team_memory.history("root")
+        if event.kind == "session_closed"
+    ]
+    assert "1 reports" in closed.detail and API_SPEC in closed.detail
+    assert service.drafts(place.session) == {}
+
+
+async def test_closing_a_session_keeps_what_waited_of_its_accepted_work(
+    service: DirectorService,
+):
+    top, conversation = await at_api(service)
+    sets_up_jobs(service, top)
+    org_gains(service, JOBS, "services/api/workers")
+    jobs = service.store.place(f"{JOBS}@{api_place(service, top).session}")
+    assert jobs is not None
+    service.write_spec(jobs, "Run the refund jobs.")
+    await accepted(service, top, conversation)
+    assert waiting(service, top) == [JOBS]
+
+    service.close_session(jobs.session)
+    await service.settled()
+
+    # Nobody settled it, so the org's team stays and what the session wrote
+    # for its own is that team's record.
+    assert path_of(service, JOBS) == "services/api/workers"
+    [left] = service.team_memory.former(JOBS)
+    assert (left.ended, left.spec) == ("not_taken", "Run the refund jobs.")
+
+
+async def test_a_team_a_session_prunes_is_the_orgs_until_its_work_is_accepted(
+    service: DirectorService,
+):
+    await split_root(service)
+    await landed(service)
+    await service.settled()
+    kept = Report(at="2026-11-01T00:00:00+00:00", role="ic", text="Chose REST.")
+    service.team_memory.append_report("services.api", "ic", kept)
+
+    await use(service, manager(service), PruneTeamTool, PRUNE_API)
+    await service.settled()
+
+    # Other sessions still have the team and all it recorded.
+    assert service.store.team("services.api") is not None
+    assert service.team_memory.reports("services.api", "ic") == [kept]
+    assert service.team_memory.former("services.api") == []
+
+    await landed(service)
+    await service.settled()
+
+    assert service.store.team("services.api") is None
+    [record] = service.team_memory.former("services.api")
+    assert (record.ended, record.reports) == ("pruned", [kept])
+    assert service.team_memory.reports("services.api", "ic") == []

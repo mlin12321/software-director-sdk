@@ -5,7 +5,8 @@ import json
 import logging
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
+from uuid import uuid4
 
 from pydantic import TypeAdapter
 
@@ -21,12 +22,14 @@ from openhands.agent_server.director.git_store import (
     CONTRACTS_FILE,
     SPEC_FILE,
     GitStore,
+    Landing,
     normalize_store_path,
     team_key,
 )
 from openhands.agent_server.director.models import (
     AGENT_ROLES,
     AgentRole,
+    BoundaryContracts,
     ConversationLink,
     ConversationPlace,
     ConversationRelation,
@@ -34,6 +37,7 @@ from openhands.agent_server.director.models import (
     HistoryEvent,
     InheritedSpec,
     OldSpec,
+    OrgChangeContracts,
     OrgHistory,
     OrgNode,
     Report,
@@ -57,9 +61,11 @@ from openhands.agent_server.director.prompts import (
 )
 from openhands.agent_server.director.run_state import (
     CHECKS,
-    DRAFT,
+    FILES,
+    FORMER,
     JOINED,
     REPORTS,
+    TASK,
 )
 from openhands.agent_server.director.service.state import (
     ASKED_KEPT,
@@ -69,10 +75,12 @@ from openhands.agent_server.director.service.state import (
     NOT_STARTED,
     TOGETHER_WORTH_SAYING,
     ServiceState,
+    _contracts_file,
     _now,
     _spec_file,
 )
 from openhands.agent_server.director.split import (
+    home_of_lost,
     is_inside,
 )
 from openhands.sdk.errors import NotFound
@@ -80,6 +88,24 @@ from openhands.sdk.errors import NotFound
 
 logger = logging.getLogger(__name__)
 _REPORTS = TypeAdapter(list[Report])
+
+
+def _directory_of(file: str) -> str:
+    """The directory a spec or contracts file of team memory is of."""
+    return file.rpartition("/")[0]
+
+
+def session_of(node: OrgNode) -> str:
+    """The session a place belongs to; '' for a team of the org."""
+    return node.session if isinstance(node, SessionTeam) else ""
+
+
+class Taken(NamedTuple):
+    """What became of a session's records when its work was accepted."""
+
+    grown: list[tuple[str, AgentRole]]
+    contracts: list[OrgChangeContracts]
+    not_taken: list[FormerTeam]
 
 
 def _written_by(report: Report, session: str) -> str:
@@ -444,10 +470,7 @@ class Records(ServiceState):
         """
         store = self.store
         team_memory = self.team_memory
-        above = self._works_above(node)
-        _, contracts = team_memory.applies_to(
-            node.boundary.path, above.boundary.path if above else None
-        )
+        contracts = self.contracts_of(node)
         specs = self.specs_of(node)
         own_spec = next((spec for spec in specs if not spec.old), None)
         to_settle = [
@@ -576,7 +599,7 @@ class Records(ServiceState):
                     if in_full
                     else {}
                 )
-                for former in self._former_below(team_memory, node.id)
+                for former in self.former_teams_of(node)
             ]
         if in_full:
             # What became of the teams below so far, also of the ones that
@@ -605,8 +628,14 @@ class Records(ServiceState):
         return read[node_id]
 
     def former_teams_of(self, node: OrgNode) -> list[FormerTeam]:
-        """What the teams removed from directly below a node left."""
-        return self._former_below(self.team_memory, node.id)
+        """What the teams removed from directly below a node left, with
+        the ones its own session removed and the org does not know of yet."""
+        own = [
+            former
+            for former in self.former_drafts(session_of(node))
+            if former.above == team_key(node.id)
+        ]
+        return [*self._former_below(self.team_memory, node.id), *own]
 
     def org_history(self, limit: int, before: str | None = None) -> OrgHistory:
         """What became of every team of the org, newest first.
@@ -637,6 +666,14 @@ class Records(ServiceState):
             limit += 1
         return OrgHistory(events=events[:limit], earlier=len(events) > limit)
 
+    def is_orgs(self, node: OrgNode) -> bool:
+        """Whether a place is of the team the org has by its id now. An id
+        comes from the directory, so the org may have another team there."""
+        if not isinstance(node, SessionTeam):
+            return True
+        team = self.store.team(node.team_id)
+        return team is not None and team.since == node.since
+
     def reports_of(self, node: OrgNode) -> list[Report]:
         """What the two agents of a team recorded, oldest first. Reports
         are the team's: an agent started again reads what it wrote before."""
@@ -645,6 +682,7 @@ class Records(ServiceState):
             report
             for role in AGENT_ROLES
             for report in team_memory.reports(team_id_of(node), role)
+            if self.is_orgs(node)
         ]
         return sorted([*reports, *self.own_reports(node)], key=lambda report: report.at)
 
@@ -657,7 +695,8 @@ class Records(ServiceState):
         return _REPORTS.validate_json(kept) if kept else []
 
     def _keep_report(self, node: SessionTeam, report: Report) -> None:
-        reports = [*self.own_reports(node), report]
+        named = report.model_copy(update={"id": report.id or uuid4().hex})
+        reports = [*self.own_reports(node), named]
         self._runs().mark(REPORTS, node.id, _REPORTS.dump_json(reports).decode())
 
     def _works_above(self, node: OrgNode) -> OrgNode | None:
@@ -666,45 +705,65 @@ class Records(ServiceState):
         above = self.store.get(node.parent_id) if node.parent_id else None
         return None if above is None or reviews_only(above) else above
 
-    def _land_reports(
-        self, top: SessionTeam, only: set[str] | None = None
-    ) -> list[tuple[str, AgentRole]]:
-        """Add what a session's agents recorded to the records of their
-        teams, now that its work is accepted. The other sessions at those
-        teams read it with the next message they get.
+    def drafts(self, session: str) -> dict[str, tuple[str | None, str | None]]:
+        """The files of team memory a session wrote, which are its own
+        until its work is accepted.
 
         Returns:
-            The team and the role of each record that grew.
+            For each file, its text (None where the session removed it)
+            and the text it was written over (None where there was none).
         """
-        session = top.session
-        team_memory = self._memory()
-        run = self._runs()
-        grown: list[tuple[str, AgentRole]] = []
-        waits = self._waits(top)
-        for team in self.store.session(session):
-            if team.team_id in waits or (only is not None and team.team_id not in only):
-                continue
-            # What a team the org no longer has reported is dropped with it.
-            kept = self.store.team(team.team_id) is not None
-            for report in self.own_reports(team) if kept else []:
-                team_memory.append_report(team.team_id, report.role, report)
-                if (team.team_id, report.role) not in grown:
-                    grown.append((team.team_id, report.role))
-            run.unmark(REPORTS, team.id)
-        return grown
+        if not session:
+            return {}
+        prefix = f"{session}\n"
+        found = {}
+        for key, raw in self._runs().marked(FILES).items():
+            if key.startswith(prefix):
+                draft = json.loads(raw)
+                found[key.removeprefix(prefix)] = (draft["text"], draft["over"])
+        return found
+
+    def _draft(self, session: str, file: str, text: str | None) -> None:
+        """Keep, for a session alone, what it makes of a file of team
+        memory. The text it is written over is the one the session first
+        wrote over, so that what the org made of it since is not lost
+        sight of."""
+        earlier = self.drafts(session).get(file)
+        over = earlier[1] if earlier else self.team_memory.read(file)
+        self._runs().mark(
+            FILES, f"{session}\n{file}", json.dumps({"text": text, "over": over})
+        )
+
+    def _undraft(self, session: str, file: str) -> None:
+        self._runs().unmark(FILES, f"{session}\n{file}")
+
+    def read_file(self, node: OrgNode, file: str) -> str | None:
+        """A file of team memory as the agents of ``node`` have it: what
+        their session wrote there, else the org's."""
+        draft = self.drafts(session_of(node)).get(file)
+        return draft[0] if draft else self._memory().read(file)
+
+    def contracts_of(self, node: OrgNode) -> list[BoundaryContracts]:
+        """The contracts a team works to: the ones between it and the teams
+        beside it, set by the team above, and the ones between its own
+        sub-teams."""
+        above = self._works_above(node)
+        own = normalize_store_path(node.boundary.path)
+        paths = [] if above is None else [normalize_store_path(above.boundary.path)]
+        return [
+            BoundaryContracts(path=path, contracts=text, own=path == own)
+            for path in [*paths, own]
+            if (text := self.read_file(node, _contracts_file(path)))
+        ]
 
     def specs_of(self, node: OrgNode) -> list[InheritedSpec]:
         """The spec of a team's own boundary and the ones teams before it
         left in its directory, which are old."""
-        team_memory = self._memory()
-        specs, _ = team_memory.applies_to(node.boundary.path, None)
-        draft = self.spec_draft(node)
-        if draft is not None:
-            own = normalize_store_path(node.boundary.path)
-            specs = [
-                InheritedSpec(path=own, spec=draft[0], readonly=False),
-                *(spec for spec in specs if spec.path != own),
-            ]
+        own = normalize_store_path(node.boundary.path)
+        text = self.read_file(node, _spec_file(own))
+        specs = (
+            [] if text is None else [InheritedSpec(path=own, spec=text, readonly=False)]
+        )
         left = {old.path: old for old in node.old_specs}
         found = [
             spec.model_copy(
@@ -715,9 +774,9 @@ class Records(ServiceState):
             for spec in specs
         ]
         for old in node.old_specs:
-            if old.path == normalize_store_path(node.boundary.path):
+            if old.path == own:
                 continue
-            text = team_memory.read(_spec_file(old.path))
+            text = self.read_file(node, _spec_file(old.path))
             if text:
                 found.append(
                     InheritedSpec(
@@ -738,19 +797,17 @@ class Records(ServiceState):
             The spec and the team's spec it was written over, None when
             the team had none; None when the session wrote no spec there.
         """
-        kept = self._runs().marked(DRAFT).get(node.id)
-        if kept is None:
+        file = _spec_file(normalize_store_path(node.boundary.path))
+        draft = self.drafts(session_of(node)).get(file)
+        if draft is None or draft[0] is None:
             return None
-        draft = json.loads(kept)
-        return draft["spec"], draft["over"]
+        return draft[0], draft[1]
 
     def write_spec(self, node: SessionTeam, content: str) -> None:
         """Write the spec of a place's directory. It is kept for the
         session alone until its work is accepted."""
-        path = node.boundary.path
-        earlier = self.spec_draft(node)
-        over = earlier[1] if earlier else self.team_memory.read(_spec_file(path))
-        self._runs().mark(DRAFT, node.id, json.dumps({"spec": content, "over": over}))
+        file = _spec_file(normalize_store_path(node.boundary.path))
+        self._draft(node.session, file, content)
 
     def specs_to_reconcile(self, top: SessionTeam) -> list[tuple[str, str, str]]:
         """The specs a session wrote while the team's spec in the same
@@ -759,16 +816,14 @@ class Records(ServiceState):
         Returns:
             For each, the directory, the team's spec now and the session's.
         """
-        session = top.session
         team_memory = self._memory()
         found = []
-        for team in self.store.session(session):
-            draft = self.spec_draft(team)
-            if draft is None:
+        for file, (text, over) in sorted(self.drafts(top.session).items()):
+            if not file.endswith(SPEC_FILE) or text is None:
                 continue
-            now = team_memory.read(_spec_file(team.boundary.path))
-            if now != draft[1] and now != draft[0]:
-                found.append((team.boundary.path, now or "", draft[0]))
+            now = team_memory.read(file)
+            if now != over and now != text:
+                found.append((_directory_of(file), now or "", text))
         return found
 
     def _waits(self, top: SessionTeam) -> set[str]:
@@ -779,42 +834,230 @@ class Records(ServiceState):
             return set()
         return {team.team_id for team in review.org_change.teams}
 
-    def _land_specs(self, top: SessionTeam, only: set[str] | None = None) -> None:
-        """Make the specs a session wrote the specs of its teams, now that
-        its work is accepted. What it wrote for a team that waits to be
-        settled is kept with the session until then.
+    def _home_of(self, top: SessionTeam, path: str) -> str:
+        """The team of the org that has what a session's team the org does
+        not have left: the nearest one that holds its directory."""
+        session = self.store.session_of(top)
+        return home_of_lost(
+            path, self.store.teams(), session.above_id if session else top.team_id
+        )
+
+    def former_drafts(self, session: str) -> list[FormerTeam]:
+        """The records of the teams a session removed, which are its own
+        until its work is accepted."""
+        if not session:
+            return []
+        return [
+            FormerTeam.model_validate_json(raw)
+            for key, raw in self._runs().marked(FORMER).items()
+            if key.startswith(f"{session}\n")
+        ]
+
+    def _keep_former(self, session: str, record: FormerTeam) -> None:
+        self._runs().mark(
+            FORMER, f"{session}\n{record.id}\n{record.at}", record.model_dump_json()
+        )
+
+    def _land_records(
+        self,
+        top: SessionTeam,
+        seen: dict[str, str | None] | None = None,
+        chosen: dict[str, str | None] | None = None,
+    ) -> Taken:
+        """Make what a session kept to itself the org's, now that its work
+        is accepted: the specs and contracts it wrote, what its agents
+        recorded and the records of the teams it removed. All of it is one
+        commit of team memory.
+
+        What is of a team that waits to be settled stays the session's
+        until then. What is of a team the org does not have, or has another
+        team in place of, is kept as that team's record with the nearest
+        team of the org that holds its directory. Contracts the org
+        changed meanwhile wait to be settled, and a spec is put in place
+        of one that changed only where its reviewer was shown that one.
 
         Args:
-            only: The teams that were settled, when it is those alone.
-        """
-        session = top.session
-        team_memory = self._memory()
-        run = self._runs()
-        waits = self._waits(top)
-        for team in self.store.session(session):
-            if team.team_id in waits or (only is not None and team.team_id not in only):
-                continue
-            draft = self.spec_draft(team)
-            if draft is None:
-                continue
-            run.unmark(DRAFT, team.id)
-            if self.store.team(team.team_id) is None:
-                # The org lost the team meanwhile and the session did not
-                # set it up again: its spec goes with it.
-                logger.info("The spec %s drafted is dropped with the team", team.id)
-                continue
-            path = team.boundary.path
-            if team_memory.read(_spec_file(path)) != draft[0]:
-                team_memory.write(path, SPEC_FILE, draft[0])
-            self.store.update_team(
-                team.team_id, spec_summary=team.spec_summary, old_specs=[]
-            )
+            seen: The specs the reviewer was shown, by file.
+            chosen: The contracts that were settled, by file: the text
+                that holds.
 
-    def _specs_left_in(self, path: str, removed: list[SessionTeam]) -> list[OldSpec]:
-        """The specs a team that is given ``path`` finds there: the one of
-        the directory itself and those of the ``removed`` teams whose
-        directories hold it or lie in it. None of them is its own."""
-        team_memory = self._memory()
+        Returns:
+            The records that grew, the contracts that wait, and the
+            records of the teams that were not taken.
+        """
+        store = self.store
+        run = self._runs()
+        session = top.session
+        waits = self._waits(top)
+        review = store.place(top.parent_id or "")
+        held = {
+            _contracts_file(agreed.path)
+            for agreed in (
+                review.org_change.contracts if review and review.org_change else []
+            )
+        } - set(chosen or {})
+        places = [place for place in store.session(session) if not reviews_only(place)]
+        by_path = {normalize_store_path(p.boundary.path): p for p in places}
+        stamp = _now()
+        left = {
+            place.id: place
+            for place in places
+            if place.team_id not in waits and not self.is_orgs(place)
+        }
+        files: dict[str, tuple[str | None, str | None]] = {}
+        of_left: dict[str, dict[str, str]] = {}
+        waiting: list[OrgChangeContracts] = []
+        for file, (text, over) in self.drafts(session).items():
+            owner = by_path.get(_directory_of(file))
+            if file in held or (owner is not None and owner.team_id in waits):
+                continue
+            if owner is not None and owner.id in left:
+                kind = "spec" if file.endswith(SPEC_FILE) else "contracts"
+                of_left.setdefault(owner.id, {})[kind] = text or ""
+                continue
+            if chosen is not None and file in chosen:
+                files[file] = (chosen[file], self._memory().read(file))
+            else:
+                files[file] = (text, over)
+        reports = {
+            place.team_id: self.own_reports(place)
+            for place in places
+            if place.team_id not in waits and place.id not in left
+        }
+        not_taken = [
+            FormerTeam(
+                id=place.team_id,
+                title=place.title,
+                above=self._home_of(top, place.boundary.path),
+                path=place.boundary.path,
+                purpose=run.marked(TASK).get(place.id, place.spec_summary),
+                ended="not_taken",
+                at=stamp,
+                review=place.review.state if place.review else None,
+                reports=self.own_reports(place),
+                compacted_report="\n\n".join(r.text for r in self.own_reports(place)),
+                contracts=of_left.get(place.id, {}).get("contracts", ""),
+                spec=of_left.get(place.id, {}).get("spec", ""),
+                session=store.session_title(place),
+                since=place.since,
+            )
+            for place in left.values()
+            if self.own_reports(place) or of_left.get(place.id)
+        ]
+        removed = [
+            record for record in self.former_drafts(session) if record.id not in waits
+        ]
+        former, forget = [], []
+        for record in removed:
+            team = store.team(record.id)
+            if team is not None and team.since == record.since:
+                # The org kept the team the session removed.
+                former.append(record.model_copy(update={"ended": "not_taken"}))
+            else:
+                former.append(record)
+                ours = next((p for p in places if p.team_id == record.id), None)
+                if team is None or (ours is not None and ours.since == team.since):
+                    forget.append(record.id)
+        conflicts = self._memory().take_in(
+            Landing(
+                files=files,
+                seen=seen or {},
+                reports={team: kept for team, kept in reports.items() if kept},
+                former=[*former, *not_taken],
+                forget=forget,
+            ),
+            f"memory: the accepted work of session {session}",
+        )
+        for file in files:
+            if file in conflicts:
+                if file.endswith(CONTRACTS_FILE):
+                    waiting.append(
+                        OrgChangeContracts(
+                            path=_directory_of(file),
+                            session=files[file][0] or "",
+                            org=conflicts[file] or "",
+                        )
+                    )
+                continue
+            self._undraft(session, file)
+            owner = by_path.get(_directory_of(file))
+            if (
+                owner is not None
+                and file.endswith(SPEC_FILE)
+                and files[file][0] is not None
+            ):
+                store.update_team(
+                    owner.team_id, spec_summary=owner.spec_summary, old_specs=[]
+                )
+        for place in left.values():
+            for file in self.drafts(session):
+                if by_path.get(_directory_of(file)) is place:
+                    self._undraft(session, file)
+        for place in places:
+            if place.team_id not in waits:
+                run.unmark(REPORTS, place.id)
+        for record in removed:
+            run.unmark(FORMER, f"{session}\n{record.id}\n{record.at}")
+        for record in not_taken:
+            self.record_event(
+                record.above,
+                "not_taken",
+                next(p for p in left.values() if p.team_id == record.id),
+                "what its session wrote for it is kept in its record",
+            )
+        grown: list[tuple[str, AgentRole]] = [
+            (team, role)
+            for team, kept in reports.items()
+            for role in AGENT_ROLES
+            if any(report.role == role for report in kept)
+        ]
+        return Taken(grown, waiting, not_taken)
+
+    def _leave(self, top: SessionTeam) -> str:
+        """Settle what a session that is being closed kept to itself. Of
+        work that was accepted and only waited to be settled, the org's
+        stay, and what the session wrote for it is the org's where the org
+        has the team and that team's record where it has not. What it
+        wrote for work that was never accepted goes with the session.
+
+        Returns:
+            What went with the session, in words; '' when nothing did.
+        """
+        store = self.store
+        run = self._runs()
+        session = top.session
+        review = store.place(top.parent_id or "")
+        if review is not None and review.org_change is not None:
+            with self._landing:
+                store.update_place(review.id, org_change=None)
+                self._land_records(top)
+        places = store.session(session)
+        reports = sum(len(self.own_reports(place)) for place in places)
+        files = sorted(self.drafts(session))
+        records = self.former_drafts(session)
+        for place in places:
+            run.unmark(REPORTS, place.id)
+        for file in files:
+            self._undraft(session, file)
+        for record in records:
+            run.unmark(FORMER, f"{session}\n{record.id}\n{record.at}")
+        return ", ".join(
+            said
+            for said in (
+                f"{reports} reports" if reports else "",
+                ", ".join(files),
+                f"the records of {len(records)} teams it removed" if records else "",
+            )
+            if said
+        )
+
+    def _specs_left_in(
+        self, node: SessionTeam, path: str, removed: list[SessionTeam]
+    ) -> list[OldSpec]:
+        """The specs a team that is given ``path`` in the session of
+        ``node`` finds there: the one of the directory itself and those of
+        the ``removed`` teams whose directories hold it or lie in it. None
+        of them is its own."""
         own = normalize_store_path(path)
         left: dict[str, str | None] = {}
 
@@ -836,38 +1079,29 @@ class Records(ServiceState):
         # A spec in the directory itself that no team here is known to have
         # left: a team pruned long ago, or one written by hand.
         left.setdefault(own, None)
-        # A spec a removed team wrote in a session is still the session's
-        # own; it is left in the directory when the team is archived.
-        drafted = {
-            normalize_store_path(team.boundary.path)
-            for team in removed
-            if self.spec_draft(team) is not None
-        }
         return [
             OldSpec(path=directory, team=team)
             for directory, team in left.items()
-            if directory in drafted or team_memory.read(_spec_file(directory))
+            if self.read_file(node, _spec_file(directory))
         ]
 
     def _record_contracts(
         self, node: SessionTeam, contracts: str, replace: bool
     ) -> None:
         """Add the contracts of a split to those of the node's boundary,
-        or put them in their place when the split replaced teams."""
-        team_memory = self._memory()
-        path = node.boundary.path
-        earlier = team_memory.read(
-            f"{path}/{CONTRACTS_FILE}" if path else CONTRACTS_FILE
-        )
+        or put them in their place when the split replaced teams. They are
+        the session's alone until its work is accepted."""
+        file = _contracts_file(normalize_store_path(node.boundary.path))
+        earlier = self.read_file(node, file)
         text = f"{contracts.strip()}\n"
         if replace:
             if earlier != text:
-                team_memory.write(path, CONTRACTS_FILE, text)
+                self._draft(node.session, file, text)
             return
         if earlier and text.strip() in earlier:
             return
-        team_memory.write(
-            path,
-            CONTRACTS_FILE,
+        self._draft(
+            node.session,
+            file,
             f"{earlier.rstrip()}\n\n{text}" if earlier and earlier.strip() else text,
         )

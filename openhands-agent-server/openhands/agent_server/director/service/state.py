@@ -39,8 +39,10 @@ from openhands.agent_server.director.git_index import (
     rcfile,
 )
 from openhands.agent_server.director.git_store import (
+    CONTRACTS_FILE,
     SPEC_FILE,
     GitStore,
+    normalize_store_path,
 )
 from openhands.agent_server.director.headline import provisional_summary
 from openhands.agent_server.director.models import (
@@ -384,6 +386,7 @@ class ServiceState:
         # an agent that tries the same file again is counted once.
         self._keeping_needs = threading.Lock()
         self._saving = threading.Lock()
+        self._landing = threading.Lock()
         self._adding_manager = threading.Lock()
         self._counting = threading.Lock()
         self._clock = clock
@@ -1158,6 +1161,12 @@ def _spec_file(directory: str) -> str:
     return f"{directory}/{SPEC_FILE}" if directory else SPEC_FILE
 
 
+def _contracts_file(directory: str) -> str:
+    """The contracts between the sub-teams of ``directory``, in team memory."""
+    path = normalize_store_path(directory)
+    return f"{path}/{CONTRACTS_FILE}" if path else CONTRACTS_FILE
+
+
 def _child_node(
     taken: set[str], parent: SessionTeam, child: SplitChild
 ) -> SessionTeamInput:
@@ -1186,6 +1195,7 @@ def _child_node(
         status="idle",
         headline=provisional_summary(child.task).headline,
         spec_summary=_summary_of(child.task),
+        since=_instant(),
     )
 
 

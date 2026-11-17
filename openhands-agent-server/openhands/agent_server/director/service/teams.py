@@ -19,9 +19,6 @@ from openhands.agent_server.director.git import (
     head_of,
     uncommitted,
 )
-from openhands.agent_server.director.git_store import (
-    CONTRACTS_FILE,
-)
 from openhands.agent_server.director.models import (
     AgentRef,
     AgentRole,
@@ -417,27 +414,20 @@ class Teams(Delivery):
     def hand_over(self, team: SessionTeam, notes: str, contracts: str) -> None:
         """Give a team what its IC above passes on of the teams that were
         there before it: notes, kept with the team's reports, and the
-        contracts its own sub-teams must keep. Starts nothing. Safe from
-        any thread."""
-        team_memory = self._memory()
+        contracts its own sub-teams must keep. Both are the session's alone
+        until its work is accepted. Starts nothing. Safe from any thread."""
         if notes.strip():
-            team_memory.append_report(
-                team.team_id,
-                "ic",
+            self._keep_report(
+                team,
                 Report(at=_instant(), role="ic", text=notes.strip(), handed_over=True),
             )
         if contracts.strip():
-            team_memory.write(
-                team.boundary.path, CONTRACTS_FILE, f"{contracts.strip()}\n"
-            )
+            self._record_contracts(team, contracts, True)
 
     def _task_of(self, node: SessionTeam) -> str:
         """What a team that is started again is to do, from what the org
         kept of it."""
-        above = self.store.place(node.parent_id) if node.parent_id else None
-        specs, _ = self.team_memory.applies_to(
-            node.boundary.path, above.boundary.path if above else None
-        )
+        specs = [spec for spec in self.specs_of(node) if not spec.old]
         task = specs[0].spec if specs else node.spec_summary
         if node.headline and node.headline not in task:
             task = f"{task}\n\nWhere the team last was: {node.headline}"
@@ -460,11 +450,7 @@ class Teams(Delivery):
     ) -> tuple[str, str]:
         """An agent's first message, and the context it tells, as kept to
         find later what changed."""
-        team_memory = self._memory()
-        above = self.store.place(node.parent_id) if node.parent_id else None
-        _, contracts = team_memory.applies_to(
-            node.boundary.path, above.boundary.path if above else None
-        )
+        contracts = self.contracts_of(node)
         context = self.context_of(node, role)
         text = brief(
             node,
@@ -479,10 +465,7 @@ class Teams(Delivery):
 
     def _hand_over_briefing(self, node: SessionTeam, job: str) -> str:
         """The first message of an IC's hand-over conversation."""
-        above = self.store.place(node.parent_id) if node.parent_id else None
-        _, contracts = self._memory().applies_to(
-            node.boundary.path, above.boundary.path if above else None
-        )
+        contracts = self.contracts_of(node)
         return hand_over_brief(
             node,
             job,

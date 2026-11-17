@@ -320,7 +320,9 @@ class OrgStore:
             self._changed()
             return self._seats[top.id]
 
-    def set_shape(self, session_id: str, shape: list[tuple[str, str, str]]) -> None:
+    def set_shape(
+        self, session_id: str, shape: list[tuple[str, str, str, str]]
+    ) -> None:
         """Keep the sub-teams the org has under a session's team, as the
         session last knew them. Nothing for a session that is not open."""
         with self._lock:
