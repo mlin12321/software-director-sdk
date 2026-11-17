@@ -47,10 +47,10 @@ from tests.agent_server.director.test_director_landing import (
     JOBS,
     accepted,
     at_api,
+    division_lead_manager,
     landed,
     org_gains,
     path_of,
-    review_manager,
     sets_up_jobs,
     waiting,
 )
@@ -730,6 +730,8 @@ async def test_teams_that_wait_are_still_there_after_a_restart(
     second = await again(repo, launcher)
 
     assert waiting(second, top) == [JOBS]
-    await use(second, review_manager(second, top), SettleTeamsTool, SettleTeamsAction())
+    await use(
+        second, division_lead_manager(second, top), SettleTeamsTool, SettleTeamsAction()
+    )
     assert path_of(second, JOBS) == "services/api/jobs"
     await second.aclose()

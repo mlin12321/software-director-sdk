@@ -649,9 +649,26 @@ def _finding_lines(findings: list[ReviewFinding]) -> list[str]:
     return lines
 
 
-def session_work(team: SessionTeam, title: str, request: str) -> str:
+def session_work(
+    team: SessionTeam,
+    title: str,
+    request: str,
+    contracts: Sequence[tuple[str, str]] = (),
+) -> str:
     """What comes before the review request for the work of the session
-    titled ``title``, which was opened for ``request``."""
+    titled ``title``, which was opened for ``request``.
+
+    Args:
+        contracts: The contracts it wrote that are not the org's: each
+            directory with the session's text.
+    """
+    written = "".join(
+        f"Contracts it wrote for {directory or 'the repository'}, which its "
+        "code is written to. They are not the org's yet: the Division Lead "
+        "Manager settles them if other accepted work changed them too. "
+        f"Judge the code by these:\n{text or '(none)'}\n\n"
+        for directory, text in contracts
+    )
     return (
         f"The session {title!r} at {team.title!r} submits its work. It was "
         f"opened for this request:\n{request}\n\nIt worked in a checkout of "
@@ -661,7 +678,7 @@ def session_work(team: SessionTeam, title: str, request: str) -> str:
         "once, where it meets whatever was merged there meanwhile; if the "
         "two do not merge, it goes back to the session to resolve. A spec "
         "it wrote and sub-teams it set up are its own until you accept its "
-        "work and the org's from then on.\n\n"
+        "work and the org's from then on.\n\n" + written
     )
 
 
@@ -886,6 +903,7 @@ def teams_settled(
     kept: list[str],
     agreed: list[str],
     held: list[str],
+    others: Sequence[tuple[str, str]] = (),
 ) -> str:
     """What a session's IC is told when what waited of its teams is
     settled.
@@ -894,7 +912,16 @@ def teams_settled(
         agreed: The directories whose contracts are the session's or what
             the Manager wrote from both.
         held: The directories whose contracts stay the org's.
+        others: Where the contracts the session wrote do not hold: each
+            directory with the contracts that do.
     """
+    follow_up = "".join(
+        f"\n\nThe contracts that hold for {directory or 'the repository'} "
+        "are not the ones you wrote. Your merged code was written to yours: "
+        "check it against these and deliver what must change in this "
+        f"session.\n{text or '(none)'}"
+        for directory, text in others
+    )
     return (
         f"The Manager of {above!r} settled what the org had made something "
         "else of than your session. "
@@ -912,7 +939,7 @@ def teams_settled(
             else ""
         )
         + (f"The org's contracts stay for: {', '.join(held)}." if held else "")
-    ).strip()
+    ).strip() + follow_up
 
 
 def handed_up(sent: SessionTeam, text: str, why: str) -> str:
@@ -1527,14 +1554,29 @@ def proposal_facts(
     return "\n".join(["What the runtime knows of them:", *lines])
 
 
-def changes_requested(reviewer: SessionTeam, findings: list[ReviewFinding]) -> str:
-    """What a team is told when its work was not accepted."""
+def changes_requested(
+    reviewer: SessionTeam, findings: list[ReviewFinding], *, of_a_session: bool = False
+) -> str:
+    """What a team is told when its work was not accepted.
+
+    Args:
+        of_a_session: Whether it is the work a session delivers into the
+            repository, which is accepted in the order it was submitted.
+    """
     return "\n".join(
         [
             f"The IC of {reviewer.title!r} reviewed your work and asks for "
             "changes before it is accepted:",
             *_finding_lines(findings),
             "Make them, commit, and submit the work again with `submit_review`.",
+            *(
+                [
+                    "Work goes into the repository in the order it is "
+                    "submitted, so yours joins the end of the line again."
+                ]
+                if of_a_session
+                else []
+            ),
         ]
     )
 

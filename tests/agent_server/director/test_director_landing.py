@@ -433,7 +433,7 @@ def waiting(service: DirectorService, top: str) -> list[str]:
     ]
 
 
-def review_manager(service: DirectorService, top: str) -> str | None:
+def division_lead_manager(service: DirectorService, top: str) -> str | None:
     place = service.store.place(division_lead_of(service, top))
     assert place is not None
     return agent_conversation(place, "manager")
@@ -472,7 +472,7 @@ async def test_a_stale_session_adds_its_team_and_keeps_what_the_org_gained(
     assert path_of(service, JOBS) == "services/api/jobs"
     assert path_of(service, "services.api.cache") == "services/api/cache"
     assert waiting(service, top) == []
-    assert review_manager(service, top) is None
+    assert division_lead_manager(service, top) is None
 
     # What the session did not change is not brought up again either.
     service.store.remove("services.api.cache")
@@ -503,7 +503,7 @@ async def test_a_team_both_made_something_else_of_waits_for_the_manager_above(
     assert review is not None and review.state == "accepted"
     assert path_of(service, JOBS) == "services/api/workers"
     assert waiting(service, top) == [JOBS]
-    asked = review_manager(service, top)
+    asked = division_lead_manager(service, top)
     assert asked is not None
     # It was asked when the work was submitted, beside the review.
     [start] = [d for d in launcher.derived if str(d.conversation_id) == asked]
@@ -569,7 +569,7 @@ async def test_a_team_set_up_under_one_the_org_lost_goes_under_the_nearest_team(
     assert "Accepting the work of 'API'" in answer
     assert service.store.team("services.api") is None
     assert waiting(service, top) == [JOBS]
-    asked = review_manager(service, top)
+    asked = division_lead_manager(service, top)
     assert asked is not None
     told = launcher.messages_to(asked)[-1]
     assert "it goes under team root" in told and "is not put back" in told
@@ -656,11 +656,17 @@ async def test_contracts_both_changed_wait_for_the_manager_above(
     # settled, and nothing is overwritten.
     assert "Accepting the work of 'API'" in answer
     assert service.team_memory.read(API_CONTRACTS) == "Orders go through Jobs.\n"
-    asked = review_manager(service, top)
+    asked = division_lead_manager(service, top)
     assert asked is not None
     told = launcher.messages_to(asked)[-1]
     assert "Refunds go through Jobs." in told and "Orders go through Jobs." in told
     assert "the contracts between the sub-teams of services/api" in told
+    # Its Division Lead IC judged the code by the contracts it was written to.
+    request = [
+        start.task for start in launcher.derived if "submits its work" in start.task
+    ][-1]
+    assert "Contracts it wrote for services/api" in request
+    assert "Refunds go through Jobs." in request
 
     # What the Manager decided on is held to what it was shown.
     service.team_memory.write(
@@ -701,6 +707,22 @@ async def test_contracts_both_changed_wait_for_the_manager_above(
     assert [c.contracts for c in service.contracts_of(api_place(service, top))] == [
         holds
     ]
+    # Where its own do not hold, its IC is told the ones that do, to follow
+    # up on the code it delivered, and it is on the team's record.
+    last = launcher.messages_to(conversation)[-1]
+    on_record = [
+        event
+        for event in service.org_history(50).events
+        if event.kind == "not_taken" and "the contracts it wrote" in event.detail
+    ]
+    if take == "session":
+        assert "are not the ones you wrote" not in last and not on_record
+    else:
+        assert "are not the ones you wrote" in last and holds.strip() in last
+        assert [event.detail for event in on_record] == [
+            "the contracts it wrote for services/api: its merged code was "
+            "written to them"
+        ]
 
 
 async def test_what_a_reviewer_reconciled_holds_only_for_what_it_was_shown(
@@ -889,14 +911,17 @@ async def test_what_later_work_makes_of_the_org_waits_for_earlier_work(
     waits = merge_of(service, second)
     assert waits is not None and waits.code_landed and waits.org_queued
     assert service.store.team(WORKERS) is None
-    assert review_manager(service, second) is None
+    assert division_lead_manager(service, second) is None
     late = await use(
         service, division_lead_ic(service, second), SettleTeamsTool, SettleTeamsAction()
     )
     assert late.is_error
 
     await use(
-        service, review_manager(service, first), SettleTeamsTool, SettleTeamsAction()
+        service,
+        division_lead_manager(service, first),
+        SettleTeamsTool,
+        SettleTeamsAction(),
     )
 
     # Then both are the org's, the earlier first.
@@ -922,7 +947,7 @@ async def test_settled_before_the_code_is_accepted_it_all_lands_in_one_step(
 
     # The Manager is asked beside the review, and what it settles is not
     # the org's before the code is accepted.
-    asked = review_manager(service, top)
+    asked = division_lead_manager(service, top)
     settled = await use(service, asked, SettleTeamsTool, SettleTeamsAction())
     assert not settled.is_error and "when the IC" in settled.text
     assert path_of(service, JOBS) == "services/api/workers"
@@ -951,7 +976,7 @@ async def test_work_that_is_sent_back_waits_for_no_manager(
     sets_up_jobs(service, top)
     org_gains(service, JOBS, "services/api/workers")
     await use(service, conversation, SubmitReviewTool, DONE)
-    asked = review_manager(service, top)
+    asked = division_lead_manager(service, top)
     assert waiting(service, top) == [JOBS]
 
     await use(
@@ -966,6 +991,44 @@ async def test_work_that_is_sent_back_waits_for_no_manager(
     gone = await use(service, asked, SettleTeamsTool, SettleTeamsAction())
     assert gone.is_error
     assert path_of(service, JOBS) == "services/api/workers"
+
+
+async def test_work_that_is_sent_back_joins_the_end_and_keeps_what_was_decided(
+    service: DirectorService, launcher: FakeLauncher
+):
+    top, conversation = await at_api(service)
+    sets_up_jobs(service, top)
+    org_gains(service, JOBS, "services/api/workers")
+    await use(service, conversation, SubmitReviewTool, DONE)
+    asked = division_lead_manager(service, top)
+    first = merge_of(service, top)
+    assert first is not None
+    await use(
+        service,
+        asked,
+        SettleTeamsTool,
+        SettleTeamsAction(teams=[TeamChoice(team=JOBS, take="org")]),
+    )
+
+    await use(
+        service,
+        division_lead_ic(service, top),
+        ReviewTeamTool,
+        ReviewTeamAction(node_id=top, decision="reject", findings=[FINDING]),
+    )
+    back = launcher.messages_to(conversation)[-1]
+    heard = len(launcher.messages_to(asked))
+    await use(service, conversation, SubmitReviewTool, DONE)
+    await service.settled()
+
+    assert "joins the end of the line again" in back
+    again = merge_of(service, top)
+    assert again is not None and again.seq > first.seq
+    # The Manager decided this already and nothing of it changed.
+    assert [(item.key, item.take) for item in again.items if item.kind == "team"] == [
+        (JOBS, "org")
+    ]
+    assert len(launcher.messages_to(asked)) == heard
 
 
 async def test_a_reviewer_writes_the_spec_that_holds(service: DirectorService):
@@ -1049,7 +1112,7 @@ async def test_a_manager_puts_a_team_it_takes_where_it_fits_the_org(
     org_gains(service, JOBS, "services/api/workers")
     org_gains(service, "services.api.queue", "services/api/queue")
     await use(service, conversation, SubmitReviewTool, DONE)
-    asked = review_manager(service, top)
+    asked = division_lead_manager(service, top)
 
     def placed(**choice: str) -> SettleTeamsAction:
         return SettleTeamsAction(
@@ -1151,7 +1214,7 @@ async def test_a_manager_that_does_not_answer_is_asked_again_and_then_the_human(
     sets_up_jobs(service, top)
     org_gains(service, JOBS, "services/api/workers")
     await accepted(service, top, conversation)
-    asked = review_manager(service, top)
+    asked = division_lead_manager(service, top)
     told = len(launcher.messages_to(asked))
 
     async def later(minutes: int) -> None:
