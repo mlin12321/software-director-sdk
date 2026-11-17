@@ -397,8 +397,11 @@ class Delivery(Records):
         if shorter is None:
             logger.warning("No usable rewrite of the reports of %s %s", node_id, role)
             return
-        await asyncio.to_thread(
-            team_memory.replace_reports, node_id, role, reports, shorter
+        # Rewriting them changes what the org shares.
+        await self._base(
+            lambda: asyncio.to_thread(
+                team_memory.replace_reports, node_id, role, reports, shorter
+            )
         )
 
     async def _as_one_report(self, reports: list[Report]) -> str:

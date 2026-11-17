@@ -44,7 +44,9 @@ def _is_ancestor(repo_dir: Path, older: str, newer: str) -> bool:
 
 
 def fetch(repo_dir: Path, remote: str) -> None:
-    """Bring the remote's org and team memory beside ours.
+    """Bring the remote's org and team memory beside ours, and nothing
+    else it keeps under ``refs/agents``: what a server keeps there for
+    itself is not another server's.
 
     Raises:
         NotFound: The repository has no such remote.
@@ -52,17 +54,25 @@ def fetch(repo_dir: Path, remote: str) -> None:
     """
     if remote not in git(repo_dir, ["remote"]).split():
         raise NotFound(f"The repository has no remote named {remote!r}")
+    shared = {ORG_REF: remote_org(remote), MEMORY_REF: remote_memory(remote)}
     try:
+        listed = git(
+            repo_dir,
+            ["ls-remote", "--refs", remote, *shared],
+            env=_NO_PROMPT,
+            timeout=_NETWORK_TIMEOUT_SECONDS,
+        )
+        there = {line.split()[-1] for line in listed.splitlines() if line.strip()}
+        for ref, beside in shared.items():
+            if ref not in there and commit_at(repo_dir, beside) is not None:
+                # The remote has it no more.
+                git(repo_dir, ["update-ref", "-d", beside])
+        if not there & shared.keys():
+            return
         git(
             repo_dir,
-            [
-                "fetch",
-                "--no-tags",
-                "--quiet",
-                "--prune",
-                remote,
-                f"+refs/agents/*:refs/remotes/{remote}/agents/*",
-            ],
+            ["fetch", "--no-tags", "--quiet", remote]
+            + [f"+{ref}:{beside}" for ref, beside in shared.items() if ref in there],
             env=_NO_PROMPT,
             timeout=_NETWORK_TIMEOUT_SECONDS,
         )

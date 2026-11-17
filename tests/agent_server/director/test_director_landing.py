@@ -2,12 +2,14 @@
 sub-teams, its specs and what its agents recorded."""
 
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
 from openhands.agent_server.director.models import (
     ContractsChoice,
+    CreateOrgRequest,
     DirectorSettingsUpdate,
     OpenSessionRequest,
     OrgNodeInput,
@@ -20,6 +22,7 @@ from openhands.agent_server.director.models import (
 )
 from openhands.agent_server.director.org_store import session_id_of, team_id_of
 from openhands.agent_server.director.routing import USAGE_ID
+from openhands.agent_server.director.run_state import SESSION
 from openhands.agent_server.director.service import DirectorService
 from openhands.agent_server.director.service.state import (
     MERGE_WAITS,
@@ -45,6 +48,7 @@ from openhands.sdk.errors import NotFound
 from tests.agent_server.director.conftest import (
     FakeLauncher,
     record_of,
+    root_conversation,
     run_git,
     take_in,
 )
@@ -1112,3 +1116,68 @@ async def test_a_spec_written_for_a_team_the_org_lost_is_left_to_the_team_that_h
         ]
     [left] = service.team_memory.former("services.api")
     assert (left.ended, left.spec) == ("not_taken", "# Refunds")
+
+
+async def test_a_manager_that_does_not_answer_is_asked_again_and_then_the_human(
+    repo: Path, launcher: FakeLauncher
+):
+    now = [datetime(2026, 11, 14, tzinfo=UTC)]
+    service = await started(repo, launcher, clock=lambda: now[0], stall_poll=3600)
+    service.update_settings(DirectorSettingsUpdate(stall_check_minutes=60))
+    top, conversation = await at_api(service)
+    sets_up_jobs(service, top)
+    org_gains(service, JOBS, "services/api/workers")
+    await accepted(service, top, conversation)
+    asked = review_manager(service, top)
+    told = len(launcher.messages_to(asked))
+
+    async def later(minutes: int) -> None:
+        now[0] += timedelta(minutes=minutes)
+        await service._check_stalls()
+        await service.settled()
+
+    await later(30)
+    assert len(launcher.messages_to(asked)) == told
+    await later(31)
+    assert "still waits for you" in launcher.messages_to(asked)[-1]
+    assert node(service, top).escalations == []
+    await later(30)
+    assert node(service, top).escalations == []
+
+    # After as long again the human is asked, once.
+    await later(31)
+    await later(61)
+    [waits] = node(service, top).escalations
+    assert waits.held_by is None and "has not settled" in waits.title
+    assert path_of(service, JOBS) == "services/api/workers"
+
+    # Their answer goes on without the Manager: the org's stay.
+    service.answer_escalation(top, waits.id, "Go on.")
+    await service.settled()
+
+    assert merge_of(service, top) is None
+    assert path_of(service, JOBS) == "services/api/workers"
+    assert [left.ended for left in service.team_memory.former(JOBS)] == []
+    assert node(service, top).escalations == []
+    await service.aclose()
+
+
+async def test_what_a_session_has_is_kept_at_once(repo: Path, launcher: FakeLauncher):
+    service = DirectorService(repo, save_delay=3600)
+    await service.start(launcher)
+    await service.create_org(
+        CreateOrgRequest(
+            title="Checkout", task="Build", conversation=root_conversation(repo)
+        )
+    )
+    await service.settled()
+    opened = await service.open_session(
+        OpenSessionRequest(text="Add refunds.", node_id="root")
+    )
+    await service.settled()
+
+    # The tree waits to be saved; what the session has does not.
+    kept = service._runs().marked(SESSION)
+    assert opened.session.id in kept
+    assert "Add refunds." in kept[opened.session.id]
+    await service.aclose()

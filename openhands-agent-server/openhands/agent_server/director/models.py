@@ -1333,6 +1333,11 @@ class Merge(BaseModel):
     asked: str = Field(
         default="", description="What names the state its Manager was last asked of."
     )
+    asked_at: str = Field(default="", description="When its Manager was last asked.")
+    reminded: bool = Field(
+        default=False,
+        description="Whether its Manager was asked again for not answering.",
+    )
     note: str = Field(default="", description="What the Manager said in settling.")
 
 

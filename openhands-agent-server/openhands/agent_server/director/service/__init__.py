@@ -46,9 +46,11 @@ from openhands.agent_server.director.run_state import (
 from openhands.agent_server.director.runtime import bind_director
 from openhands.agent_server.director.service.state import (
     AGENT_PAUSED,
+    BASE_LANE,
     DIRECTOR_TOOL_NAMES,
     HAND_OVER_TOOLS,
     MERGE_WAITS,
+    ORG_WAITS,
     RESTART_NOTE,
     ROOT_ID,
     TOOLS_OF,
@@ -229,7 +231,7 @@ class DirectorService(Sync):
         if request.title is None:
             # The org is named after what its first session is for.
             top = opened.session.teams[0].id
-            self._enqueue(lambda: self._name_org(top), top)
+            self._enqueue(lambda: self._name_org(top), BASE_LANE)
         return opened
 
     async def _name_org(self, top_id: str) -> None:
@@ -460,6 +462,10 @@ class DirectorService(Sync):
             # The way into the checkout was cleared: the accepted work is
             # merged now, with nobody asked again.
             self._begin("accept", node_id, needed_above="", reconciled="")
+            return store.place(node_id) or node
+        if escalation_id == ORG_WAITS:
+            # The human goes on without the Manager.
+            self._begin("land_org", node_id, org_holds=True)
             return store.place(node_id) or node
         self.notify(
             agent_conversation(node, escalation.raised_by),

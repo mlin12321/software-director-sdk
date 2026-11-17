@@ -241,6 +241,9 @@ STALL_LANE = "stalls"
 _REVIEW_STEPS = ("request_review", "accept")
 # The escalation that asks the human to clear the way for a merge.
 MERGE_WAITS = "merge-waits"
+# The id of the escalation raised when a Manager does not settle the teams
+# and contracts of accepted work.
+ORG_WAITS = "org-waits"
 # How many of the director's own model calls run at once.
 MODEL_CALLS_AT_ONCE = 2
 
@@ -386,6 +389,7 @@ class ServiceState:
         # The conversations a resume is about to run again.
         self._resuming: set[str] = set()
         self._save_asked = False
+        self._sessions_asked = False
         # Teams that waited for a run when the org was paused, in the order
         # they waited: each tries to start only when it is the first.
         self._line: deque[str] = deque()
@@ -1128,11 +1132,44 @@ class ServiceState:
 
     def _arm_save(self) -> None:
         loop = self._loop
-        if loop is None or self._save_timer is not None:
+        if loop is None:
+            return
+        if not self._sessions_asked:
+            # What a session has is only here: it is kept at once, not
+            # when the tree is next saved.
+            self._sessions_asked = True
+            self._enqueue(self._keep_sessions)
+        if self._save_timer is not None:
             return
         self._save_timer = loop.call_later(
             self._save_delay, lambda: self._enqueue(self._save_due)
         )
+
+    async def _keep_sessions(self) -> None:
+        self._sessions_asked = False
+        store = self._store
+        if store is None:
+            return
+
+        def keep() -> None:
+            with self._saving:
+                self._runs().replace_marks(SESSION, kept_sessions(store))
+
+        try:
+            await asyncio.to_thread(keep)
+        except (GitError, RunStateError):
+            logger.exception("Could not keep the sessions of %s", self._repo_dir)
+
+    async def _base[T](self, work: Callable[[], Awaitable[T]]) -> T:
+        """What ``work`` returns, carried out in the lane of what the org
+        shares."""
+        results: list[T] = []
+
+        async def effect() -> None:
+            results.append(await work())
+
+        await self._in_base(effect)
+        return results[0]
 
     async def _save_due(self) -> None:
         self._save_timer = None

@@ -851,7 +851,9 @@ async def test_a_server_in_a_submodule_joins_the_org_of_the_repository_above(
         "libs",
         "root",
     ]
-    asked = [start.task for start in launcher.derived[-3:]]
+    # The three are started side by side, in no fixed order.
+    tasks = {str(start.conversation_id): start.task for start in launcher.derived}
+    asked = [tasks[sent.conversation_id] for sent in (from_here, by_path, further_up)]
     assert "Refunds\n\n(The human sent this from libs/payments.)" in asked[0]
     assert "Refunds\n\n(The human sent this from libs/payments/src.)" in asked[1]
     assert "Refunds\n\n(The human sent this from docs.)" in asked[2]

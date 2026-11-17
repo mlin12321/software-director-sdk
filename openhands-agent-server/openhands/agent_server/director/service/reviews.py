@@ -4,7 +4,7 @@ import asyncio
 import hashlib
 import json
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import NamedTuple
 from uuid import UUID
@@ -80,6 +80,7 @@ from openhands.agent_server.director.service.state import (
     ASKED_KEPT,
     BASE_LANE,
     MERGE_WAITS,
+    ORG_WAITS,
     _checkout_root,
     _contracts_file,
     _now,
@@ -721,7 +722,16 @@ class Reviews(Requests):
         ).hexdigest()
         if review is None or merge.asked == mark:
             return
-        self._keep_merge(top, merge.model_copy(update={"asked": mark}))
+        self._keep_merge(
+            top,
+            merge.model_copy(
+                update={
+                    "asked": mark,
+                    "asked_at": self._clock().isoformat(),
+                    "reminded": False,
+                }
+            ),
+        )
         self.tell_manager(
             review.id,
             merge_request(
@@ -729,6 +739,66 @@ class Reviews(Requests):
             ),
             review=True,
         )
+
+    def _check_managers(self) -> None:
+        """Move on what waits for a Manager that does not answer. It
+        holds back the teams and contracts of every session that
+        submitted later, so it is asked once more after the time a team
+        may show no progress, and after as long again the human is asked:
+        their answer lets the org's stand wherever nothing was decided."""
+        limit = self.settings.stall_check_minutes
+        if not limit:
+            return
+        with self._weighing:
+            order = self._in_order()
+            top = order[0] if order else None
+            merge = self._merge_of(top) if top else None
+            review = self._review_of(top) if top else None
+            if top is None or merge is None or review is None or not merge.asked_at:
+                return
+            waiting = [item for item in merge.items if item.gate == "manager"]
+            if all(item.take for item in waiting):
+                return
+            now = self._clock()
+            if now - datetime.fromisoformat(merge.asked_at) < timedelta(minutes=limit):
+                return
+            if not merge.reminded:
+                self._keep_merge(
+                    top,
+                    merge.model_copy(
+                        update={"reminded": True, "asked_at": now.isoformat()}
+                    ),
+                )
+                self.tell_manager(
+                    review.id,
+                    "This still waits for you, and with it the teams and "
+                    "contracts of every session that submitted later.\n\n"
+                    + merge_request(
+                        top, self.store.session_title(top), waiting, merge.code_landed
+                    ),
+                    review=True,
+                )
+                return
+            if not merge.code_landed or any(e.id == ORG_WAITS for e in top.escalations):
+                return
+            self.store.raise_escalation(
+                top.id,
+                ORG_WAITS,
+                kind="critical_issue",
+                title="A Manager has not settled the teams of accepted work",
+                detail=(
+                    f"The code of {top.title!r} is accepted and merged. What "
+                    "it makes of the org's teams and contracts waits for the "
+                    "Manager that reviews it, which has not answered, and the "
+                    "teams and contracts of sessions that submitted later "
+                    "wait behind it. Answer this to go on without the "
+                    "Manager: the org's stay wherever it has not decided, and "
+                    "what the session wrote for a team that is not taken is "
+                    "kept in that team's record."
+                ),
+                at=_now(),
+            )
+        self._save_soon()
 
     def settle_teams(
         self,
@@ -1001,6 +1071,14 @@ class Reviews(Requests):
     def _after_landing(self, top: SessionTeam, landed: Landed, note: str) -> None:
         for team_id, role in landed.records.grown:
             self.reports_grew(team_id, role)
+        now = self.store.place(top.id)
+        if (
+            self._merge_of(top) is None
+            and now is not None
+            and any(e.id == ORG_WAITS for e in now.escalations)
+        ):
+            # Its Manager answered after all.
+            self.store.settle_escalation(top.id, ORG_WAITS)
         review = self._review_of(top)
         if review is not None and (
             landed.taken or landed.kept or landed.agreed or landed.held
@@ -1020,11 +1098,20 @@ class Reviews(Requests):
         top = self.store.place(intent.node_id)
         if top is None:
             return
-        landed = await asyncio.to_thread(self._land_org, top)
+        landed = await asyncio.to_thread(
+            self._land_org, top, bool(intent.payload.get("org_holds"))
+        )
         if landed is not None:
             self._after_landing(top, *landed)
 
-    def _land_org(self, top: SessionTeam) -> tuple[Landed, str] | None:
+    def _land_org(
+        self, top: SessionTeam, org_holds: bool = False
+    ) -> tuple[Landed, str] | None:
+        """
+        Args:
+            org_holds: The human went on without the Manager: the org's
+                stay wherever nothing was decided.
+        """
         with self._weighing:
             merge = self._merge_of(top)
             order = self._in_order()
@@ -1036,6 +1123,11 @@ class Reviews(Requests):
             ):
                 return None
             take, items = self._manager_items(top, merge.items)
+            if org_holds:
+                items = [
+                    item if item.take else item.model_copy(update={"take": "org"})
+                    for item in items
+                ]
             if any(item.take is None for item in items):
                 return None
             return self._land(top, None, (take, items)), merge.note

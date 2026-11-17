@@ -386,6 +386,7 @@ class Watch(Reviews):
         store = self._store
         if not limit or store is None or self._paused is not None:
             return
+        await asyncio.to_thread(self._check_managers)
         run = self._runs()
         marks = run.marked(PROGRESS)
         teams = {team.id: team for team in store.places()}
