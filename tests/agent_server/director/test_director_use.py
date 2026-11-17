@@ -164,7 +164,7 @@ async def test_no_more_sessions_are_opened_than_the_settings_allow(
 ):
     service.update_settings(DirectorSettingsUpdate(max_open_sessions=1))
 
-    with pytest.raises(Conflict, match="1 sessions are open"):
+    with pytest.raises(Conflict, match="allow 1 open session at once"):
         await service.open_session(
             OpenSessionRequest(text="Add refunds", node_id="root")
         )

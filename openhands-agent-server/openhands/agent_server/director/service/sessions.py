@@ -114,8 +114,9 @@ class Sessions(Splits):
         most = self.settings.max_open_sessions
         if most and len(store.sessions()) >= most:
             raise Conflict(
-                f"{most} sessions are open, the most the org's settings allow. "
-                "Close one, or raise the limit in the settings."
+                f"The org's settings allow {most} open "
+                f"{'session' if most == 1 else 'sessions'} at once. Close "
+                "one, or raise the limit in the settings."
             )
         text = request.text.strip()
         chosen_by: ChosenBy = "path"
