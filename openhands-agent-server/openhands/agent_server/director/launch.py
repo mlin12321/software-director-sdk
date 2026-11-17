@@ -21,6 +21,7 @@ from openhands.agent_server.director.headline import (
     summary_question,
 )
 from openhands.agent_server.director.models import AgentKind, IsolationMode, Usage
+from openhands.agent_server.director.pricing import priced
 from openhands.agent_server.event_service import (
     ActionGuard,
     ConversationRunLimitExceeded,
@@ -46,6 +47,7 @@ from openhands.sdk.conversation.title_utils import strip_reasoning_blocks
 from openhands.sdk.errors import Conflict, Invalid, NotFound
 from openhands.sdk.event.conversation_error import ConversationErrorEvent
 from openhands.sdk.llm import LLM
+from openhands.sdk.llm.utils.metrics import MetricsSnapshot
 from openhands.sdk.profiles.agent_profile import ACPAgentProfile
 from openhands.sdk.tool.spec import Tool
 
@@ -523,18 +525,11 @@ class ConversationTeamLauncher:
                 state = await event_service.get_state()
             except ValueError:
                 continue
-            metrics = state.stats.get_combined_metrics()
-            tokens = metrics.accumulated_token_usage
-            read = tokens.prompt_tokens if tokens else 0
-            if tokens and isinstance(state.agent, ACPAgent):
-                # Such an agent reports what it read from and wrote to its
-                # cache apart from its input, and that is nearly all of it.
-                read += tokens.cache_read_tokens + tokens.cache_write_tokens
-            found[conversation_id] = Usage(
-                input_tokens=read,
-                output_tokens=tokens.completion_tokens if tokens else 0,
-                cost=metrics.accumulated_cost,
-            ).plus(self._own_use.get(conversation_id, Usage()))
+            used = self._own_use.get(conversation_id, Usage())
+            own_model = isinstance(state.agent, ACPAgent)
+            for metrics in state.stats.usage_to_metrics.values():
+                used = used.plus(_used(metrics, own_model=own_model))
+            found[conversation_id] = used
         return found
 
     def on_status(self, listener: ExecutionStatusListener) -> Callable[[], None]:
@@ -615,10 +610,35 @@ def _ask(llm: LLM, system: str, user: str) -> tuple[str | None, Usage]:
     text = "".join(
         part.text for part in response.message.content if isinstance(part, TextContent)
     )
-    tokens = response.metrics.accumulated_token_usage
-    used = Usage(
-        input_tokens=tokens.prompt_tokens if tokens else 0,
-        output_tokens=tokens.completion_tokens if tokens else 0,
-        cost=response.metrics.accumulated_cost,
-    )
+    used = _used(response.metrics, own_model=False)
     return strip_reasoning_blocks(text).strip() or None, used
+
+
+def _used(metrics: MetricsSnapshot, *, own_model: bool) -> Usage:
+    """What one model of a conversation used, with a cost.
+
+    Args:
+        own_model: The agent runs its own model (an ``ACPAgent``). It
+            reports what it read from and wrote to its cache apart from its
+            input, and its cost itself.
+    """
+    tokens = metrics.accumulated_token_usage
+    if tokens is None:
+        return Usage(cost=metrics.accumulated_cost)
+    read = tokens.prompt_tokens
+    if own_model:
+        read += tokens.cache_read_tokens + tokens.cache_write_tokens
+    cost = metrics.accumulated_cost
+    unpriced = 0
+    if cost <= 0 and read + tokens.completion_tokens > 0:
+        # The model said nothing of cost: the public price list does.
+        derived = None if own_model else priced(metrics.model_name, tokens)
+        if derived is None:
+            unpriced = read + tokens.completion_tokens
+        cost = derived or 0.0
+    return Usage(
+        input_tokens=read,
+        output_tokens=tokens.completion_tokens,
+        cost=cost,
+        unpriced_tokens=unpriced,
+    )

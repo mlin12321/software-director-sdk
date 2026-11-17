@@ -166,7 +166,7 @@ class Sessions(Splits):
                 request=text[:ASKED_KEPT],
                 opened_at=datetime.now(UTC).isoformat(),
                 branch="" if branch == "HEAD" else branch,
-                token_allowance=self.settings.session_token_limit,
+                cost_allowance=self.settings.session_cost_limit,
                 shape=shape_of(shape),
             ),
             [

@@ -148,22 +148,24 @@ class Watch(Reviews):
             last: dict[str, list[float]] = json.loads(marks.get(session.id) or "{}")
             added = Usage()
             for conversation_id, used in now.items():
-                before = last.get(str(conversation_id), [0, 0, 0.0])
+                before = last.get(str(conversation_id), [0, 0, 0.0, 0])
                 # A count that went down began again, with a server.
                 added = added.plus(
                     Usage(
                         input_tokens=max(0, used.input_tokens - int(before[0])),
                         output_tokens=max(0, used.output_tokens - int(before[1])),
                         cost=max(0.0, used.cost - before[2]),
+                        unpriced_tokens=max(0, used.unpriced_tokens - int(before[3])),
                     )
                 )
                 last[str(conversation_id)] = [
                     used.input_tokens,
                     used.output_tokens,
                     used.cost,
+                    used.unpriced_tokens,
                 ]
             run.mark(USE, session.id, json.dumps(last))
-            limit = session.token_allowance or self.settings.session_token_limit
+            limit = session.cost_allowance or self.settings.session_cost_limit
             kept = store.set_session_use(session.id, session.usage.plus(added), limit)
             if kept is not None:
                 self._hold_at_limit(kept)
@@ -173,10 +175,10 @@ class Watch(Reviews):
         ask the human whether it goes on."""
         store = self.store
         top = store.instance(session.team_id, session.id)
-        limit = session.token_allowance
+        limit = session.cost_allowance
         if (
             not limit
-            or session.usage.tokens < limit
+            or session.usage.cost < limit
             or top is None
             or top.stopped is not None
             or self._paused is not None
@@ -191,7 +193,7 @@ class Watch(Reviews):
             top.id,
             Stopped(
                 at=utc_now(),
-                reason=f"The session reached its limit of {limit:,} tokens.",
+                reason=f"The session reached its limit of ${limit:,.2f}.",
                 running=sorted(running),
             ),
         )
@@ -202,14 +204,13 @@ class Watch(Reviews):
                 top.id,
                 LIMIT_WAITS,
                 kind="critical_issue",
-                title=f"{session.title!r} reached its limit of {limit:,} tokens",
+                title=f"{session.title!r} reached its limit of ${limit:,.2f}",
                 detail=(
-                    f"Its agents have used {used.tokens:,} tokens "
-                    f"({used.input_tokens:,} in, {used.output_tokens:,} out"
-                    + (f"; ${used.cost:.2f}" if used.cost else "")
-                    + ") and are at rest.\nAnswer this to let it go on for as "
-                    "many again; your answer is sent to its IC. Close the "
-                    "session to end it."
+                    f"Its agents have used ${used.cost:,.2f} "
+                    f"({used.input_tokens:,} tokens in, "
+                    f"{used.output_tokens:,} out) and are at rest.\nAnswer "
+                    "this to let it go on for as much again; your answer is "
+                    "sent to its IC. Close the session to end it."
                 ),
                 at=utc_now(),
             )
@@ -217,15 +218,15 @@ class Watch(Reviews):
 
     def go_on_past_limit(self, place_id: str) -> None:
         """Let a session that was put to rest at its limit go on for as
-        many tokens again, or without a limit when the org has none now."""
+        much again, or without a limit when the org has none now."""
         store = self.store
         top = store.place(place_id)
         session = store.session_of(top) if top else None
         if top is None or session is None:
             return
-        limit = self.settings.session_token_limit
+        limit = self.settings.session_cost_limit
         store.set_session_use(
-            session.id, session.usage, session.usage.tokens + limit if limit else 0
+            session.id, session.usage, session.usage.cost + limit if limit else 0.0
         )
         stopped = top.stopped
         if stopped is not None:

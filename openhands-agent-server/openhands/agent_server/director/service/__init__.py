@@ -497,7 +497,7 @@ class DirectorService(Sync):
             if escalation_id == failure_waits(role)
             else "The human was told that your team shows no progress, and says"
             if escalation_id == STALL_WAITS
-            else "Your session had reached its token limit and its agents were "
+            else "Your session had reached its cost limit and its agents were "
             "put to rest. The human lets it go on, and says"
             if escalation_id == LIMIT_WAITS
             else f"The human answered your escalation {escalation.title!r}"
