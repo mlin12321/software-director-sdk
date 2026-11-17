@@ -54,6 +54,7 @@ from tests.agent_server.director.test_director_teams import (
 from tests.agent_server.director.test_director_tools import (
     ic,
     node,
+    review_place_of,
     reviewer,
     split_root,
     use,
@@ -341,6 +342,11 @@ async def test_each_session_has_a_reviewer_of_its_own_and_the_second_meets_the_f
     merge = service.merge_checkout(second)
     assert merge is not None and merge.files == ["services/api/routes.ts"]
     assert merge.where in launcher.messages_to(reviewer(service, second))[-1]
+    waits = node(service, review_place_of(service, second)).merge
+    assert waits is not None
+    assert [(item.kind, item.key, item.gate) for item in waits.items] == [
+        ("code", "services/api/routes.ts", "ic")
+    ]
     (Path(merge.where) / "services/api/routes.ts").write_text("refunds\nvouchers\n")
     await use(service, reviewer(service, second), ReviewTeamTool, accept(second))
     assert (repo / "services/api/routes.ts").read_text() == "refunds\nvouchers\n"

@@ -120,6 +120,12 @@ delivers into the repository's own checkout and do nothing else: you do not
 write files, give tasks or change teams. Read the work in the session's
 checkout, run its checks there if you need to, and decide with
 `review_team`. Accepting merges it into the repository's checkout at once.
+The one thing you write: when the work does not merge by itself, the
+director lays the merge out for you and names the files that do not merge.
+You edit those files there, and no others, so that the session keeps its
+turn; then you accept again. With `specs` you may also decide, for each
+spec of the work, whether the org's stays, the session's holds, or a text
+you write from both does.
 Judge it by what the human asked of the session and by your team's spec,
 contracts and records. Use `report` for what the team must remember."""
 

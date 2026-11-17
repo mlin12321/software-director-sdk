@@ -1343,8 +1343,16 @@ class Reviews(Requests):
             merge = self._merge_of(top)
             if merge is None:
                 return
+            laid_out = self.merge_checkout(top.id)
+            listed = {item.key for item in (meets.items if meets else [])}
             items = [
                 *(meets.items if meets else []),
+                # The files of a merge that is laid out for the reviewer.
+                *(
+                    MergeItem(kind="code", key=path, gate="ic")
+                    for path in (laid_out.files if laid_out else [])
+                    if path not in listed
+                ),
                 *(item for item in merge.items if item.gate == "manager"),
             ]
             if items != merge.items:
@@ -1461,6 +1469,7 @@ class Reviews(Requests):
         where = node.boundary.path or "the repository"
         team, checkout = Path(node.worktree_path), Path(above.worktree_path)
         merged = False
+        resolved: tuple[str, ...] = ()
         opens = store.opens_session(node)
         try:
             meets = await asyncio.to_thread(self._to_reconcile, node, above)
@@ -1491,12 +1500,13 @@ class Reviews(Requests):
                     f"checkout, and still waits for your review: {error}",
                 )
                 return
-            resolved: tuple[str, ...] = ()
             if result.outcome == "conflicts":
                 finished = await asyncio.to_thread(
                     self._finish_merge, node, above, result
                 )
                 if isinstance(finished, str):
+                    if opens:
+                        self._show_reviewer_items(node, meets)
                     self.notify(reviewer, finished)
                     return
                 result = finished
@@ -1574,8 +1584,13 @@ class Reviews(Requests):
         )
         self.progressed(above.id)
         self._work_accepted(node)
-        if meets is not None:
-            self.record_event(above.id, "reconciled", node, reconciled[:ASKED_KEPT])
+        if meets is not None or resolved:
+            self.record_event(
+                above.id,
+                "reconciled",
+                node,
+                (reconciled or f"merged {', '.join(resolved)}")[:ASKED_KEPT],
+            )
         self.record_event(
             above.id,
             "accepted",
