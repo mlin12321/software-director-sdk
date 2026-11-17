@@ -231,7 +231,8 @@ def left_behind(
         spec = (specs or {}).get(team.path, "").strip()
         if spec:
             lines += [
-                f"The spec it wrote (old; it stays in {team.path or 'the repository'}):",
+                "The spec it wrote (old; it stays in "
+                f"{team.path or 'the repository'}):",
                 spec,
             ]
     return lines
@@ -1155,7 +1156,8 @@ def _span(minutes: int) -> str:
 def unstarted_notice(team: SessionTeam, minutes: int) -> str:
     """What the IC above is told of a team it set up and gave no task."""
     return (
-        f"Team {team.title!r} (node {team.id}, {team.boundary.path or 'the repository'}) "
+        f"Team {team.title!r} (node {team.id}, "
+        f"{team.boundary.path or 'the repository'}) "
         f"was set up {_span(minutes)} ago and has been given no task. Nobody "
         "works in its directory, and nothing there is committed. Give it its "
         "task with `msg_team`. If it is not needed, write to your Manager to "
