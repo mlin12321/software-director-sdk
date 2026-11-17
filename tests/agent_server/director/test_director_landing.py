@@ -104,12 +104,12 @@ async def test_the_org_has_a_sessions_sub_teams_once_its_work_is_accepted(
 
     await use(service, ic(service), SubmitReviewTool, DONE)
 
-    # Its reviewer is the top team's IC in review mode, started for this.
+    # Its Division Lead IC is the top team's IC, started for this.
     asked = division_lead_ic(service)
     assert asked is not None
     start = launcher.derived[-1]
     assert str(start.conversation_id) == asked
-    assert "submits its work" in start.task and "review mode" in start.suffixes[0]
+    assert "submits its work" in start.task and "Division Lead IC" in start.suffixes[0]
     assert start.title == "Checkout (Division Lead IC)"
     assert start.checkout == node(service, division_lead_of(service)).worktree_path
 
@@ -507,7 +507,7 @@ async def test_a_team_both_made_something_else_of_waits_for_the_manager_above(
     assert asked is not None
     # It was asked when the work was submitted, beside the review.
     [start] = [d for d in launcher.derived if str(d.conversation_id) == asked]
-    assert "Manager of your team in review mode" in "".join(start.suffixes or [])
+    assert "You are the Division Lead Manager" in "".join(start.suffixes or [])
     told = launcher.messages_to(asked)[-1]
     assert "the session: 'API' in services/api/jobs, under services.api" in told
     assert "the org now: 'API' in services/api/workers, under services.api" in told
@@ -892,7 +892,7 @@ async def test_what_later_work_makes_of_the_org_waits_for_earlier_work(
     early = await use(
         service, division_lead_ic(service, second), ReviewTeamTool, accept(second)
     )
-    assert early.is_error and "its reviewer has not decided" in early.text
+    assert early.is_error and "its Division Lead IC has not decided" in early.text
     await use(service, division_lead_ic(service, first), ReviewTeamTool, accept(first))
     # The reviewer that was made to wait is told when it is its turn.
     assert (
