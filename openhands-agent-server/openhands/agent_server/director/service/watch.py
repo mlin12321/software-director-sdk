@@ -5,37 +5,26 @@ import json
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from openhands.agent_server.director import routing
 from openhands.agent_server.director.git import (
     last_commit_in,
 )
-from openhands.agent_server.director.git_store import team_key
 from openhands.agent_server.director.models import (
     Escalation,
     SessionTeam,
     Stopped,
 )
 from openhands.agent_server.director.org_store import (
-    AGENT_LOST,
     is_division_lead,
     utc_now,
 )
 from openhands.agent_server.director.prompts import (
-    NEED_ASKED,
-    PASSED_UP,
-    SETTLED,
     STALL_QUESTION,
-    UNANSWERED,
-    asked_by_team,
-    many_requests_notice,
-    requests_between,
     stall_notice,
     unstarted_notice,
 )
 from openhands.agent_server.director.run_state import (
     PROGRESS,
 )
-from openhands.agent_server.director.service.requests import takes_requests
 from openhands.agent_server.director.service.reviews import Reviews
 from openhands.agent_server.director.service.state import (
     ROLE_NAMES,
@@ -47,10 +36,6 @@ from openhands.sdk.errors import (
     Conflict,
     NotFound,
 )
-
-
-# How many requests one team may have open with another it asked directly.
-OPEN_REQUESTS_TO_ONE_TEAM = 3
 
 
 class Watch(Reviews):
@@ -81,7 +66,7 @@ class Watch(Reviews):
             self.count_ic_escalation(holder_id, through.id)
         text = (
             f"The {ROLE_NAMES[escalation.raised_by]} of team {raiser.title!r} "
-            f"(node {raiser.id}) escalates {escalation.title!r} (escalation "
+            f"(id {raiser.id}) escalates {escalation.title!r} (escalation "
             f"{escalation.id}):\n{escalation.detail or '(no detail)'}{history}\n"
             "Settle it with resolve_escalation if you can; pass it up only with "
             "the reason you cannot."
@@ -90,220 +75,6 @@ class Watch(Reviews):
             self.tell_manager(holder_id, text)
         else:
             self.tell_ic(holder_id, text)
-
-    def ask_team(self, node_id: str, escalation_id: str, team_for: str) -> None:
-        """Take what a team's IC needs of another team straight to that
-        team's IC if it is sure which team it is, and to the IC of the team
-        above otherwise. Safe from any thread."""
-        self._enqueue(lambda: self._ask_team(node_id, escalation_id, team_for), node_id)
-
-    async def _ask_team(self, node_id: str, escalation_id: str, team_for: str) -> None:
-        store = self.store
-        raiser = store.place(node_id)
-        escalation = next(
-            (e for e in raiser.escalations if e.id == escalation_id)
-            if raiser
-            else iter(()),
-            None,
-        )
-        root = store.team(store.root_id) if store.root_id else None
-        if raiser is None or escalation is None or root is None:
-            return
-        if escalation.held_by is None or escalation.asked_of is not None:
-            return
-        asked = "\n".join(filter(None, (team_for, escalation.title, escalation.detail)))
-        choice = await self.choose_team(asked, root, asker=raiser)
-        # The team as it is in the session that asks: a request never
-        # leaves the session it was made in.
-        owner = store.instance(choice.node_id, raiser.session)
-        if not choice.sure or owner is None or not self._may_ask(raiser, owner):
-            self.hand_escalation(escalation.held_by, raiser, raiser, escalation, [])
-            return
-        store.ask_escalation(
-            raiser.id, escalation.id, owner.id, self._clock().isoformat()
-        )
-        self._save_soon()
-        parents = {node.id: node.parent_id for node in store.places()}
-        above = store.place(
-            routing.lowest_holding([raiser.id, owner.id], parents) or ""
-        )
-        if above is not None:
-            await asyncio.to_thread(
-                self._note_request, above, raiser, owner, escalation
-            )
-        self.tell_ic(owner.id, asked_by_team(raiser, escalation, team_for))
-
-    def _may_ask(self, raiser: SessionTeam, owner: SessionTeam) -> bool:
-        """Whether a team's IC may be asked directly by another's: not a
-        team above or below the one that asks, not one that cannot take a
-        request now, not one that itself waits on the asking team, and not
-        one the asking team already has several requests open with."""
-        store = self.store
-        parents = {node.id: node.parent_id for node in store.places()}
-        if routing.on_one_line(raiser.id, owner.id, parents):
-            return False
-        if not takes_requests(owner):
-            return False
-        if any(escalation.asked_of == raiser.id for escalation in owner.escalations):
-            return False
-        open_with = sum(1 for e in raiser.escalations if e.asked_of == owner.id)
-        return open_with < OPEN_REQUESTS_TO_ONE_TEAM
-
-    def _note_request(
-        self,
-        above: SessionTeam,
-        raiser: SessionTeam,
-        owner: SessionTeam,
-        escalation: Escalation,
-    ) -> None:
-        """Keep a direct request in the record of the team above both, count
-        it between that team's two sub-teams it passed between, and wake
-        that team's IC when one team has asked the other as often as the
-        org's setbacks number."""
-        store = self.store
-        self.record_event(above.id, "asked_team", raiser, escalation.title, other=owner)
-        sides = [
-            next(
-                (
-                    team
-                    for team in (*store.above(node.id), node)
-                    if team.parent_id == above.id
-                ),
-                None,
-            )
-            for node in (raiser, owner)
-        ]
-        if sides[0] is not None and sides[1] is not None:
-            self.record_event(
-                above.id,
-                "needed",
-                sides[0],
-                NEED_ASKED,
-                [owner.boundary.path],
-                sides[1],
-            )
-        limit = self.settings.manager_check_ic_setbacks
-        table = requests_between(self.history_of(above.id))
-        row = next(
-            (
-                r
-                for r in table
-                if (r["from_node"], r["to_node"]) == (raiser.team_id, owner.team_id)
-            ),
-            None,
-        )
-        if limit and row is not None and row["asked"] == limit:
-            self.tell_ic(above.id, many_requests_notice(row, table))
-
-    def answered_directly(
-        self, raiser: SessionTeam, escalation: Escalation, action: str, text: str
-    ) -> str:
-        """The IC of a team that was asked directly settles what was asked,
-        or cannot. Safe from any thread."""
-        owner = self.store.place(escalation.asked_of or "")
-        title = owner.title if owner else "a team that is gone"
-        if action != "settle":
-            self._back_to_chain(raiser, escalation, title, PASSED_UP, text)
-            return (
-                "Passed up. It is now with the IC of the team above the one that asked."
-            )
-        self.store.settle_escalation(raiser.id, escalation.id)
-        self._save_soon()
-        self.progressed(raiser.id)
-        self._note_answer(raiser, escalation, SETTLED)
-        self.notify(
-            agent_conversation(raiser, "ic"),
-            f"The IC of {title!r}, which the runtime asked directly, settled "
-            f"your escalation {escalation.title!r}:\n{text}",
-        )
-        return "Settled; the IC that asked has your answer."
-
-    def _back_to_chain(
-        self,
-        raiser: SessionTeam,
-        escalation: Escalation,
-        title: str,
-        how: str,
-        why: str,
-    ) -> None:
-        """A team that was asked directly did not settle a request: it goes
-        to the IC of the team above the one that asked, as it would have
-        without the direct way."""
-        self._note_answer(raiser, escalation, how)
-        back = self.store.ask_escalation(raiser.id, escalation.id, None)
-        self._save_soon()
-        if back.held_by is None:
-            return
-        self.hand_escalation(
-            back.held_by,
-            raiser,
-            raiser,
-            back,
-            [f"{title}, which was asked directly ({how}): {why}"],
-        )
-
-    def _note_answer(
-        self, raiser: SessionTeam, escalation: Escalation, how: str
-    ) -> None:
-        """Keep how a direct request ended, in the record that has it."""
-        asked = escalation.asked_of
-        for above in self.store.above(raiser.id):
-            made = [
-                event
-                for event in self.history_of(above.id)
-                if event.kind == "asked_team"
-                and (event.team_id, event.other_id)
-                == (raiser.team_id, team_key(asked or ""))
-            ]
-            if made:
-                self.record_event(
-                    above.id,
-                    "answered",
-                    raiser,
-                    how,
-                    other_gone=(made[-1].other_id, made[-1].other),
-                )
-                return
-
-    async def _check_asks(self) -> None:
-        """Give back to the chain each request a team was asked directly
-        that it can no longer answer, or has not answered for as long as a
-        team may show no progress."""
-        store = self._store
-        if store is None or self._paused is not None:
-            return
-        limit = self.settings.stall_check_minutes
-        now = self._clock()
-        for raiser in store.places():
-            for escalation in raiser.escalations:
-                if escalation.asked_of is None:
-                    continue
-                owner = store.place(escalation.asked_of)
-                ic = (
-                    next((a for a in owner.agents if a.role == "ic"), None)
-                    if owner
-                    else None
-                )
-                gone = (
-                    owner is None
-                    or ic is None
-                    or ic.status == AGENT_LOST
-                    or owner.stopped is not None
-                )
-                late = bool(limit) and now - datetime.fromisoformat(
-                    escalation.asked_at or escalation.raised_at
-                ) >= timedelta(minutes=limit)
-                if gone or late:
-                    await asyncio.to_thread(
-                        self._back_to_chain,
-                        raiser,
-                        escalation,
-                        owner.title if owner else "a team that is gone",
-                        UNANSWERED,
-                        "it can take no request now"
-                        if gone
-                        else f"no answer in {limit} min",
-                    )
 
     def stop_team(self, node_id: str, reason: str) -> None:
         """Stop a team for the IC of the team above: its agents and those
@@ -349,7 +120,6 @@ class Watch(Reviews):
         while True:
             await asyncio.sleep(self._stall_poll)
             if self._loop is not None:
-                self._enqueue(self._check_asks, STALL_LANE)
                 self._enqueue(self._check_stalls, STALL_LANE)
 
     def _may_stall(self, team: SessionTeam) -> bool:

@@ -107,7 +107,7 @@ def write_refusal(
         if owns(sub_team, path):
             return (
                 f"{path!r} belongs to your sub-team {sub_team.title!r} "
-                f"(node {sub_team.id}), so it was not changed. Tell that team "
+                f"(id {sub_team.id}), so it was not changed. Tell that team "
                 "what you need instead."
             )
     if any(glob_matches(glob, path) for glob in node.boundary.readonly):

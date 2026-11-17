@@ -145,18 +145,6 @@ class Escalation(BaseModel):
             "first. Always the unbroken chain from that node's parent."
         ),
     )
-    asked_of: str | None = Field(
-        default=None,
-        description=(
-            "A team that is not above the one that raised it, which the "
-            "director asked to settle it directly. While set, that team's "
-            "IC has it and `held_by` does not; None once that team could "
-            "not settle it, or when no team was asked."
-        ),
-    )
-    asked_at: str | None = Field(
-        default=None, description="When `asked_of` was asked (ISO 8601)."
-    )
 
 
 class SplitChild(BaseModel):
@@ -421,8 +409,6 @@ TeamEventKind = Literal[
     "needed",
     "asked",
     "misrouted",
-    "asked_team",
-    "answered",
     "session_opened",
     "session_closed",
     "not_taken",
@@ -869,10 +855,9 @@ class DirectorSettings(BaseModel):
     route_requests: bool = Field(
         default=True,
         description=(
-            "Whether a message sent with `auto`, and what an IC asks of "
-            "another team, may go straight to the team the director "
-            "chooses. Off, the first goes to the team its directory gives "
-            "and the second up the chain of teams."
+            "Whether a message sent with `auto` may go straight to the "
+            "team the director chooses. Off, it goes to the team its "
+            "directory gives."
         ),
     )
 

@@ -85,7 +85,7 @@ class MsgIcAction(Action):
     team: str = Field(
         default="",
         description=(
-            "The node id of a team directly below yours, to write to its "
+            "The id of a team directly below yours, to write to its "
             "IC. Leave empty for your own team's IC."
         ),
     )
@@ -145,17 +145,6 @@ class RaiseEscalationAction(Action):
     title: str
     detail: str = Field(
         default="", description="What you need decided, and the options you see."
-    )
-    team_for: str = Field(
-        default="",
-        description=(
-            "For an IC that needs something of a team that is not above it: "
-            "what it needs, of which files or of which part of the product. "
-            "The runtime then takes the escalation straight to the IC of the "
-            "team that holds it, when it is sure which team that is, and "
-            "otherwise to the IC of the team above as without this. Leave "
-            "empty for what the team above must decide."
-        ),
     )
 
 
@@ -224,14 +213,14 @@ class ReportAction(Action):
 class MsgTeamAction(Action):
     """Write to the IC of a team below yours."""
 
-    team: str = Field(description="The node id of a team directly below yours.")
+    team: str = Field(description="The id of a team directly below yours.")
     text: str = Field(description="The message, in your own words.")
 
 
 class HandOverAction(Action):
     """Pass on to a team below yours what the teams before it left."""
 
-    team: str = Field(description="The node id of a team directly below yours.")
+    team: str = Field(description="The id of a team directly below yours.")
     notes: str = Field(
         default="",
         description=(
@@ -252,7 +241,7 @@ class HandOverAction(Action):
 class StopTeamAction(Action):
     """Stop a team below yours that has gone on too long without progress."""
 
-    team: str = Field(description="The node id of a team directly below yours.")
+    team: str = Field(description="The id of a team directly below yours.")
     reason: str = Field(description="Why the team is stopped; your Manager is told.")
 
 
@@ -540,7 +529,6 @@ class RaiseEscalationTool(_DirectorTool[RaiseEscalationAction]):
             action.category,
             action.title,
             action.detail,
-            action.team_for,
         )
 
 

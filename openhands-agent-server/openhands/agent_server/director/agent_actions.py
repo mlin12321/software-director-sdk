@@ -350,7 +350,6 @@ def raise_escalation(
     kind: EscalationKind | Literal["misrouted"],
     title: str,
     detail: str,
-    team_for: str = "",
 ) -> str:
     """Send something the caller cannot settle to the agent of its own role
     in the team above. `misrouted` hands back what the human's words
@@ -378,13 +377,6 @@ def raise_escalation(
         return (
             f"Raised as {escalation.id}. Nobody is above your team: it waits "
             "on the human."
-        )
-    if team_for.strip() and caller.role == "ic" and service.settings.route_requests:
-        service.ask_team(node.id, escalation.id, team_for.strip())
-        return (
-            f"Raised as {escalation.id}. The runtime takes it to the IC of the "
-            "team it concerns if it is sure which that is, and otherwise to "
-            "the IC of the team above; you will be told the answer."
         )
     service.hand_escalation(escalation.held_by, node, node, escalation, [])
     return (
@@ -418,10 +410,7 @@ def resolve_escalation(
     )
     if raiser is None or escalation is None:
         raise NotFound(f"Node {node_id} has no escalation {escalation_id}")
-    direct = escalation.asked_of == caller.node.id
-    if not direct and (
-        escalation.asked_of is not None or escalation.held_by != caller.node.id
-    ):
+    if escalation.held_by != caller.node.id:
         raise Invalid(f"Escalation {escalation_id} is not with your team")
     if escalation.raised_by != caller.role:
         raise Invalid(
@@ -429,8 +418,6 @@ def resolve_escalation(
             f"{'an IC' if escalation.raised_by == 'ic' else 'a Manager'}: it is "
             f"for your team's {_role_name(escalation.raised_by)} to settle"
         )
-    if direct:
-        return service.answered_directly(raiser, escalation, action, text.strip())
     if action == "settle":
         store.settle_escalation(raiser.id, escalation_id)
         service.progressed(raiser.id)

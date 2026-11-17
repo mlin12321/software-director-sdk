@@ -251,31 +251,40 @@ async def test_the_human_is_asked_when_their_uncommitted_work_is_in_the_way(
     assert review is not None and review.state == "accepted"
 
 
-async def test_a_team_a_session_set_up_is_asked_within_that_session_only(
+async def test_what_a_team_needs_of_another_goes_to_the_ic_above_both(
     service: DirectorService, launcher: FakeLauncher
 ):
     await split_root(service)
-    launcher.answers[USAGE_ID] = "Teams: apps.web\nReason: The cart page is Web's."
     need = RaiseEscalationAction(
         category="design_decision",
         title="The cart must send the order id",
-        detail="POST /checkout needs it.",
-        team_for="The cart page should send order_id with the form.",
+        detail="POST /checkout needs it of the cart page, which is Web's.",
     )
 
     await use(service, ic(service, "services.api"), RaiseEscalationTool, need)
     await service.settled()
 
-    # The org does not have Web yet; the session that set it up does.
-    assert service.store.team("apps.web") is None
     [raised] = node(service, "services.api").escalations
-    assert raised.asked_of == node(service, "apps.web").id
+    assert raised.held_by == node(service, "root").id
     assert (
-        "asks your team directly" in launcher.messages_to(ic(service, "apps.web"))[-1]
+        "escalates 'The cart must send the order id'"
+        in launcher.messages_to(ic(service))[-1]
+    )
+    # The team it concerns hears of it only from the IC above both.
+    assert not any(
+        "The cart must send" in told
+        for told in launcher.messages_to(ic(service, "apps.web"))
     )
 
-    # A new request of the human's is for the org's own teams: it cannot
-    # go to a team only a session has.
+
+async def test_a_new_request_cannot_go_to_a_team_only_a_session_has(
+    service: DirectorService, launcher: FakeLauncher
+):
+    await split_root(service)
+    launcher.answers[USAGE_ID] = "Teams: apps.web\nReason: The cart page is Web's."
+
+    # The org does not have Web yet; the session that set it up does.
+    assert service.store.team("apps.web") is None
     sent = await service.route_message(
         RouteMessageRequest(text="Make the cart page faster.", auto=True)
     )

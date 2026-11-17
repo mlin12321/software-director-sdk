@@ -59,7 +59,6 @@ from openhands.agent_server.director.prompts import (
     needs_between,
     proposal_facts,
     record_line,
-    requests_between,
     track_records,
 )
 from openhands.agent_server.director.run_state import (
@@ -359,8 +358,7 @@ class Records(ServiceState):
         return [
             pair
             for pair in needs_between(self.history_of(node_id))
-            if pair["writes_refused"] + pair["review_findings"] + pair["requests"]
-            >= NEEDED_WORTH_SAYING
+            if pair["writes_refused"] + pair["review_findings"] >= NEEDED_WORTH_SAYING
         ]
 
     def _so_far(self, team: SessionTeam) -> str:
@@ -596,11 +594,9 @@ class Records(ServiceState):
                     for handoff in escalation.handoffs
                 ],
             }
-            | ({"asked_of_you_directly": True} if escalation.asked_of else {})
             for other in store.places()
             for escalation in other.escalations
-            if escalation.raised_by == role
-            and (escalation.asked_of or escalation.held_by) == node.id
+            if escalation.raised_by == role and escalation.held_by == node.id
         ]
         others = [
             other
@@ -682,7 +678,7 @@ class Records(ServiceState):
                 {
                     "escalation_id": escalation.id,
                     "title": escalation.title,
-                    "with": escalation.asked_of or escalation.held_by or "the human",
+                    "with": escalation.held_by or "the human",
                 }
                 for escalation in node.escalations
                 if escalation.raised_by == role
@@ -705,9 +701,6 @@ class Records(ServiceState):
             ]
         if role == "ic" and store.below(node.id):
             context["asked_directly_of_teams_below"] = self.asked_below(node)
-            context["what_teams_below_asked_of_each_other_directly"] = requests_between(
-                self.history_of(node.id)
-            )
         if role == "ic":
             # The IC is the one that passes on what removed teams left.
             context["former_teams"] = [
