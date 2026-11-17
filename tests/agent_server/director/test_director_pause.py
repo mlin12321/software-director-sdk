@@ -36,7 +36,9 @@ from openhands.agent_server.director.tools.definition import SettleTeamsAction
 from openhands.sdk.conversation.state import ConversationExecutionStatus
 from tests.agent_server.director.conftest import (
     FakeLauncher,
+    former_of,
     make_node,
+    memory_of,
     open_session_in,
     run_git,
     tasked,
@@ -282,7 +284,7 @@ async def test_a_team_start_cut_off_by_a_crash_is_finished_without_a_second_of_a
     assert node(second, "root").pending_split is None
     starts = [str(start.conversation_id) for start in launcher.derived]
     assert len(set(starts)) == len(starts) == 3
-    contracts = second.team_memory.read(CONTRACTS_FILE) or ""
+    contracts = memory_of(second, CONTRACTS_FILE) or ""
     assert contracts.count("POST /checkout returns {order_id}") == 1
     told = [text for text in launcher.messages_to(ic(second)) if "approved" in text]
     assert len(told) == 1
@@ -314,7 +316,7 @@ async def test_a_prune_cut_off_by_a_crash_is_finished_and_recorded_once(
     assert len(set(launcher.deleted)) == 2
     kept = run_git(repo, "for-each-ref", "--format=%(refname)", "refs/agents/pruned")
     assert len(kept.split()) == 1
-    assert len(second.team_memory.former("services.api")) == 1
+    assert len(former_of(second, "services.api")) == 1
     told = [text for text in launcher.messages_to(ic(second)) if "pruned" in text]
     assert len(told) == 1
     await second.aclose()

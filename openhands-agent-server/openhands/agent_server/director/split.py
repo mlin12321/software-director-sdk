@@ -5,8 +5,9 @@ comparing paths: whether two arbitrary sets of globs overlap cannot be
 decided reliably.
 """
 
+import json
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import PurePosixPath
 from typing import NamedTuple
 
@@ -381,27 +382,85 @@ def is_inside(path: str, ancestor: str) -> bool:
     return not ancestor or path.startswith(f"{ancestor}/")
 
 
-Shape = list[tuple[str, str, str]]
+# Each team, the team above it, its directory and, where it is known, what
+# else makes it that team (:func:`made_of`).
+Shape = list[tuple[str, str, str, str]]
+
+
+def made_of(team: OrgNodeInput) -> str:
+    """What makes a team that team besides where it hangs and its
+    directory: its name, what it may write and read, the agent it runs on
+    and when it was set up."""
+    return json.dumps(
+        [
+            team.title,
+            sorted(team.boundary.writable),
+            sorted(team.boundary.readonly),
+            team.agent_profile or "",
+            team.since,
+        ]
+    )
 
 
 def shape_of(teams: Sequence[OrgNodeInput]) -> Shape:
     """The sub-teams under a team, as they are compared between the org and
-    a session: each team, the team above it and its directory. The first of
-    ``teams`` is the team itself and has nothing above it here."""
+    a session. The first of ``teams`` is the team itself and has nothing
+    above it here."""
     top = teams[0].id if teams else ""
     return sorted(
         (
             team_id_of(team),
             "" if team.id == top else (team.parent_id or "").split("@")[0],
             team.boundary.path,
+            made_of(team),
         )
         for team in teams
     )
 
 
-# A team in a shape: the team above it and its directory. None where the
-# team is not there.
-Side = tuple[str, str] | None
+def settle[K, V](
+    base: Mapping[K, V], theirs: Mapping[K, V], now: Mapping[K, V]
+) -> tuple[dict[K, V | None], list[K]]:
+    """Settle, key by key, what a session made of something the org has,
+    which may have changed since the session last knew it as ``base``.
+
+    What the session left as it was stays as the org has it now. What only
+    the session changed is taken from the session. What both changed, and
+    not to the same, is a conflict. A key that is missing is None.
+
+    Returns:
+        What to take from the session (None to remove it), and the keys
+        both changed.
+    """
+    take: dict[K, V | None] = {}
+    conflicts: list[K] = []
+    for key in {*base, *theirs, *now}:
+        was, wanted, has = base.get(key), theirs.get(key), now.get(key)
+        if wanted == was or wanted == has:
+            continue
+        if has == was:
+            take[key] = wanted
+        else:
+            conflicts.append(key)
+    return take, conflicts
+
+
+def home_of_lost(path: str, teams: Sequence[OrgNodeInput], top: str) -> str:
+    """The team of the org that has what a team it does not have left: the
+    one whose directory most closely holds ``path``, else ``top``."""
+    holding = [
+        team
+        for team in teams
+        if team.boundary.path == path or is_inside(path, team.boundary.path)
+    ]
+    if not holding:
+        return top
+    return max(holding, key=lambda team: len(team.boundary.path)).id
+
+
+# A team in a shape: the team above it, its directory and, where it is
+# known, what else makes it that team. None where the team is not there.
+Side = tuple[str, ...] | None
 
 
 class ShapeConflict(NamedTuple):
@@ -413,16 +472,16 @@ class ShapeConflict(NamedTuple):
 
 
 def merge_shapes(
-    base: Shape, theirs: Shape, now: Shape
+    base: Sequence[tuple[str, ...]],
+    theirs: Sequence[tuple[str, ...]],
+    now: Sequence[tuple[str, ...]],
 ) -> tuple[dict[str, Side], list[ShapeConflict]]:
     """Settle, team by team, what the sub-teams a session has make of the
-    org's, which may have changed since.
+    org's, which may have changed since (:func:`settle`).
 
-    A team the session left as it was in ``base`` stays as the org has it
-    now. One only the session changed is taken from the session. One both
-    changed, and not to the same, is a conflict; so is a team that would
-    not hang together with the rest: under a team that is gone, with a
-    directory another team has, or removed while a team is still below it.
+    A team is also a conflict when it would not hang together with the
+    rest: under a team that is gone, with a directory another team has, or
+    removed while a team is still below it.
 
     Args:
         base: The sub-teams as the session last knew the org's.
@@ -434,19 +493,10 @@ def merge_shapes(
         (None to remove it), and the conflicts.
     """
     was, session, org = (
-        {team: (above, path) for team, above, path in shape}
-        for shape in (base, theirs, now)
+        {team: tuple(side) for team, *side in shape} for shape in (base, theirs, now)
     )
-    take: dict[str, Side] = {}
-    conflicts: set[str] = set()
-    for team in {*was, *session, *org}:
-        wanted, has = session.get(team), org.get(team)
-        if wanted == was.get(team) or wanted == has:
-            continue
-        if has == was.get(team):
-            take[team] = wanted
-        else:
-            conflicts.add(team)
+    take, both = settle(was, session, org)
+    conflicts = set(both)
     while True:
         after = {
             team: side for team, side in {**org, **take}.items() if side is not None

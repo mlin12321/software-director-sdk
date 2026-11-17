@@ -16,6 +16,7 @@ from openhands.agent_server.director.git import uncommitted
 from openhands.agent_server.director.models import (
     ROLE_NAMES,
     AgentRole,
+    ContractsChoice,
     EscalationKind,
     Review,
     ReviewFinding,
@@ -518,12 +519,19 @@ def review_team(
 
 
 def settle_teams(
-    service: DirectorService, caller: Caller, org_teams: list[str], note: str
+    service: DirectorService,
+    caller: Caller,
+    org_teams: list[str],
+    note: str,
+    contracts: list[ContractsChoice] | None = None,
 ) -> str:
-    """Settle the sub-teams of a session that wait for the caller."""
+    """Settle what waits for the caller of a session's teams."""
     _only(caller, "manager", "settle the sub-teams of a session")
     return service.settle_teams(
-        caller.node.id, [team.strip().split("@")[0] for team in org_teams], note.strip()
+        caller.node.id,
+        [team.strip().split("@")[0] for team in org_teams],
+        note.strip(),
+        contracts,
     )
 
 

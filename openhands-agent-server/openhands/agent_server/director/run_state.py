@@ -31,7 +31,12 @@ HANDING = "handing"  # node id -> what its hand-over conversation has done
 SESSION = "session"  # session id -> the session and what it has at its teams
 JOINED = "joined"  # conversation id, the human has written in it
 REPORTS = "reports"  # node id of a session's team -> what its agents recorded
-DRAFT = "draft"  # node id of a session's team -> the spec it wrote there
+# session id and a file of team memory -> the text the session wrote there
+# and the text it was written over
+FILES = "files"
+# session id, team id and time -> the record of a team the session removed
+FORMER = "former"
+SHOWN = "shown"  # node id -> what its reviewer was shown to reconcile
 
 _TABLES = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);

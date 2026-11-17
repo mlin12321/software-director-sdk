@@ -592,9 +592,10 @@ async def test_an_approved_split_starts_a_pod_for_each_sub_team(
 
     assert node(service, "root").pending_split is None
     assert "API (services/api)" in launcher.messages_to(ic(service))[-1]
-    specs, [contracts] = service.team_memory.applies_to("services/api", "")
-    assert specs == []
+    [contracts] = service.contracts_of(node(service, "services.api"))
     assert not contracts.own and "POST /checkout" in contracts.contracts
+    # They are the session's alone until its work is accepted.
+    assert service.team_memory.read("contracts.md") is None
 
 
 async def test_a_sub_team_that_cannot_start_is_shown_as_blocked(

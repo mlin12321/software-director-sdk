@@ -13,6 +13,7 @@ from openhands.agent_server.conversation_service import (
     ExecutionStatusListener,
     ToolParams,
 )
+from openhands.agent_server.director.git_store import team_key
 from openhands.agent_server.director.headline import TeamSummary
 from openhands.agent_server.director.models import (
     AgentKind,
@@ -21,6 +22,7 @@ from openhands.agent_server.director.models import (
     Escalation,
     EscalationHandoff,
     EscalationKind,
+    FormerTeam,
     IsolationMode,
     OrgNodeInput,
     SessionInput,
@@ -539,3 +541,22 @@ async def tasked(service: DirectorService) -> None:
         if not team.agents:
             service.tell_ic(team.id, "Begin.")
     await service.settled()
+
+
+def former_of(service: DirectorService, team_id: str) -> list[FormerTeam]:
+    """The records of the teams removed from an id: the org's, then the ones
+    sessions keep to themselves until their work is accepted."""
+    kept = [
+        record
+        for session in service.store.sessions()
+        for record in service.former_drafts(session.id)
+        if record.id == team_key(team_id)
+    ]
+    return [*service.team_memory.former(team_id), *kept]
+
+
+def memory_of(service: DirectorService, file: str) -> str | None:
+    """A file of team memory as the first session has it: what it wrote
+    there and nobody accepted yet, else the org's."""
+    [session, *_] = service.store.sessions()
+    return service.read_file(service.store.session(session.id)[0], file)

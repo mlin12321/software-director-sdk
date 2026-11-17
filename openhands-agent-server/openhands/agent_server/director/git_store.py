@@ -81,6 +81,25 @@ class Merged(NamedTuple):
     """Files both sides changed where this side's text was kept."""
 
 
+class Landing(NamedTuple):
+    """What a session's accepted work makes of team memory, to be taken in
+    as one commit."""
+
+    # Each file the session wrote, with its text (None to remove it) and
+    # the text it was written over.
+    files: dict[str, tuple[str | None, str | None]]
+    # The text a reviewer was shown of a file and decided to put the
+    # session's in place of.
+    seen: dict[str, str | None]
+    # What its agents recorded, by team and in the order it was written.
+    reports: dict[str, list[Report]]
+    # The records of the teams it removed or that the org did not take.
+    former: list[FormerTeam]
+    # The teams whose own records go: another team has their id now, or
+    # none.
+    forget: list[str]
+
+
 class Clash(NamedTuple):
     """A file both stores changed the same lines of."""
 
@@ -272,59 +291,90 @@ class GitStore:
             key=lambda record: record.at,
         )
 
-    def record_former(self, team: FormerTeam, place: str = "") -> FormerTeam:
-        """Keep what a removed team left as one record and take it out of
-        where a later team of the same name or directory would find it:
-        its reports, its messages and the contracts between its sub-teams.
-        Its spec stays where it is.
-
-        Recording the same removal again changes nothing.
-
-        Args:
-            place: The id its messages are kept under, when that is not the
-                team's own: its place in a session.
+    def take_threads(self, place: str) -> list[FormerThread]:
+        """Take out what the agents at a session's place wrote to each
+        other, so that a later team at the same place does not find it.
 
         Returns:
-            The record as kept.
+            What was taken out.
         """
-        path = _former_file(team.id, team.at)
-        kept = team
+        taken: list[FormerThread] = []
 
         def mutate(read: StoreReader) -> list[StoreChange]:
-            nonlocal kept
-            if (raw := read(path)) is not None:
-                kept = FormerTeam.model_validate_json(raw)
-                return []
-            contracts_file = _join(normalize_store_path(team.path), CONTRACTS_FILE)
-            threads = [
+            nonlocal taken
+            files = [
                 file
                 for directory in (THREADS_DIR, IC_THREADS_DIR)
                 for file in self._files(directory)
-                if (place or team.id) in (Path(file).parent.name, Path(file).stem)
+                if place in (Path(file).parent.name, Path(file).stem)
             ]
-            kept = team.model_copy(
-                update={
-                    "contracts": read(contracts_file) or "",
-                    "threads": [
-                        FormerThread(file=file, messages=_parse_messages(read(file)))
-                        for file in threads
-                    ],
-                }
-            )
-            gone = [
-                contracts_file,
-                *threads,
-                *(_reports_file(team.id, role) for role in AGENT_ROLES),
-                # What became of its own sub-teams is not a later team's.
-                _history_file(team.id),
+            taken = [
+                FormerThread(file=file, messages=_parse_messages(read(file)))
+                for file in files
+                if read(file) is not None
             ]
-            return [
-                StoreChange(path, kept.model_dump_json(indent=2) + "\n"),
-                *(StoreChange(file, None) for file in gone if read(file) is not None),
-            ]
+            return [StoreChange(thread.file, None) for thread in taken]
 
-        self.commit(mutate, f"memory: former team {path}")
-        return kept
+        self.commit(mutate, f"memory: messages of {place}")
+        return taken
+
+    def take_in(self, landing: Landing, message: str) -> dict[str, str | None]:
+        """Make of team memory what a session's accepted work makes of it,
+        all of it or none, whoever else writes meanwhile.
+
+        A file is written only where the text it was written over still
+        stands, or the text a reviewer was shown; where the file already
+        has the session's text there is nothing to write. A report is
+        added once, by its id. A record of a former team is written once.
+
+        Returns:
+            The files that were not written, with the text each has now.
+        """
+        left: dict[str, str | None] = {}
+
+        def mutate(read: StoreReader) -> list[StoreChange]:
+            nonlocal left
+            left = {}
+            out: dict[str, str | None] = {}
+
+            def now(path: str) -> str | None:
+                return out[path] if path in out else read(path)
+
+            for team in landing.forget:
+                for file in (
+                    *(_reports_file(team, role) for role in AGENT_ROLES),
+                    _history_file(team),
+                ):
+                    if read(file) is not None:
+                        out[file] = None
+            for record in landing.former:
+                path = _former_file(record.id, record.at)
+                if read(path) is None:
+                    out[path] = record.model_dump_json(indent=2) + "\n"
+            for team, reports in landing.reports.items():
+                for role in AGENT_ROLES:
+                    path = _reports_file(team, role)
+                    kept = _parse_reports(now(path))
+                    known = {report.id for report in kept if report.id}
+                    added = [
+                        report
+                        for report in reports
+                        if report.role == role and report.id not in known
+                    ]
+                    if added:
+                        out[path] = _serialize(_REPORTS.dump_python([*kept, *added]))
+            for path, (text, over) in landing.files.items():
+                has = read(path)
+                if has == text:
+                    continue
+                if has == over or (path in landing.seen and landing.seen[path] == has):
+                    out[path] = text
+                else:
+                    left[path] = has
+            return [StoreChange(path, content) for path, content in out.items()]
+
+        self.commit(mutate, message)
+        return left
 
     def history(self, node_id: str) -> list[TeamEvent]:
         """What became of the teams directly below a team, oldest first."""

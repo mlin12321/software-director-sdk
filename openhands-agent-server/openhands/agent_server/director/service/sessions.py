@@ -34,9 +34,7 @@ from openhands.agent_server.director.prompts import (
 )
 from openhands.agent_server.director.run_state import (
     CHECKS,
-    DRAFT,
     PROGRESS,
-    REPORTS,
     TASK,
     TOLD,
     Intent,
@@ -179,6 +177,7 @@ class Sessions(Splits):
                     agents=[],
                     status="idle",
                     spec_summary=above.spec_summary,
+                    since=above.since,
                 ),
                 *(
                     SessionTeamInput(
@@ -207,6 +206,7 @@ class Sessions(Splits):
                         else current.headline,
                         spec_summary=current.spec_summary,
                         old_specs=current.old_specs,
+                        since=current.since,
                     )
                     for current in shape
                 ),
@@ -397,6 +397,7 @@ class Sessions(Splits):
                 headline=node.headline,
                 spec_summary=higher.spec_summary,
                 old_specs=higher.old_specs,
+                since=higher.since,
             ),
             SessionTeamInput(
                 id=reviewing,
@@ -413,6 +414,7 @@ class Sessions(Splits):
                 agents=[],
                 status="idle",
                 spec_summary=above.spec_summary,
+                since=above.since,
             ),
             [
                 SessionTeamInput(
@@ -531,15 +533,28 @@ class Sessions(Splits):
             top = store.place(node_id)
             for team in map(store.place, plan["teams"]):
                 if team is not None:
-                    for kind in (TASK, PROGRESS, CHECKS, DRAFT, REPORTS):
+                    for kind in (TASK, PROGRESS, CHECKS):
                         run.unmark(kind, team.id)
                     self._work_accepted(team)
             if top is not None:
+                gone = await asyncio.to_thread(self._leave, top)
                 self.record_event(
                     plan["parent"],
                     "session_closed",
                     top,
-                    "with work that was not merged" if intent.payload["kept"] else "",
+                    "; ".join(
+                        said
+                        for said in (
+                            "with work that was not merged"
+                            if intent.payload["kept"]
+                            else "",
+                            f"what it wrote and never had accepted went with it "
+                            f"({gone})"
+                            if gone
+                            else "",
+                        )
+                        if said
+                    ),
                 )
             store.close_session(plan["session"])
             await self._save()

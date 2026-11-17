@@ -51,6 +51,7 @@ from openhands.agent_server.director.service.state import (
     ROOT_ID,
     TOOLS_OF,
     _checkout_root,
+    _instant,
     _is_in,
     _summary_of,
     agent_conversation,
@@ -205,6 +206,7 @@ class DirectorService(Sync):
                     isolation="shared",
                     headline=named.headline,
                     spec_summary=_summary_of(request.task),
+                    since=_instant(),
                 )
             )
             try:

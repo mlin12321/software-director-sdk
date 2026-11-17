@@ -299,6 +299,7 @@ def sets_up_jobs(service: DirectorService, top: str, path: str = "services/api/j
             parent_id=top,
             agents=[],
             boundary=place.boundary.model_copy(update={"path": path}),
+            since="set up by the session",
         )
     )
 
@@ -313,6 +314,7 @@ def org_gains(service: DirectorService, team_id: str, path: str) -> None:
             id=team_id,
             parent_id=api.id,
             boundary=api.boundary.model_copy(update={"path": path}),
+            since="set up by other work",
         )
     )
 
@@ -398,8 +400,8 @@ async def test_a_team_both_made_something_else_of_waits_for_the_manager_above(
     assert str(start.conversation_id) == asked
     assert "Manager of your team in review mode" in "".join(start.suffixes or [])
     told = launcher.messages_to(asked)[-1]
-    assert "the session: services/api/jobs, under services.api" in told
-    assert "the org now: services/api/workers, under services.api" in told
+    assert "the session: 'API' in services/api/jobs, under services.api" in told
+    assert "the org now: 'API' in services/api/workers, under services.api" in told
     # What the session wrote for it waits with it.
     assert service.spec_draft(place) is not None
 
@@ -427,11 +429,20 @@ async def test_a_team_both_made_something_else_of_waits_for_the_manager_above(
     assert service.spec_draft(place) is None
     said = launcher.messages_to(conversation)[-1]
     assert "One queue." in said
-    assert ("The org's stay" in said) is org_holds
+    assert ("The org's teams stay" in said) is org_holds
+    # What the session wrote for the team is never dropped: it is the
+    # team's spec where the org took the team, and that team's record with
+    # the team above where it did not.
+    written = service.team_memory.read("services/api/jobs/spec.md")
+    assert written == (None if org_holds else "Run the refund jobs.")
+    kept = service.team_memory.former(JOBS)
+    assert [(left.ended, left.above, left.spec) for left in kept] == (
+        [("not_taken", "services.api", "Run the refund jobs.")] if org_holds else []
+    )
 
 
-async def test_a_team_set_up_under_one_the_org_lost_waits_and_brings_it_back(
-    service: DirectorService,
+async def test_a_team_set_up_under_one_the_org_lost_goes_under_the_nearest_team(
+    service: DirectorService, launcher: FakeLauncher
 ):
     top, conversation = await at_api(service)
     sets_up_jobs(service, top)
@@ -442,11 +453,16 @@ async def test_a_team_set_up_under_one_the_org_lost_waits_and_brings_it_back(
     assert "Accepting the work of 'API'" in answer
     assert service.store.team("services.api") is None
     assert waiting(service, top) == [JOBS]
+    asked = review_manager(service, top)
+    assert asked is not None
+    told = launcher.messages_to(asked)[-1]
+    assert "it goes under team root" in told and "is not put back" in told
 
-    await use(
-        service, review_manager(service, top), SettleTeamsTool, SettleTeamsAction()
-    )
+    await use(service, asked, SettleTeamsTool, SettleTeamsAction())
 
-    back = service.store.team("services.api")
-    assert back is not None and back.parent_id == "root"
+    # The team the org removed stays removed.
+    assert service.store.team("services.api") is None
+    jobs = service.store.team(JOBS)
+    assert jobs is not None and jobs.parent_id == "root"
     assert path_of(service, JOBS) == "services/api/jobs"
+    assert "moved" in [event.kind for event in service.team_memory.history("root")]
