@@ -738,6 +738,8 @@ def test_the_limits_on_new_teams_are_read_changed_and_kept(saved_tree: Path):
         "manager_check_accepted_reviews": 5,
         "manager_check_ic_setbacks": 3,
         "route_requests": True,
+        "session_token_limit": 0,
+        "max_open_sessions": 0,
         "teams": 5,
         "depth": 3,
         "max_concurrent_runs": 7,

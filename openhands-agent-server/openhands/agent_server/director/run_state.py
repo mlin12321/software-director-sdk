@@ -29,6 +29,7 @@ TASK = "task"  # team id -> what the team was started to do
 TOLD = "told"  # conversation id -> the context its agent was last told
 HANDING = "handing"  # team id -> what its hand-over conversation has done
 SESSION = "session"  # session id -> the session and what it has at its teams
+USE = "use"  # session id -> what each of its conversations had used when last read
 JOINED = "joined"  # conversation id, the human has written in it
 REPORTS = "reports"  # team id of a session's team -> what its agents recorded
 # session id and a file of team memory -> the text the session wrote there

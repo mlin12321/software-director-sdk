@@ -4,14 +4,17 @@ import asyncio
 import json
 from datetime import datetime, timedelta
 from pathlib import Path
+from uuid import UUID
 
 from openhands.agent_server.director.git import (
     last_commit_in,
 )
 from openhands.agent_server.director.models import (
     Escalation,
+    Session,
     SessionTeam,
     Stopped,
+    Usage,
 )
 from openhands.agent_server.director.org_store import (
     is_division_lead,
@@ -24,9 +27,11 @@ from openhands.agent_server.director.prompts import (
 )
 from openhands.agent_server.director.run_state import (
     PROGRESS,
+    USE,
 )
 from openhands.agent_server.director.service.reviews import Reviews
 from openhands.agent_server.director.service.state import (
+    LIMIT_WAITS,
     ROLE_NAMES,
     STALL_LANE,
     STALL_WAITS,
@@ -121,7 +126,114 @@ class Watch(Reviews):
         while True:
             await asyncio.sleep(self._stall_poll)
             if self._loop is not None:
+                self._enqueue(self._count_use, STALL_LANE)
                 self._enqueue(self._check_stalls, STALL_LANE)
+
+    async def _count_use(self) -> None:
+        """Add up what each session's agents have used since it was last
+        looked at, and put a session that reached its limit to rest."""
+        store = self._store
+        if store is None:
+            return
+        launcher = self._require_launcher()
+        run = self._runs()
+        marks = run.marked(USE)
+        for session in store.sessions():
+            conversations = {
+                conversation_id
+                for team in session.teams
+                for conversation_id in self._conversations_below(team)
+            }
+            now = await launcher.usage([UUID(each) for each in sorted(conversations)])
+            last: dict[str, list[float]] = json.loads(marks.get(session.id) or "{}")
+            added = Usage()
+            for conversation_id, used in now.items():
+                before = last.get(str(conversation_id), [0, 0, 0.0])
+                # A count that went down began again, with a server.
+                added = added.plus(
+                    Usage(
+                        input_tokens=max(0, used.input_tokens - int(before[0])),
+                        output_tokens=max(0, used.output_tokens - int(before[1])),
+                        cost=max(0.0, used.cost - before[2]),
+                    )
+                )
+                last[str(conversation_id)] = [
+                    used.input_tokens,
+                    used.output_tokens,
+                    used.cost,
+                ]
+            run.mark(USE, session.id, json.dumps(last))
+            limit = session.token_allowance or self.settings.session_token_limit
+            kept = store.set_session_use(session.id, session.usage.plus(added), limit)
+            if kept is not None:
+                self._hold_at_limit(kept)
+
+    def _hold_at_limit(self, session: Session) -> None:
+        """Put the agents of a session that reached its limit to rest and
+        ask the human whether it goes on."""
+        store = self.store
+        top = store.instance(session.team_id, session.id)
+        limit = session.token_allowance
+        if (
+            not limit
+            or session.usage.tokens < limit
+            or top is None
+            or top.stopped is not None
+            or self._paused is not None
+        ):
+            return
+        running = [
+            conversation_id
+            for conversation_id in self._conversations_below(top)
+            if conversation_id in self._running
+        ]
+        store.set_stopped(
+            top.id,
+            Stopped(
+                at=utc_now(),
+                reason=f"The session reached its limit of {limit:,} tokens.",
+                running=sorted(running),
+            ),
+        )
+        self._enqueue(lambda: self._stop(top.id), top.id)
+        used = session.usage
+        if all(e.id != LIMIT_WAITS for e in top.escalations):
+            store.raise_escalation(
+                top.id,
+                LIMIT_WAITS,
+                kind="critical_issue",
+                title=f"{session.title!r} reached its limit of {limit:,} tokens",
+                detail=(
+                    f"Its agents have used {used.tokens:,} tokens "
+                    f"({used.input_tokens:,} in, {used.output_tokens:,} out"
+                    + (f"; ${used.cost:.2f}" if used.cost else "")
+                    + ") and are at rest.\nAnswer this to let it go on for as "
+                    "many again; your answer is sent to its IC. Close the "
+                    "session to end it."
+                ),
+                at=utc_now(),
+            )
+        self._save_soon()
+
+    def go_on_past_limit(self, place_id: str) -> None:
+        """Let a session that was put to rest at its limit go on for as
+        many tokens again, or without a limit when the org has none now."""
+        store = self.store
+        top = store.place(place_id)
+        session = store.session_of(top) if top else None
+        if top is None or session is None:
+            return
+        limit = self.settings.session_token_limit
+        store.set_session_use(
+            session.id, session.usage, session.usage.tokens + limit if limit else 0
+        )
+        stopped = top.stopped
+        if stopped is not None:
+            store.set_stopped(top.id, None)
+            self._enqueue(
+                lambda: self._go_on(top.id, stopped.running, own_too=True), top.id
+            )
+        self._save_soon()
 
     def _may_stall(self, team: SessionTeam) -> bool:
         """Whether a team owes work nobody waits to give it: it has not

@@ -503,6 +503,14 @@ export interface DirectorMerge {
   note?: string;
 }
 
+/** What agents have used of their models. */
+export interface DirectorUsage {
+  input_tokens: number;
+  output_tokens: number;
+  /** In US dollars, as far as the agents' models report it. */
+  cost: number;
+}
+
 /**
  * A line of work at a team. All of an org's work is done in sessions: a team
  * of the org tree is reference only, and a session has agents and a checkout
@@ -530,6 +538,17 @@ export interface DirectorSession {
    * was on none.
    */
   branch: string;
+  /**
+   * What its agents have used so far, with the director's own model calls
+   * for them.
+   */
+  usage: DirectorUsage;
+  /**
+   * How many tokens, input and output together, it may use before its
+   * agents are put to rest and the human is asked; 0 while nothing limits
+   * it.
+   */
+  token_allowance: number;
   /** Of the team it was opened at. */
   status: DirectorNodeStatus;
   /** Where the review of its work stands. */
@@ -958,10 +977,18 @@ export interface DirectorSettings {
    */
   manager_check_ic_setbacks: number;
   /**
-   * Whether a message sent with `auto`, and what an IC asks of another team,
-   * may go straight to the team the director chooses.
+   * Whether a message sent with `auto` may go straight to the team the
+   * director chooses. Off, it goes to the team its folder gives.
    */
   route_requests: boolean;
+  /**
+   * How many tokens, input and output together, the agents of one session
+   * may use before they are put to rest and the human is asked whether it
+   * goes on for as many again. 0: no limit.
+   */
+  session_token_limit: number;
+  /** How many sessions may be open at once. 0: no limit. */
+  max_open_sessions: number;
 }
 
 /** The settings, beside what the org has now. */

@@ -20,7 +20,7 @@ from openhands.agent_server.director.headline import (
     summarize_team,
     summary_question,
 )
-from openhands.agent_server.director.models import AgentKind, IsolationMode
+from openhands.agent_server.director.models import AgentKind, IsolationMode, Usage
 from openhands.agent_server.event_service import (
     ActionGuard,
     ConversationRunLimitExceeded,
@@ -217,6 +217,12 @@ class TeamLauncher(Protocol):
         said nothing or does not exist."""
         ...
 
+    async def usage(self, conversation_ids: Collection[UUID]) -> dict[UUID, Usage]:
+        """What each conversation's agent has used of its model so far, with
+        the director's own calls on that agent's model. One that does not
+        exist is left out."""
+        ...
+
     def on_status(self, listener: ExecutionStatusListener) -> Callable[[], None]:
         """Hear every status change of every conversation, until stopped."""
         ...
@@ -291,6 +297,9 @@ class ConversationTeamLauncher:
     """Runs the org's agents as conversations of this server."""
 
     def __init__(self, conversations: ConversationService) -> None:
+        # What the director's own model calls used, by the conversation
+        # whose agent's model they ran on.
+        self._own_use: dict[UUID, Usage] = {}
         self._conversations = conversations
 
     async def start_root(
@@ -398,6 +407,9 @@ class ConversationTeamLauncher:
             agent_launch_additions=AgentLaunchAdditions(
                 system_message_suffix_append="\n\n".join(suffixes) or None
             ),
+            # It spends under the same caps as the agent it is started for.
+            max_iterations=parent.stored.max_iterations,
+            max_budget_per_run=parent.get_conversation().max_budget_per_run,
         )
         info, is_new = await self._conversations.start_conversation(
             request,
@@ -501,6 +513,25 @@ class ConversationTeamLauncher:
                 return f"{event.code}: {event.detail}"[:_FAILURE_KEPT]
         return None
 
+    async def usage(self, conversation_ids: Collection[UUID]) -> dict[UUID, Usage]:
+        found: dict[UUID, Usage] = {}
+        for conversation_id in conversation_ids:
+            event_service = await self._conversations.get_event_service(conversation_id)
+            if event_service is None:
+                continue
+            try:
+                state = await event_service.get_state()
+            except ValueError:
+                continue
+            metrics = state.stats.get_combined_metrics()
+            tokens = metrics.accumulated_token_usage
+            found[conversation_id] = Usage(
+                input_tokens=tokens.prompt_tokens if tokens else 0,
+                output_tokens=tokens.completion_tokens if tokens else 0,
+                cost=metrics.accumulated_cost,
+            ).plus(self._own_use.get(conversation_id, Usage()))
+        return found
+
     def on_status(self, listener: ExecutionStatusListener) -> Callable[[], None]:
         return self._conversations.add_execution_status_listener(listener)
 
@@ -521,8 +552,13 @@ class ConversationTeamLauncher:
         agent = await self._agent(conversation_id)
         if isinstance(agent, ACPAgent):
             return await self.ask_agent(conversation_id, f"{system}\n\n{user}")
+        # A copy counts for itself, so what it uses is added here.
         llm = agent.llm.model_copy(update={"usage_id": usage_id})
-        return await asyncio.to_thread(_ask, llm, system, user)
+        answer, used = await asyncio.to_thread(_ask, llm, system, user)
+        self._own_use[conversation_id] = self._own_use.get(
+            conversation_id, Usage()
+        ).plus(used)
+        return answer
 
     async def ask_agent(self, conversation_id: UUID, question: str) -> str | None:
         event_service = await self._conversations.get_event_service(conversation_id)
@@ -560,7 +596,8 @@ def _kind_of(agent: AgentBase) -> dict[str, Any]:
     return {"kind": "openhands"}
 
 
-def _ask(llm: LLM, system: str, user: str) -> str | None:
+def _ask(llm: LLM, system: str, user: str) -> tuple[str | None, Usage]:
+    """One call of a model: its answer, and what the call used."""
     messages = [
         Message(role="system", content=[TextContent(text=system)]),
         Message(role="user", content=[TextContent(text=user)]),
@@ -569,8 +606,14 @@ def _ask(llm: LLM, system: str, user: str) -> str | None:
         response = llm.generate(messages, store=False)
     except Exception:
         logger.warning("A model call of the director failed", exc_info=True)
-        return None
+        return None, Usage()
     text = "".join(
         part.text for part in response.message.content if isinstance(part, TextContent)
     )
-    return strip_reasoning_blocks(text).strip() or None
+    tokens = response.metrics.accumulated_token_usage
+    used = Usage(
+        input_tokens=tokens.prompt_tokens if tokens else 0,
+        output_tokens=tokens.completion_tokens if tokens else 0,
+        cost=response.metrics.accumulated_cost,
+    )
+    return strip_reasoning_blocks(text).strip() or None, used

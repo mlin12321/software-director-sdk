@@ -72,6 +72,7 @@ from openhands.agent_server.director.run_state import (
     ROUTED,
     TASK,
     THREADS,
+    USE,
     Intent,
 )
 from openhands.agent_server.director.service.state import (
@@ -1291,6 +1292,7 @@ class Records(ServiceState):
                     run.unmark(kind, key)
         for place in places:
             self._take_threads(place.id)
+        run.unmark(USE, session)
         return ", ".join(
             said
             for said in (

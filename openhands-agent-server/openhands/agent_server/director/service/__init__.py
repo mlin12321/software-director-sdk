@@ -50,6 +50,7 @@ from openhands.agent_server.director.service.state import (
     AGENT_PAUSED,
     DIRECTOR_TOOL_NAMES,
     HAND_OVER_TOOLS,
+    LIMIT_WAITS,
     MERGE_WAITS,
     ORG_WAITS,
     RESTART_NOTE,
@@ -480,6 +481,8 @@ class DirectorService(Sync):
             self._begin("land_org", place_id, org_holds=True)
             return store.place(place_id) or place
         role = escalation.raised_by
+        if escalation_id == LIMIT_WAITS:
+            self.go_on_past_limit(place_id)
         if escalation_id == failure_waits(role) and any(
             a.role == role and a.status == AGENT_LOST for a in place.agents
         ):
@@ -494,6 +497,9 @@ class DirectorService(Sync):
             if escalation_id == failure_waits(role)
             else "The human was told that your team shows no progress, and says"
             if escalation_id == STALL_WAITS
+            else "Your session had reached its token limit and its agents were "
+            "put to rest. The human lets it go on, and says"
+            if escalation_id == LIMIT_WAITS
             else f"The human answered your escalation {escalation.title!r}"
         )
         self.notify(agent_conversation(place, role), f"{told}:\n{answer}", at_once=True)
