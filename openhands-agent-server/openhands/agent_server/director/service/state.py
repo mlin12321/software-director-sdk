@@ -181,7 +181,7 @@ TOGETHER_WORTH_SAYING = 3
 # How many earlier declines for the same directories a proposal is shown with.
 DECLINED_TOLD = 3
 # How long a model may take to name a team before the team keeps the name
-# it has; the root's agents are not briefed until then.
+# it has; a session's first IC is not briefed until then.
 SUMMARY_TIMEOUT_SECONDS = 20.0
 # How long a model may take over a team's diff, or over an agent's reports.
 MODEL_CALL_TIMEOUT_SECONDS = 120.0

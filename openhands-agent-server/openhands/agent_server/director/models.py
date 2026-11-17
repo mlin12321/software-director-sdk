@@ -40,15 +40,14 @@ AgentKind = Literal["openhands", "acp"]
 # Why an org's agents are held. 'shutdown': the server was stopped while the
 # org worked. 'crash': the server ended without stopping the org first.
 PauseReason = Literal["human", "shutdown", "crash"]
+Side = Literal["mine", "theirs"]
+ConflictKind = Literal["field", "team", "file"]
+SyncResult = Literal["up_to_date", "fast_forward", "merged", "conflicts", "pushed"]
 # 'run_again': an agent that was running runs again. 'start': a team that
 # waited to start is started. 'continue': a step the director had begun is
 # finished. 'message': messages are delivered. 'dropped': run state that no
 # longer fits the org was put aside. 'cannot_resume': a team that cannot be
 # taken up as it is.
-Side = Literal["mine", "theirs"]
-ConflictKind = Literal["field", "team", "file"]
-SyncResult = Literal["up_to_date", "fast_forward", "merged", "conflicts", "pushed"]
-
 RecoveryKind = Literal[
     "run_again", "start", "continue", "message", "dropped", "cannot_resume"
 ]
@@ -61,10 +60,10 @@ class Boundary(BaseModel):
         description="Directory the boundary is rooted at; '' is the repository root."
     )
     writable: list[str] = Field(
-        default_factory=list, description="Globs the node's agents may write."
+        default_factory=list, description="Globs the team's agents may write."
     )
     readonly: list[str] = Field(
-        default_factory=list, description="Globs the node's agents may only read."
+        default_factory=list, description="Globs the team's agents may only read."
     )
 
 
@@ -78,7 +77,7 @@ class HandOverMode(BaseModel):
 
 
 class AgentRef(BaseModel):
-    """One agent in a node's pod."""
+    """One agent of a team at its place in a session."""
 
     role: AgentRole
     hand_over: HandOverMode | None = Field(
@@ -116,8 +115,9 @@ class Escalation(BaseModel):
 
     It goes to the agent of the same role in the node above (an IC's to the
     IC there, a Manager's to the Manager), which settles it or passes it up
-    in turn. It waits on the human only once every node above the one that
-    raised it has passed it up.
+    in turn. It waits on the human once every node above the one that raised
+    it in its session has passed it up, which for the team the session was
+    opened at is at once.
     """
 
     id: str = Field(description="Unique within the node that raised it.")
@@ -300,7 +300,12 @@ class Review(BaseModel):
 
 
 class OrgNodeInput(BaseModel):
-    """What a caller supplies for a node; the store derives the rest."""
+    """What a caller supplies for a team of the org tree; the store derives
+    the rest.
+
+    It is what an agent that works on the team is briefed from. Nobody works
+    at one: the work is at a session's place (:class:`SessionTeamInput`).
+    """
 
     id: str
     parent_id: str | None = Field(description="None for the root node.")
@@ -337,13 +342,13 @@ class OrgNodeInput(BaseModel):
 
 
 class OrgNode(OrgNodeInput):
-    """A node of the org tree, including the fields the store derives."""
+    """A team of the org tree, including the fields the store derives."""
 
     child_ids: list[str] = Field(default_factory=list)
 
 
 class OrgNodeDetail(BaseModel):
-    """A node with the nodes around it."""
+    """A team of the org tree with the teams around it."""
 
     node: OrgNode
     ancestors: list[OrgNode] = Field(description="Root first, excluding the node.")
@@ -422,7 +427,10 @@ class TeamEvent(BaseModel):
     team: str = ""
     session: str = Field(
         default="",
-        description="The title of the session that team works in, if it is in one.",
+        description=(
+            "The title of the session that team works in; '' when the event "
+            "names no team."
+        ),
     )
     detail: str = ""
     paths: list[str] = Field(
@@ -453,7 +461,7 @@ class Report(BaseModel):
         default="",
         description=(
             "The title of the session the agent that wrote it works in; '' "
-            "for an agent of the org's own team."
+            "for a report a model rewrote or the IC above handed over."
         ),
     )
     compacted: bool = Field(
@@ -687,18 +695,23 @@ class NodeOwnership(BaseModel):
     files: list[OwnedFile] = Field(
         description=(
             "The files of the node's boundary in its own checkout that git "
-            "does not ignore, sorted by path."
+            "does not ignore, sorted by path. For a team of the org, in the "
+            "repository's checkout."
         )
     )
     truncated: bool = Field(description="There were more files than are listed.")
     collisions: list[Collision] = Field(
         description=(
             "Found by merging the tips of the checkouts of the node and its "
-            "direct reports in memory. Uncommitted changes are not compared."
+            "direct reports in memory. Uncommitted changes are not compared. "
+            "Always empty for a team of the org, whose work is in sessions."
         )
     )
     collisions_checked: bool = Field(
-        description="False when the installed git is too old to look for them."
+        description=(
+            "False when the installed git is too old to look for them, and "
+            "for a team of the org."
+        )
     )
 
 
@@ -941,10 +954,6 @@ class OrgSync(BaseModel):
     memory: MemorySync | None = Field(
         default=None, description="What happened to specs, contracts and reports."
     )
-    put_aside: list[RecoveryItem] = Field(
-        default_factory=list,
-        description="Unfinished work dropped because its team was changed.",
-    )
 
 
 class ResolveMergeRequest(BaseModel):
@@ -966,9 +975,9 @@ class StartAgainRequest(BaseModel):
         description=(
             "How to start the team's IC. Its workspace is replaced by the "
             "team's own checkout; the team's Manager is derived from it. "
-            "Without one the IC is started like the IC of the team above, or "
-            "from the team's own agent profile, which needs the team above "
-            "to have its IC here."
+            "Without one the IC is started like the IC above it in its "
+            "session, or from the team's own agent profile, which needs an "
+            "IC of the org to run on this server."
         ),
     )
 
@@ -1022,7 +1031,7 @@ class OrgSummary(BaseModel):
 
 
 class CreateOrgRequest(BaseModel):
-    """Start an org: a root team that works on ``task``."""
+    """Start an org: its top team, and the session that works on ``task``."""
 
     title: str | None = Field(
         default=None,
@@ -1035,8 +1044,9 @@ class CreateOrgRequest(BaseModel):
     task: str = Field(min_length=1, description="What the org is to deliver.")
     conversation: StartConversationRequest = Field(
         description=(
-            "How to start the root team's IC. Every other agent of the org is "
-            "derived from it. The org lives in the git repository of its "
+            "How to start the IC of the org's first session, which works at "
+            "the top team. Every other agent of the org is derived from one "
+            "that runs already. The org lives in the git repository of its "
             "workspace. Its initial message is ignored: the IC is briefed "
             "with `task`."
         )
@@ -1080,11 +1090,12 @@ class RouteMessageRequest(BaseModel):
     conversation: StartConversationRequest | None = Field(
         default=None,
         description=(
-            "How to start the root team's IC when there is no org yet. If "
-            "the git repository of its workspace already has a saved org, "
-            "that org is taken up and the message routed in it; otherwise "
-            "the message starts an org there and becomes its task. See "
-            "`CreateOrgRequest`. Ignored when an org exists."
+            "How to start the IC of the session the message opens; without "
+            "it that IC is derived from one that runs already. Needed when "
+            "there is no org yet: if the git repository of its workspace "
+            "already has a saved org, that org is taken up and the message "
+            "routed in it; otherwise the message starts an org there and "
+            "becomes its task. See `CreateOrgRequest`."
         ),
     )
 
@@ -1092,9 +1103,14 @@ class RouteMessageRequest(BaseModel):
 class RoutedMessage(BaseModel):
     """Where a message to the org went."""
 
-    node_id: str = Field(description="The team that received it.")
+    node_id: str = Field(
+        description=(
+            "The place that received it: the team's in the session the "
+            "message opened, or was said in."
+        )
+    )
     team: str = Field(default="", description="The title of that team.")
-    conversation_id: str = Field(description="The conversation of that team's IC.")
+    conversation_id: str = Field(description="The conversation of the IC there.")
     started_org: bool = Field(
         description="There was no org, and the message started one."
     )
@@ -1114,7 +1130,7 @@ class RoutedMessage(BaseModel):
 
 
 class OpenSessionRequest(BaseModel):
-    """A request the human wants worked on beside what a team is doing."""
+    """A request the human wants worked on, in a session of its own."""
 
     text: str = Field(min_length=1, description="What the session is to do.")
     title: str = Field(
@@ -1154,8 +1170,8 @@ class SessionTeamInput(OrgNodeInput):
     a team: agents, a checkout, a review, escalations. The team's title and
     boundary are the team's, as they were when the session was opened.
     ``parent_id`` is what is above it in the session: the same session's
-    record for the team above, or, for the team the session was opened at,
-    the team of the org whose IC reviews the session's work.
+    place for the team above, or, for the team the session was opened at,
+    the place the session's work is reviewed from, which has none.
     """
 
     session: str = Field(description="The session it belongs to.")
@@ -1232,7 +1248,8 @@ class SessionTeam(SessionTeamInput, OrgNode):
 
 
 class SessionInput(BaseModel):
-    """A line of work the human opened at a team, beside the org's own."""
+    """A line of work the human opened at a team. All work of an org is
+    done in sessions."""
 
     id: str
     title: str
@@ -1267,9 +1284,7 @@ class ConversationLink(BaseModel):
     node_id: str = Field(description="The team of the org the agent works for.")
     team: str = Field(description="That team's title.")
     role: AgentRole
-    session_id: str = Field(
-        default="", description="The session the agent works in; '' for none."
-    )
+    session_id: str = Field(default="", description="The session the agent works in.")
     session: str = Field(default="", description="That session's title.")
     status: str = Field(default="", description="The agent's status.")
 
@@ -1282,9 +1297,7 @@ class ConversationPlace(BaseModel):
     node_id: str = Field(description="The team of the org the agent works for.")
     team: str = Field(description="That team's title.")
     role: AgentRole
-    session_id: str = Field(
-        default="", description="The session the agent works in; '' for none."
-    )
+    session_id: str = Field(default="", description="The session the agent works in.")
     session: str = Field(default="", description="That session's title.")
     human_joined: bool = Field(
         default=False,
@@ -1292,7 +1305,7 @@ class ConversationPlace(BaseModel):
     )
     links: list[ConversationLink] = Field(
         default_factory=list,
-        description="Above first, then beside, below and sessions.",
+        description="Above first, then beside and below.",
     )
 
 
@@ -1302,8 +1315,8 @@ class Session(SessionInput):
     A session is apart from the org tree: the tree is the org's structure,
     and a session is work over a part of it. For the team it was opened at
     and each team below that one, the session has agents and a checkout of
-    its own. Its work is reviewed by the IC of the team above and merged
-    into that team's checkout.
+    its own. Its work is reviewed by an IC at the team above that only
+    reviews and, once accepted, merged into the repository's checkout.
     """
 
     team: str = Field(description="The title of the team it was opened at.")
@@ -1317,7 +1330,8 @@ class Session(SessionInput):
     )
     teams: list[SessionTeam] = Field(
         description=(
-            "The team it was opened at, then each team below it. One whose "
+            "What it has at the team it was opened at, then at each team "
+            "below it, and last the place it is reviewed from. One whose "
             "`agents` is empty was given no task in this session yet."
         )
     )
@@ -1354,7 +1368,8 @@ class AnswerEscalationRequest(BaseModel):
 
 
 class EscalationPathStep(BaseModel):
-    """One node on the way from the root to an escalation."""
+    """One team on the way to an escalation, from the one its session was
+    opened at."""
 
     id: str
     title: str
@@ -1366,12 +1381,15 @@ class OpenEscalation(BaseModel):
     node_id: str = Field(description="The team that raised it.")
     session_id: str = Field(
         default="",
-        description="The session that team raised it in; '' for the org's own.",
+        description="The session that team raised it in.",
     )
     session: str = Field(default="", description="The title of that session.")
     escalation: Escalation
     path: list[EscalationPathStep] = Field(
-        description="Root first, ending at the team that raised it."
+        description=(
+            "The team its session was opened at first, ending at the team "
+            "that raised it."
+        )
     )
 
 
@@ -1396,7 +1414,7 @@ class SnapshotEvent(BaseModel):
     escalations: list[OpenEscalation] = Field(
         default_factory=list,
         description=(
-            "Every escalation in the tree that waits on the human, wherever "
+            "Every escalation of any session that waits on the human, wherever "
             "the subscriber is focused: critical issues first, then longest "
             "waiting first."
         ),

@@ -2,7 +2,7 @@
 
 Nothing is shared on its own: a pull takes in what the remote has, a push
 gives it what is here. These calls move the team memory alone; the org tree
-and the teams' branches travel with it through ``org_sync``.
+travels with it through ``org_sync``.
 """
 
 from openhands.agent_server.director.git import GitError, git

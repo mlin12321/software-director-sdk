@@ -3719,7 +3719,7 @@ def test_director_runs_an_org_whose_root_splits_into_sub_teams(
         # The org has a session's sub-teams once its work is accepted, and
         # its teams have no agents: those are the session's.
         tree = client.get("/api/director/org/nodes/root").json()
-        assert (tree["children"], tree["node"]["agents"]) == ([], [])
+        assert tree["children"] == [] and "agents" not in tree["node"]
         threads = client.get(f"/api/director/org/nodes/{top['id']}/messages").json()
         # The IC gave each team its task in a thread with that team.
         assert sum(thread["ic_to_ic"] for thread in threads) == 2
@@ -3932,10 +3932,7 @@ def test_director_has_submitted_work_reviewed_once_all_teams_submitted(
 
         while time.time() < deadline and len(teams()) < 2:
             time.sleep(0.05)
-        assert [(team["id"], team["agents"]) for team in teams()] == [
-            ("services.api", []),
-            ("apps.web", []),
-        ]
+        assert [team["id"] for team in teams()] == ["services.api", "apps.web"]
         top = _work_places(client, session_id)["root"]
         assert (top["review"]["state"], top["review"]["passed_up"]) == (
             "accepted",
@@ -4152,7 +4149,16 @@ def test_director_prunes_a_blocked_team_and_maps_who_owns_what(
             {"path": "apps/web/index.html", "owner": "apps.web"},
             {"path": "services/api/app.py", "owner": None},
         ]
-        assert (body["collisions"], body["collisions_checked"]) == ([], True)
+        # Nobody works at a team of the org, so no work can collide there;
+        # the session's place is where collisions are looked for.
+        assert (body["collisions"], body["collisions_checked"]) == ([], False)
+        place = client.get(
+            f"/api/director/org/nodes/root@{session_id}/ownership"
+        ).json()
+        assert [owner["node_id"] for owner in place["owners"]] == [
+            f"apps.web@{session_id}"
+        ]
+        assert (place["collisions"], place["collisions_checked"]) == ([], True)
         titles = [
             item["title"]
             for item in client.get("/api/conversations/search").json()["items"]

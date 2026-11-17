@@ -314,8 +314,6 @@ describe('DirectorClient', () => {
       head: 'abc',
       merge: { remote: 'origin', theirs: 'def', conflicts: [] },
       memory: null,
-      branches: [],
-      put_aside: [],
     };
     const fetchMock = mockFetch(() => jsonResponse(sync));
     const client = new DirectorClient({ host: 'http://example.com' });

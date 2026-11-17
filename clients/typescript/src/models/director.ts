@@ -81,8 +81,9 @@ export interface DirectorEscalationHandoff {
 
 /**
  * Something a node cannot settle itself. It goes to the node above, which
- * settles it or passes it up in turn; it waits on the human only once every
- * node above the one that raised it has passed it up.
+ * settles it or passes it up in turn; it waits on the human once every node
+ * above the one that raised it in its session has passed it up, which for
+ * the team the session was opened at is at once.
  */
 export interface DirectorEscalation {
   /** Unique within the node that raised it. */
@@ -110,8 +111,6 @@ export interface DirectorEscalation {
   /** When `asked_of` was asked (ISO 8601). */
   asked_at: string | null;
 }
-
-export type DirectorStatusCounts = Record<DirectorNodeStatus, number>;
 
 export type DirectorSplitStatus = 'proposed' | 'approved';
 
@@ -156,11 +155,8 @@ export interface DirectorSplitProposal {
   proposed_at: string;
 }
 
-/**
- * `pending`: the IC of the team above has the work to review. `unreviewed`:
- * the root team's, which has nobody above.
- */
-export type DirectorReviewState = 'pending' | 'changes_requested' | 'accepted' | 'unreviewed';
+/** `pending`: the IC of the team above has the work to review. */
+export type DirectorReviewState = 'pending' | 'changes_requested' | 'accepted';
 
 /** One thing a review found wrong in a team's work. */
 export interface DirectorReviewFinding {
@@ -195,6 +191,10 @@ export interface DirectorReview {
   at: string;
 }
 
+/**
+ * A team of the org tree: what an agent that works on it is briefed from.
+ * Nobody works at one; the work is at a session's place (`DirectorSessionTeam`).
+ */
 export interface DirectorOrgNode {
   id: DirectorNodeId;
   parent_id: DirectorNodeId | null;
@@ -202,51 +202,22 @@ export interface DirectorOrgNode {
   title: string;
   boundary: DirectorBoundary;
   isolation: DirectorIsolationMode;
-  worktree_path: string;
-  branch: string;
-  /** Empty while the team was set up and has been given no task yet. */
-  agents: DirectorAgentRef[];
-  status: DirectorNodeStatus;
   /**
    * One line on what the team is delivering, written by a model from the
    * team's task and its latest report.
    */
   headline: string;
   spec_summary: string;
-  /** Open escalations this node raised, wherever above they are held. */
-  escalations: DirectorEscalation[];
-  /** A split of this node's boundary that is not carried out yet. */
-  pending_split: DirectorSplitProposal | null;
-  /** The commit the team's work is compared with when it is reviewed. */
-  base_commit: string;
-  /** The review of what the team last submitted. */
-  review: DirectorReview | null;
-  /**
-   * Set while the IC of the team above has stopped the team: its agents and
-   * those of every team below it are at rest and nothing is sent to them.
-   */
-  stopped?: DirectorStopped | null;
   /**
    * Specs that teams before this one left in its directory. They are old
    * until the team's IC writes its own spec.
    */
   old_specs: DirectorOldSpec[];
   /**
-   * An agent of the team could not be started yet because the server runs
-   * as many conversations as it may; it starts when one of them ends.
-   */
-  waiting_to_start: boolean;
-  /**
    * The agent profile the team's agents were started from; `null` when
    * they were derived from the team above.
    */
   agent_profile: string | null;
-  /** How this team is held to its boundary; `null` until its IC ran. */
-  boundary_enforcement: DirectorTeamEnforcement | null;
-  /** Status of every node below this one. */
-  descendant_counts: DirectorStatusCounts;
-  /** Escalations from this node or below that wait on the human. */
-  escalation_count: number;
 }
 
 export interface DirectorOrgNodeDetail {
@@ -353,16 +324,6 @@ export interface DirectorOrgMerge {
   conflicts: DirectorOrgConflict[];
 }
 
-/** What a pull or a push did with the branch of one team's work. */
-export interface DirectorBranchSync {
-  node_id: string;
-  title: string;
-  branch: string;
-  result: 'created' | 'fast_forwarded' | 'diverged' | 'pushed';
-  /** Where the remote's commits are kept, when a pull found it diverged. */
-  ref: string | null;
-}
-
 /** What a pull or a push of the org did. */
 export interface DirectorOrgSync {
   remote: string;
@@ -372,10 +333,6 @@ export interface DirectorOrgSync {
   /** The merge waiting for choices, when `result` is `conflicts`. */
   merge: DirectorOrgMerge | null;
   memory: DirectorMemorySync | null;
-  /** The teams' branches that changed. */
-  branches: DirectorBranchSync[];
-  /** Unfinished work dropped because its team was changed. */
-  put_aside: DirectorRecoveryItem[];
 }
 
 /** Choices for the conflicts of a merge. */
@@ -423,14 +380,39 @@ export type DirectorChosenBy = 'path' | 'named' | 'model' | 'top';
  * What a session has at one team of the org: agents, a checkout, a review
  * and escalations of its own. It is no node of the org tree. `id` is its
  * own (`<team id>@<session id>`), `parent_id` what the session has at the
- * team above, or for the team it was opened at the team whose IC reviews
- * it, and `child_ids` what it has at the team's sub-teams.
+ * team above, or for the team it was opened at the place its work is
+ * reviewed from, and `child_ids` what it has at the team's sub-teams.
  */
 export interface DirectorSessionTeam extends DirectorOrgNode {
   /** The session. */
   session: string;
   /** The team of the org. */
   team_id: DirectorNodeId;
+  worktree_path: string;
+  branch: string;
+  /** Empty while the team was set up and has been given no task yet. */
+  agents: DirectorAgentRef[];
+  status: DirectorNodeStatus;
+  /** Open escalations this place raised, wherever above they are held. */
+  escalations: DirectorEscalation[];
+  /** A split of this team's boundary that is not carried out yet. */
+  pending_split: DirectorSplitProposal | null;
+  /** The commit the team's work is compared with when it is reviewed. */
+  base_commit: string;
+  /** The review of what the team last submitted. */
+  review: DirectorReview | null;
+  /**
+   * Set while the IC of the team above has stopped the team: its agents and
+   * those of every team below it are at rest and nothing is sent to them.
+   */
+  stopped?: DirectorStopped | null;
+  /**
+   * An agent of the team could not be started yet because the server runs
+   * as many conversations as it may; it starts when one of them ends.
+   */
+  waiting_to_start: boolean;
+  /** How this team is held to its boundary; `null` until its IC ran. */
+  boundary_enforcement: DirectorTeamEnforcement | null;
   /**
    * Whether this is the place the session's work is reviewed from: the team
    * above the one the session was opened at (the top team itself for a
@@ -488,17 +470,19 @@ export interface DirectorSession {
   review: DirectorReviewState | null;
   /** The conversation of its IC at the team it was opened at. */
   conversation_id: string | null;
-  /** What it has at each of its teams, the one it was opened at first. */
+  /**
+   * What it has at each of its teams, the one it was opened at first, and
+   * last the place it is reviewed from.
+   */
   teams: DirectorSessionTeam[];
 }
 
 /**
  * Where an agent is from a conversation: `above` an agent of the team that
  * reviews its team's work, `beside` the other agent of its own team, `below`
- * the IC of a team directly below, `session` the IC of a session whose work
- * its team reviews.
+ * the IC of a team directly below.
  */
-export type DirectorConversationRelation = 'above' | 'beside' | 'below' | 'session';
+export type DirectorConversationRelation = 'above' | 'beside' | 'below';
 
 /** An agent's conversation, as it is reached from another one. */
 export interface DirectorConversationLink {
@@ -508,7 +492,7 @@ export interface DirectorConversationLink {
   node_id: DirectorNodeId;
   team: string;
   role: DirectorAgentRole;
-  /** The session the agent works in; `''` for none. */
+  /** The session the agent works in. */
   session_id: string;
   session: string;
   /** The agent's status. */
@@ -528,7 +512,7 @@ export interface DirectorConversationPlace {
   session: string;
   /** Whether the human has written in this conversation. */
   human_joined: boolean;
-  /** Above first, then beside, below and sessions. */
+  /** Above first, then beside and below. */
   links: DirectorConversationLink[];
 }
 
@@ -550,12 +534,12 @@ export interface DirectorEscalationPathStep {
 export interface DirectorOpenEscalation {
   /** The team of the org that raised it. */
   node_id: DirectorNodeId;
-  /** The session it was raised in; `''` when it is the org's own. */
+  /** The session it was raised in. */
   session_id: string;
   /** That session's title. */
   session: string;
   escalation: DirectorEscalation;
-  /** Root first, ending at the node that raised it. */
+  /** The team its session was opened at first, ending at the one that raised it. */
   path: DirectorEscalationPathStep[];
 }
 
@@ -567,8 +551,8 @@ export interface DirectorReport {
   role: DirectorAgentRole;
   text: string;
   /**
-   * The title of the session the agent that wrote it works in; `''` for an
-   * agent of the org's own team.
+   * The title of the session the agent that wrote it works in; `''` for a
+   * report a model rewrote or the IC above handed over.
    */
   session?: string;
   /** True for the one report a model wrote in place of earlier ones. */
@@ -794,12 +778,21 @@ export interface DirectorFileEdit {
 export interface DirectorNodeOwnership {
   node_id: DirectorNodeId;
   owners: DirectorBoundaryOwner[];
-  /** The unignored files of the node's boundary in its own checkout, by path. */
+  /**
+   * The unignored files of the node's boundary in its own checkout, by path;
+   * for a team of the org, in the repository's checkout.
+   */
   files: DirectorOwnedFile[];
   truncated: boolean;
-  /** From the tips of the checkouts; uncommitted changes are not compared. */
+  /**
+   * From the tips of the checkouts; uncommitted changes are not compared.
+   * Always empty for a team of the org.
+   */
   collisions: DirectorCollision[];
-  /** False when the server's git is too old to look for collisions. */
+  /**
+   * False when the server's git is too old to look for collisions, and for
+   * a team of the org.
+   */
   collisions_checked: boolean;
 }
 
@@ -808,9 +801,10 @@ export interface DirectorNodeOwnership {
  *
  * A `snapshot` holds the focused node, its ancestors, its direct reports and
  * the direct reports of every expanded node (or, for a full stream, every
- * node below the focused one), plus every escalation in the tree that waits
- * on the human, wherever the stream is focused. `node_upsert` and `node_removed` are limited to
- * those nodes. `escalations` carries the whole new list. The snapshot says
+ * node below the focused one), plus the open sessions and every escalation
+ * that waits on the human, wherever the stream is focused. `node_upsert` and
+ * `node_removed` are limited to those nodes. `sessions` and `escalations`
+ * carry the whole new list. The snapshot says
  * whether the org is paused and whether a pull waits for choices; `org_state`
  * follows whenever either changes.
  */

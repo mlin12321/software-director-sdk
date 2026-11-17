@@ -73,7 +73,6 @@ export type {
   DirectorEscalationHandoff,
   DirectorEscalationKind,
   DirectorEscalationPathStep,
-  DirectorStatusCounts,
   DirectorInheritedSpec,
   DirectorIsolationMode,
   DirectorNodeMemory,

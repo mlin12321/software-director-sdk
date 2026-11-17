@@ -6,9 +6,8 @@ from that side. What is left for the human is a conflict: the same field
 changed on both sides, or a team removed on one side and changed, or given
 sub-teams, on the other.
 
-Where a team's agents run and where its checkout is belong to the machine
-that runs them, so those fields are never taken from the other side for a
-team that is here.
+A saved team has only what the org keeps of it. Agents, checkouts and
+reviews are of sessions, which are no part of the tree and are not merged.
 """
 
 import json

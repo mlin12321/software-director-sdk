@@ -131,9 +131,7 @@ class Teams(Delivery):
         store = self.store
         with self._adding_manager:
             node = store.place(node_id)
-            # Nobody stands at a team of the org itself: agents are at its
-            # places in the sessions.
-            if node is None or not node.session:
+            if node is None:
                 return
             if reviews_only(node) and not review:
                 return
@@ -166,9 +164,6 @@ class Teams(Delivery):
         with self._adding_manager:
             node = store.place(node_id)
             if node is None:
-                return None
-            if not node.session:
-                # Nobody stands at a team of the org itself.
                 return None
             conversation_id = agent_conversation(node, "ic")
             reviewing = reviews_only(node)
@@ -447,7 +442,7 @@ class Teams(Delivery):
         if node.headline and node.headline not in task:
             task = f"{task}\n\nWhere the team last was: {node.headline}"
         return (
-            f"{task}\n\nThis team was worked on before, on another machine. "
+            f"{task}\n\nThis team was worked on before. "
             "What it committed is in your checkout: look at it first and "
             "carry on from there."
         )

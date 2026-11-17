@@ -247,8 +247,8 @@ class Sync(Sessions):
             )
 
     async def push_org(self, remote: str) -> OrgSync:
-        """Give a remote of the repository the org, the team memory and the
-        branches of the teams' work.
+        """Give a remote of the repository the org tree and the team
+        memory. Sessions stay on this machine.
 
         Raises:
             Conflict: There is no org, a merge waits for choices, or the
@@ -592,15 +592,12 @@ class Sync(Sessions):
         synced = self._pull_memory(repo, remote, taken)
         if result == "up_to_date" and synced is not None and synced.changed:
             result = "merged"
-        already = len(self._dropped())
-        self._put_aside_stale()
         self._save_tree(store)
         return OrgSync(
             remote=remote,
             result=result,
             head=board.head(),
             memory=synced,
-            put_aside=self._dropped()[already:],
         )
 
     def _pull_memory(

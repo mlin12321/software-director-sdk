@@ -408,7 +408,6 @@ async def test_a_session_goes_on_with_a_team_the_pull_removed(
     # The session has the team as it set it up; it is not made to catch up
     # while it works.
     assert team_id_of(node(here, API)) == API and ic(here, API) is not None
-    assert pulled.put_aside == []
     assert here.summary().paused == "human"
     assert (await here.recovery()).messages_held == 1
     await here.aclose()

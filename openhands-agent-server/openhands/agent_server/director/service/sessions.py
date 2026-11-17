@@ -1,4 +1,4 @@
-"""Sessions: lines of work the human opens at a team beside the org's own."""
+"""Sessions: the lines of work the human opens at a team. All work is in one."""
 
 import asyncio
 import logging

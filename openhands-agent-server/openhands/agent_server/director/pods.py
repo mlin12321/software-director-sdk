@@ -51,7 +51,8 @@ from openhands.sdk.tool.spec import Tool
 logger = logging.getLogger(__name__)
 
 # On every conversation the director starts itself, so that a client can tell
-# them from the ones a human started. The root IC is the human's own.
+# them from the ones a human started. An IC that runs as the conversation a
+# request came in is the human's own.
 STARTED_BY_DIRECTOR = {"startedby": "director"}
 # On a conversation the director started and the human has written in. A
 # client lists it with the conversations the human started.
