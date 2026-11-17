@@ -51,42 +51,42 @@ def merge_orgs(
         (mine, theirs, "mine"),
         (theirs, mine, "theirs"),
     ):
-        for node_id in base:
-            if node_id in gone_from or node_id in settled or node_id not in kept_in:
+        for team_id in base:
+            if team_id in gone_from or team_id in settled or team_id not in kept_in:
                 continue
-            parent = base[node_id]["parent_id"]
+            parent = base[team_id]["parent_id"]
             if parent is not None and parent not in gone_from:
                 continue  # settled with the removed team above it
-            below = _subtree(kept_in, node_id)
+            below = _subtree(kept_in, team_id)
             settled.update(below)
             if all(base.get(each) == kept_in[each] for each in below):
                 continue  # removed on one side, untouched on the other
             conflict = OrgConflict(
-                id=f"team:{node_id}",
+                id=f"team:{team_id}",
                 kind="team",
-                node_id=node_id,
-                title=kept_in[node_id]["title"],
+                node_id=team_id,
+                title=kept_in[team_id]["title"],
                 field="",
                 mine=None if remover == "mine" else _KEPT,
                 theirs=_KEPT if remover == "mine" else None,
-                choice=choices.get(f"team:{node_id}"),
+                choice=choices.get(f"team:{team_id}"),
             )
             conflicts.append(conflict)
             keeper: Side = "theirs" if remover == "mine" else "mine"
             if (conflict.choice or "mine") == keeper:
                 merged.update({each: kept_in[each] for each in below})
 
-    for node_id in [*mine, *(each for each in theirs if each not in mine)]:
-        if node_id in settled:
+    for team_id in [*mine, *(each for each in theirs if each not in mine)]:
+        if team_id in settled:
             continue
-        ours, other = mine.get(node_id), theirs.get(node_id)
+        ours, other = mine.get(team_id), theirs.get(team_id)
         if ours is None or other is None:
             present = ours if ours is not None else other
-            if present is not None and node_id not in base:
-                merged[node_id] = present
+            if present is not None and team_id not in base:
+                merged[team_id] = present
             continue
-        merged[node_id] = _merge_node(
-            base.get(node_id, {}), ours, other, choices, conflicts
+        merged[team_id] = _merge_node(
+            base.get(team_id, {}), ours, other, choices, conflicts
         )
 
     return MergedOrg(_parents_first(merged), conflicts)
@@ -128,17 +128,17 @@ def _shown(value: Any) -> str:
 
 
 def _subtree(nodes: Nodes, top: str) -> list[str]:
-    """``top`` and every node below it, parents first."""
+    """``top`` and every team below it, parents first."""
     found = [top]
-    for node_id in found:
+    for team_id in found:
         found.extend(
-            each for each, node in nodes.items() if node["parent_id"] == node_id
+            each for each, node in nodes.items() if node["parent_id"] == team_id
         )
     return found
 
 
 def _parents_first(nodes: Nodes) -> list[dict[str, Any]]:
-    """The nodes in an order that names no parent after its sub-team. A node
+    """The teams in an order that names no parent after its sub-team. A team
     whose parent is not among them is left out, with everything below it."""
     ordered: list[dict[str, Any]] = []
     placed: set[str | None] = {None}

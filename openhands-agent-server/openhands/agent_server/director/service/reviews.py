@@ -183,27 +183,27 @@ def _same(item: MergeItem) -> tuple[str | None, ...]:
 class Reviews(Requests):
     """Carries a team's work through its review."""
 
-    def request_review(self, node_id: str) -> None:
+    def request_review(self, place_id: str) -> None:
         """Have the work a team submitted reviewed. Safe from any thread."""
-        node = self.store.place(node_id)
-        if node is not None and self.store.opens_session(node):
-            self._open_merge(node)
-        self._begin("request_review", node_id)
+        place = self.store.place(place_id)
+        if place is not None and self.store.opens_session(place):
+            self._open_merge(place)
+        self._begin("request_review", place_id)
 
-    def rest(self, node_id: str) -> None:
+    def rest(self, place_id: str) -> None:
         """End the turn of a team's IC after the step it is in: it has
         handed its work over and acts again when something is sent to it.
         Safe from any thread."""
         if self._loop is not None:
-            self._enqueue(lambda: self._rest(node_id), node_id)
+            self._enqueue(lambda: self._rest(place_id), place_id)
 
-    async def _rest(self, node_id: str) -> None:
-        node = self.store.place(node_id)
-        conversation_id = agent_conversation(node, "ic") if node else None
-        if node is None or conversation_id is None or self._paused is not None:
+    async def _rest(self, place_id: str) -> None:
+        place = self.store.place(place_id)
+        conversation_id = agent_conversation(place, "ic") if place else None
+        if place is None or conversation_id is None or self._paused is not None:
             return
         launcher = self._require_launcher()
-        if any(agent.role == "ic" and agent.kind == "acp" for agent in node.agents):
+        if any(agent.role == "ic" and agent.kind == "acp" for agent in place.agents):
             # It runs its own turn, and the tool's answer tells it to end
             # it. Only one that carries on regardless is cut short, which
             # costs it the step it is in.
@@ -222,70 +222,70 @@ class Reviews(Requests):
                 return
             await asyncio.sleep(_REST_CHECK_SECONDS)
 
-    def request_changes(self, node_id: str, findings: list[ReviewFinding]) -> None:
+    def request_changes(self, place_id: str, findings: list[ReviewFinding]) -> None:
         """Send a team's work back to it with what must change.
 
         Safe from any thread.
 
         Raises:
-            NotFound: The node does not exist.
+            NotFound: The team does not exist.
             Conflict: None of its work waits for a review.
         """
         store = self.store
-        node = store.place(node_id)
-        if node is None:
-            raise NotFound(f"Node {node_id} does not exist")
-        if node.review is None or node.review.state != "pending":
-            raise Conflict(f"Team {node_id} has no work waiting for a review")
-        review = node.review.model_copy(
+        place = store.place(place_id)
+        if place is None:
+            raise NotFound(f"Team {place_id} does not exist")
+        if place.review is None or place.review.state != "pending":
+            raise Conflict(f"Team {place_id} has no work waiting for a review")
+        review = place.review.model_copy(
             update={"state": "changes_requested", "findings": findings, "at": utc_now()}
         )
-        above = store.place(node.parent_id) if node.parent_id else None
-        store.set_review(node_id, review)
-        self._drop_merge_checkout(node_id)
+        above = store.place(place.parent_id) if place.parent_id else None
+        store.set_review(place_id, review)
+        self._drop_merge_checkout(place_id)
         self._tell_turns()
-        self.progressed(node_id)
+        self.progressed(place_id)
         self.record_event(
-            node.parent_id,
+            place.parent_id,
             "sent_back",
-            node,
+            place,
             f"round {review.round}, {len(findings)} to change",
         )
         for finding in findings:
             # A finding of the runtime names several files in one.
             for path in finding.path.split(", "):
                 if path.strip():
-                    self.record_need(node, path.strip(), NEED_FINDING)
+                    self.record_need(place, path.strip(), NEED_FINDING)
         limit = self.settings.manager_check_ic_setbacks
-        if limit and node.parent_id is not None and review.round % limit == 0:
+        if limit and place.parent_id is not None and review.round % limit == 0:
             with self._counting:
-                counted = self._counted(node.parent_id)
+                counted = self._counted(place.parent_id)
             self._wake_manager(
-                node.parent_id,
-                f"your IC has sent the work of {node.title!r} back "
+                place.parent_id,
+                f"your IC has sent the work of {place.title!r} back "
                 f"{review.round} times.",
                 counted,
-                team=node,
+                team=place,
             )
         self.notify(
-            agent_conversation(node, "ic"),
+            agent_conversation(place, "ic"),
             changes_requested(
-                above or node, findings, of_a_session=store.opens_session(node)
+                above or place, findings, of_a_session=store.opens_session(place)
             ),
         )
-        if store.opens_session(node):
-            self._sent_back(node)
+        if store.opens_session(place):
+            self._sent_back(place)
 
-    def release_reviews(self, node_id: str | None, *, now: bool = False) -> None:
+    def release_reviews(self, place_id: str | None, *, now: bool = False) -> None:
         """Hand a team's IC the reviews its sub-teams wait for, if it is
         time (see :meth:`_release_reviews`). Safe from any thread."""
-        if node_id is not None and self._loop is not None:
-            self._enqueue(lambda: self._released(node_id, now), f"review:{node_id}")
+        if place_id is not None and self._loop is not None:
+            self._enqueue(lambda: self._released(place_id, now), f"review:{place_id}")
 
-    async def _released(self, node_id: str, now: bool) -> None:
-        self._release_reviews(node_id, now=now)
+    async def _released(self, place_id: str, now: bool) -> None:
+        self._release_reviews(place_id, now=now)
 
-    def _release_reviews(self, node_id: str | None, *, now: bool = False) -> None:
+    def _release_reviews(self, place_id: str | None, *, now: bool = False) -> None:
         """Hand a team's IC the reviews its sub-teams wait for.
 
         They are held until every sub-team has submitted its work or is
@@ -294,7 +294,7 @@ class Reviews(Requests):
         something else wakes it.
         """
         store = self.store
-        node = store.place(node_id) if node_id else None
+        node = store.place(place_id) if place_id else None
         if node is None or self._paused is not None:
             return
         run = self._runs()
@@ -363,7 +363,7 @@ class Reviews(Requests):
         return session.request if session else ""
 
     def spec_choices(
-        self, node_id: str, specs: list[SpecChoice]
+        self, place_id: str, specs: list[SpecChoice]
     ) -> list[dict[str, str]]:
         """What a reviewer decided about the specs of a session's work, as
         it is kept with the acceptance.
@@ -374,20 +374,20 @@ class Reviews(Requests):
         """
         if not specs:
             return []
-        node = self.store.place(node_id)
-        if node is None or not self.store.opens_session(node):
+        place = self.store.place(place_id)
+        if place is None or not self.store.opens_session(place):
             raise Invalid(
                 "Specs are decided where the work of a session is accepted. "
                 "Leave `specs` empty."
             )
-        own = normalize_store_path(node.boundary.path)
-        homes = {home for home, *_ in self.specs_inherited(node)}
+        own = normalize_store_path(place.boundary.path)
+        homes = {home for home, *_ in self.specs_inherited(place)}
         chosen = []
         for choice in specs:
             path = normalize_store_path(choice.path)
             if not (path == own or is_inside(path, own) or path in homes):
                 raise Invalid(
-                    f"{choice.path!r} is not a directory of this work "
+                    f"{choice.path!r} is not a folder of this work "
                     f"({own or 'the repository'}), so its spec is not yours "
                     "to decide here."
                 )
@@ -408,7 +408,7 @@ class Reviews(Requests):
 
     def accept_review(
         self,
-        node_id: str,
+        place_id: str,
         needed_above: str,
         reconciled: str = "",
         specs: list[dict[str, str]] | None = None,
@@ -423,15 +423,15 @@ class Reviews(Requests):
                 in the checkout above; '' when it was asked nothing.
             specs: What it decided about the specs of a session's work.
         """
-        node = self.store.place(node_id)
+        place = self.store.place(place_id)
         self._begin(
             "accept",
-            node_id,
+            place_id,
             needed_above=needed_above,
             reconciled=reconciled,
             specs=specs or [],
             # The work of a session goes into what the org shares.
-            base=node is not None and self.store.opens_session(node),
+            base=place is not None and self.store.opens_session(place),
         )
 
     def _shapes(
@@ -880,7 +880,7 @@ class Reviews(Requests):
             unknown = [path for path in chosen if path not in agreed]
             if unknown:
                 raise Invalid(
-                    f"No contracts wait for: {', '.join(unknown)}. The directories "
+                    f"No contracts wait for: {', '.join(unknown)}. The folders "
                     f"whose contracts wait: {', '.join(agreed) or 'none'}"
                 )
             others = [item for item in merge.items if item.gate == "ic"]
@@ -971,7 +971,7 @@ class Reviews(Requests):
         path = normalize_store_path(place.boundary.path)
         if not is_inside(path, normalize_store_path(home.boundary.path)):
             raise Invalid(
-                f"The directory of team {choice.team} ({path}) is not inside "
+                f"The folder of team {choice.team} ({path}) is not inside "
                 f"that of team {choice.under} "
                 f"({home.boundary.path or 'the repository'}), so it cannot go "
                 "under it."
@@ -1253,13 +1253,13 @@ class Reviews(Requests):
             if file.endswith(CONTRACTS_FILE) and memory.read(file) != text
         ]
 
-    def _merged_as(self, node: SessionTeam) -> str:
+    def _merged_as(self, place: SessionTeam) -> str:
         """What the commit that merges a team's work calls it: the session
         too, for the work of one."""
-        session = self.store.session_title(node)
-        return f"{node.title} · {session}" if session else node.title
+        session = self.store.session_title(place)
+        return f"{place.title} · {session}" if session else place.title
 
-    def _to_reconcile(self, node: SessionTeam, above: SessionTeam) -> Meets | None:
+    def _to_reconcile(self, place: SessionTeam, above: SessionTeam) -> Meets | None:
         """What the IC above has to settle before the work of a team is
         merged: the files both it and the checkout above changed since it
         began, and the specs it wrote over ones that changed meanwhile.
@@ -1271,7 +1271,7 @@ class Reviews(Requests):
         Raises:
             GitError: A checkout could not be read.
         """
-        team, checkout = Path(node.worktree_path), Path(above.worktree_path)
+        team, checkout = Path(place.worktree_path), Path(above.worktree_path)
         changes = (
             changes_of(checkout, team)
             if _checkout_root(str(team)) != _checkout_root(str(checkout))
@@ -1289,14 +1289,14 @@ class Reviews(Requests):
                 else ()
             )
             if not unmergeable:
-                files = [path for path in changes.both if owns(node, path)]
-        opens = self.store.opens_session(node)
-        specs = self.specs_to_reconcile(node) if opens else []
-        inherited = self.specs_inherited(node) if opens else []
+                files = [path for path in changes.both if owns(place, path)]
+        opens = self.store.opens_session(place)
+        specs = self.specs_to_reconcile(place) if opens else []
+        inherited = self.specs_inherited(place) if opens else []
         if not files and not specs and not inherited:
             return None
         text = reconcile_request(
-            node,
+            place,
             above.worktree_path,
             changes.tip if changes else "",
             files,
@@ -1337,11 +1337,11 @@ class Reviews(Requests):
             ],
         )
 
-    def _before(self, node: SessionTeam) -> SessionTeam | None:
+    def _before(self, place: SessionTeam) -> SessionTeam | None:
         """The work submitted first of all that was submitted before that
         of ``node`` and is not decided on yet; None when it is its turn."""
         store = self.store
-        above = store.place(node.parent_id) if node.parent_id else None
+        above = store.place(place.parent_id) if place.parent_id else None
         if above is None:
             return None
         # Every session's work goes into the one checkout of the repository.
@@ -1351,7 +1351,7 @@ class Reviews(Requests):
                 for session in store.sessions()
                 if (places := store.session(session.id))
             ]
-            if store.opens_session(node)
+            if store.opens_session(place)
             else store.below(above.id)
         )
         # Work whose acceptance is being carried out no longer waits.
@@ -1363,11 +1363,11 @@ class Reviews(Requests):
         waiting = [
             other
             for other in beside
-            if other.id != node.id
+            if other.id != place.id
             and other.id not in accepting
             and other.review is not None
             and other.review.state == "pending"
-            and _submitted(other) < _submitted(node)
+            and _submitted(other) < _submitted(place)
         ]
         return min(waiting, key=_submitted) if waiting else None
 
@@ -1377,24 +1377,24 @@ class Reviews(Requests):
         from any thread."""
         store = self.store
         run = self._runs()
-        for node_id in run.marked(TURN):
-            node = store.place(node_id)
-            above = store.place(node.parent_id or "") if node else None
-            pending = node and node.review and node.review.state == "pending"
-            if node is None or above is None or not pending:
-                run.unmark(TURN, node_id)
+        for place_id in run.marked(TURN):
+            place = store.place(place_id)
+            above = store.place(place.parent_id or "") if place else None
+            pending = place and place.review and place.review.state == "pending"
+            if place is None or above is None or not pending:
+                run.unmark(TURN, place_id)
                 continue
-            if self._before(node) is not None:
+            if self._before(place) is not None:
                 continue
-            run.unmark(TURN, node_id)
+            run.unmark(TURN, place_id)
             self.notify(
                 agent_conversation(above, "ic"),
                 f"It is your turn: the work submitted before that of "
-                f"{node.title!r} (node {node.id}) is decided on. Accept it "
+                f"{place.title!r} (id {place.id}) is decided on. Accept it "
                 "with `review_team` now, or send it back.",
             )
 
-    def check_accept(self, node_id: str, reconciled: str) -> None:
+    def check_accept(self, place_id: str, reconciled: str) -> None:
         """Hold the acceptance of a team's work to what is asked of every
         one: work is accepted in the order it was submitted, and work that
         meets other work is reconciled with it first.
@@ -1404,32 +1404,32 @@ class Reviews(Requests):
                 work the reviewer has not said it reconciled.
         """
         store = self.store
-        node = store.place(node_id)
-        above = store.place(node.parent_id) if node and node.parent_id else None
-        if node is None or above is None or node.review is None:
+        place = store.place(place_id)
+        above = store.place(place.parent_id) if place and place.parent_id else None
+        if place is None or above is None or place.review is None:
             return
-        first = self._before(node)
+        first = self._before(place)
         if first is not None:
-            theirs = first.parent_id != node.parent_id
+            theirs = first.parent_id != place.parent_id
             if theirs:
                 # Its reviewer is told when the other reviewer has decided.
-                self._runs().mark(TURN, node.id)
+                self._runs().mark(TURN, place.id)
             raise Conflict(
                 accept_in_order(
-                    node, first, store.session_title(first) if theirs else ""
+                    place, first, store.session_title(first) if theirs else ""
                 )
             )
         try:
-            meets = self._to_reconcile(node, above)
+            meets = self._to_reconcile(place, above)
         except (GitError, OSError):
             # Merging says what is wrong with the checkouts.
             return
-        refusal = self._not_reconciled(node, meets, reconciled)
+        refusal = self._not_reconciled(place, meets, reconciled)
         if refusal is not None:
             raise Conflict(refusal)
 
     def _not_reconciled(
-        self, node: SessionTeam, meets: Meets | None, reconciled: str
+        self, place: SessionTeam, meets: Meets | None, reconciled: str
     ) -> str | None:
         """Hold what a reviewer says it reconciled to what it was shown.
 
@@ -1437,15 +1437,15 @@ class Reviews(Requests):
             What to tell the reviewer when the work meets something it has
             not been shown as it is now; None when it may be accepted.
         """
-        if self.store.opens_session(node):
-            self._show_reviewer_items(node, meets)
+        if self.store.opens_session(place):
+            self._show_reviewer_items(place, meets)
         if meets is None:
             return None
         run = self._runs()
-        shown = run.marked(SHOWN).get(node.id)
+        shown = run.marked(SHOWN).get(place.id)
         if reconciled and shown == meets.mark:
             return None
-        run.mark(SHOWN, node.id, meets.mark)
+        run.mark(SHOWN, place.id, meets.mark)
         if reconciled and shown is not None:
             return (
                 "What the work meets changed since you were shown it. Nothing "
@@ -1487,7 +1487,7 @@ class Reviews(Requests):
         )
 
     async def _own_account(
-        self, node: SessionTeam
+        self, place: SessionTeam
     ) -> tuple[str, list[ReviewFinding] | None]:
         """What a team's IC says of the work its team reported done.
 
@@ -1496,14 +1496,14 @@ class Reviews(Requests):
             it found reviewing them, None when it gave no usable answer or
             was not asked.
         """
-        ic = agent_conversation(node, "ic")
-        if ic is None or not node.base_commit:
+        ic = agent_conversation(place, "ic")
+        if ic is None or not place.base_commit:
             return "", None
         files = await asyncio.to_thread(
             bugbot.changed_files,
-            Path(node.worktree_path),
-            node.base_commit,
-            node.boundary.path,
+            Path(place.worktree_path),
+            place.base_commit,
+            place.boundary.path,
         )
         if files is None:
             return "", None
@@ -1513,10 +1513,10 @@ class Reviews(Requests):
         instructions = await asyncio.to_thread(self._find_review_instructions)
         if instructions is None:
             return description or "", None
-        contracts = await asyncio.to_thread(self.contracts_of, node)
+        contracts = await asyncio.to_thread(self.contracts_of, place)
         specs = [
             spec
-            for spec in await asyncio.to_thread(self.specs_of, node)
+            for spec in await asyncio.to_thread(self.specs_of, place)
             if not spec.old
         ]
         answer = await self._ask_agent(
@@ -1530,17 +1530,17 @@ class Reviews(Requests):
         )
         return description or "", bugbot.parse_findings(answer) if answer else None
 
-    async def _request_review(self, node_id: str) -> None:
+    async def _request_review(self, place_id: str) -> None:
         store = self.store
-        node = store.place(node_id)
-        asked = node.review if node else None
-        if node is None or asked is None:
+        place = store.place(place_id)
+        asked = place.review if place else None
+        if place is None or asked is None:
             return
         if asked.state != "pending":
             return
-        description, found = await self._own_account(node)
-        node = store.place(node_id)
-        if node is None or node.review != asked:
+        description, found = await self._own_account(place)
+        place = store.place(place_id)
+        if place is None or place.review != asked:
             return
         review = asked.model_copy(
             update={
@@ -1549,43 +1549,43 @@ class Reviews(Requests):
                 "automated": found or [],
             }
         )
-        node = store.set_review(node_id, review)
-        if store.opens_session(node):
+        place = store.set_review(place_id, review)
+        if store.opens_session(place):
             # Its Manager is asked what waits for it beside the review.
             await asyncio.to_thread(self._org_turn)
-        if node.parent_id is not None:
-            self._runs().mark(HELD, node_id)
-            self._release_reviews(node.parent_id)
+        if place.parent_id is not None:
+            self._runs().mark(HELD, place_id)
+            self._release_reviews(place.parent_id)
 
     async def _accept(
         self,
-        node_id: str,
+        place_id: str,
         needed_above: str,
         reconciled: str = "",
         specs: list[dict[str, str]] | None = None,
     ) -> None:
         store = self.store
-        node = store.place(node_id)
-        above = store.place(node.parent_id) if node and node.parent_id else None
-        if node is None or above is None or node.review is None:
+        place = store.place(place_id)
+        above = store.place(place.parent_id) if place and place.parent_id else None
+        if place is None or above is None or place.review is None:
             return
-        if node.review.state == "accepted":
+        if place.review.state == "accepted":
             # Cut off after the acceptance was made: what follows it is
             # still owed.
             await self._pass_up(above.id, acted=True)
-        if node.review.state != "pending":
+        if place.review.state != "pending":
             return
         reviewer = agent_conversation(above, "ic")
-        where = node.boundary.path or "the repository"
-        team, checkout = Path(node.worktree_path), Path(above.worktree_path)
+        where = place.boundary.path or "the repository"
+        team, checkout = Path(place.worktree_path), Path(above.worktree_path)
         merged = False
         resolved: tuple[str, ...] = ()
-        opens = store.opens_session(node)
+        opens = store.opens_session(place)
         try:
-            meets = await asyncio.to_thread(self._to_reconcile, node, above)
+            meets = await asyncio.to_thread(self._to_reconcile, place, above)
         except (GitError, OSError):
             meets = None
-        refusal = self._not_reconciled(node, meets, reconciled)
+        refusal = self._not_reconciled(place, meets, reconciled)
         if refusal is not None:
             # Something came into the checkout between the review and now.
             self.notify(reviewer, refusal)
@@ -1594,41 +1594,41 @@ class Reviews(Requests):
             if not opens:
                 # What is uncommitted in a session's directory is the work
                 # of the team it was opened beside, and stays.
-                await asyncio.to_thread(self._put_aside, above, node)
+                await asyncio.to_thread(self._put_aside, above, place)
             try:
                 result = await asyncio.to_thread(
                     merge_back,
                     checkout,
                     team,
-                    node.boundary.path,
-                    self._merged_as(node),
+                    place.boundary.path,
+                    self._merged_as(place),
                 )
             except (GitError, OSError) as error:
                 self.notify(
                     reviewer,
-                    f"The work of {node.title!r} could not be merged into your "
+                    f"The work of {place.title!r} could not be merged into your "
                     f"checkout, and still waits for your review: {error}",
                 )
                 return
             if result.outcome == "conflicts":
                 finished = await asyncio.to_thread(
-                    self._finish_merge, node, above, result
+                    self._finish_merge, place, above, result
                 )
                 if isinstance(finished, str):
                     if opens:
-                        self._show_reviewer_items(node, meets)
+                        self._show_reviewer_items(place, meets)
                     self.notify(reviewer, finished)
                     return
                 result = finished
                 resolved = result.files if result.outcome == "merged" else ()
             else:
-                await asyncio.to_thread(self._drop_merge_checkout, node_id)
+                await asyncio.to_thread(self._drop_merge_checkout, place_id)
             if result.outcome == "refused" and is_division_lead(above):
                 # Only the human can clear their own checkout: they are
                 # asked, and their answer merges the work.
-                if all(e.id != MERGE_WAITS for e in node.escalations):
+                if all(e.id != MERGE_WAITS for e in place.escalations):
                     store.raise_escalation(
-                        node_id,
+                        place_id,
                         MERGE_WAITS,
                         kind="critical_issue",
                         title="Accepted work cannot be merged into your checkout",
@@ -1642,7 +1642,7 @@ class Reviews(Requests):
                     self._save_soon()
                 self.notify(
                     reviewer,
-                    f"The work of {node.title!r} is accepted and waits for "
+                    f"The work of {place.title!r} is accepted and waits for "
                     "the human, whose uncommitted changes are in the way of "
                     "the merge. There is nothing more for you to do.",
                 )
@@ -1650,7 +1650,7 @@ class Reviews(Requests):
             if result.outcome == "refused":
                 self.notify(
                     reviewer,
-                    f"git would not merge the work of {node.title!r} into your "
+                    f"git would not merge the work of {place.title!r} into your "
                     f"checkout as it is:\n{result.detail}\n"
                     + (
                         "What is in the way is work that is not committed "
@@ -1668,12 +1668,12 @@ class Reviews(Requests):
                     "team owns. Take them out of your commits."
                 )
                 self.request_changes(
-                    node_id,
+                    place_id,
                     [ReviewFinding(path=", ".join(result.files), issue=issue)],
                 )
                 self.notify(
                     reviewer,
-                    f"The work of {node.title!r} was not taken into your "
+                    f"The work of {place.title!r} was not taken into your "
                     f"checkout: {issue} ({', '.join(result.files)}) "
                     "It was sent back to the team.",
                 )
@@ -1681,66 +1681,66 @@ class Reviews(Requests):
             merged = result.outcome == "merged"
             if resolved:
                 self.notify(
-                    agent_conversation(node, "ic"),
+                    agent_conversation(place, "ic"),
                     "Your team's work did not merge by itself. The IC that "
                     "reviewed it finished the merge in these files, which are "
                     f"now as it left them: {', '.join(resolved)}",
                 )
         tip = await asyncio.to_thread(head_of, team)
         store.set_review(
-            node_id,
-            node.review.model_copy(update={"state": "accepted", "at": utc_now()}),
-            base_commit=tip or node.base_commit,
+            place_id,
+            place.review.model_copy(update={"state": "accepted", "at": utc_now()}),
+            base_commit=tip or place.base_commit,
         )
         self.progressed(above.id)
-        self._work_accepted(node)
+        self._work_accepted(place)
         if meets is not None or resolved:
             self.record_event(
                 above.id,
                 "reconciled",
-                node,
+                place,
                 (reconciled or f"merged {', '.join(resolved)}")[:ASKED_KEPT],
             )
         self.record_event(
             above.id,
             "accepted",
-            node,
+            place,
             "at the first review"
-            if node.review.round <= 1
-            else f"at review {node.review.round}",
+            if place.review.round <= 1
+            else f"at review {place.review.round}",
         )
         if opens:
-            self._take_spec_choices(node, specs or [])
+            self._take_spec_choices(place, specs or [])
             await asyncio.to_thread(
-                self._land_accepted, node, meets.seen if meets else None
+                self._land_accepted, place, meets.seen if meets else None
             )
-        self._runs().unmark(SHOWN, node_id)
+        self._runs().unmark(SHOWN, place_id)
         self._tell_turns()
         if not is_division_lead(above):
             self.count_accepted_review(above.id)
         self.notify(
-            agent_conversation(node, "ic"),
+            agent_conversation(place, "ic"),
             f"The IC of {above.title!r} accepted your team's work"
             + (" and it is merged into that team's checkout." if merged else "."),
         )
         if merged:
             self.notify(
-                reviewer, f"The work of {node.title!r} is merged into your checkout."
+                reviewer, f"The work of {place.title!r} is merged into your checkout."
             )
         await self._pass_up(above.id, acted=True)
         further = store.place(above.parent_id) if above.parent_id else None
         if needed_above and further is not None:
             self.notify(
                 agent_conversation(further, "ic"),
-                f"Team {above.title!r} (node {above.id}) below you accepted the "
-                f"work of its sub-team {node.title!r} in {where} and says a team "
+                f"Team {above.title!r} (id {above.id}) below you accepted the "
+                f"work of its sub-team {place.title!r} in {where} and says a team "
                 f"above it waits on that work: {needed_above}\nIt is in "
                 f"{above.worktree_path}"
                 + (f" on branch {above.branch}." if above.branch else "."),
             )
 
     def _finish_merge(
-        self, node: SessionTeam, above: SessionTeam, found: MergeBack
+        self, place: SessionTeam, above: SessionTeam, found: MergeBack
     ) -> MergeBack | str:
         """Take the merge the reviewer of a team's work finished, or lay
         it out for it to finish.
@@ -1751,7 +1751,7 @@ class Reviews(Requests):
         """
         checkout = Path(above.worktree_path)
         ours = head_of(checkout)
-        merge = self.merge_checkout(node.id)
+        merge = self.merge_checkout(place.id)
         if (
             ours is None
             or merge is None
@@ -1760,7 +1760,7 @@ class Reviews(Requests):
         ):
             if ours is None:
                 return f"The checkout of {above.title!r} has no commit."
-            where = self._merging_root() / node.id.replace("@", "-")
+            where = self._merging_root() / place.id.replace("@", "-")
             merge = MergeCheckout(
                 where=str(where), ours=ours, tip=found.tip, files=list(found.files)
             )
@@ -1768,34 +1768,34 @@ class Reviews(Requests):
                 prepare(self._repo_dir, where, ours, found.tip)
             except (GitError, OSError) as error:
                 return (
-                    f"The work of {node.title!r} does not merge with your "
+                    f"The work of {place.title!r} does not merge with your "
                     f"checkout ({', '.join(found.files)}), and the merge could "
                     f"not be laid out for you: {error}"
                 )
-            self._runs().mark(MERGING, node.id, merge.model_dump_json())
-            return merge_prepared(node, merge.where, merge.files)
+            self._runs().mark(MERGING, place.id, merge.model_dump_json())
+            return merge_prepared(place, merge.where, merge.files)
         try:
             commit = finish(
-                merge, merge_message(self._merged_as(node), node.boundary.path)
+                merge, merge_message(self._merged_as(place), place.boundary.path)
             )
         except Unfinished as error:
             return (
-                f"The merge of the work of {node.title!r} in {merge.where} is "
+                f"The merge of the work of {place.title!r} in {merge.where} is "
                 f"not taken yet, and the work still waits for you: {error}"
             )
         except (GitError, OSError) as error:
             return (
-                f"The merge of the work of {node.title!r} in {merge.where} "
+                f"The merge of the work of {place.title!r} in {merge.where} "
                 f"could not be committed: {error}"
             )
         taken = take_merge(checkout, commit)
         if taken.outcome != "merged":
             return taken
-        self._drop_merge_checkout(node.id)
+        self._drop_merge_checkout(place.id)
         return MergeBack("merged", found.tip, tuple(merge.files))
 
     def _own_changes(
-        self, node: SessionTeam, teams: list[SessionTeam]
+        self, place: SessionTeam, teams: list[SessionTeam]
     ) -> list[str] | None:
         """The files a team changed itself since its work was last taken
         up, committed or not: those in its directory that are in no
@@ -1804,16 +1804,16 @@ class Reviews(Requests):
         Returns:
             None when git cannot tell.
         """
-        if not node.base_commit:
+        if not place.base_commit:
             return None
-        checkout = Path(node.worktree_path)
+        checkout = Path(place.worktree_path)
         try:
             names = git(
                 checkout,
-                ["diff", "--name-only", node.base_commit, "HEAD", "--"]
-                + [pathspec(node.boundary.path)],
+                ["diff", "--name-only", place.base_commit, "HEAD", "--"]
+                + [pathspec(place.boundary.path)],
             ).splitlines()
-            names += uncommitted(checkout, node.boundary.path)
+            names += uncommitted(checkout, place.boundary.path)
         except (GitError, OSError):
             return None
         given = [team.boundary.path for team in teams]
@@ -1828,7 +1828,7 @@ class Reviews(Requests):
             }
         )
 
-    async def _pass_up(self, node_id: str, *, acted: bool) -> None:
+    async def _pass_up(self, place_id: str, *, acted: bool) -> None:
         """Take a team's work into the team above without another review,
         when all of it is work of its sub-teams that was accepted.
 
@@ -1841,38 +1841,38 @@ class Reviews(Requests):
                 sub-teams itself; otherwise their work came up on its own.
         """
         store = self.store
-        node = store.place(node_id)
-        if node is None or not store.below(node_id):
+        place = store.place(place_id)
+        if place is None or not store.below(place_id):
             return
         # A team that was set up and never given work owes none.
         teams = [
             team
-            for team in store.below(node_id)
+            for team in store.below(place_id)
             if team.review is not None or agent_conversation(team, "ic") is not None
         ]
         if not teams or any(
             team.review is None or team.review.state != "accepted" for team in teams
         ):
             return
-        if node.review is not None and node.review.state == "pending":
+        if place.review is not None and place.review.state == "pending":
             return
-        opens = store.opens_session(node)
+        opens = store.opens_session(place)
         if opens and _LANE.get() != BASE_LANE:
             # The work of a session goes into what the org shares.
-            await self._in_base(lambda: self._pass_up(node_id, acted=acted))
+            await self._in_base(lambda: self._pass_up(place_id, acted=acted))
             return
-        ic = agent_conversation(node, "ic")
-        above = store.place(node.parent_id) if node.parent_id else None
-        own = await asyncio.to_thread(self._own_changes, node, teams)
+        ic = agent_conversation(place, "ic")
+        above = store.place(place.parent_id) if place.parent_id else None
+        own = await asyncio.to_thread(self._own_changes, place, teams)
         if own is None:
             return
         # The work of a session meets what other sessions delivered: where
         # it does, the reviewer is asked even if the team changed nothing.
         meets = False
-        if not own and above is not None and store.opens_session(node):
+        if not own and above is not None and store.opens_session(place):
             try:
                 meets = (
-                    await asyncio.to_thread(self._to_reconcile, node, above)
+                    await asyncio.to_thread(self._to_reconcile, place, above)
                 ) is not None
             except (GitError, OSError):
                 meets = True
@@ -1891,11 +1891,11 @@ class Reviews(Requests):
                     + "Call `submit_review` when your team's work is complete.",
                 )
             return
-        team, checkout = Path(node.worktree_path), Path(above.worktree_path)
+        team, checkout = Path(place.worktree_path), Path(above.worktree_path)
         if _checkout_root(str(team)) != _checkout_root(str(checkout)):
             try:
                 result = await asyncio.to_thread(
-                    merge_back, checkout, team, node.boundary.path, node.title
+                    merge_back, checkout, team, place.boundary.path, place.title
                 )
                 problem = (
                     f"{result.outcome}: {', '.join(result.files) or result.detail}"
@@ -1916,7 +1916,7 @@ class Reviews(Requests):
                 return
         tip = await asyncio.to_thread(head_of, team)
         store.set_review(
-            node_id,
+            place_id,
             Review(
                 state="accepted",
                 summary="The accepted work of its sub-teams, with no changes of "
@@ -1924,11 +1924,11 @@ class Reviews(Requests):
                 passed_up=True,
                 at=utc_now(),
             ),
-            base_commit=tip or node.base_commit,
+            base_commit=tip or place.base_commit,
         )
-        self._work_accepted(node)
+        self._work_accepted(place)
         if opens:
-            await asyncio.to_thread(self._land_accepted, node, None)
+            await asyncio.to_thread(self._land_accepted, place, None)
         self._tell_turns()
         if acted:
             self.notify(

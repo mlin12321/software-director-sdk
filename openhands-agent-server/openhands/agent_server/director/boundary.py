@@ -69,7 +69,7 @@ def glob_matches(glob: str, path: str) -> bool:
 
 
 def owns(node: OrgNode, path: str) -> bool:
-    """Whether ``path`` is the node's directory or lies in it."""
+    """Whether ``path`` is the team's directory or lies in it."""
     return path == node.boundary.path or is_inside(path, node.boundary.path)
 
 
@@ -107,7 +107,7 @@ def write_refusal(
         if owns(sub_team, path):
             return (
                 f"{path!r} belongs to your sub-team {sub_team.title!r} "
-                f"(node {sub_team.id}), so it was not changed. Tell that team "
+                f"(id {sub_team.id}), so it was not changed. Tell that team "
                 "what you need instead."
             )
     if any(glob_matches(glob, path) for glob in node.boundary.readonly):
@@ -122,7 +122,7 @@ def write_refusal(
 
 
 def _may_take(node: OrgNode, path: str) -> bool:
-    """Whether a request about ``path`` is the node's to act on."""
+    """Whether a request about ``path`` is the team's to act on."""
     if path == node.boundary.path:
         return True
 

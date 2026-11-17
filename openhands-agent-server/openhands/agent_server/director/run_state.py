@@ -20,26 +20,26 @@ from openhands.sdk.errors import DomainError
 SCHEMA_VERSION = 1
 
 # Marks: one row per (kind, key), kept in the order they were first made.
-RUNNING = "running"  # conversation id -> node id
-WAITING = "waiting"  # node id, waiting for the server to have room
-CHECKS = "checks"  # node id -> what its Manager's checks have counted
-HELD = "held"  # node id, its review request waits for the teams beside it
-PROGRESS = "progress"  # node id -> when the team last got anywhere
-TASK = "task"  # node id -> what the team was started to do
+RUNNING = "running"  # conversation id -> team id
+WAITING = "waiting"  # team id, waiting for the server to have room
+CHECKS = "checks"  # team id -> what its Manager's checks have counted
+HELD = "held"  # team id, its review request waits for the teams beside it
+PROGRESS = "progress"  # team id -> when the team last got anywhere
+TASK = "task"  # team id -> what the team was started to do
 TOLD = "told"  # conversation id -> the context its agent was last told
-HANDING = "handing"  # node id -> what its hand-over conversation has done
+HANDING = "handing"  # team id -> what its hand-over conversation has done
 SESSION = "session"  # session id -> the session and what it has at its teams
 JOINED = "joined"  # conversation id, the human has written in it
-REPORTS = "reports"  # node id of a session's team -> what its agents recorded
+REPORTS = "reports"  # team id of a session's team -> what its agents recorded
 # session id and a file of team memory -> the text the session wrote there
 # and the text it was written over
 FILES = "files"
 # session id, team id and time -> the record of a team the session removed
 FORMER = "former"
-SHOWN = "shown"  # node id -> what its reviewer was shown to reconcile
-MERGING = "merging"  # node id -> the merge its reviewer finishes
-TURN = "turn"  # node id, its reviewer was told to wait for its turn
-DECIDED = "decided"  # node id -> what a Manager decided of work sent back
+SHOWN = "shown"  # team id -> what its reviewer was shown to reconcile
+MERGING = "merging"  # team id -> the merge its reviewer finishes
+TURN = "turn"  # team id, its reviewer was told to wait for its turn
+DECIDED = "decided"  # team id -> what a Manager decided of work sent back
 # session id and team id -> what became of the teams below that team there
 EVENTS = "events"
 # who wrote, to whom and which of the two kinds -> what was written
@@ -190,16 +190,16 @@ class RunState:
             )
             self._db.execute("COMMIT")
 
-    def begin(self, kind: str, node_id: str, payload: dict[str, Any]) -> Intent:
+    def begin(self, kind: str, place_id: str, payload: dict[str, Any]) -> Intent:
         with self._lock:
             cursor = self._db.execute(
                 "INSERT INTO intents (kind, node_id, payload, steps) "
                 "VALUES (?, ?, ?, '[]')",
-                (kind, node_id, json.dumps(payload)),
+                (kind, place_id, json.dumps(payload)),
             )
             intent_id = cursor.lastrowid
         assert intent_id is not None
-        return Intent(intent_id, kind, node_id, payload, frozenset())
+        return Intent(intent_id, kind, place_id, payload, frozenset())
 
     def step_done(self, intent: Intent, step: str, **learned: Any) -> Intent:
         """Record that a step of ``intent`` is done, with what it found out."""
@@ -226,20 +226,20 @@ class RunState:
             Intent(
                 intent_id,
                 kind,
-                node_id,
+                place_id,
                 json.loads(payload),
                 frozenset(json.loads(steps)),
             )
-            for intent_id, kind, node_id, payload, steps in self._all(
+            for intent_id, kind, place_id, payload, steps in self._all(
                 "SELECT id, kind, node_id, payload, steps FROM intents ORDER BY id"
             )
         ]
 
-    def hold(self, conversation_id: str, node_id: str, text: str) -> int:
+    def hold(self, conversation_id: str, place_id: str, text: str) -> int:
         with self._lock:
             cursor = self._db.execute(
                 "INSERT INTO outbox (conversation_id, node_id, text) VALUES (?, ?, ?)",
-                (conversation_id, node_id, text),
+                (conversation_id, place_id, text),
             )
             seq = cursor.lastrowid
         assert seq is not None

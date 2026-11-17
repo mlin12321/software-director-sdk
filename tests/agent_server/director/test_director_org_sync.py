@@ -19,7 +19,7 @@ from openhands.agent_server.director.service import DirectorService
 from openhands.sdk.errors import Conflict, Unprocessable
 from tests.agent_server.director.conftest import (
     FakeLauncher,
-    make_node,
+    make_team,
     root_conversation,
     run_git,
 )
@@ -35,9 +35,9 @@ def tree(*changes: tuple[str, str, object]) -> dict[str, dict]:
     """A root with teams ``a`` and ``b``, as saved, with fields changed."""
     nodes = by_id(
         [
-            make_node("root", None, path="").model_dump(),
-            make_node("a", "root").model_dump(),
-            make_node("b", "root").model_dump(),
+            make_team("root", None, path="").model_dump(),
+            make_team("a", "root").model_dump(),
+            make_team("b", "root").model_dump(),
         ]
     )
     for node_id, field, value in changes:
@@ -93,7 +93,7 @@ def test_the_same_change_on_both_sides_is_no_conflict():
 
 
 def test_a_team_removed_on_one_side_and_untouched_on_the_other_is_removed():
-    below = make_node("a.x", "a").model_dump()
+    below = make_team("a.x", "a").model_dump()
     base = {**tree(), "a.x": below}
 
     mine_removed = merge_orgs(base, without(base, "a", "a.x"), base, {})
@@ -105,7 +105,7 @@ def test_a_team_removed_on_one_side_and_untouched_on_the_other_is_removed():
 
 
 def test_a_team_removed_on_one_side_and_changed_below_on_the_other_is_a_conflict():
-    below = make_node("a.x", "a").model_dump()
+    below = make_team("a.x", "a").model_dump()
     base = {**tree(), "a.x": below}
     theirs = {**base, "a.x": {**below, "headline": "Still going"}}
     mine = without(base, "a", "a.x")
@@ -128,8 +128,8 @@ def test_a_team_removed_on_one_side_and_changed_below_on_the_other_is_a_conflict
 
 
 def test_teams_added_on_either_side_are_kept():
-    mine = {**tree(), "c": make_node("c", "root").model_dump()}
-    theirs = {**tree(), "d": make_node("d", "b").model_dump()}
+    mine = {**tree(), "c": make_team("c", "root").model_dump()}
+    theirs = {**tree(), "d": make_team("d", "b").model_dump()}
 
     merged = merge_orgs(tree(), mine, theirs, {})
 

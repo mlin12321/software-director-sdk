@@ -33,10 +33,10 @@ from openhands.sdk.errors import Invalid, NotSupported, OperationFailed
 MEMORY_REF = "refs/agents/memory"
 SPEC_FILE = "spec.md"
 CONTRACTS_FILE = "contracts.md"
-# One file of reports for each agent of a team: `<node id>/<role>.json`.
+# One file of reports for each agent of a team: `<team id>/<role>.json`.
 REPORTS_DIR = ".reports"
 # One record for each team that was replaced or pruned:
-# `<node id>/<time>.json`.
+# `<team id>/<time>.json`.
 FORMER_DIR = ".former"
 HISTORY_DIR = ".history"
 # What the human said that went straight to a team, for the whole org.
@@ -323,7 +323,7 @@ class GitStore:
         return _parse_reports(self.read(_reports_file(node_id, role)))
 
     def former(self, node_id: str) -> list[FormerTeam]:
-        """The records of the teams that were removed from a node id,
+        """The records of the teams that were removed from a team id,
         oldest first."""
         commit = self.head()
         return [
@@ -334,7 +334,7 @@ class GitStore:
 
     def former_below(self, above: str) -> list[FormerTeam]:
         """The records of the teams that were removed from directly below
-        a node, oldest first."""
+        a team, oldest first."""
         commit = self.head()
         records = [
             FormerTeam.model_validate_json(raw)

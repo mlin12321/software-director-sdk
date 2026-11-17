@@ -15,6 +15,7 @@ from openhands.agent_server.director.models import (
     TeamChoice,
 )
 from openhands.agent_server.director.service import DirectorService
+from openhands.agent_server.director.split import ProposedTeam
 from openhands.agent_server.director.tools.impl import (
     DirectorExecutor,
     DirectorObservation,
@@ -27,7 +28,7 @@ if TYPE_CHECKING:
     from openhands.sdk.conversation.state import ConversationState
 
 
-class ReadNodeContextAction(Action):
+class ReadTeamContextAction(Action):
     """Read who you are in the org and what concerns your team."""
 
 
@@ -37,44 +38,43 @@ class WriteSpecAction(Action):
     text: str = Field(description="The whole spec, in Markdown.")
 
 
-TEAMS_EXAMPLE = """\
-```teams
-contracts: |
-  What the sub-teams must keep between them: types, endpoints, file formats.
-keep: [Web]  # every sub-team you already have that is to stay as it is
-teams:
-  - name: API
-    path: services/api
-    instruction: What this team is to deliver.
-    reason: Why it is a team of its own.  # optional, for your Manager
-    model: a-profile-name      # optional
-    writable: [services/api/**]  # optional; all of path when left out
-    readonly: [shared/**]        # optional
-    isolation: shared            # optional; or worktree
-```"""
-
-
 class MsgManagerAction(Action):
     """Write to your team's Manager."""
 
-    text: str = Field(
+    text: str = Field(description="The message, in your own words.")
+
+
+class ProposeTeamsAction(Action):
+    """Propose sub-teams to your team's Manager."""
+
+    teams: list[ProposedTeam] = Field(
+        min_length=1,
         description=(
-            "The message, in your own words. To propose sub-teams, include "
-            "one block like this:\n"
-            f"{TEAMS_EXAMPLE}\n"
-            "Each team owns one directory strictly inside what your team "
-            "may write; no two may overlap. `model` is one of the profiles "
-            "read_node_context lists. A team whose directory covers "
+            "The sub-teams. Each owns one folder strictly inside what your "
+            "team may write; no two may overlap. A team whose folder covers "
             "sub-teams you already have replaces them, and so does one that "
-            "takes part of an existing sub-team's directory; what the new "
-            "teams leave of it is yours again. When you already have "
-            "sub-teams, say what becomes of each: list under `keep` the "
-            "name of every one that stays as it is; leave `keep` out when "
-            "you have none. The sub-teams cannot see "
-            "each other's work or your spec, so the contracts must hold "
-            "everything they have to respect. What teams promise each "
-            "other is written only there, not in a spec."
-        )
+            "takes part of an existing sub-team's folder; what the new "
+            "teams leave of it is yours again."
+        ),
+    )
+    contracts: str = Field(
+        default="",
+        description=(
+            "What the sub-teams must keep between them: types, endpoints, "
+            "file formats. They cannot see each other's work or your spec, "
+            "so this must hold everything they have to respect. What teams "
+            "promise each other is written only here, not in a spec."
+        ),
+    )
+    keep: list[str] = Field(
+        default_factory=list,
+        description=(
+            "When you already have sub-teams: the name of every one that "
+            "stays as it is. Leave empty when you have none."
+        ),
+    )
+    text: str = Field(
+        default="", description="Why you want these teams, for your Manager."
     )
 
 
@@ -85,7 +85,7 @@ class MsgIcAction(Action):
     team: str = Field(
         default="",
         description=(
-            "The node id of a team directly below yours, to write to its "
+            "The id of a team directly below yours, to write to its "
             "IC. Leave empty for your own team's IC."
         ),
     )
@@ -110,7 +110,7 @@ class SettleTeamsAction(Action):
     contracts: list[ContractsChoice] = Field(
         default_factory=list,
         description=(
-            "For contracts that wait: which holds for each directory. "
+            "For contracts that wait: which holds for each folder. "
             "Unnamed, the session's hold."
         ),
     )
@@ -146,23 +146,12 @@ class RaiseEscalationAction(Action):
     detail: str = Field(
         default="", description="What you need decided, and the options you see."
     )
-    team_for: str = Field(
-        default="",
-        description=(
-            "For an IC that needs something of a team that is not above it: "
-            "what it needs, of which files or of which part of the product. "
-            "The runtime then takes the escalation straight to the IC of the "
-            "team that holds it, when it is sure which team that is, and "
-            "otherwise to the IC of the team above as without this. Leave "
-            "empty for what the team above must decide."
-        ),
-    )
 
 
 class ResolveEscalationAction(Action):
     """Settle an escalation your team holds, or pass it up."""
 
-    node_id: str = Field(description="The node that raised the escalation.")
+    team: str = Field(description="The team that raised the escalation.")
     escalation_id: str
     action: Literal["settle", "pass_up"]
     text: str = Field(
@@ -182,7 +171,7 @@ class SubmitReviewAction(Action):
 class ReviewTeamAction(Action):
     """Decide on the work a team below yours submitted."""
 
-    node_id: str = Field(description="A team directly below yours.")
+    team: str = Field(description="A team directly below yours.")
     decision: Literal["accept", "reject"]
     findings: list[ReviewFinding] = Field(
         default_factory=list,
@@ -208,7 +197,7 @@ class ReviewTeamAction(Action):
         default_factory=list,
         description=(
             "Only when you accept the work of a session: for the spec of a "
-            "directory in it, whether the org's stays, the session's holds, "
+            "folder in it, whether the org's stays, the session's holds, "
             "or a text you write from both does. Unnamed, the session's "
             "holds."
         ),
@@ -224,14 +213,14 @@ class ReportAction(Action):
 class MsgTeamAction(Action):
     """Write to the IC of a team below yours."""
 
-    team: str = Field(description="The node id of a team directly below yours.")
+    team: str = Field(description="The id of a team directly below yours.")
     text: str = Field(description="The message, in your own words.")
 
 
 class HandOverAction(Action):
     """Pass on to a team below yours what the teams before it left."""
 
-    team: str = Field(description="The node id of a team directly below yours.")
+    team: str = Field(description="The id of a team directly below yours.")
     notes: str = Field(
         default="",
         description=(
@@ -252,14 +241,14 @@ class HandOverAction(Action):
 class StopTeamAction(Action):
     """Stop a team below yours that has gone on too long without progress."""
 
-    team: str = Field(description="The node id of a team directly below yours.")
+    team: str = Field(description="The id of a team directly below yours.")
     reason: str = Field(description="Why the team is stopped; your Manager is told.")
 
 
 class PruneTeamAction(Action):
     """Remove a team below yours that is grossly inefficient."""
 
-    node_id: str = Field(description="A team directly below yours.")
+    team: str = Field(description="A team directly below yours.")
     reason: str = Field(description="Why the team is removed; its IC above is told.")
 
 
@@ -299,7 +288,7 @@ class _DirectorTool[ActionT: Action](ToolDefinition[ActionT, DirectorObservation
         ]
 
 
-class ReadNodeContextTool(_DirectorTool[ReadNodeContextAction]):
+class ReadTeamContextTool(_DirectorTool[ReadTeamContextAction]):
     summary = (
         "Read your place in the org: your team, role and folder, your spec, "
         "the contracts you keep and what your team has reported, your sub-teams "
@@ -310,7 +299,7 @@ class ReadNodeContextTool(_DirectorTool[ReadNodeContextAction]):
 
     @classmethod
     def action(cls):
-        return ReadNodeContextAction
+        return ReadTeamContextAction
 
     @classmethod
     def act(cls):
@@ -340,13 +329,10 @@ class WriteSpecTool(_DirectorTool[WriteSpecAction]):
 
 class MsgManagerTool(_DirectorTool[MsgManagerAction]):
     summary = (
-        "IC only. Write to your team's Manager, in your own words: propose "
-        "sub-teams, say how the teams below are doing, say when one "
-        "struggles and you cannot fix it, or when two of them are at odds. "
-        "To propose sub-teams, put one ```teams block of YAML in the "
-        "message; it is checked at once and nothing is set up until the "
-        "Manager approves. A team without sub-teams uses this only to "
-        "propose some."
+        "IC only, with sub-teams. Write to your team's Manager, in your own "
+        "words: say how the teams below are doing, say when one struggles "
+        "and you cannot fix it, or when two of them are at odds. To propose "
+        "sub-teams use propose_teams."
     )
 
     @classmethod
@@ -357,6 +343,29 @@ class MsgManagerTool(_DirectorTool[MsgManagerAction]):
     def act(cls):
         return lambda service, caller, action: agent_actions.msg_manager(
             service, caller, action.text
+        )
+
+
+class ProposeTeamsTool(_DirectorTool[ProposeTeamsAction]):
+    summary = (
+        "IC only. Propose sub-teams to your team's Manager. The proposal is "
+        "checked at once, and nothing is set up until the Manager approves; "
+        "you are told either way."
+    )
+
+    @classmethod
+    def action(cls):
+        return ProposeTeamsAction
+
+    @classmethod
+    def act(cls):
+        return lambda service, caller, action: agent_actions.propose_teams(
+            service,
+            caller,
+            action.teams,
+            action.contracts,
+            action.keep,
+            action.text,
         )
 
 
@@ -484,7 +493,7 @@ class DeclineTeamsTool(_DirectorTool[DeclineTeamsAction]):
     summary = (
         "Manager only. Decline the sub-teams your IC proposed, saying why. "
         "Nothing is set up, your IC is told the reason, and the reason is "
-        "kept in the record, where it is shown when the same directories "
+        "kept in the record, where it is shown when the same folders "
         "are proposed again. Also the way to ask for a different division: "
         "say what to change, and your IC proposes again."
     )
@@ -520,7 +529,6 @@ class RaiseEscalationTool(_DirectorTool[RaiseEscalationAction]):
             action.category,
             action.title,
             action.detail,
-            action.team_for,
         )
 
 
@@ -540,7 +548,7 @@ class ResolveEscalationTool(_DirectorTool[ResolveEscalationAction]):
         return lambda service, caller, action: agent_actions.resolve_escalation(
             service,
             caller,
-            action.node_id,
+            action.team,
             action.escalation_id,
             action.action,
             action.text,
@@ -588,7 +596,7 @@ class ReviewTeamTool(_DirectorTool[ReviewTeamAction]):
         return lambda service, caller, action: agent_actions.review_team(
             service,
             caller,
-            action.node_id,
+            action.team,
             action.decision,
             action.findings,
             action.needed_above,
@@ -622,7 +630,7 @@ class PruneTeamTool(_DirectorTool[PruneTeamAction]):
         "inefficient, with every team below it. Rare, and never a "
         "precaution: wait until the team has had enough tasks to judge it "
         "by. Its agents are deleted and the uncommitted changes in its "
-        "directory are discarded (git keeps a copy). The directory goes back "
+        "folder are discarded (git keeps a copy). The folder goes back "
         "to your team's IC, who is told why."
     )
 
@@ -635,35 +643,18 @@ class PruneTeamTool(_DirectorTool[PruneTeamAction]):
         return lambda service, caller, action: agent_actions.prune_team(
             service,
             caller,
-            action.node_id,
+            action.team,
             action.reason,
         )
-
-
-register_tool(ReadNodeContextTool.name, ReadNodeContextTool)
-register_tool(WriteSpecTool.name, WriteSpecTool)
-register_tool(MsgManagerTool.name, MsgManagerTool)
-register_tool(MsgIcTool.name, MsgIcTool)
-register_tool(MsgTeamTool.name, MsgTeamTool)
-register_tool(StopTeamTool.name, StopTeamTool)
-register_tool(ApproveTeamsTool.name, ApproveTeamsTool)
-register_tool(DeclineTeamsTool.name, DeclineTeamsTool)
-register_tool(SettleTeamsTool.name, SettleTeamsTool)
-register_tool(RaiseEscalationTool.name, RaiseEscalationTool)
-register_tool(ResolveEscalationTool.name, ResolveEscalationTool)
-register_tool(SubmitReviewTool.name, SubmitReviewTool)
-register_tool(PruneTeamTool.name, PruneTeamTool)
-register_tool(ReviewTeamTool.name, ReviewTeamTool)
-register_tool(ReportTool.name, ReportTool)
-register_tool(HandOverTool.name, HandOverTool)
 
 
 DIRECTOR_TOOLS: dict[str, type[_DirectorTool]] = {
     tool.name: tool
     for tool in (
-        ReadNodeContextTool,
+        ReadTeamContextTool,
         WriteSpecTool,
         MsgManagerTool,
+        ProposeTeamsTool,
         MsgIcTool,
         MsgTeamTool,
         StopTeamTool,
@@ -679,3 +670,6 @@ DIRECTOR_TOOLS: dict[str, type[_DirectorTool]] = {
         HandOverTool,
     )
 }
+
+for _tool in DIRECTOR_TOOLS.values():
+    register_tool(_tool.name, _tool)

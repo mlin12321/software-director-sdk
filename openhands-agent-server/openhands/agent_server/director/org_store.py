@@ -1,6 +1,6 @@
 """In-memory org tree.
 
-The store owns ``child_ids`` on every node and is the only thing that emits
+The store owns ``child_ids`` on every team and is the only thing that emits
 org events, so every subscriber sees one consistent tree.
 """
 
@@ -37,7 +37,7 @@ from openhands.sdk.errors import Invalid, NotFound
 
 
 # An agent whose conversation failed, and one that has none on this server.
-AGENT_FAILED = "blocked"
+AGENT_BLOCKED = "blocked"
 AGENT_LOST = "lost"
 
 
@@ -53,7 +53,7 @@ def status_of(node: SessionTeamInput) -> NodeStatus:
     agents = {agent.status for agent in node.agents}
     if node.stopped is not None:
         return "blocked"
-    if AGENT_FAILED in agents or any(
+    if AGENT_BLOCKED in agents or any(
         escalation.raised_by == "ic" for escalation in node.escalations
     ):
         return "blocked"
@@ -100,11 +100,11 @@ def team_id_of(node: OrgNodeInput) -> str:
 @dataclass
 class _Subscription:
     focus_id: str
-    # Nodes whose direct reports the subscriber also follows.
+    # Teams whose direct reports the subscriber also follows.
     expanded: frozenset[str]
-    # Whether the subscriber follows every node below the focused one.
+    # Whether the subscriber follows every team below the focused one.
     full: bool
-    # The nodes above the focused one. A node never changes parent.
+    # The teams above the focused one. A team never changes parent.
     above: frozenset[str]
     # What the subscriber was last told, to announce only real changes.
     escalations: list[OpenEscalation] = field(default_factory=list)
@@ -124,7 +124,7 @@ class OrgStore:
     The tree is the org's structure: what a team is, and nothing of its
     work. Beside it the store holds the open sessions: each is a record of
     its own with, for the team it was opened at and every team below that
-    one, a place (:class:`SessionTeam`). Places are in no node's
+    one, a place (:class:`SessionTeam`). Places are in no team's
     ``child_ids`` and in no snapshot's ``nodes``. All work is at places:
     the agents, the review, the escalations.
 
@@ -141,7 +141,7 @@ class OrgStore:
         self._listeners: dict[OrgListener, _Subscription] = {}
         self._change_listeners: list[Callable[[], None]] = []
         self._agents: dict[str, tuple[str, AgentRole]] = {}
-        # The hand-over conversation of each IC that has one -> its node.
+        # The hand-over conversation of each IC that has one -> its team.
         self._hand_overs: dict[str, str] = {}
 
     @property
@@ -155,34 +155,34 @@ class OrgStore:
         """A team of the org, or a place of a session, by its id."""
         return self._nodes.get(node_id) or self._places.get(node_id)
 
-    def team(self, node_id: str) -> OrgNode | None:
-        """A node of the org tree; None for anything else."""
-        return self._nodes.get(node_id)
+    def team(self, team_id: str) -> OrgNode | None:
+        """A team of the org tree; None for anything else."""
+        return self._nodes.get(team_id)
 
-    def place(self, node_id: str) -> SessionTeam | None:
+    def place(self, place_id: str) -> SessionTeam | None:
         """A place of a session; None for anything else."""
-        return self._places.get(node_id)
+        return self._places.get(place_id)
 
-    def sub_teams(self, node_id: str) -> list[OrgNode]:
-        """The teams of the org directly below the team ``node_id``."""
+    def sub_teams(self, team_id: str) -> list[OrgNode]:
+        """The teams of the org directly below the team ``team_id``."""
         with self._lock:
-            node = self._nodes.get(node_id)
+            node = self._nodes.get(team_id)
             return [self._nodes[child] for child in node.child_ids] if node else []
 
-    def below(self, node_id: str) -> list[SessionTeam]:
-        """The places directly below the place ``node_id`` in its session."""
+    def below(self, place_id: str) -> list[SessionTeam]:
+        """The places directly below the place ``place_id`` in its session."""
         with self._lock:
-            place = self._places.get(node_id)
+            place = self._places.get(place_id)
             return [self._places[child] for child in place.child_ids] if place else []
 
-    def opens_session(self, node: SessionTeam) -> bool:
+    def opens_session(self, place: SessionTeam) -> bool:
         """Whether ``node`` is the place a session was opened at."""
         with self._lock:
-            session = self._sessions.get(node.session)
+            session = self._sessions.get(place.session)
             return (
                 session is not None
-                and not node.division_lead
-                and session.team_id == node.team_id
+                and not place.division_lead
+                and session.team_id == place.team_id
             )
 
     def teams(self) -> list[OrgNode]:
@@ -226,10 +226,10 @@ class OrgStore:
         """The place a session has at the team ``team_id``."""
         return self._places.get(session_team_id(team_id, session_id))
 
-    def teams_below(self, node_id: str) -> int:
-        """How many places are below the place ``node_id``, at any depth."""
+    def teams_below(self, place_id: str) -> int:
+        """How many places are below the place ``place_id``, at any depth."""
         with self._lock:
-            found = [node_id]
+            found = [place_id]
             for current in found:
                 found.extend(team.id for team in self.below(current))
             return len(found) - 1
@@ -361,11 +361,11 @@ class OrgStore:
             self._changed()
             return True
 
-    def teams_above(self, node_id: str) -> list[OrgNode]:
-        """The teams of the org above the team ``node_id``, the top first."""
+    def teams_above(self, team_id: str) -> list[OrgNode]:
+        """The teams of the org above the team ``team_id``, the top first."""
         with self._lock:
             chain: list[OrgNode] = []
-            node = self._nodes.get(node_id)
+            node = self._nodes.get(team_id)
             while node is not None and node.parent_id is not None:
                 node = self._nodes.get(node.parent_id)
                 if node is not None:
@@ -373,14 +373,14 @@ class OrgStore:
             chain.reverse()
             return chain
 
-    def above(self, node_id: str) -> list[SessionTeam]:
-        """The places above the place ``node_id`` in its session, the one
+    def above(self, place_id: str) -> list[SessionTeam]:
+        """The places above the place ``place_id`` in its session, the one
         the session was opened at first. Nobody stands at a session's
         Division Lead place, so it is not one of them."""
         with self._lock:
             return (
-                [self._places[above] for above in reversed(self._chain(node_id))][:-1]
-                if node_id in self._places
+                [self._places[above] for above in reversed(self._chain(place_id))][:-1]
+                if place_id in self._places
                 else []
             )
 
@@ -397,17 +397,17 @@ class OrgStore:
             found = self._agents.get(conversation_id)
             if found is None:
                 return None
-            node_id, role = found
-            return self._places[node_id], role
+            place_id, role = found
+            return self._places[place_id], role
 
     def find_hand_over(self, conversation_id: str) -> SessionTeam | None:
         """The place whose IC has ``conversation_id`` as its hand-over
         conversation."""
         with self._lock:
-            node_id = self._hand_overs.get(conversation_id)
-            return self._places[node_id] if node_id is not None else None
+            place_id = self._hand_overs.get(conversation_id)
+            return self._places[place_id] if place_id is not None else None
 
-    def set_hand_over(self, node_id: str, mode: HandOverMode | None) -> SessionTeam:
+    def set_hand_over(self, place_id: str, mode: HandOverMode | None) -> SessionTeam:
         """Put a place's IC in hand-over mode, change how that stands, or
         end it. The place's status does not follow: a hand-over says nothing
         of how the team's work stands.
@@ -416,7 +416,7 @@ class OrgStore:
             NotFound: The place does not exist.
         """
         with self._lock:
-            node = self._require_place(node_id)
+            node = self._require_place(place_id)
             agents = [
                 agent.model_copy(update={"hand_over": mode})
                 if agent.role == "ic"
@@ -425,7 +425,7 @@ class OrgStore:
             ]
             if agents == node.agents:
                 return node
-            return self.update_place(node_id, agents=agents)
+            return self.update_place(place_id, agents=agents)
 
     def on_change(self, listener: Callable[[], None]) -> Callable[[], None]:
         """Call ``listener`` after every change to the tree.
@@ -445,7 +445,7 @@ class OrgStore:
 
         return stop
 
-    def update_team(self, node_id: str, **changes: object) -> OrgNode:
+    def update_team(self, team_id: str, **changes: object) -> OrgNode:
         """Change fields of a team of the org.
 
         Raises:
@@ -453,13 +453,13 @@ class OrgStore:
             OrgStoreError: The changed team would not fit into the tree.
         """
         with self._lock:
-            node = self._nodes.get(node_id)
+            node = self._nodes.get(team_id)
             if node is None:
-                raise NotFound(f"Unknown node: {node_id}")
+                raise NotFound(f"Unknown team: {team_id}")
             current = node.model_dump(exclude=_DERIVED_FIELDS)
             return self.upsert(OrgNodeInput.model_validate({**current, **changes}))
 
-    def update_place(self, node_id: str, **changes: object) -> SessionTeam:
+    def update_place(self, place_id: str, **changes: object) -> SessionTeam:
         """Change fields of a place of a session.
 
         Raises:
@@ -467,7 +467,7 @@ class OrgStore:
             OrgStoreError: The changed place would not fit into its session.
         """
         with self._lock:
-            place = self._require_place(node_id)
+            place = self._require_place(place_id)
             current = place.model_dump(exclude=_DERIVED_FIELDS)
             return self._upsert_place(
                 SessionTeamInput.model_validate({**current, **changes})
@@ -475,7 +475,7 @@ class OrgStore:
 
     def set_agent(
         self,
-        node_id: str,
+        place_id: str,
         role: AgentRole,
         *,
         conversation_id: str | None = None,
@@ -492,9 +492,9 @@ class OrgStore:
             NotFound: The place does not exist or has no agent in that role.
         """
         with self._lock:
-            node = self._require_place(node_id)
+            node = self._require_place(place_id)
             if all(agent.role != role for agent in node.agents):
-                raise NotFound(f"Node {node_id} has no {role} agent")
+                raise NotFound(f"Team {place_id} has no {role} agent")
             agents = [
                 agent
                 if agent.role != role
@@ -511,10 +511,10 @@ class OrgStore:
             if agents == node.agents:
                 return node
             status = status_of(node.model_copy(update={"agents": agents}))
-            return self.update_place(node_id, agents=agents, status=status)
+            return self.update_place(place_id, agents=agents, status=status)
 
     def set_review(
-        self, node_id: str, review: Review | None, **changes: object
+        self, place_id: str, review: Review | None, **changes: object
     ) -> SessionTeam:
         """Change where the review of a place's work stands, and with it the
         place's status. ``changes`` are other fields to change with it.
@@ -523,11 +523,11 @@ class OrgStore:
             NotFound: The place does not exist.
         """
         with self._lock:
-            node = self._require_place(node_id)
+            node = self._require_place(place_id)
             status = status_of(node.model_copy(update={"review": review}))
-            return self.update_place(node_id, review=review, status=status, **changes)
+            return self.update_place(place_id, review=review, status=status, **changes)
 
-    def set_stopped(self, node_id: str, stopped: Stopped | None) -> SessionTeam:
+    def set_stopped(self, place_id: str, stopped: Stopped | None) -> SessionTeam:
         """Record that a place was stopped, or that it goes on, and with it
         the place's status.
 
@@ -535,18 +535,18 @@ class OrgStore:
             NotFound: The place does not exist.
         """
         with self._lock:
-            node = self._require_place(node_id)
+            node = self._require_place(place_id)
             status = status_of(node.model_copy(update={"stopped": stopped}))
-            return self.update_place(node_id, stopped=stopped, status=status)
+            return self.update_place(place_id, stopped=stopped, status=status)
 
     def upsert(self, node_input: OrgNodeInput) -> OrgNode:
-        """Insert a node or update an existing one.
+        """Insert a team or update an existing one.
 
-        A node cannot move to a different parent; remove it and insert it
+        A team cannot move to a different parent; remove it and insert it
         again instead.
 
         Raises:
-            OrgStoreError: The node would not fit into the tree.
+            OrgStoreError: The team would not fit into the tree.
         """
         with self._lock:
             if isinstance(node_input, SessionTeamInput):
@@ -556,7 +556,7 @@ class OrgStore:
             if existing is not None:
                 if existing.parent_id != parent_id:
                     raise OrgStoreError(
-                        f"Node {node_input.id} cannot change parent from "
+                        f"Team {node_input.id} cannot change parent from "
                         f"{existing.parent_id} to {parent_id}"
                     )
             elif parent_id is None:
@@ -567,7 +567,7 @@ class OrgStore:
                     )
             elif parent_id not in self._nodes:
                 raise OrgStoreError(
-                    f"Parent {parent_id} of node {node_input.id} does not exist"
+                    f"Parent {parent_id} of team {node_input.id} does not exist"
                 )
             node = OrgNode(
                 **node_input.model_dump(),
@@ -639,7 +639,7 @@ class OrgStore:
         self._changed()
         return place
 
-    def move(self, node_id: str, parent_id: str) -> OrgNode:
+    def move(self, team_id: str, parent_id: str) -> OrgNode:
         """Put a team of the org, with everything below it, under another
         team of the org.
 
@@ -649,28 +649,28 @@ class OrgStore:
                 team itself or below it.
         """
         with self._lock:
-            node = self._nodes.get(node_id)
+            node = self._nodes.get(team_id)
             if node is None or parent_id not in self._nodes:
-                raise NotFound(f"Unknown node: {node_id} or {parent_id}")
+                raise NotFound(f"Unknown team: {team_id} or {parent_id}")
             former = node.parent_id
             above = [team.id for team in self.teams_above(parent_id)]
-            if former is None or node_id in [parent_id, *above]:
-                raise OrgStoreError(f"Node {node_id} cannot move under {parent_id}")
+            if former is None or team_id in [parent_id, *above]:
+                raise OrgStoreError(f"Team {team_id} cannot move under {parent_id}")
             if former == parent_id:
                 return node
-            self._unlink(self._nodes, former, node_id)
+            self._unlink(self._nodes, former, team_id)
             new_parent = self._nodes[parent_id]
             self._nodes[parent_id] = new_parent.model_copy(
-                update={"child_ids": [*new_parent.child_ids, node_id]}
+                update={"child_ids": [*new_parent.child_ids, team_id]}
             )
             moved = node.model_copy(update={"parent_id": parent_id})
-            self._nodes[node_id] = moved
+            self._nodes[team_id] = moved
             for changed in (moved, self._nodes[former], self._nodes[parent_id]):
                 self._emit(NodeUpsertEvent(node=changed), changed.id, changed.parent_id)
             self._changed()
             return moved
 
-    def move_place(self, node_id: str, parent_id: str) -> SessionTeam:
+    def move_place(self, place_id: str, parent_id: str) -> SessionTeam:
         """Put a place, with everything below it, under another place of
         its session.
 
@@ -685,7 +685,7 @@ class OrgStore:
                 place itself or below it.
         """
         with self._lock:
-            place = self._require_place(node_id)
+            place = self._require_place(place_id)
             above = self._require_place(parent_id)
             former = self._places.get(place.parent_id or "")
             if (
@@ -693,18 +693,18 @@ class OrgStore:
                 or former.division_lead
                 or above.division_lead
                 or above.session != place.session
-                or node_id in [parent_id, *self._chain(parent_id)]
+                or place_id in [parent_id, *self._chain(parent_id)]
             ):
-                raise OrgStoreError(f"Node {node_id} cannot move under {parent_id}")
+                raise OrgStoreError(f"Team {place_id} cannot move under {parent_id}")
             if former.id == parent_id:
                 return place
-            self._unlink(self._places, former.id, node_id)
+            self._unlink(self._places, former.id, place_id)
             above = self._places[parent_id]
             self._places[parent_id] = above.model_copy(
-                update={"child_ids": [*above.child_ids, node_id]}
+                update={"child_ids": [*above.child_ids, place_id]}
             )
-            self._places[node_id] = place.model_copy(update={"parent_id": parent_id})
-            moved = [node_id]
+            self._places[place_id] = place.model_copy(update={"parent_id": parent_id})
+            moved = [place_id]
             for current in moved:
                 moved.extend(self._places[current].child_ids)
             for current in moved:
@@ -721,7 +721,7 @@ class OrgStore:
             self._announce_sessions()
             self._announce_escalations()
             self._changed()
-            return self._places[node_id]
+            return self._places[place_id]
 
     @staticmethod
     def _unlink[T: OrgNode](nodes: dict[str, T], parent_id: str, child_id: str) -> None:
@@ -742,10 +742,10 @@ class OrgStore:
         return escalation.model_copy(update={"handoffs": kept, "held_by": holder})
 
     def remove(self, node_id: str) -> bool:
-        """Remove a node and everything below it.
+        """Remove a team and everything below it.
 
         Returns:
-            Whether the node existed.
+            Whether the team existed.
         """
         with self._lock:
             node = self.get(node_id)
@@ -764,7 +764,7 @@ class OrgStore:
             # parent.
             doomed.reverse()
 
-            # Decide who hears about each removal while the doomed nodes can
+            # Decide who hears about each removal while the doomed teams can
             # still be resolved, so a subscriber focused inside the removed
             # subtree is still matched.
             for gone in doomed:
@@ -816,7 +816,7 @@ class OrgStore:
         nodes: dict[str, OrgNode] = {}
         for node_input in inputs:
             if node_input.id in nodes:
-                raise OrgStoreError(f"Duplicate node id {node_input.id}")
+                raise OrgStoreError(f"Duplicate team id {node_input.id}")
             nodes[node_input.id] = OrgNode(**node_input.model_dump())
 
         root_id: str | None = None
@@ -824,18 +824,18 @@ class OrgStore:
             if node.parent_id is None:
                 if root_id is not None:
                     raise OrgStoreError(
-                        f"More than one root node ({root_id}, {node.id})"
+                        f"More than one root team ({root_id}, {node.id})"
                     )
                 root_id = node.id
                 continue
             parent = nodes.get(node.parent_id)
             if parent is None:
                 raise OrgStoreError(
-                    f"Parent {node.parent_id} of node {node.id} does not exist"
+                    f"Parent {node.parent_id} of team {node.id} does not exist"
                 )
             parent.child_ids.append(node.id)
         if nodes and root_id is None:
-            raise OrgStoreError("The tree has no root node")
+            raise OrgStoreError("The tree has no root team")
 
         ordered = self._ordered(nodes, root_id)
         if len(ordered) != len(nodes):
@@ -895,7 +895,7 @@ class OrgStore:
 
     def raise_escalation(
         self,
-        node_id: str,
+        place_id: str,
         escalation_id: str,
         *,
         kind: EscalationKind,
@@ -904,22 +904,22 @@ class OrgStore:
         at: str | None = None,
         raised_by: AgentRole = "ic",
     ) -> Escalation:
-        """Record something an agent of ``node_id`` cannot settle itself.
+        """Record something an agent of ``place_id`` cannot settle itself.
 
         It goes to the place above, never straight to the human, unless
-        nobody works above ``node_id``: it is the place a session was opened
+        nobody works above ``place_id``: it is the place a session was opened
         at. One an IC raised
         blocks its team until it is settled.
 
         Raises:
-            NotFound: The node does not exist.
-            OrgStoreError: The node already has an escalation with this id.
+            NotFound: The team does not exist.
+            OrgStoreError: The team already has an escalation with this id.
         """
         with self._lock:
-            node = self._require_place(node_id)
+            node = self._require_place(place_id)
             if any(e.id == escalation_id for e in node.escalations):
                 raise OrgStoreError(
-                    f"Node {node_id} already has an escalation {escalation_id}"
+                    f"Team {place_id} already has an escalation {escalation_id}"
                 )
             escalation = Escalation(
                 id=escalation_id,
@@ -934,30 +934,30 @@ class OrgStore:
             return escalation
 
     def pass_up_escalation(
-        self, node_id: str, escalation_id: str, *, reason: str, at: str | None = None
+        self, place_id: str, escalation_id: str, *, reason: str, at: str | None = None
     ) -> Escalation:
-        """The node holding an escalation could not settle it: send it one up.
+        """The team holding an escalation could not settle it: send it one up.
 
         This is the only way an escalation moves, so it reaches the human
-        only after every node above the one that raised it has said why it
+        only after every team above the one that raised it has said why it
         could not settle it. Design decisions in particular should almost
         always be settled on the way.
 
         Args:
-            node_id: The node that raised the escalation, not the one holding it.
-            reason: Why the node holding it could not settle it.
+            node_id: The team that raised the escalation, not the one holding it.
+            reason: Why the team holding it could not settle it.
 
         Raises:
-            NotFound: The node or the escalation does not exist.
+            NotFound: The team or the escalation does not exist.
             OrgStoreError: The escalation already waits on the human, or the
                 reason is blank.
         """
         with self._lock:
-            node = self._require_place(node_id)
+            node = self._require_place(place_id)
             escalation = self._require_escalation(node, escalation_id)
             if escalation.held_by is None:
                 raise OrgStoreError(
-                    f"Escalation {escalation_id} of node {node_id} already waits "
+                    f"Escalation {escalation_id} of team {place_id} already waits "
                     "on the human"
                 )
             if not reason.strip():
@@ -980,43 +980,14 @@ class OrgStore:
             )
             return passed
 
-    def ask_escalation(
-        self,
-        node_id: str,
-        escalation_id: str,
-        team_id: str | None,
-        at: str | None = None,
-    ) -> Escalation:
-        """Give an escalation to a team that is not above the one that
-        raised it, to settle directly; None gives it back to the node that
-        holds it by the chain.
-
-        Raises:
-            NotFound: The node or the escalation does not exist.
-        """
-        with self._lock:
-            node = self._require_place(node_id)
-            escalation = self._require_escalation(node, escalation_id)
-            asked = escalation.model_copy(
-                update={
-                    "asked_of": team_id,
-                    "asked_at": (at or utc_now()) if team_id else None,
-                }
-            )
-            self._set_escalations(
-                node,
-                [asked if e.id == escalation_id else e for e in node.escalations],
-            )
-            return asked
-
-    def settle_escalation(self, node_id: str, escalation_id: str) -> None:
+    def settle_escalation(self, place_id: str, escalation_id: str) -> None:
         """Close an escalation, whoever settled it.
 
         Raises:
-            NotFound: The node or the escalation does not exist.
+            NotFound: The team or the escalation does not exist.
         """
         with self._lock:
-            node = self._require_place(node_id)
+            node = self._require_place(place_id)
             self._require_escalation(node, escalation_id)
             self._set_escalations(
                 node, [e for e in node.escalations if e.id != escalation_id]
@@ -1058,10 +1029,10 @@ class OrgStore:
     def snapshot(
         self, focus_id: str, expanded: Collection[str] = (), *, full: bool = False
     ) -> SnapshotEvent | None:
-        """The focused node, its ancestors, and the direct reports of the
-        focused node and of every node in ``expanded``.
+        """The focused team, its ancestors, and the direct reports of the
+        focused team and of every team in ``expanded``.
 
-        With ``full``, every node below the focused one instead. Unknown ids
+        With ``full``, every team below the focused one instead. Unknown ids
         in ``expanded`` are ignored.
         """
         with self._lock:
@@ -1076,9 +1047,9 @@ class OrgStore:
                     *self.sub_teams(focus_id),
                 )
             }
-            for node_id in expanded:
-                if node_id in self._nodes:
-                    for child in self.sub_teams(node_id):
+            for team_id in expanded:
+                if team_id in self._nodes:
+                    for child in self.sub_teams(team_id):
                         nodes[child.id] = child
             if full:
                 for node in self._ordered(self._nodes, focus_id):
@@ -1128,23 +1099,23 @@ class OrgStore:
     def _ordered(nodes: dict[str, OrgNode], root_id: str | None) -> list[OrgNode]:
         ordered: list[OrgNode] = []
         queue = [] if root_id is None else [root_id]
-        for node_id in queue:
-            node = nodes[node_id]
+        for team_id in queue:
+            node = nodes[team_id]
             ordered.append(node)
             queue.extend(node.child_ids)
         return ordered
 
-    def _emit(self, event: OrgChange, node_id: str, parent_id: str | None) -> None:
+    def _emit(self, event: OrgChange, team_id: str, parent_id: str | None) -> None:
         if not self._listeners:
             return
-        above = {team.id for team in self.teams_above(node_id)}
+        above = {team.id for team in self.teams_above(team_id)}
         for listener, subscription in list(self._listeners.items()):
             focus_id = subscription.focus_id
             if (
-                node_id == focus_id
+                team_id == focus_id
                 or parent_id == focus_id
                 or parent_id in subscription.expanded
-                or (node_id in subscription.above and focus_id in self._nodes)
+                or (team_id in subscription.above and focus_id in self._nodes)
                 or (subscription.full and focus_id in above)
             ):
                 listener(event)
@@ -1190,40 +1161,40 @@ class OrgStore:
 
     @staticmethod
     def _check_escalations(node: SessionTeamInput, chain: list[str]) -> None:
-        """Refuse an escalation that skipped a node on its way up.
+        """Refuse an escalation that skipped a team on its way up.
 
         Raises:
             OrgStoreError: An escalation's handoffs are not the unbroken chain
-                from the node's parent, or it is held by the wrong node.
+                from the team's parent, or it is held by the wrong team.
         """
         for escalation in node.escalations:
             passed = [handoff.node_id for handoff in escalation.handoffs]
             holder = chain[len(passed)] if len(passed) < len(chain) else None
             if passed != chain[: len(passed)] or escalation.held_by != holder:
                 raise OrgStoreError(
-                    f"Escalation {escalation.id} of node {node.id} must be passed "
+                    f"Escalation {escalation.id} of team {node.id} must be passed "
                     f"up through {chain or 'nobody'} in order; it was passed up "
                     f"by {passed} and is held by {escalation.held_by}"
                 )
 
-    def _require_place(self, node_id: str) -> SessionTeam:
-        place = self._places.get(node_id)
+    def _require_place(self, place_id: str) -> SessionTeam:
+        place = self._places.get(place_id)
         if place is None:
-            raise NotFound(f"Unknown place: {node_id}")
+            raise NotFound(f"Unknown place: {place_id}")
         return place
 
     @staticmethod
-    def _require_escalation(node: SessionTeam, escalation_id: str) -> Escalation:
-        for escalation in node.escalations:
+    def _require_escalation(place: SessionTeam, escalation_id: str) -> Escalation:
+        for escalation in place.escalations:
             if escalation.id == escalation_id:
                 return escalation
-        raise NotFound(f"Node {node.id} has no escalation {escalation_id}")
+        raise NotFound(f"Team {place.id} has no escalation {escalation_id}")
 
     def _set_escalations(
-        self, node: SessionTeam, escalations: list[Escalation]
+        self, place: SessionTeam, escalations: list[Escalation]
     ) -> None:
-        status = status_of(node.model_copy(update={"escalations": escalations}))
-        self.update_place(node.id, escalations=escalations, status=status)
+        status = status_of(place.model_copy(update={"escalations": escalations}))
+        self.update_place(place.id, escalations=escalations, status=status)
 
     def _index_agents(self, old: SessionTeam | None, new: SessionTeam | None) -> None:
         if old is not None:

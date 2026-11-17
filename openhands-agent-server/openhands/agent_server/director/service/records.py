@@ -59,7 +59,6 @@ from openhands.agent_server.director.prompts import (
     needs_between,
     proposal_facts,
     record_line,
-    requests_between,
     track_records,
 )
 from openhands.agent_server.director.run_state import (
@@ -318,18 +317,18 @@ class Records(ServiceState):
             text[:ASKED_KEPT],
         )
 
-    def asked_below(self, node: SessionTeam) -> list[dict[str, str]]:
+    def asked_below(self, place: SessionTeam) -> list[dict[str, str]]:
         """The latest of what the human asked directly of the teams below
         a team, oldest first."""
         store = self.store
         below = {
             team.id
             for team in store.places()
-            if any(above.id == node.id for above in store.above(team.id))
+            if any(above.id == place.id for above in store.above(team.id))
         }
         return [
             {
-                "node_id": request.team_id,
+                "team_id": request.team_id,
                 "team": request.team,
                 "at": request.at,
                 "text": request.text,
@@ -354,13 +353,12 @@ class Records(ServiceState):
         return asked
 
     def needs_below(self, node_id: str) -> list[dict[str, Any]]:
-        """The pairs of teams directly below a node that needed each
+        """The pairs of teams directly below a team that needed each
         other's directory often enough to say so."""
         return [
             pair
             for pair in needs_between(self.history_of(node_id))
-            if pair["writes_refused"] + pair["review_findings"] + pair["requests"]
-            >= NEEDED_WORTH_SAYING
+            if pair["writes_refused"] + pair["review_findings"] >= NEEDED_WORTH_SAYING
         ]
 
     def _so_far(self, team: SessionTeam) -> str:
@@ -370,20 +368,20 @@ class Records(ServiceState):
             return ""
         records = track_records(self.history_of(team.parent_id))
         own = team.team_id
-        counted = next((record_line(r) for r in records if r["node_id"] == own), "")
+        counted = next((record_line(r) for r in records if r["team_id"] == own), "")
         needed = [
             need_words(pair, own)
             for pair in self.needs_below(team.parent_id)
-            if own in pair["node_ids"]
+            if own in pair["team_ids"]
         ]
         return "; ".join(part for part in (counted, *needed) if part)
 
-    def facts_of_proposal(self, node: SessionTeam, proposal: SplitProposal) -> str:
+    def facts_of_proposal(self, place: SessionTeam, proposal: SplitProposal) -> str:
         """What the director knows of the sub-teams a team's IC proposes:
         how much is in each directory, which were changed together, what
         became of teams that had them before, and what was declined for
         them before."""
-        checkout = Path(node.worktree_path)
+        checkout = Path(place.worktree_path)
         children = proposal.children
         sizes = [(child, tracked_files(checkout, child.path)) for child in children]
         together = [
@@ -393,7 +391,7 @@ class Records(ServiceState):
             if (count := changed_together(checkout, one.path, other.path))
             >= TOGETHER_WORTH_SAYING
         ]
-        history = self.history_of(node.id)
+        history = self.history_of(place.id)
         why = {
             (event.team_id, event.at): event.detail
             for event in history
@@ -401,7 +399,7 @@ class Records(ServiceState):
         }
         paths = {child.path for child in children}
         before = []
-        for former in self.former_teams_of(node):
+        for former in self.former_teams_of(place):
             if former.path not in paths:
                 continue
             reason = next(
@@ -430,7 +428,7 @@ class Records(ServiceState):
         needed = [
             f"{need_words(pair)}."
             for pair in needs_between(history)
-            if set(pair["node_ids"]) <= {team_key(r) for r in proposal.replaces}
+            if set(pair["team_ids"]) <= {team_key(r) for r in proposal.replaces}
         ]
         return proposal_facts(
             sizes, together, before + declined + needed, proposal.reason
@@ -446,16 +444,16 @@ class Records(ServiceState):
             if counted["escalations"].pop(team.id, None) is not None:
                 self._runs().mark(CHECKS, team.parent_id, json.dumps(counted))
 
-    def _counted(self, node_id: str) -> dict[str, Any]:
+    def _counted(self, place_id: str) -> dict[str, Any]:
         """What a Manager's checks have counted: the reviews its IC
         accepted, and the escalations of each team below on its work."""
         try:
-            kept = json.loads(self._runs().marked(CHECKS).get(node_id) or "{}")
+            kept = json.loads(self._runs().marked(CHECKS).get(place_id) or "{}")
         except ValueError:
             kept = {}
         if not isinstance(kept, dict):
             kept = {}
-        below = {team.id for team in self.store.below(node_id)}
+        below = {team.id for team in self.store.below(place_id)}
         return {
             "accepted": int(kept.get("accepted", 0)),
             "escalations": {
@@ -511,13 +509,13 @@ class Records(ServiceState):
             ],
         )
 
-    def threads_of(self, node: SessionTeam) -> list[Thread]:
+    def threads_of(self, place: SessionTeam) -> list[Thread]:
         """What the agents of a team have said to Managers and ICs: its own
         two to each other, its Manager and its IC to the ICs directly
         below, and the Manager and the IC above to its IC. Threads nobody
         wrote in are left out."""
-        down = [(node.id, team.id) for team in self.store.below(node.id)]
-        up = [(node.parent_id, node.id)] if node.parent_id is not None else []
+        down = [(place.id, team.id) for team in self.store.below(place.id)]
+        up = [(place.parent_id, place.id)] if place.parent_id is not None else []
         return [
             Thread(
                 manager_node_id=writer,
@@ -526,7 +524,7 @@ class Records(ServiceState):
                 messages=messages,
             )
             for ic_to_ic, pairs in (
-                (False, [(node.id, node.id), *down, *up]),
+                (False, [(place.id, place.id), *down, *up]),
                 (True, [*down, *up]),
             )
             for writer, ic in pairs
@@ -570,7 +568,7 @@ class Records(ServiceState):
         return taken
 
     def context_of(
-        self, node: SessionTeam, role: AgentRole, *, in_full: bool = False
+        self, place: SessionTeam, role: AgentRole, *, in_full: bool = False
     ) -> dict[str, Any]:
         """Who an agent is and everything of the org that concerns its
         team. Safe from any thread.
@@ -580,12 +578,12 @@ class Records(ServiceState):
                 left, which is otherwise only named.
         """
         store = self.store
-        contracts = self.contracts_of(node)
-        specs = self.specs_of(node)
+        contracts = self.contracts_of(place)
+        specs = self.specs_of(place)
         own_spec = next((spec for spec in specs if not spec.old), None)
         to_settle = [
             {
-                "node_id": other.id,
+                "team_id": other.id,
                 "team": other.title,
                 "escalation_id": escalation.id,
                 "kind": escalation.kind,
@@ -596,31 +594,29 @@ class Records(ServiceState):
                     for handoff in escalation.handoffs
                 ],
             }
-            | ({"asked_of_you_directly": True} if escalation.asked_of else {})
             for other in store.places()
             for escalation in other.escalations
-            if escalation.raised_by == role
-            and (escalation.asked_of or escalation.held_by) == node.id
+            if escalation.raised_by == role and escalation.held_by == place.id
         ]
         others = [
             other
             for other in store.places()
-            if other.team_id == node.team_id
-            and other.id != node.id
+            if other.team_id == place.team_id
+            and other.id != place.id
             and other.agents
             and not is_division_lead(other)
         ]
-        title = store.session_title(node)
+        title = store.session_title(place)
         context: dict[str, Any] = {
-            "you": {"role": role, "node_id": node.id, "team": node.title}
+            "you": {"role": role, "team_id": place.id, "team": place.title}
             | ({"session": title} if title else {}),
-            "team_above": node.parent_id,
-            "status": node.status,
-            "boundary": node.boundary.model_dump(),
+            "team_above": place.parent_id,
+            "status": place.status,
+            "boundary": place.boundary.model_dump(),
             "workspace": {
-                "path": node.worktree_path,
-                "branch": node.branch,
-                "isolation": node.isolation,
+                "path": place.worktree_path,
+                "branch": place.branch,
+                "isolation": place.isolation,
             },
             "spec": own_spec.spec if own_spec else None,
             "specs_left_by_teams_before_you": [
@@ -644,11 +640,11 @@ class Records(ServiceState):
                     "at": report.at,
                     "text": report.text,
                 }
-                for report in self.reports_of(node)
+                for report in self.reports_of(place)
             ],
             "sub_teams": [
                 {
-                    "node_id": child.id,
+                    "team_id": child.id,
                     "team": child.title,
                     "path": child.boundary.path,
                     "status": child.status if child.agents else NOT_STARTED,
@@ -657,34 +653,34 @@ class Records(ServiceState):
                     "review": child.review.state if child.review else None,
                     "stopped": child.stopped.reason if child.stopped else None,
                 }
-                for child in store.below(node.id)
+                for child in store.below(place.id)
             ],
             # What it wrote of its work and what was found in it reach it in
             # the messages of the review, not a second time here.
             "review_of_your_work": (
-                {"state": node.review.state, "round": node.review.round}
-                if node.review
+                {"state": place.review.state, "round": place.review.round}
+                if place.review
                 else None
             ),
             "agent_profiles_a_sub_team_may_run_on": self.settings.allowed_profiles,
             # The proposal itself is in the message that made it.
             "pending_split": (
                 None
-                if node.pending_split is None
-                else node.pending_split.model_dump()
+                if place.pending_split is None
+                else place.pending_split.model_dump()
                 if in_full
                 else {
-                    "status": node.pending_split.status,
-                    "teams": [child.title for child in node.pending_split.children],
+                    "status": place.pending_split.status,
+                    "teams": [child.title for child in place.pending_split.children],
                 }
             ),
             "escalations_you_raised": [
                 {
                     "escalation_id": escalation.id,
                     "title": escalation.title,
-                    "with": escalation.asked_of or escalation.held_by or "the human",
+                    "with": escalation.held_by or "the human",
                 }
-                for escalation in node.escalations
+                for escalation in place.escalations
                 if escalation.raised_by == role
             ],
             "escalations_for_you_to_settle": to_settle,
@@ -694,7 +690,7 @@ class Records(ServiceState):
             # checkout of its own, and share the team's reports.
             context["other_sessions_of_your_team"] = [
                 {
-                    "node_id": other.id,
+                    "team_id": other.id,
                     "session": store.session_title(other),
                     "status": other.status,
                     "headline": other.headline,
@@ -703,16 +699,13 @@ class Records(ServiceState):
                 }
                 for other in others
             ]
-        if role == "ic" and store.below(node.id):
-            context["asked_directly_of_teams_below"] = self.asked_below(node)
-            context["what_teams_below_asked_of_each_other_directly"] = requests_between(
-                self.history_of(node.id)
-            )
+        if role == "ic" and store.below(place.id):
+            context["asked_directly_of_teams_below"] = self.asked_below(place)
         if role == "ic":
             # The IC is the one that passes on what removed teams left.
             context["former_teams"] = [
                 {
-                    "node_id": former.id,
+                    "team_id": former.id,
                     "team": former.title,
                     "directory": former.path or "the repository",
                     "ended": former.ended,
@@ -727,14 +720,14 @@ class Records(ServiceState):
                     if in_full
                     else {}
                 )
-                for former in self.former_teams_of(node)
+                for former in self.former_teams_of(place)
             ]
         if in_full:
             # What became of the teams below so far, also of the ones that
             # are gone: for both agents to weigh what they do next by.
-            events = self.history_of(node.id)
+            events = self.history_of(place.id)
             context["track_record_of_the_teams_below"] = track_records(events)
-            needed = [need_words(pair) for pair in self.needs_below(node.id)]
+            needed = [need_words(pair) for pair in self.needs_below(place.id)]
             if needed:
                 context["teams_below_that_needed_each_other"] = needed
             context["what_became_of_them_lately"] = [
@@ -743,7 +736,7 @@ class Records(ServiceState):
         return context
 
     def _former_below(self, team_memory: GitStore, node_id: str) -> list[FormerTeam]:
-        """The records of the teams removed from below a node. They are
+        """The records of the teams removed from below a team. They are
         read once for each state of team memory, since a context is built
         for every message."""
         head = team_memory.head()
@@ -756,7 +749,7 @@ class Records(ServiceState):
         return read[node_id]
 
     def former_teams_of(self, node: OrgNode) -> list[FormerTeam]:
-        """What the teams removed from directly below a node left, with
+        """What the teams removed from directly below a team left, with
         the ones its own session removed and the org does not know of yet."""
         own = [
             former
@@ -833,11 +826,11 @@ class Records(ServiceState):
         kept = self._runs().marked(REPORTS).get(node.id)
         return _REPORTS.validate_json(kept) if kept else []
 
-    def _keep_report(self, node: SessionTeam, report: Report) -> None:
+    def _keep_report(self, place: SessionTeam, report: Report) -> None:
         named = report.model_copy(update={"id": report.id or uuid4().hex})
         with self._keeping:
-            reports = [*self.own_reports(node), named]
-            self._runs().mark(REPORTS, node.id, _REPORTS.dump_json(reports).decode())
+            reports = [*self.own_reports(place), named]
+            self._runs().mark(REPORTS, place.id, _REPORTS.dump_json(reports).decode())
 
     def _works_above(self, node: OrgNode) -> OrgNode | None:
         """What is above ``node``, a team of the org or a place: nobody
@@ -943,11 +936,11 @@ class Records(ServiceState):
             return None
         return draft[0], draft[1]
 
-    def write_spec(self, node: SessionTeam, content: str) -> None:
+    def write_spec(self, place: SessionTeam, content: str) -> None:
         """Write the spec of a place's directory. It is kept for the
         session alone until its work is accepted."""
-        file = _spec_file(normalize_store_path(node.boundary.path))
-        self._draft(node.session, file, content)
+        file = _spec_file(normalize_store_path(place.boundary.path))
+        self._draft(place.session, file, content)
 
     def specs_inherited(self, top: SessionTeam) -> list[tuple[str, str, str, str]]:
         """The specs a session wrote for teams the org had when it began
@@ -1292,7 +1285,7 @@ class Records(ServiceState):
         )
 
     def _specs_left_in(
-        self, node: SessionTeam, path: str, removed: list[SessionTeam]
+        self, place: SessionTeam, path: str, removed: list[SessionTeam]
     ) -> list[OldSpec]:
         """The specs a team that is given ``path`` in the session of
         ``node`` finds there: the one of the directory itself and those of
@@ -1322,26 +1315,26 @@ class Records(ServiceState):
         return [
             OldSpec(path=directory, team=team)
             for directory, team in left.items()
-            if self.read_file(node, _spec_file(directory))
+            if self.read_file(place, _spec_file(directory))
         ]
 
     def _record_contracts(
-        self, node: SessionTeam, contracts: str, replace: bool
+        self, place: SessionTeam, contracts: str, replace: bool
     ) -> None:
-        """Add the contracts of a split to those of the node's boundary,
+        """Add the contracts of a split to those of the team's boundary,
         or put them in their place when the split replaced teams. They are
         the session's alone until its work is accepted."""
-        file = _contracts_file(normalize_store_path(node.boundary.path))
-        earlier = self.read_file(node, file)
+        file = _contracts_file(normalize_store_path(place.boundary.path))
+        earlier = self.read_file(place, file)
         text = f"{contracts.strip()}\n"
         if replace:
             if earlier != text:
-                self._draft(node.session, file, text)
+                self._draft(place.session, file, text)
             return
         if earlier and text.strip() in earlier:
             return
         self._draft(
-            node.session,
+            place.session,
             file,
             f"{earlier.rstrip()}\n\n{text}" if earlier and earlier.strip() else text,
         )

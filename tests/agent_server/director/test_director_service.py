@@ -42,10 +42,10 @@ from openhands.tools.file_editor.definition import FileEditorAction
 from openhands.tools.terminal.definition import TerminalAction
 from tests.agent_server.director.conftest import (
     FakeLauncher,
+    as_proposed,
     root_conversation,
     run_git,
     tasked,
-    teams_block,
 )
 from tests.agent_server.director.test_director_landing import landed
 from tests.agent_server.director.test_director_tools import division_lead_of, node
@@ -164,7 +164,7 @@ def test_an_ic_is_not_told_what_only_a_manager_does():
     assert "approve_teams" not in ORG_PROTOCOL and "prune_team" not in ORG_PROTOCOL
     assert "approve_teams" in MANAGER_ROLE and "prune_team" in MANAGER_ROLE
     # What an IC needs before its first event is still there.
-    for tool in ("write_spec", "submit_review", "msg_manager", "raise_escalation"):
+    for tool in ("write_spec", "submit_review", "propose_teams", "raise_escalation"):
         assert tool in ORG_PROTOCOL
 
 
@@ -317,7 +317,7 @@ async def test_no_org_is_left_when_its_root_agent_cannot_start(
     assert service.summary().node_count == 0
 
 
-async def test_a_node_works_while_an_agent_runs_and_is_blocked_by_a_failed_one(
+async def test_a_team_works_while_an_agent_runs_and_is_blocked_by_a_failed_one(
     service: DirectorService, launcher: FakeLauncher, repo: Path
 ):
     opened = await service.create_org(org_request(repo))
@@ -433,7 +433,9 @@ async def split_root(service: DirectorService, *children: SplitChild) -> None:
         assert conversation_id is not None
         return agent_actions.caller_of(service, UUID(conversation_id))
 
-    agent_actions.msg_manager(service, caller("ic"), teams_block(list(children)))
+    agent_actions.propose_teams(
+        service, caller("ic"), as_proposed(list(children)), "", [], ""
+    )
     agent_actions.approve_teams(service, caller("manager"))
     await service.settled()
     await tasked(service)

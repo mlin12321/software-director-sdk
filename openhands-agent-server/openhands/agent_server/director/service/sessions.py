@@ -117,7 +117,7 @@ class Sessions(Splits):
         if request.node_id is not None:
             team = store.team(request.node_id)
             if team is None:
-                raise NotFound(f"Unknown node: {request.node_id}")
+                raise NotFound(f"Unknown team: {request.node_id}")
         elif self.settings.route_requests and store.sub_teams(root.id):
             choice = await self.choose_team(text, root)
             chosen_by, reason = choice.by, choice.reason
@@ -126,7 +126,7 @@ class Sessions(Splits):
             team = root
         above = store.team(team.parent_id) if team.parent_id else team
         if above is None:
-            raise NotFound(f"Unknown node: {team.parent_id}")
+            raise NotFound(f"Unknown team: {team.parent_id}")
         if conversation is None and await self._template() is None:
             raise Conflict(
                 "No conversation of the org runs on this server to start the "
@@ -191,9 +191,7 @@ class Sessions(Splits):
                         boundary=current.boundary,
                         # Its work is kept apart from the repository's
                         # checkout until it is reviewed.
-                        isolation=(
-                            "worktree" if self.settings.session_worktrees else "shared"
-                        )
+                        isolation="worktree"
                         if current.id == team.id
                         else current.isolation,
                         agent_profile=current.agent_profile,
@@ -310,21 +308,21 @@ class Sessions(Splits):
         return str(ic_id)
 
     def _hand_on(
-        self, node: SessionTeam, above: SessionTeam, request: RoutedRequest, why: str
+        self, place: SessionTeam, above: SessionTeam, request: RoutedRequest, why: str
     ) -> str:
         """Nobody works above the team a session was opened at, so a
         request that team says is not its own goes one team up the org, in
         a session of its own, and to the human only from the top."""
         if not is_division_lead(above):
-            return super()._hand_on(node, above, request, why)
-        own = self.store.team(node.team_id)
+            return super()._hand_on(place, above, request, why)
+        own = self.store.team(place.team_id)
         higher = self.store.team(own.parent_id or "") if own else None
         try:
-            top = self._lift(node, higher) if higher else None
+            top = self._lift(place, higher) if higher else None
         except OrgStoreError:
             top = None
         if top is None:
-            self._tell_human_misrouted(node, request.text, why)
+            self._tell_human_misrouted(place, request.text, why)
             return (
                 "The human, who asked, is told that it is not your team's. "
                 "Wait for the answer."
@@ -333,7 +331,7 @@ class Sessions(Splits):
         self.keep_routed("asked", top, request.text, "top", why)
         self.tell_ic(
             top.id,
-            handed_up(node, request.text, why)
+            handed_up(place, request.text, why)
             + session_brief(top, self.store.session_title(top), []),
         )
         self._save_soon()
@@ -443,11 +441,11 @@ class Sessions(Splits):
             run.mark(TASK, session_team_id(current.id, sid), self._purpose(current))
         return top
 
-    def _tell_human_misrouted(self, node: SessionTeam, text: str, why: str) -> None:
+    def _tell_human_misrouted(self, place: SessionTeam, text: str, why: str) -> None:
         """Put a request no team took before the human, who asked."""
-        taken = {escalation.id for escalation in node.escalations}
+        taken = {escalation.id for escalation in place.escalations}
         self.store.raise_escalation(
-            node.id,
+            place.id,
             next(name for n in count(1) if (name := f"misrouted-{n}") not in taken),
             kind="design_decision",
             title="This request is not this team's",
@@ -469,13 +467,13 @@ class Sessions(Splits):
             raise NotFound(f"No session {session_id!r} is open")
         self._begin("close_session", teams[0].id)
 
-    async def _close_session(self, intent: Intent) -> None:
+    async def _do_close_session(self, intent: Intent) -> None:
         store = self.store
         run = self._runs()
-        node_id = intent.node_id
+        place_id = intent.node_id
         launcher = self._require_launcher()
         if "planned" not in intent.steps:
-            top = store.place(node_id)
+            top = store.place(place_id)
             session = store.session_of(top) if top else None
             if top is None or session is None:
                 return
@@ -512,7 +510,7 @@ class Sessions(Splits):
                 for team in map(store.place, plan["teams"])
                 if team is not None and team.agents
             ]
-            top = store.place(node_id)
+            top = store.place(place_id)
             # Its Division Lead place is in the repository's checkout.
             above = store.place(top.parent_id or "") if top else None
             kept = None
@@ -530,7 +528,7 @@ class Sessions(Splits):
                 run.unmark(TOLD, str(conversation_id))
             intent = run.step_done(intent, "deleted")
         if "removed" not in intent.steps:
-            top = store.place(node_id)
+            top = store.place(place_id)
             for team in map(store.place, plan["teams"]):
                 if team is not None:
                     for kind in (TASK, PROGRESS, CHECKS):

@@ -34,7 +34,7 @@ def _tracked(checkout: Path) -> list[str]:
     return [path for path in listed.split("\0") if path]
 
 
-def takes_requests(node: SessionTeam) -> bool:
+def takes_requests(place: SessionTeam) -> bool:
     """Whether a request may be sent straight to a team now.
 
     Not to one that was only set up, which has not had its task from the IC
@@ -42,12 +42,12 @@ def takes_requests(node: SessionTeam) -> bool:
     whose work waits for its review, which would otherwise go on changing
     what is being reviewed.
     """
-    ic = next((agent for agent in node.agents if agent.role == "ic"), None)
+    ic = next((agent for agent in place.agents if agent.role == "ic"), None)
     if ic is None or ic.conversation_id is None or ic.status == AGENT_LOST:
         return False
-    if node.stopped is not None:
+    if place.stopped is not None:
         return False
-    return node.review is None or node.review.state != "pending"
+    return place.review is None or place.review.state != "pending"
 
 
 class Requests(Teams):
@@ -58,22 +58,16 @@ class Requests(Teams):
         text: str,
         start: OrgNode,
         *,
-        asker: SessionTeam | None = None,
         within: str = "",
     ) -> Choice:
         """The team at or below ``start`` that what is asked in ``text``
         goes to. It is ``start`` unless a lower team is sure.
 
         Args:
-            asker: The team whose IC asks, when it is not the human. What
-                a team asks for is told in the words of its own work, so
-                its card and those of the teams above and below it say
-                nothing about whose the request is.
             within: The session the human says it in, when it does not
                 begin a new one.
         """
         store = self.store
-        within = asker.session if asker else within
         started: set[str] = set()
         able: set[str] | None = None
         checkout = self._repo_dir
@@ -108,13 +102,13 @@ class Requests(Teams):
                 checkout = Path(places[0].worktree_path)
         parents = {node.id: node.parent_id for node in nodes}
 
-        def under(node_id: str | None) -> bool:
+        def under(team_id: str | None) -> bool:
             seen: set[str] = set()
-            while node_id is not None and node_id not in seen:
-                if node_id == start.id:
+            while team_id is not None and team_id not in seen:
+                if team_id == start.id:
                     return True
-                seen.add(node_id)
-                node_id = parents.get(node_id)
+                seen.add(team_id)
+                team_id = parents.get(team_id)
             return False
 
         below = [node for node in nodes if under(node.id)]
@@ -141,15 +135,6 @@ class Requests(Teams):
             ],
             tracked,
         )
-        own = (
-            {
-                node.id
-                for node in below
-                if routing.on_one_line(node.id, asker.team_id, parents)
-            }
-            if asker
-            else set()
-        )
         shown = routing.cards_to_show(text, cards)
         answers, reason = await self._ask_which(text, shown)
         choice = routing.choose(
@@ -158,9 +143,7 @@ class Requests(Teams):
             takes=takes,
             named_owners=owners,
             answers=answers,
-            worded=routing.best_by_words(
-                text, [card for card in cards if card.node_id not in own]
-            ),
+            worded=routing.best_by_words(text, cards),
             reason=reason,
         )
         logger.info("A request was %s", choice.log_line())
@@ -218,7 +201,7 @@ class Requests(Teams):
         reason = next((r for r in map(routing.reason_of, raw) if r), "")
         return [routing.parse_answer(answer, known) for answer in raw], reason
 
-    def not_ours(self, node: SessionTeam, why: str) -> str:
+    def not_ours(self, place: SessionTeam, why: str) -> str:
         """A team's IC says the request the human's words brought it
         directly is not its team's: hand it to the IC of the team above.
         Safe from any thread.
@@ -228,9 +211,9 @@ class Requests(Teams):
                 handed on already.
         """
         mine = [
-            request for request in self.routed_requests() if request.team_id == node.id
+            request for request in self.routed_requests() if request.team_id == place.id
         ]
-        above = self.store.place(node.parent_id) if node.parent_id else None
+        above = self.store.place(place.parent_id) if place.parent_id else None
         if above is None or not mine or mine[-1].kind != "asked":
             raise Invalid(
                 "Nothing was sent to your team directly that is still with "
@@ -238,14 +221,14 @@ class Requests(Teams):
                 "a `design_decision`."
             )
         request = mine[-1]
-        self.keep_routed("misrouted", node, request.text, request.chosen_by, why)
-        return self._hand_on(node, above, request, why)
+        self.keep_routed("misrouted", place, request.text, request.chosen_by, why)
+        return self._hand_on(place, above, request, why)
 
     def _hand_on(
-        self, node: SessionTeam, above: SessionTeam, request: RoutedRequest, why: str
+        self, place: SessionTeam, above: SessionTeam, request: RoutedRequest, why: str
     ) -> str:
         """Give a request a team said is not its own to the IC above it."""
-        self.tell_ic(above.id, misrouted_notice(node, request.text, why))
+        self.tell_ic(above.id, misrouted_notice(place, request.text, why))
         return (
             f"Handed to the IC of the team above ({above.title}). It is no "
             "longer yours; go on with your own work."

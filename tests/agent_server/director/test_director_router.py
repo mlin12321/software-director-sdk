@@ -12,7 +12,6 @@ from fastapi.testclient import TestClient
 from openhands.agent_server import director_router
 from openhands.agent_server.api import create_app
 from openhands.agent_server.config import Config
-from openhands.agent_server.director.git import git_version
 from openhands.agent_server.director.git_store import GitStore
 from openhands.agent_server.director.models import (
     OrgNodeInput,
@@ -33,7 +32,7 @@ from openhands.sdk.conversation.state import ConversationExecutionStatus
 from openhands.sdk.errors import NotFound
 from tests.agent_server.director.conftest import (
     FakeLauncher,
-    make_node,
+    make_team,
     open_session_in,
     root_conversation,
     run_git,
@@ -74,7 +73,7 @@ def client(saved_tree: Path) -> TestClient:
     return make_client(saved_tree)
 
 
-def test_returns_a_node_with_its_ancestors_and_children(client: TestClient):
+def test_returns_a_team_with_its_ancestors_and_children(client: TestClient):
     response = client.get("/api/director/org/nodes/a")
 
     assert response.status_code == 200
@@ -84,7 +83,7 @@ def test_returns_a_node_with_its_ancestors_and_children(client: TestClient):
     assert [node["id"] for node in body["children"]] == ["a1", "a2"]
 
 
-def test_an_unknown_node_is_not_found_on_every_node_route(client: TestClient):
+def test_an_unknown_team_is_not_found_on_every_team_route(client: TestClient):
     responses = [
         client.get("/api/director/org/nodes/missing"),
         client.get("/api/director/org/nodes/missing/memory"),
@@ -134,12 +133,12 @@ def test_the_tree_is_empty_without_a_saved_tree_or_a_repository(
         assert client.get("/api/director/org/tree-stream").status_code == 404
 
 
-def test_ownership_lists_a_nodes_files_by_the_report_that_owns_them(repo: Path):
+def test_ownership_lists_a_teams_files_by_the_report_that_owns_them(repo: Path):
     (repo / "svc" / "a").mkdir(parents=True)
     (repo / "svc" / "a" / "app.py").write_text("a\n")
     store = OrgStore()
     store.replace_all(
-        [make_node("root", None, path=""), make_node("a", "root", path="svc/a")]
+        [make_team("root", None, path=""), make_team("a", "root", path="svc/a")]
     )
     save_org(create_org_board(repo), store)
 
@@ -294,7 +293,7 @@ class TestTreeStream:
 
         name, snapshot = await self.next_event(body)
         await asyncio.to_thread(
-            service.store.upsert, renamed(make_node("b", "root"), "Billing")
+            service.store.upsert, renamed(make_team("b", "root"), "Billing")
         )
         _, upsert = await self.next_event(body)
         await asyncio.to_thread(service.store.remove, "b")
@@ -312,8 +311,8 @@ class TestTreeStream:
         body = await self.open_stream(service, "b")
 
         _, snapshot = await self.next_event(body)
-        service.store.upsert(renamed(make_node("a1", "a"), "One"))
-        service.store.upsert(renamed(make_node("b", "root"), "Billing"))
+        service.store.upsert(renamed(make_team("a1", "a"), "One"))
+        service.store.upsert(renamed(make_team("b", "root"), "Billing"))
         _, first_change = await self.next_event(body)
 
         assert [node["id"] for node in snapshot["nodes"]] == ["root", "b"]
@@ -326,7 +325,7 @@ class TestTreeStream:
         body = await self.open_stream(service, expanded=["a", "missing"])
 
         _, snapshot = await self.next_event(body)
-        service.store.upsert(renamed(make_node("a1", "a"), "One"))
+        service.store.upsert(renamed(make_team("a1", "a"), "One"))
         _, change = await self.next_event(body)
 
         assert [node["id"] for node in snapshot["nodes"]] == [
@@ -344,7 +343,7 @@ class TestTreeStream:
         body = await self.open_stream(service, "a", full=True)
 
         _, snapshot = await self.next_event(body)
-        service.store.upsert(make_node("deep", "a1"))
+        service.store.upsert(make_team("deep", "a1"))
         _, change = await self.next_event(body)
 
         assert [node["id"] for node in snapshot["nodes"]] == ["root", "a", "a1", "a2"]
@@ -406,7 +405,7 @@ class TestTreeStream:
 
         await body.aclose()  # type: ignore[attr-defined]
         service.store.subscribe("root", delivered.append)
-        service.store.upsert(renamed(make_node("b", "root"), "Billing"))
+        service.store.upsert(renamed(make_team("b", "root"), "Billing"))
 
         # The store has exactly the open stream and this test's listener left.
         assert len(service.store._listeners) == 2
@@ -556,7 +555,7 @@ async def test_an_org_is_pushed_pulled_and_its_merge_asked_for(running, repo, tm
     created = await client.post("/api/director/org", json=org_body(repo))
     await service.settled()
     session = created.json()["session"]["id"]
-    start_again = f"/api/director/org/sessions/{session}/teams/root/start_again"
+    start_again = f"/api/director/org/sessions/{session}/teams/root/start-again"
     no_remote = await client.post("/api/director/org/pull", json={"remote": "nope"})
     bare = tmp_path / "remote.git"
     run_git(tmp_path, "init", "--quiet", "--bare", str(bare))
@@ -721,49 +720,6 @@ def test_the_history_of_the_org_is_one_list_newest_first(saved_tree: Path):
     assert refused.status_code == 422
 
 
-def test_the_team_memory_is_pushed_to_and_pulled_from_a_remote(
-    saved_tree: Path, tmp_path: Path
-):
-    if git_version(saved_tree) < (2, 38):
-        pytest.skip("needs git 2.38")
-    bare, clone = tmp_path / "remote.git", tmp_path / "clone"
-    run_git(tmp_path, "clone", "--quiet", "--bare", str(saved_tree), str(bare))
-    run_git(saved_tree, "remote", "add", "origin", str(bare))
-    run_git(tmp_path, "clone", "--quiet", str(bare), str(clone))
-    GitStore(saved_tree).write("svc/a", "spec.md", "Be kind.")
-    client = make_client(saved_tree)
-
-    pushed = client.post("/api/director/org/memory/push")
-    pulled = make_client(clone).post(
-        "/api/director/org/memory/pull", json={"remote": "origin"}
-    )
-
-    assert pushed.status_code == 200 and pushed.json()["pushed"] is True
-    assert pulled.status_code == 200
-    assert pulled.json() == {
-        "remote": "origin",
-        "head": GitStore(saved_tree).head(),
-        "changed": True,
-        "kept_local": [],
-        "pushed": False,
-    }
-    assert GitStore(clone).read("svc/a/spec.md") == "Be kind."
-
-
-def test_sharing_the_team_memory_reports_what_is_missing(saved_tree: Path):
-    client = make_client(saved_tree)
-
-    no_remote = client.post("/api/director/org/memory/pull")
-    run_git(saved_tree, "remote", "add", "origin", str(saved_tree / "nowhere.git"))
-    nothing_to_push = client.post("/api/director/org/memory/push")
-    GitStore(saved_tree).write("", "spec.md", "Spec.")
-    unreachable = client.post("/api/director/org/memory/push")
-
-    assert [
-        response.status_code for response in (no_remote, nothing_to_push, unreachable)
-    ] == [404, 409, 502]
-
-
 def test_the_limits_on_new_teams_are_read_changed_and_kept(saved_tree: Path):
     with make_client(saved_tree, max_concurrent_runs=7) as client:
         before = client.get("/api/director/settings").json()
@@ -782,7 +738,6 @@ def test_the_limits_on_new_teams_are_read_changed_and_kept(saved_tree: Path):
         "manager_check_accepted_reviews": 5,
         "manager_check_ic_setbacks": 3,
         "route_requests": True,
-        "session_worktrees": True,
         "teams": 5,
         "depth": 3,
         "max_concurrent_runs": 7,

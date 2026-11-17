@@ -19,13 +19,15 @@ from openhands.agent_server.director.service import (
     DirectorService,
     hand_over_of,
 )
+from openhands.agent_server.director.split import ProposedTeam
 from openhands.agent_server.director.tools import (
     ApproveTeamsTool,
     HandOverTool,
     MsgManagerTool,
     MsgTeamTool,
+    ProposeTeamsTool,
     PruneTeamTool,
-    ReadNodeContextTool,
+    ReadTeamContextTool,
     ReportTool,
     StopTeamTool,
     WriteSpecTool,
@@ -34,8 +36,9 @@ from openhands.agent_server.director.tools.definition import (
     HandOverAction,
     MsgManagerAction,
     MsgTeamAction,
+    ProposeTeamsAction,
     PruneTeamAction,
-    ReadNodeContextAction,
+    ReadTeamContextAction,
     ReportAction,
     StopTeamAction,
     WriteSpecAction,
@@ -84,7 +87,7 @@ async def service(repo: Path, launcher: FakeLauncher):
     """An org of API and Web. API has a spec, two reports and messages with
     its Manager and with the IC above."""
     service = await started(repo, launcher)
-    await use(service, ic(service), MsgManagerTool, TWO)
+    await use(service, ic(service), ProposeTeamsTool, TWO)
     await use(service, manager(service), ApproveTeamsTool, APPROVE)
     await tasked(service)
     api_ic = ic(service, API)
@@ -102,7 +105,7 @@ async def replace(
     service: DirectorService, *teams: SplitChild, keep: list[str], contracts: str = ""
 ):
     proposal = proposing(list(teams), contracts, keep)
-    await use(service, ic(service), MsgManagerTool, proposal)
+    await use(service, ic(service), ProposeTeamsTool, proposal)
     return await use(service, manager(service), ApproveTeamsTool, APPROVE)
 
 
@@ -236,11 +239,11 @@ async def test_the_ic_is_told_who_has_each_replaced_teams_directory_now(
 
     told = given_aside(service, launcher)
     assert (
-        "Its directory is now divided: HTTP (services/api/http), Store "
+        "Its folder is now divided: HTTP (services/api/http), Store "
         "(services/api/db). What of services/api is in none of those is yours again."
     ) in told
     assert "Its reports, as one:\nFlask, SQLite" in told
-    assert "give each the part that concerns its directory" in told
+    assert "give each the part that concerns its folder" in told
     # Like a merged team, each is set up and not started, and is shown the
     # spec of the team it was cut from as old.
     for team_id in ("services.api.http", "services.api.db"):
@@ -250,8 +253,8 @@ async def test_the_ic_is_told_who_has_each_replaced_teams_directory_now(
     below = service.context_of(node(service, "root"), "ic")["sub_teams"]
     assert {team["team"]: team["status"] for team in below} == {
         "Web": "idle",
-        "HTTP": "not started",
-        "Store": "not started",
+        "HTTP": "not_started",
+        "Store": "not_started",
     }
 
     # A merge: one team over the directories of all three.
@@ -260,12 +263,12 @@ async def test_the_ic_is_told_who_has_each_replaced_teams_directory_now(
     )
 
     told = given_aside(service, launcher)
-    assert told.count("Its directory is now in the folder of Services (services).") == 3
+    assert told.count("Its folder is now in the folder of Services (services).") == 3
 
     # Teams that take none of a removed team's directory.
     [api] = former_of(service, API)[-1:]
     elsewhere = left_behind([api], [SplitChild(title="Apps", path="apps", task="Apps")])
-    assert "No new team has its directory: services/api is yours again." in elsewhere
+    assert "No new team has its folder: services/api is yours again." in elsewhere
 
 
 async def test_reports_that_no_model_shortens_are_kept_in_full(
@@ -297,7 +300,7 @@ async def test_sub_teams_of_a_stopped_team_that_is_replaced_go_on(
     service: DirectorService, launcher: FakeLauncher
 ):
     db = SplitChild(title="DB", path="services/api/db", task="Own the schema")
-    await use(service, ic(service, API), MsgManagerTool, proposing([db]))
+    await use(service, ic(service, API), ProposeTeamsTool, proposing([db]))
     await use(service, manager(service, API), ApproveTeamsTool, APPROVE)
     await tasked(service)
     db_ic = str(ic(service, "services.api.db"))
@@ -324,10 +327,12 @@ async def test_what_was_said_to_a_manager_is_archived_with_its_team(
     await use(
         service,
         ic(service, API),
-        MsgManagerTool,
-        MsgManagerAction(
-            text="Splitting.\n\n```teams\nteams:\n"
-            "  - {name: DB, path: services/api/db, instruction: Schema}\n```"
+        ProposeTeamsTool,
+        ProposeTeamsAction(
+            teams=[
+                ProposedTeam(name="DB", path="services/api/db", instruction="Schema")
+            ],
+            text="Splitting.",
         ),
     )
 
@@ -348,7 +353,7 @@ async def test_the_ic_that_proposed_is_given_what_the_replaced_team_left(
     approved = await replace(service, ORDERS, keep=["Web"])
 
     told = given_aside(service, launcher)
-    assert "Team 'API' (node services.api, services/api), replaced." in told
+    assert "Team 'API' (id services.api, services/api), replaced." in told
     assert "It was for: Serve the checkout API" in told
     assert "Its reports, as one:\nSQLite, no cache." in told
     assert "reaches a new team unless you hand it over" in told
@@ -470,7 +475,7 @@ async def test_the_ic_above_is_given_what_a_pruned_team_left(
     assert "Your Manager pruned the team 'API'" in launcher.messages_to(ic(service))[-1]
     told = given_aside(service, launcher)
     assert "your Manager pruned the team 'API'" in told
-    assert "Team 'API' (node services.api, services/api), pruned." in told
+    assert "Team 'API' (id services.api, services/api), pruned." in told
     assert "Chose SQLite.\n\nDropped the cache." in told
     assert "Rewrite your own spec with `write_spec`" in told
     assert "`hand_over`" in told
@@ -482,14 +487,14 @@ async def test_an_ic_can_read_again_what_removed_teams_left(
 ):
     await replace(service, ORDERS, keep=["Web"])
 
-    read = await use(service, ic(service), ReadNodeContextTool, ReadNodeContextAction())
+    read = await use(service, ic(service), ReadTeamContextTool, ReadTeamContextAction())
 
     [former] = json.loads(read.text)["former_teams"]
     assert (former["team"], former["ended"]) == ("API", "replaced")
     assert former["reports_as_one"] == "Chose SQLite.\n\nDropped the cache."
     # What is told with every message names the team and no more.
     [named] = service.context_of(node(service, "root"), "ic")["former_teams"]
-    assert sorted(named) == ["at", "directory", "ended", "node_id", "team"]
+    assert sorted(named) == ["at", "directory", "ended", "team", "team_id"]
     assert "former_teams" not in service.context_of(node(service, "root"), "manager")
 
 
@@ -516,8 +521,8 @@ async def test_a_hand_over_is_a_side_conversation_of_the_ic_with_its_own_briefin
     # The team still has its two agents and no third.
     assert [agent.role for agent in node(service, "root").agents] == ["ic", "manager"]
     orders = node(service, API).id
-    assert f"- Orders (node {orders}, services/api): Keep the orders" in told
-    assert "Its directory is now in the folder of Orders (services/api)." in told
+    assert f"- Orders (id {orders}, services/api): Keep the orders" in told
+    assert "Its folder is now in the folder of Orders (services/api)." in told
     assert "Its reports, as one:\nSQLite, no cache." in told
     assert "The spec it wrote (old; it stays in services/api):\n# API by hand" in told
     assert "Your team's spec:\n# Shop" in told
@@ -540,7 +545,7 @@ async def test_a_hand_over_conversation_hands_over_and_writes_the_spec_and_no_mo
         service, side, HandOverTool, HandOverAction(team=API, notes="Keep SQLite.")
     )
     spec = await use(service, side, WriteSpecTool, WriteSpecAction(text="# Shop"))
-    read = await use(service, side, ReadNodeContextTool, ReadNodeContextAction())
+    read = await use(service, side, ReadTeamContextTool, ReadTeamContextAction())
     refused = [
         await use(service, side, ReportTool, ReportAction(text="Done.")),
         await use(service, side, MsgTeamTool, MsgTeamAction(team=API, text="Go.")),
@@ -729,7 +734,7 @@ async def test_a_server_that_ends_as_a_hand_over_starts_starts_it_at_its_next_st
     repo: Path, service: DirectorService, launcher: FakeLauncher
 ):
     ended = end_server_at(launcher, "derived")
-    await use(service, ic(service), MsgManagerTool, proposing([ORDERS], "", ["Web"]))
+    await use(service, ic(service), ProposeTeamsTool, proposing([ORDERS], "", ["Web"]))
     with suppress(ServerEnded):
         await use(service, manager(service), ApproveTeamsTool, APPROVE)
     await ended.wait()
@@ -781,13 +786,13 @@ HTTP = SplitChild(title="HTTP", path="services/api/http", task="Serve the routes
 
 async def api_in_hand_over(service: DirectorService, launcher: FakeLauncher) -> str:
     """Have API's IC in hand-over mode, at work on a team its Manager pruned."""
-    await use(service, ic(service, API), MsgManagerTool, proposing([DB, HTTP]))
+    await use(service, ic(service, API), ProposeTeamsTool, proposing([DB, HTTP]))
     await use(service, manager(service, API), ApproveTeamsTool, APPROVE)
     await use(
         service,
         manager(service, API),
         PruneTeamTool,
-        PruneTeamAction(node_id="services.api.db", reason="Not needed."),
+        PruneTeamAction(team="services.api.db", reason="Not needed."),
     )
     side = aside(service, API)
     assert side is not None

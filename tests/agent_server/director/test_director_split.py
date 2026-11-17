@@ -10,14 +10,16 @@ from openhands.agent_server.director.org_store import (
 )
 from openhands.agent_server.director.split import (
     MAX_SPLIT_CHILDREN,
+    ProposedTeam,
     Split,
+    as_written,
     check_limits,
     home_of,
     normalize_split,
     proposed_teams,
 )
 from tests.agent_server.director.conftest import (
-    make_node,
+    make_team,
     open_session_in,
     small_tree,
 )
@@ -57,36 +59,28 @@ def replaced(split: Split) -> list[str]:
     return [team.team_id for team in split.replaces]
 
 
-WRITTEN = """\
-I would split the service in two.
+def test_a_proposal_is_read_as_the_teams_it_names():
+    proposed = proposed_teams(
+        [
+            ProposedTeam(
+                name="API",
+                path="services/api",
+                instruction="Build the orders endpoint",
+                model="fast",
+                writable=["services/api/src/**"],
+                readonly=["shared/**"],
+                isolation="worktree",
+            ),
+            ProposedTeam(name="Web", path="apps/web", instruction="Build the pages"),
+        ],
+        "API serves /orders.\n",
+        ["Billing"],
+        " The service has two concerns. ",
+    )
 
-```teams
-contracts: |
-  API serves /orders.
-keep: [Billing]
-teams:
-  - name: API
-    path: services/api
-    instruction: Build the orders endpoint
-    model: fast
-    writable: [services/api/src/**]
-    readonly: [shared/**]
-    isolation: worktree
-  - name: Web
-    path: apps/web
-    instruction: Build the pages
-```
-
-Tell me what you think.
-"""
-
-
-def test_a_message_proposes_the_teams_in_its_block():
-    proposed = proposed_teams(WRITTEN)
-
-    assert proposed is not None
     assert proposed.contracts == "API serves /orders.\n"
     assert proposed.keep == ["Billing"]
+    assert proposed.reason == "The service has two concerns."
     assert proposed.children == [
         SplitChild(
             title="API",
@@ -99,52 +93,7 @@ def test_a_message_proposes_the_teams_in_its_block():
         ),
         SplitChild(title="Web", path="apps/web", task="Build the pages"),
     ]
-
-
-@pytest.mark.parametrize(
-    "text",
-    [
-        pytest.param("The API team is behind.", id="no block"),
-        pytest.param("```yaml\nteams: []\n```", id="a block of another kind"),
-        pytest.param("Use ```teams when you propose.", id="the fence in a sentence"),
-    ],
-)
-def test_a_message_without_a_teams_block_proposes_nothing(text: str):
-    assert proposed_teams(text) is None
-
-
-@pytest.mark.parametrize(
-    ("block", "problem"),
-    [
-        pytest.param("teams: [", "is not YAML", id="broken YAML"),
-        pytest.param("- API\n- Web", "does not describe sub-teams", id="a list"),
-        pytest.param("teams: []", "teams", id="no teams"),
-        pytest.param(
-            "teams:\n  - name: API\n    path: a", "instruction", id="no instruction"
-        ),
-        pytest.param(
-            "teams:\n  - name: API\n    path: a\n    instruction: x\n    manager: y",
-            "manager",
-            id="a field teams do not have",
-        ),
-        pytest.param(
-            "teams:\n  - name: API\n    path: a\n    instruction: x\n"
-            "    isolation: container",
-            "isolation",
-            id="an isolation there is not",
-        ),
-    ],
-)
-def test_a_block_that_is_not_a_team_proposal_is_refused(block: str, problem: str):
-    with pytest.raises(OrgStoreError, match=problem):
-        proposed_teams(f"```teams\n{block}\n```")
-
-
-def test_a_message_proposes_teams_only_once():
-    block = "```teams\nteams:\n  - {name: A, path: a, instruction: x}\n```"
-
-    with pytest.raises(OrgStoreError, match="2 ```teams blocks"):
-        proposed_teams(f"{block}\nor\n{block}")
+    assert as_written(proposed).startswith("contracts: |\n  API serves /orders.\n")
 
 
 def test_sub_teams_get_clean_paths_and_write_their_whole_directory(store: OrgStore):
@@ -210,7 +159,7 @@ def test_refuses_a_split_that_cannot_be_told_apart(store: OrgStore, children):
 
 
 def test_a_team_proposes_only_inside_what_it_may_write(store: OrgStore):
-    b = make_node("b", "root", path="svc/b")
+    b = make_team("b", "root", path="svc/b")
     narrow = b.boundary.model_copy(update={"writable": ["svc/b/src/**"]})
     store.update_place(at("b"), boundary=narrow)
 
@@ -219,7 +168,7 @@ def test_a_team_proposes_only_inside_what_it_may_write(store: OrgStore):
         check(store, "b", [child("docs", "svc/b/docs")])
 
 
-def test_a_new_team_beside_the_ones_a_node_has_replaces_none(store: OrgStore):
+def test_a_new_team_beside_the_ones_a_team_has_replaces_none(store: OrgStore):
     result = check(store, "a", [child("three", "svc/a/three")])
 
     assert result.children[0].path == "svc/a/three" and result.replaces == []

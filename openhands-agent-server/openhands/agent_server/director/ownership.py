@@ -1,4 +1,4 @@
-"""Which team owns which file below a node, and where their work collides."""
+"""Which team owns which file below a team, and where their work collides."""
 
 from collections.abc import Sequence
 from functools import lru_cache
@@ -23,7 +23,7 @@ from openhands.agent_server.director.models import (
 
 
 MAX_FILES = 5000
-# Above this many checkouts, direct reports are compared with the node only
+# Above this many checkouts, direct reports are compared with the team only
 # and not with each other: the pairs grow with the square of the count.
 MAX_CHECKOUTS_COMPARED_PAIRWISE = 12
 _MERGE_TREE_MIN_GIT = (2, 38)
@@ -32,7 +32,7 @@ _MERGE_TREE_MIN_GIT = (2, 38)
 def node_ownership(
     node: OrgNode, reports: Sequence[OrgNode], checkout: Path
 ) -> NodeOwnership:
-    """The files of a node's boundary in ``checkout`` by the direct report
+    """The files of a team's boundary in ``checkout`` by the direct report
     that owns them. For a place of a session, also the files the committed
     work of two of these teams both changed in ways that do not merge."""
     files, truncated = _files(checkout, node.boundary.path)
@@ -93,15 +93,15 @@ def can_merge_in_memory(checkout: Path) -> bool:
 
 
 def _collisions(
-    node: SessionTeam, reports: list[SessionTeam]
+    place: SessionTeam, reports: list[SessionTeam]
 ) -> tuple[list[Collision], bool]:
-    checkout = Path(node.worktree_path)
+    checkout = Path(place.worktree_path)
     if not can_merge_in_memory(checkout):
         return [], False
     # Teams that share a checkout have one tip between them; the first stands
     # for it.
     tips: dict[str, str] = {}
-    for team in (node, *reports):
+    for team in (place, *reports):
         tip = head_of(Path(team.worktree_path))
         if tip is not None:
             tips.setdefault(tip, team.id)
@@ -115,7 +115,7 @@ def _collisions(
     for ours, theirs in pairs:
         for path in conflicts(checkout, ours, theirs):
             teams_by_path.setdefault(path, set()).update((tips[ours], tips[theirs]))
-    order = [node.id, *(report.id for report in reports)]
+    order = [place.id, *(report.id for report in reports)]
     return [
         Collision(path=path, node_ids=sorted(teams, key=order.index))
         for path, teams in sorted(teams_by_path.items())

@@ -116,7 +116,7 @@ class Teams(Delivery):
         self.tell_ic(ic_node_id, f"{heading}\n{text}{note}")
 
     def tell_manager(
-        self, node_id: str, text: str, *, division_lead: bool = False
+        self, place_id: str, text: str, *, division_lead: bool = False
     ) -> None:
         """Send a team's Manager a message from the director. A team has no
         Manager until something is sent to it: the first message starts
@@ -128,23 +128,23 @@ class Teams(Delivery):
         """
         store = self.store
         with self._adding_manager:
-            node = store.place(node_id)
-            if node is None:
+            place = store.place(place_id)
+            if place is None:
                 return
-            if is_division_lead(node) and not division_lead:
+            if is_division_lead(place) and not division_lead:
                 return
-            if agent_conversation(node, "manager") is None:
+            if agent_conversation(place, "manager") is None:
                 manager = AgentRef(
                     role="manager", conversation_id=str(uuid4()), status="idle"
                 )
-                node = store.update_place(node_id, agents=[*node.agents, manager])
-                task = self._runs().marked(TASK).get(node_id) or node.spec_summary
-                self._begin("launch_manager", node_id, task=task)
-        self.notify(agent_conversation(node, "manager"), text)
+                place = store.update_place(place_id, agents=[*place.agents, manager])
+                task = self._runs().marked(TASK).get(place_id) or place.spec_summary
+                self._begin("launch_manager", place_id, task=task)
+        self.notify(agent_conversation(place, "manager"), text)
 
     def tell_ic(
         self,
-        node_id: str,
+        place_id: str,
         text: str,
         *,
         human: bool = False,
@@ -165,25 +165,27 @@ class Teams(Delivery):
         """
         store = self.store
         with self._adding_manager:
-            node = store.place(node_id)
-            if node is None:
+            place = store.place(place_id)
+            if place is None:
                 return None
-            conversation_id = agent_conversation(node, "ic")
-            leads = is_division_lead(node)
+            conversation_id = agent_conversation(place, "ic")
+            leads = is_division_lead(place)
             if conversation_id is None and leads and not division_lead:
                 return None
             if conversation_id is None:
                 [ic] = _new_agents(uuid4())
-                store.update_place(node_id, agents=[ic, *node.agents])
-                purpose = self._purpose(node)
+                store.update_place(place_id, agents=[ic, *place.agents])
+                purpose = self._purpose(place)
                 self._begin(
                     "start_team",
-                    node_id,
+                    place_id,
                     task=f"{purpose}{_STARTED_WITH}{text}",
                     purpose=purpose,
-                    parent=self._derived_from(node),
+                    parent=self._derived_from(place),
                     **(
-                        {"checkout": node.worktree_path} if self._in_place(node) else {}
+                        {"checkout": place.worktree_path}
+                        if self._in_place(place)
+                        else {}
                     ),
                 )
                 if human and ic.conversation_id:
@@ -196,34 +198,34 @@ class Teams(Delivery):
             self.notify(conversation_id, text)
         return conversation_id
 
-    def _in_place(self, node: SessionTeam) -> bool:
+    def _in_place(self, place: SessionTeam) -> bool:
         """Whether a team that starts works in the checkout it has: a
         session's Division Lead place, and the team a session is opened
         at when sessions get no worktree or the session has one already."""
-        return is_division_lead(node) or (
-            self.store.opens_session(node)
+        return is_division_lead(place) or (
+            self.store.opens_session(place)
             and (
-                node.isolation != "worktree"
-                or _checkout_root(node.worktree_path)
+                place.isolation != "worktree"
+                or _checkout_root(place.worktree_path)
                 != _checkout_root(str(self._repo_dir))
             )
         )
 
-    def _derived_from(self, node: SessionTeam) -> str | None:
+    def _derived_from(self, place: SessionTeam) -> str | None:
         """The place whose IC the IC of ``node`` is derived from when it
         starts: the team above, or for the team a session is opened at and
         its reviewer, who of the session works already."""
         store = self.store
-        opened = store.session_of(node)
-        if is_division_lead(node) and opened:
+        opened = store.session_of(place)
+        if is_division_lead(place) and opened:
             return session_team_id(opened.team_id, opened.id)
-        if store.opens_session(node):
+        if store.opens_session(place):
             # A session that went a team higher has an IC below already.
             return next(
-                (team.id for team in store.below(node.id) if team.agents),
-                node.parent_id,
+                (team.id for team in store.below(place.id) if team.agents),
+                place.parent_id,
             )
-        return node.parent_id
+        return place.parent_id
 
     async def _template(self) -> str | None:
         """A conversation of the org to derive an agent from when nothing
@@ -240,7 +242,7 @@ class Teams(Delivery):
         task = self._runs().marked(TASK).get(node.id) or node.spec_summary
         return task.split(_STARTED_WITH)[0]
 
-    def message_team(self, node_id: str, team_id: str, text: str) -> bool:
+    def message_team(self, place_id: str, below_id: str, text: str) -> bool:
         """Keep and deliver what a team's IC writes to the IC of a team
         directly below. A team that was stopped goes on with it. Safe from
         any thread.
@@ -249,22 +251,22 @@ class Teams(Delivery):
             Whether the team was stopped.
         """
         store = self.store
-        node, team = store.place(node_id), store.place(team_id)
+        node, team = store.place(place_id), store.place(below_id)
         if node is None or team is None:
             raise NotFound("That team is no longer in the org")
         self._keep_message(
-            node_id,
-            team_id,
+            place_id,
+            below_id,
             ThreadMessage(at=_instant(), sender="ic", text=text),
             ic_to_ic=True,
         )
         stopped = team.stopped
         if stopped is not None:
-            store.set_stopped(team_id, None)
-            self._enqueue(lambda: self._go_on(team_id, stopped.running), team_id)
-        self.progressed(team_id)
+            store.set_stopped(below_id, None)
+            self._enqueue(lambda: self._go_on(below_id, stopped.running), below_id)
+        self.progressed(below_id)
         self.tell_ic(
-            team_id,
+            below_id,
             f"The IC of the team above ({node.title}) writes:\n{text}"
             + (
                 "\n\nIt had stopped your team; with this message your team goes on."
@@ -274,7 +276,7 @@ class Teams(Delivery):
         )
         return stopped is not None
 
-    def count_accepted_review(self, node_id: str) -> None:
+    def count_accepted_review(self, place_id: str) -> None:
         """Count a review a team's IC accepted, and wake the team's Manager
         to look at its teams when that makes as many as the org set. Safe
         from any thread."""
@@ -282,40 +284,40 @@ class Teams(Delivery):
         if not limit:
             return
         with self._counting:
-            counted = self._counted(node_id)
+            counted = self._counted(place_id)
             counted["accepted"] += 1
             due = counted["accepted"] >= limit
             if due:
                 counted["accepted"] = 0
-            self._runs().mark(CHECKS, node_id, json.dumps(counted))
+            self._runs().mark(CHECKS, place_id, json.dumps(counted))
         if due:
             self._wake_manager(
-                node_id,
+                place_id,
                 f"your IC has accepted {limit} reviews since the last look "
                 "of this kind.",
                 counted,
                 after_successes=True,
             )
 
-    def count_ic_escalation(self, node_id: str, team_id: str) -> None:
+    def count_ic_escalation(self, place_id: str, below_id: str) -> None:
         """Count an escalation the IC of a team directly below raised to a
         team's IC, and wake the team's Manager when that team has raised as
         many, on the work it has in hand, as the org set. Safe from any
         thread."""
         limit = self.settings.manager_check_ic_setbacks
-        team = self.store.place(team_id)
+        team = self.store.place(below_id)
         if not limit or team is None:
             return
         with self._counting:
-            counted = self._counted(node_id)
-            raised = counted["escalations"].get(team_id, 0) + 1
+            counted = self._counted(place_id)
+            raised = counted["escalations"].get(below_id, 0) + 1
             due = raised >= limit
-            told = dict(counted["escalations"], **{team_id: raised})
-            counted["escalations"][team_id] = 0 if due else raised
-            self._runs().mark(CHECKS, node_id, json.dumps(counted))
+            told = dict(counted["escalations"], **{below_id: raised})
+            counted["escalations"][below_id] = 0 if due else raised
+            self._runs().mark(CHECKS, place_id, json.dumps(counted))
         if due:
             self._wake_manager(
-                node_id,
+                place_id,
                 f"the IC of {team.title!r} has escalated {limit} times to "
                 "your IC on the work it has in hand.",
                 {**counted, "escalations": told},
@@ -324,7 +326,7 @@ class Teams(Delivery):
 
     def _wake_manager(
         self,
-        node_id: str,
+        place_id: str,
         reason: str,
         counted: dict[str, Any],
         *,
@@ -346,30 +348,30 @@ class Teams(Delivery):
             if at:
                 since = now - datetime.fromisoformat(at)
                 quiet[team_id] = int(since.total_seconds() // 60)
-        teams = store.below(node_id)
+        teams = store.below(place_id)
         waiting = {}
         for below in teams:
             raised = [e.raised_at for e in below.escalations if e.raised_by == "ic"]
             if raised:
                 since = now - datetime.fromisoformat(min(raised))
                 waiting[below.id] = int(since.total_seconds() // 60)
-        self.record_event(node_id, "woken", team, reason)
+        self.record_event(place_id, "woken", team, reason)
         self.tell_manager(
-            node_id,
+            place_id,
             manager_check(
                 reason,
                 teams,
                 quiet,
                 waiting,
                 counted["escalations"],
-                self.history_of(node_id),
+                self.history_of(place_id),
                 after_successes=after_successes,
                 escalation_limit=self.settings.manager_check_ic_setbacks,
             ),
         )
 
-    async def _stop(self, node_id: str) -> None:
-        team = self.store.place(node_id)
+    async def _stop(self, place_id: str) -> None:
+        team = self.store.place(place_id)
         if team is None or team.stopped is None or self._paused is not None:
             return
         launcher = self._require_launcher()
@@ -379,7 +381,7 @@ class Teams(Delivery):
                     await launcher.pause(UUID(conversation_id))
 
     async def _go_on(
-        self, node_id: str, running: list[str], *, own_too: bool = False
+        self, place_id: str, running: list[str], *, own_too: bool = False
     ) -> None:
         """Set a team that was stopped going again: what waited for its
         agents is delivered, and those cut off in a turn run again.
@@ -388,7 +390,7 @@ class Teams(Delivery):
             own_too: Run the team's own IC again as well, when no message
                 to it does.
         """
-        team = self.store.place(node_id)
+        team = self.store.place(place_id)
         if team is None or team.stopped is not None or self._paused is not None:
             return
         own = None if own_too else agent_conversation(team, "ic")
@@ -404,16 +406,16 @@ class Teams(Delivery):
             if conversation_id in running and conversation_id != own:
                 await self._run_again(conversation_id, None)
 
-    def progressed(self, node_id: str | None) -> None:
+    def progressed(self, place_id: str | None) -> None:
         """Note that a team got somewhere just now: the time it may show no
         progress starts again. Safe from any thread."""
-        if node_id is None:
+        if place_id is None:
             return
         run = self._runs()
-        seen = _progress_of(run.marked(PROGRESS).get(node_id))
+        seen = _progress_of(run.marked(PROGRESS).get(place_id))
         run.mark(
             PROGRESS,
-            node_id,
+            place_id,
             json.dumps({"at": self._clock().isoformat(), "head": seen.get("head")}),
         )
 
@@ -430,13 +432,13 @@ class Teams(Delivery):
         if contracts.strip():
             self._record_contracts(team, contracts, True)
 
-    def _task_of(self, node: SessionTeam) -> str:
+    def _task_of(self, place: SessionTeam) -> str:
         """What a team that is started again is to do, from what the org
         kept of it."""
-        specs = [spec for spec in self.specs_of(node) if not spec.old]
-        task = specs[0].spec if specs else node.spec_summary
-        if node.headline and node.headline not in task:
-            task = f"{task}\n\nWhere the team last was: {node.headline}"
+        specs = [spec for spec in self.specs_of(place) if not spec.old]
+        task = specs[0].spec if specs else place.spec_summary
+        if place.headline and place.headline not in task:
+            task = f"{task}\n\nWhere the team last was: {place.headline}"
         return (
             f"{task}\n\nThis team was worked on before. "
             "What it committed is in your checkout: look at it first and "
@@ -452,39 +454,39 @@ class Teams(Delivery):
             await self._require_launcher().resume(UUID(conversation_id), note)
 
     def _briefing(
-        self, node: SessionTeam, role: AgentRole, task: str
+        self, place: SessionTeam, role: AgentRole, task: str
     ) -> tuple[str, str]:
         """An agent's first message, and the context it tells, as kept to
         find later what changed."""
-        contracts = self.contracts_of(node)
-        context = self.context_of(node, role)
+        contracts = self.contracts_of(place)
+        context = self.context_of(place, role)
         text = brief(
-            node,
+            place,
             role,
             task,
-            self.specs_of(node),
+            self.specs_of(place),
             contracts,
-            self.reports_of(node),
+            self.reports_of(place),
             briefing_block(context),
         )
         return text, json.dumps(steady(context))
 
-    def _hand_over_briefing(self, node: SessionTeam, job: str) -> str:
+    def _hand_over_briefing(self, place: SessionTeam, job: str) -> str:
         """The first message of an IC's hand-over conversation."""
-        contracts = self.contracts_of(node)
+        contracts = self.contracts_of(place)
         return hand_over_brief(
-            node,
+            place,
             job,
-            self.specs_of(node),
+            self.specs_of(place),
             contracts,
-            self.reports_of(node),
-            briefing_block(self.context_of(node, "ic")),
+            self.reports_of(place),
+            briefing_block(self.context_of(place, "ic")),
         )
 
     async def _start_hand_over(
-        self, node: SessionTeam, conversation_id: str, job: str
+        self, place: SessionTeam, conversation_id: str, job: str
     ) -> bool:
-        """Start the hand-over conversation of a node's IC, derived from its
+        """Start the hand-over conversation of a team's IC, derived from its
         main one.
 
         Returns:
@@ -494,12 +496,12 @@ class Teams(Delivery):
         try:
             if await launcher.started(UUID(conversation_id)) is not None:
                 return True
-            parent = await self._started_ic(node)
+            parent = await self._started_ic(place)
             if parent is None:
-                raise NotFound(f"Node {node.id} has no IC to hand over")
-            text = await asyncio.to_thread(self._hand_over_briefing, node, job)
+                raise NotFound(f"Team {place.id} has no IC to hand over")
+            text = await asyncio.to_thread(self._hand_over_briefing, place, job)
             tool_params = await asyncio.to_thread(
-                self._confine, node.id, "ic", conversation_id
+                self._confine, place.id, "ic", conversation_id
             )
             adapt = await asyncio.to_thread(
                 self._adapter, conversation_id, HAND_OVER_TOOLS
@@ -509,7 +511,7 @@ class Teams(Delivery):
                 return await launcher.start_derived(
                     UUID(parent),
                     UUID(conversation_id),
-                    title=f"{node.title} (IC, hand-over)",
+                    title=f"{place.title} (IC, hand-over)",
                     task=text,
                     isolation="shared",
                     suffixes=[HAND_OVER_ROLE],
@@ -517,73 +519,75 @@ class Teams(Delivery):
                     adapt_agent=adapt,
                 )
 
-            await self._when_there_is_room(node.id, start)
+            await self._when_there_is_room(place.id, start)
             if self._paused is not None:
-                self._note_running(conversation_id, node.id, True)
+                self._note_running(conversation_id, place.id, True)
                 await launcher.pause(UUID(conversation_id))
         except _Held:
             raise
         except Exception:
-            logger.exception("Could not start the hand-over of node %s", node.id)
+            logger.exception("Could not start the hand-over of team %s", place.id)
             return False
         return True
 
-    async def _brief(self, node_id: str, role: AgentRole, task: str) -> None:
-        node = self.store.place(node_id)
-        if node is None:
+    async def _brief(self, place_id: str, role: AgentRole, task: str) -> None:
+        place = self.store.place(place_id)
+        if place is None:
             return
-        conversation_id = agent_conversation(node, role)
+        conversation_id = agent_conversation(place, role)
         if conversation_id is not None:
-            text, told = await asyncio.to_thread(self._briefing, node, role, task)
+            text, told = await asyncio.to_thread(self._briefing, place, role, task)
             self._runs().mark(TOLD, conversation_id, told)
             await self._send(conversation_id, text)
 
     async def _start_agent(
         self,
-        node_id: str,
+        place_id: str,
         role: AgentRole,
         parent_conversation: str | None,
         task: str,
         checkout: str | None = None,
     ) -> bool:
-        """Start one agent of a node from ``parent_conversation``.
+        """Start one agent of a team from ``parent_conversation``.
 
         Args:
             checkout: The team's checkout when it has one already and the
                 agent is to work on in it.
 
         Returns:
-            Whether it runs. A failure is recorded on the node.
+            Whether it runs. A failure is recorded on the team.
         """
         store = self.store
-        node = store.place(node_id)
-        conversation_id = agent_conversation(node, role) if node else None
-        if node is None or conversation_id is None:
+        place = store.place(place_id)
+        conversation_id = agent_conversation(place, role) if place else None
+        if place is None or conversation_id is None:
             return False
         launcher = self._require_launcher()
         try:
             started = await launcher.started(UUID(conversation_id))
             if started is None:
                 started = await self._start_new(
-                    node, role, conversation_id, parent_conversation, task, checkout
+                    place, role, conversation_id, parent_conversation, task, checkout
                 )
                 if self._paused is not None:
-                    self._note_running(conversation_id, node_id, True)
+                    self._note_running(conversation_id, place_id, True)
                     await launcher.pause(UUID(conversation_id))
         except _Held:
             raise
         except Exception:
-            logger.exception("Could not start the %s of node %s", role, node_id)
-            store.set_agent(node_id, role, status=AGENT_LOST)
+            logger.exception("Could not start the %s of team %s", role, place_id)
+            store.set_agent(place_id, role, status=AGENT_LOST)
             return False
-        store.set_agent(node_id, role, kind=started.kind, acp_server=started.acp_server)
+        store.set_agent(
+            place_id, role, kind=started.kind, acp_server=started.acp_server
+        )
         if role == "ic":
             store.update_place(
-                node_id,
+                place_id,
                 worktree_path=started.workspace,
                 isolation=started.isolation,
                 branch=await asyncio.to_thread(_branch_of, started.workspace),
-                base_commit=node.base_commit
+                base_commit=place.base_commit
                 or await asyncio.to_thread(_base_of, started.workspace),
                 boundary_enforcement=self._enforcement(started.kind),
             )
@@ -591,7 +595,7 @@ class Teams(Delivery):
 
     async def _start_new(
         self,
-        node: SessionTeam,
+        place: SessionTeam,
         role: AgentRole,
         conversation_id: str,
         parent_conversation: str | None,
@@ -604,28 +608,28 @@ class Teams(Delivery):
             NotFound: There is nobody to derive the agent from.
             _Held: The org was paused while the team waited for a run.
         """
-        node_id = node.id
+        place_id = place.id
         launcher = self._require_launcher()
-        text, told = await asyncio.to_thread(self._briefing, node, role, task)
-        tool_params = await asyncio.to_thread(self._confine, node_id, role)
+        text, told = await asyncio.to_thread(self._briefing, place, role, task)
+        tool_params = await asyncio.to_thread(self._confine, place_id, role)
         if parent_conversation is None:
-            raise NotFound(f"Node {node_id} has nobody to derive its {role} from")
+            raise NotFound(f"Team {place_id} has nobody to derive its {role} from")
         parent_id = UUID(parent_conversation)
         # A team given a profile of its own starts its IC from it; its
         # Manager, like every Manager, is derived from the IC.
-        profile = node.agent_profile if role == "ic" else None
+        profile = place.agent_profile if role == "ic" else None
         kind = await (
             launcher.profile_kind(profile)
             if profile
             else launcher.agent_kind(parent_id)
         )
-        isolation = node.isolation if role == "ic" else "shared"
-        leads = is_division_lead(node)
+        isolation = place.isolation if role == "ic" else "shared"
+        leads = is_division_lead(place)
         if kind == "acp" and role == "ic" and self._bwrap is None:
             # Nothing holds its process to the team's directory, so its
             # work is kept apart and checked when it is merged.
             isolation = "worktree"
-        tools = tools_of(node, role)
+        tools = tools_of(place, role)
         adapt = await asyncio.to_thread(self._adapter, conversation_id, tools)
         # A session starts from where the repository's checkout is.
         base = (
@@ -633,13 +637,13 @@ class Teams(Delivery):
             if role == "ic"
             and not checkout
             and isolation == "worktree"
-            and self.store.opens_session(node)
+            and self.store.opens_session(place)
             else None
         )
         title = _agent_title(
-            node.title,
+            place.title,
             role,
-            self.store.session_title(node),
+            self.store.session_title(place),
             division_lead=leads,
         )
 
@@ -683,33 +687,33 @@ class Teams(Delivery):
                 base=base,
             )
 
-        started = await self._when_there_is_room(node_id, start)
+        started = await self._when_there_is_room(place_id, start)
         self._runs().mark(TOLD, conversation_id, told)
         return started
 
-    async def _started_ic(self, node: SessionTeam | None) -> str | None:
+    async def _started_ic(self, place: SessionTeam | None) -> str | None:
         """The IC of ``node`` or, while that team has not started, of the
         nearest team above that has: the conversation a new agent is
         derived from."""
         store, launcher = self.store, self._require_launcher()
-        while node is not None:
-            ic = agent_conversation(node, "ic")
+        while place is not None:
+            ic = agent_conversation(place, "ic")
             if ic is not None and await launcher.started(UUID(ic)) is not None:
                 return ic
-            node = store.place(node.parent_id) if node.parent_id else None
+            place = store.place(place.parent_id) if place.parent_id else None
         return None
 
-    async def _launch_manager(self, node_id: str, task: str) -> None:
-        node = self.store.place(node_id)
-        if node is not None:
+    async def _launch_manager(self, place_id: str, task: str) -> None:
+        place = self.store.place(place_id)
+        if place is not None:
             # A Division Lead Manager is derived from the session's IC,
             # never from the Division Lead IC, whose role it would inherit.
             derived_from = await self._started_ic(
-                self.store.place(self._derived_from(node) or "")
-                if is_division_lead(node)
-                else node
+                self.store.place(self._derived_from(place) or "")
+                if is_division_lead(place)
+                else place
             )
-            await self._start_agent(node_id, "manager", derived_from, task)
+            await self._start_agent(place_id, "manager", derived_from, task)
 
     async def _do_brief(self, intent: Intent) -> None:
         if intent.payload["role"] == "ic":
@@ -722,13 +726,13 @@ class Teams(Delivery):
         await self._launch_manager(intent.node_id, intent.payload["task"])
 
     async def _do_start_team(self, intent: Intent) -> None:
-        node_id, task = intent.node_id, intent.payload["task"]
+        place_id, task = intent.node_id, intent.payload["task"]
         above = self.store.place(intent.payload["parent"] or "")
         parent_ic = await self._started_ic(above) or await self._template()
         checkout = intent.payload.get("checkout")
-        self._runs().mark(TASK, node_id, task)
-        self.progressed(node_id)
-        started = self.store.place(node_id)
+        self._runs().mark(TASK, place_id, task)
+        self.progressed(place_id)
+        started = self.store.place(place_id)
         left: list[str] = []
         # A session starts beside the team's own work: what is uncommitted
         # in the team's directory is not the session's.
@@ -746,28 +750,28 @@ class Teams(Delivery):
                         started.boundary.path,
                     )
         await self._start_agent(
-            node_id,
+            place_id,
             "ic",
             parent_ic,
             f"{task}\n\n{left_for_team(left)}" if left else task,
             checkout,
         )
         if above is not None and not opens:
-            await asyncio.to_thread(self._pass_down, above, node_id)
+            await asyncio.to_thread(self._pass_down, above, place_id)
         if opens and not is_division_lead(started):
-            self._checkout_for_session(node_id)
+            self._checkout_for_session(place_id)
         purpose = intent.payload.get("purpose", task)
-        self._enqueue(lambda: self._summarize(node_id, purpose, first=True), node_id)
+        self._enqueue(lambda: self._summarize(place_id, purpose, first=True), place_id)
 
-    def _checkout_for_session(self, node_id: str) -> None:
+    def _checkout_for_session(self, place_id: str) -> None:
         """Give the teams of a session that have not started the checkout
         of the team the session was opened at, as a team that is set up
         has the checkout of the team above."""
         store = self.store
-        top = store.place(node_id)
+        top = store.place(place_id)
         if top is None or not top.agents:
             return
-        teams = store.below(node_id)
+        teams = store.below(place_id)
         for team in teams:
             if not team.agents:
                 store.update_place(
@@ -775,10 +779,10 @@ class Teams(Delivery):
                 )
                 teams.extend(store.below(team.id))
 
-    def _pass_down(self, above: SessionTeam, node_id: str) -> None:
+    def _pass_down(self, above: SessionTeam, place_id: str) -> None:
         """Close a started team's directory to the IC above, and bring what
         that IC left uncommitted there into the team's own checkout."""
-        team = self.store.place(node_id)
+        team = self.store.place(place_id)
         if team is None or not team.worktree_path:
             return
         with suppress(GitError, OSError):
@@ -791,19 +795,19 @@ class Teams(Delivery):
         try:
             bring_over(source, target, team.boundary.path, f"{LEFT_REFS}/{team.id}")
         except (GitError, OSError):
-            logger.exception("Could not pass what was left to node %s", team.id)
+            logger.exception("Could not pass what was left to team %s", team.id)
 
     def note_hand_over(
-        self, node_id: str, *, team: str | None = None, spec: bool = False
+        self, place_id: str, *, team: str | None = None, spec: bool = False
     ) -> None:
         """Keep what a team's hand-over conversation did, for its IC to be
         told when it ends. Safe from any thread."""
         run = self._runs()
-        kept = run.marked(HANDING).get(node_id)
+        kept = run.marked(HANDING).get(place_id)
         if kept is None:
             return
         done = json.loads(kept)
         if team is not None and team not in done["given"]:
             done["given"].append(team)
         done["spec"] = done["spec"] or spec
-        run.mark(HANDING, node_id, json.dumps(done))
+        run.mark(HANDING, place_id, json.dumps(done))

@@ -26,7 +26,7 @@ from openhands.agent_server.director.service import (
 )
 from openhands.agent_server.director.tools import (
     ApproveTeamsTool,
-    MsgManagerTool,
+    ProposeTeamsTool,
     PruneTeamTool,
     ReviewTeamTool,
     SettleTeamsTool,
@@ -37,7 +37,7 @@ from openhands.sdk.conversation.state import ConversationExecutionStatus
 from tests.agent_server.director.conftest import (
     FakeLauncher,
     former_of,
-    make_node,
+    make_team,
     memory_of,
     open_session_in,
     run_git,
@@ -185,7 +185,7 @@ async def test_what_an_agent_decides_while_the_org_is_paused_is_done_after_resum
     repo: Path, launcher: FakeLauncher
 ):
     service = await started(repo, launcher)
-    await use(service, ic(service), MsgManagerTool, SPLIT)
+    await use(service, ic(service), ProposeTeamsTool, SPLIT)
 
     await service.pause()
     answer = await use(service, manager(service), ApproveTeamsTool, APPROVE)
@@ -213,7 +213,7 @@ async def test_a_server_stopped_while_teams_wait_starts_them_in_order_once_resum
     first = await started(repo, launcher, run_limit_retry=3600)
     await woken(first)
     launcher.full_for = 1_000_000
-    await use(first, ic(first), MsgManagerTool, split("a", 3))
+    await use(first, ic(first), ProposeTeamsTool, split("a", 3))
     await use(first, manager(first), ApproveTeamsTool, APPROVE)
     top = place(first)
     for team in first.store.below(top):
@@ -257,7 +257,7 @@ async def test_a_team_start_cut_off_by_a_crash_is_finished_without_a_second_of_a
     repo: Path, launcher: FakeLauncher
 ):
     first = await started(repo, launcher)
-    await use(first, ic(first), MsgManagerTool, SPLIT)
+    await use(first, ic(first), ProposeTeamsTool, SPLIT)
     await use(first, manager(first), ApproveTeamsTool, APPROVE)
     # The server ends as the first sub-team's IC has just been started.
     ended = end_server_at(launcher, "derived")
@@ -342,7 +342,7 @@ async def test_the_end_of_a_split_cut_off_by_a_crash_is_told_once(
     repo: Path, launcher: FakeLauncher
 ):
     first = await started(repo, launcher)
-    await use(first, ic(first), MsgManagerTool, SPLIT)
+    await use(first, ic(first), ProposeTeamsTool, SPLIT)
     ended = end_server_at_message(launcher, "Your team was split")
     await cut_off(
         launcher, ended, use(first, manager(first), ApproveTeamsTool, APPROVE)
@@ -641,9 +641,9 @@ def test_a_worktree_that_is_gone_is_made_again_from_its_branch(repo: Path):
     store = OrgStore()
     store.replace_all(
         [
-            make_node("root", None, path=""),
-            make_node("api", "root"),
-            make_node("web", "root"),
+            make_team("root", None, path=""),
+            make_team("api", "root"),
+            make_team("web", "root"),
         ]
     )
     open_session_in(store, checkout=str(repo))
@@ -705,7 +705,7 @@ def test_run_state_of_a_newer_director_is_refused(tmp_path: Path):
 
 def test_run_state_stays_out_of_the_repository(repo: Path):
     service = DirectorService(repo)
-    service.store.replace_all([make_node("root", None)])
+    service.store.replace_all([make_team("root", None)])
 
     assert service.summary().paused is None
     assert run_git(repo, "status", "--porcelain") == ""

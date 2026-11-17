@@ -18,15 +18,16 @@ from openhands.agent_server.director.prompts import (
     track_records,
 )
 from openhands.agent_server.director.service import DirectorService
+from openhands.agent_server.director.split import ProposedTeam
 from openhands.agent_server.director.tools import (
     ApproveTeamsTool,
-    MsgManagerTool,
+    ProposeTeamsTool,
     PruneTeamTool,
     ReviewTeamTool,
     SubmitReviewTool,
 )
 from openhands.agent_server.director.tools.definition import (
-    MsgManagerAction,
+    ProposeTeamsAction,
     PruneTeamAction,
     ReviewTeamAction,
 )
@@ -59,7 +60,7 @@ from tests.agent_server.director.test_director_tools import (
 
 
 API, WEB = "services.api", "apps.web"
-PRUNE = PruneTeamAction(node_id=API, reason="It holds everything up.")
+PRUNE = PruneTeamAction(team=API, reason="It holds everything up.")
 
 
 @pytest.fixture
@@ -145,7 +146,7 @@ def record_of_api(service: DirectorService) -> dict:
     [api] = [
         record
         for record in track_records(record_of(service, "root"))
-        if record["node_id"] == API
+        if record["team_id"] == API
     ]
     return api
 
@@ -194,18 +195,18 @@ async def test_a_manager_may_prune_a_team_with_nothing_against_it(
     assert [team_id_of(team) for team in sub_teams(service)] == [WEB]
 
 
-ORDERS = """\
-One team for the orders, apart from the pages.
-
-```teams
-reason: Orders and pages change for different reasons.
-keep: [Web]
-teams:
-  - name: Orders
-    path: services/api
-    instruction: Keep the orders.
-    reason: The order rules are a concern of their own.
-```"""
+ORDERS = ProposeTeamsAction(
+    text="Orders and pages change for different reasons.",
+    keep=["Web"],
+    teams=[
+        ProposedTeam(
+            name="Orders",
+            path="services/api",
+            instruction="Keep the orders.",
+            reason="The order rules are a concern of their own.",
+        )
+    ],
+)
 
 
 async def test_a_manager_is_told_what_the_runtime_knows_of_proposed_teams(
@@ -217,7 +218,7 @@ async def test_a_manager_is_told_what_the_runtime_knows_of_proposed_teams(
     await use(service, manager(service), PruneTeamTool, PRUNE)
     await service.settled()
 
-    await use(service, ic(service), MsgManagerTool, MsgManagerAction(text=ORDERS))
+    await use(service, ic(service), ProposeTeamsTool, ORDERS)
 
     told = launcher.messages_to(manager(service))[-1]
     assert "What the runtime knows of them:" in told
@@ -254,7 +255,7 @@ async def test_directories_that_were_changed_together_are_pointed_out(
     for number in range(3):
         both(repo, number)
 
-    await use(service, ic(service), MsgManagerTool, SPLIT)
+    await use(service, ic(service), ProposeTeamsTool, SPLIT)
 
     told = launcher.messages_to(manager(service))[-1]
     # Fewer than three says nothing: a first commit holds everything.
@@ -268,7 +269,7 @@ async def test_directories_that_were_changed_together_are_pointed_out(
 async def test_what_an_ic_proposed_and_what_was_approved_is_kept(
     service: DirectorService,
 ):
-    await use(service, ic(service), MsgManagerTool, MsgManagerAction(text=ORDERS))
+    await use(service, ic(service), ProposeTeamsTool, ORDERS)
     await use(service, manager(service), ApproveTeamsTool, APPROVE)
     await service.settled()
 
@@ -315,11 +316,10 @@ def test_teams_that_needed_each_other_are_counted_as_a_pair_while_both_are_there
 
     assert counted == [
         {
-            "node_ids": ["a", "b"],
+            "team_ids": ["a", "b"],
             "teams": ["a", "b"],
             "writes_refused": 2,
             "review_findings": 1,
-            "requests": 0,
         }
     ]
 
@@ -383,7 +383,7 @@ async def test_an_ic_is_told_of_teams_that_keep_needing_each_other(
         service,
         ic(service),
         ReviewTeamTool,
-        ReviewTeamAction(node_id=API, decision="reject", findings=[finding]),
+        ReviewTeamAction(team=API, decision="reject", findings=[finding]),
     )
     await use(service, ic(service, API), SubmitReviewTool, DONE)
     # A review is asked for once every team below has submitted.
@@ -391,7 +391,7 @@ async def test_an_ic_is_told_of_teams_that_keep_needing_each_other(
     await use(service, ic(service, WEB), SubmitReviewTool, DONE)
 
     words = (
-        "needed each other's directory 3 times (2 writes refused, 1 review "
+        "needed each other's folder 3 times (2 writes refused, 1 review "
         "finding): weigh whether the two are one concern"
     )
     asked = "\n".join(requests(service, launcher))
@@ -410,10 +410,10 @@ async def test_a_manager_is_told_how_often_teams_replaced_together_needed_each_o
         SplitChild(title="Apps", path="apps", task="Show the shop"),
     ]
 
-    await use(service, ic(service), MsgManagerTool, proposing(redrawn))
+    await use(service, ic(service), ProposeTeamsTool, proposing(redrawn))
 
     told = launcher.messages_to(manager(service))[-1]
     assert (
-        "- 'API' and 'Web' needed each other's directory 1 time (1 write "
+        "- 'API' and 'Web' needed each other's folder 1 time (1 write "
         "refused): weigh whether the two are one concern."
     ) in told

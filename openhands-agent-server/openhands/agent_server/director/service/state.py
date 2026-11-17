@@ -126,7 +126,7 @@ logger = logging.getLogger(__name__)
 
 ROOT_ID = "root"
 _TOOLS_OF_BOTH = (
-    "read_node_context",
+    "read_team_context",
     "raise_escalation",
     "resolve_escalation",
     "report",
@@ -138,6 +138,7 @@ TOOLS_OF: dict[AgentRole, tuple[str, ...]] = {
         *_TOOLS_OF_BOTH,
         "write_spec",
         "msg_manager",
+        "propose_teams",
         "msg_team",
         "hand_over",
         "stop_team",
@@ -152,18 +153,18 @@ TOOLS_OF: dict[AgentRole, tuple[str, ...]] = {
         "prune_team",
     ),
 }
-HAND_OVER_TOOLS = ("read_node_context", "hand_over", "write_spec")
+HAND_OVER_TOOLS = ("read_team_context", "hand_over", "write_spec")
 # What an IC has of the director's tools where it only reviews the work of
 # a session.
-DIVISION_LEAD_IC_TOOLS = ("read_node_context", "report", "review_team")
+DIVISION_LEAD_IC_TOOLS = ("read_team_context", "report", "review_team")
 # What a Manager has there: it settles the sub-teams a session and the org
 # each made something else of.
-DIVISION_LEAD_MANAGER_TOOLS = ("read_node_context", "report", "settle_teams")
+DIVISION_LEAD_MANAGER_TOOLS = ("read_team_context", "report", "settle_teams")
 
 
-def tools_of(node: SessionTeam, role: AgentRole) -> tuple[str, ...]:
+def tools_of(place: SessionTeam, role: AgentRole) -> tuple[str, ...]:
     """The director's tools an agent of ``node`` is offered."""
-    if is_division_lead(node):
+    if is_division_lead(place):
         return DIVISION_LEAD_IC_TOOLS if role == "ic" else DIVISION_LEAD_MANAGER_TOOLS
     return TOOLS_OF[role]
 
@@ -172,7 +173,7 @@ DIRECTOR_TOOL_NAMES = tuple(
     dict.fromkeys((*TOOLS_OF["ic"], *TOOLS_OF["manager"], *DIVISION_LEAD_MANAGER_TOOLS))
 )
 # How a team that was set up and given no task reads to the IC above.
-NOT_STARTED = "not started"
+NOT_STARTED = "not_started"
 # What follows a team's purpose in its task once something started it.
 _STARTED_WITH = "\n\nWhat your team is started with:\n"
 # How many of the latest events of its sub-teams an agent reads at once.
@@ -270,17 +271,17 @@ class _Held(Exception):
     """The org was paused before a step could be finished."""
 
 
-def agent_conversation(node: SessionTeam, role: AgentRole) -> str | None:
-    """The conversation of the node's agent in ``role``, if it has one."""
-    for agent in node.agents:
+def agent_conversation(place: SessionTeam, role: AgentRole) -> str | None:
+    """The conversation of the team's agent in ``role``, if it has one."""
+    for agent in place.agents:
         if agent.role == role:
             return agent.conversation_id
     return None
 
 
-def hand_over_of(node: SessionTeam) -> HandOverMode | None:
-    """The hand-over mode of the node's IC, if it is or was in it."""
-    for agent in node.agents:
+def hand_over_of(place: SessionTeam) -> HandOverMode | None:
+    """The hand-over mode of the team's IC, if it is or was in it."""
+    for agent in place.agents:
         if agent.role == "ic":
             return agent.hand_over
     return None
@@ -397,7 +398,7 @@ class ServiceState:
         # they waited: each tries to start only when it is the first.
         self._line: deque[str] = deque()
         self._line_moved = asyncio.Event()
-        # The records of removed teams by the node they were below, as read
+        # The records of removed teams by the team they were below, as read
         # at one state of team memory.
         self._former_read: tuple[str | None, dict[str, list[FormerTeam]]] | None = None
         self._routed_read: tuple[str | None, list[RoutedRequest]] | None = None
@@ -662,16 +663,16 @@ class ServiceState:
     def _merging_root(self) -> Path:
         return self._shells().parent / _MERGING_DIR
 
-    def merge_checkout(self, node_id: str) -> MergeCheckout | None:
+    def merge_checkout(self, place_id: str) -> MergeCheckout | None:
         """The merge of a team's work that its reviewer finishes."""
-        kept = self._runs().marked(MERGING).get(node_id)
+        kept = self._runs().marked(MERGING).get(place_id)
         return MergeCheckout.model_validate_json(kept) if kept else None
 
-    def _drop_merge_checkout(self, node_id: str) -> None:
-        merge = self.merge_checkout(node_id)
+    def _drop_merge_checkout(self, place_id: str) -> None:
+        merge = self.merge_checkout(place_id)
         if merge is not None:
             discard(self._repo_dir, Path(merge.where))
-            self._runs().unmark(MERGING, node_id)
+            self._runs().unmark(MERGING, place_id)
 
     def _enforcement(self, kind: AgentKind) -> TeamEnforcement:
         if self._bwrap is not None:
@@ -735,12 +736,12 @@ class ServiceState:
         """Count the time teams show no progress from now: the time an org
         was paused, or its server was not running, is nobody's."""
         now = self._clock().isoformat()
-        for node_id, kept in run.marked(PROGRESS).items():
+        for place_id, kept in run.marked(PROGRESS).items():
             seen = _progress_of(kept)
             # A team without a task was told of once, and stays told.
             told = {"told": now} if "told" in seen else {}
             again = {"at": now, "head": seen.get("head")}
-            run.mark(PROGRESS, node_id, json.dumps(again | told))
+            run.mark(PROGRESS, place_id, json.dumps(again | told))
 
     def _repository(self) -> Path:
         """The repository the org is in, or would be in.
@@ -852,7 +853,7 @@ class ServiceState:
         return "" if relative == "." else relative
 
     def _confine(
-        self, node_id: str, role: AgentRole, hand_over: str | None = None
+        self, place_id: str, role: AgentRole, hand_over: str | None = None
     ) -> ToolParams | None:
         """Write the shell an agent's terminal starts.
 
@@ -864,11 +865,11 @@ class ServiceState:
             What to start the agent's terminal with, or None when it needs
             no shell of its own.
         """
-        node = self.store.place(node_id)
+        place = self.store.place(place_id)
         conversation_id = hand_over or (
-            agent_conversation(node, role) if node else None
+            agent_conversation(place, role) if place else None
         )
-        if node is None or conversation_id is None:
+        if place is None or conversation_id is None:
             return None
         # An IC writes in its boundary from its main conversation alone.
         writes = role == "ic" and hand_over is None
@@ -878,7 +879,7 @@ class ServiceState:
             return None
         shells = self._shells()
         git_dir = str(shells.parent)
-        children = self.store.below(node_id)
+        children = self.store.below(place_id)
         sub_teams = [child.boundary.path for child in children]
         # Its git commits nothing in a sub-team's directory; it may still
         # write in that of a team that has not started.
@@ -886,7 +887,7 @@ class ServiceState:
         rc: Path | None = None
         bin_dir: Path | None = None
         if own_git and real_git:
-            directory = node.boundary.path
+            directory = place.boundary.path
             rc = shells / f"{conversation_id}.rc"
             bin_dir = shells / f"{conversation_id}.bin"
             excludes = shells / f"{conversation_id}.exclude"
@@ -914,7 +915,7 @@ class ServiceState:
                 bash or "/bin/sh",
                 checkouts=self._checkouts(),
                 private=shells,
-                directory=node.boundary.path if writes else None,
+                directory=place.boundary.path if writes else None,
                 sub_team_directories=closed,
                 rcfile=rc,
             ),
@@ -927,7 +928,7 @@ class ServiceState:
                 self._bwrap,
                 checkouts=self._checkouts(),
                 private=shells,
-                directory=node.boundary.path if writes else None,
+                directory=place.boundary.path if writes else None,
                 sub_team_directories=closed,
                 first_on_path=bin_dir,
             ),
@@ -941,7 +942,7 @@ class ServiceState:
                 try:
                     self._confine(node.id, agent.role)
                 except (GitError, OSError):
-                    logger.exception("Could not write the shell of node %s", node.id)
+                    logger.exception("Could not write the shell of team %s", node.id)
 
     def _require_launcher(self) -> TeamLauncher:
         if self._launcher is None:
@@ -969,7 +970,7 @@ class ServiceState:
         while repository is not None and is_git_repository(repository):
             if load_org(create_org_board(repository), store):
                 self._repo_dir = _checkout_root(str(repository))
-                logger.info("Director loaded %d nodes from %s", len(store), repository)
+                logger.info("Director loaded %d teams from %s", len(store), repository)
                 kept = self._open_run_state()
                 try:
                     restore_sessions(store, kept.marked(SESSION))
@@ -1073,7 +1074,7 @@ class ServiceState:
         self._put(carried_out, BASE_LANE)
         await done
 
-    def _begin(self, kind: str, node_id: str, **payload: object) -> None:
+    def _begin(self, kind: str, place_id: str, **payload: object) -> None:
         """Record something of several steps the director does for a team,
         then do it. Safe from any thread.
 
@@ -1082,7 +1083,7 @@ class ServiceState:
         """
         if self._loop is None:
             raise Unavailable("The director is not running agents on this server")
-        intent = self._runs().begin(kind, node_id, payload)
+        intent = self._runs().begin(kind, place_id, payload)
         self._save_soon()
         self._enqueue(lambda: self._carry_out(intent.id), _lane_for(intent))
 
@@ -1119,9 +1120,9 @@ class ServiceState:
             self._in_flight.discard(intent.id)
             self._leave_line(intent.node_id)
 
-    def _leave_line(self, node_id: str) -> None:
-        if node_id in self._line:
-            self._line.remove(node_id)
+    def _leave_line(self, place_id: str) -> None:
+        if place_id in self._line:
+            self._line.remove(place_id)
             moved, self._line_moved = self._line_moved, asyncio.Event()
             moved.set()
 

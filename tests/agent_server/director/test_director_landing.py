@@ -251,31 +251,40 @@ async def test_the_human_is_asked_when_their_uncommitted_work_is_in_the_way(
     assert review is not None and review.state == "accepted"
 
 
-async def test_a_team_a_session_set_up_is_asked_within_that_session_only(
+async def test_what_a_team_needs_of_another_goes_to_the_ic_above_both(
     service: DirectorService, launcher: FakeLauncher
 ):
     await split_root(service)
-    launcher.answers[USAGE_ID] = "Teams: apps.web\nReason: The cart page is Web's."
     need = RaiseEscalationAction(
         category="design_decision",
         title="The cart must send the order id",
-        detail="POST /checkout needs it.",
-        team_for="The cart page should send order_id with the form.",
+        detail="POST /checkout needs it of the cart page, which is Web's.",
     )
 
     await use(service, ic(service, "services.api"), RaiseEscalationTool, need)
     await service.settled()
 
-    # The org does not have Web yet; the session that set it up does.
-    assert service.store.team("apps.web") is None
     [raised] = node(service, "services.api").escalations
-    assert raised.asked_of == node(service, "apps.web").id
+    assert raised.held_by == node(service, "root").id
     assert (
-        "asks your team directly" in launcher.messages_to(ic(service, "apps.web"))[-1]
+        "escalates 'The cart must send the order id'"
+        in launcher.messages_to(ic(service))[-1]
+    )
+    # The team it concerns hears of it only from the IC above both.
+    assert not any(
+        "The cart must send" in told
+        for told in launcher.messages_to(ic(service, "apps.web"))
     )
 
-    # A new request of the human's is for the org's own teams: it cannot
-    # go to a team only a session has.
+
+async def test_a_new_request_cannot_go_to_a_team_only_a_session_has(
+    service: DirectorService, launcher: FakeLauncher
+):
+    await split_root(service)
+    launcher.answers[USAGE_ID] = "Teams: apps.web\nReason: The cart page is Web's."
+
+    # The org does not have Web yet; the session that set it up does.
+    assert service.store.team("apps.web") is None
     sent = await service.route_message(
         RouteMessageRequest(text="Make the cart page faster.", auto=True)
     )
@@ -732,7 +741,7 @@ async def test_what_a_reviewer_reconciled_holds_only_for_what_it_was_shown(
     await use(service, conversation, WriteSpecTool, WriteSpecAction(text="# Refunds"))
     service.team_memory.write("services/api", "spec.md", "# Orders")
     await use(service, conversation, SubmitReviewTool, DONE)
-    decided = ReviewTeamAction(node_id=top, decision="accept", reconciled="Refunds.")
+    decided = ReviewTeamAction(team=top, decision="accept", reconciled="Refunds.")
 
     # Saying it is reconciled before being shown anything settles nothing.
     unseen = await use(service, division_lead_ic(service, top), ReviewTeamTool, decided)
@@ -983,7 +992,7 @@ async def test_work_that_is_sent_back_waits_for_no_manager(
         service,
         division_lead_ic(service, top),
         ReviewTeamTool,
-        ReviewTeamAction(node_id=top, decision="reject", findings=[FINDING]),
+        ReviewTeamAction(team=top, decision="reject", findings=[FINDING]),
     )
 
     assert merge_of(service, top) is None
@@ -1014,7 +1023,7 @@ async def test_work_that_is_sent_back_joins_the_end_and_keeps_what_was_decided(
         service,
         division_lead_ic(service, top),
         ReviewTeamTool,
-        ReviewTeamAction(node_id=top, decision="reject", findings=[FINDING]),
+        ReviewTeamAction(team=top, decision="reject", findings=[FINDING]),
     )
     back = launcher.messages_to(conversation)[-1]
     heard = len(launcher.messages_to(asked))
@@ -1065,7 +1074,7 @@ async def test_a_reviewer_writes_the_spec_that_holds(service: DirectorService):
 
     def decided(path: str, take: str, text: str = "") -> ReviewTeamAction:
         return ReviewTeamAction(
-            node_id=top,
+            team=top,
             decision="accept",
             reconciled="Both.",
             specs=[
@@ -1086,7 +1095,7 @@ async def test_a_reviewer_writes_the_spec_that_holds(service: DirectorService):
         ReviewTeamTool,
         decided("services/api", "text"),
     )
-    assert elsewhere.is_error and "not a directory of this work" in elsewhere.text
+    assert elsewhere.is_error and "not a folder of this work" in elsewhere.text
     assert empty.is_error and "in `text`" in empty.text
 
     written = await use(
@@ -1114,7 +1123,7 @@ async def test_a_reviewer_keeps_the_orgs_spec(service: DirectorService):
         division_lead_ic(service, top),
         ReviewTeamTool,
         ReviewTeamAction(
-            node_id=top,
+            team=top,
             decision="accept",
             reconciled="Theirs.",
             specs=[SpecChoice(path="services/api", take="org")],
@@ -1201,7 +1210,7 @@ async def test_a_spec_written_for_a_team_the_org_lost_is_left_to_the_team_that_h
         division_lead_ic(service, top),
         ReviewTeamTool,
         ReviewTeamAction(
-            node_id=top,
+            team=top,
             decision="accept",
             reconciled="Kept what holds.",
             specs=[SpecChoice(path="", take="text", text="# Checkout, with refunds")]

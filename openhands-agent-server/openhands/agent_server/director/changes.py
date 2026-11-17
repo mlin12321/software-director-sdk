@@ -28,28 +28,28 @@ MAX_FILE_BYTES = 1_000_000
 _KINDS: dict[str, ChangeKind] = {"A": "added", "D": "deleted"}
 
 
-def checkout_top(node: SessionTeam) -> Path:
+def checkout_top(place: SessionTeam) -> Path:
     """The top of the checkout the team works in, symlinks resolved."""
-    workspace = Path(node.worktree_path)
+    workspace = Path(place.worktree_path)
     try:
         top = top_of(workspace)
     except (GitError, OSError) as error:
-        raise NotFound(f"Team {node.id} has no checkout on this server") from error
+        raise NotFound(f"Team {place.id} has no checkout on this server") from error
     return Path(os.path.realpath(top))
 
 
-def team_changes(node: SessionTeam) -> TeamChanges:
+def team_changes(place: SessionTeam) -> TeamChanges:
     """The files in the team's directory that differ from where its work
     started or was last accepted, uncommitted and new files included.
 
     Raises:
         NotFound: The team's checkout is not on this server.
     """
-    top = checkout_top(node)
-    base = node.base_commit
+    top = checkout_top(place)
+    base = place.base_commit
     if not base:
-        return TeamChanges(node_id=node.id, base="", files=[], truncated=False)
-    spec = pathspec(node.boundary.path)
+        return TeamChanges(node_id=place.id, base="", files=[], truncated=False)
+    spec = pathspec(place.boundary.path)
     try:
         kinds = _fields(
             git(top, ["diff", "--name-status", "--no-renames", "-z", base, "--", spec])
@@ -62,7 +62,7 @@ def team_changes(node: SessionTeam) -> TeamChanges:
         )
     except (GitError, OSError) as error:
         raise NotFound(
-            f"Team {node.id}'s changes since {base[:12]} cannot be read"
+            f"Team {place.id}'s changes since {base[:12]} cannot be read"
         ) from error
     lines: dict[str, tuple[int | None, int | None]] = {}
     for entry in counts:
@@ -100,14 +100,14 @@ def team_changes(node: SessionTeam) -> TeamChanges:
         files[path] = files[path].model_copy(update={"committed": False})
     listed = sorted(files.values(), key=lambda file: file.path)
     return TeamChanges(
-        node_id=node.id,
+        node_id=place.id,
         base=base,
         files=listed[:MAX_CHANGED_FILES],
         truncated=len(listed) > MAX_CHANGED_FILES,
     )
 
 
-def file_sides(node: SessionTeam, path: str) -> FileSides:
+def file_sides(place: SessionTeam, path: str) -> FileSides:
     """One file of the team's directory as it was at the team's base and as
     it is in its checkout now.
 
@@ -117,11 +117,11 @@ def file_sides(node: SessionTeam, path: str) -> FileSides:
         NotFound: The team's checkout is not on this server.
     """
     path = _clean(path)
-    if not owns(node, path):
-        raise Forbidden(f"{path!r} is not in the directory of team {node.title!r}")
-    top = checkout_top(node)
+    if not owns(place, path):
+        raise Forbidden(f"{path!r} is not in the folder of team {place.title!r}")
+    top = checkout_top(place)
     target = _within(top, path)
-    before, before_unread = _committed(top, node.base_commit, path)
+    before, before_unread = _committed(top, place.base_commit, path)
     after, after_unread = _on_disk(target)
     return FileSides(
         path=path,
@@ -132,30 +132,30 @@ def file_sides(node: SessionTeam, path: str) -> FileSides:
 
 
 def edit_refusal(
-    node: SessionTeam, sub_teams: list[SessionTeam], path: str
+    place: SessionTeam, sub_teams: list[SessionTeam], path: str
 ) -> str | None:
     """Why a person may not change ``path`` through this team, if not."""
-    directory = node.boundary.path or "the repository"
+    directory = place.boundary.path or "the repository"
     if path == ".git" or path.startswith(".git/"):
         return f"{path!r} belongs to git."
-    if not owns(node, path):
-        return (
-            f"{path!r} is outside the directory of team {node.title!r} ({directory})."
-        )
+    if not owns(place, path):
+        return f"{path!r} is outside the folder of team {place.title!r} ({directory})."
     for sub_team in sub_teams:
         if owns(sub_team, path):
             return (
                 f"{path!r} belongs to the sub-team {sub_team.title!r}. "
                 "Change it in that team."
             )
-    if any(glob_matches(glob, path) for glob in node.boundary.readonly):
-        return f"{path!r} is read-only for team {node.title!r}."
-    if not any(glob_matches(glob, path) for glob in node.boundary.writable):
-        return f"{path!r} is not among the files team {node.title!r} may write."
+    if any(glob_matches(glob, path) for glob in place.boundary.readonly):
+        return f"{path!r} is read-only for team {place.title!r}."
+    if not any(glob_matches(glob, path) for glob in place.boundary.writable):
+        return f"{path!r} is not among the files team {place.title!r} may write."
     return None
 
 
-def require_editable(node: SessionTeam, sub_teams: list[SessionTeam], path: str) -> str:
+def require_editable(
+    place: SessionTeam, sub_teams: list[SessionTeam], path: str
+) -> str:
     """``path`` in its plain form, when a person may change it through
     this team.
 
@@ -164,14 +164,14 @@ def require_editable(node: SessionTeam, sub_teams: list[SessionTeam], path: str)
         Forbidden: The team's agents may not write the file either.
     """
     path = _clean(path)
-    refusal = edit_refusal(node, sub_teams, path)
+    refusal = edit_refusal(place, sub_teams, path)
     if refusal is not None:
         raise Forbidden(refusal)
     return path
 
 
 def write_by_hand(
-    node: SessionTeam, sub_teams: list[SessionTeam], path: str, content: str
+    place: SessionTeam, sub_teams: list[SessionTeam], path: str, content: str
 ) -> FileEdit:
     """Write one file in the team's checkout and commit it alone.
 
@@ -183,11 +183,11 @@ def write_by_hand(
         Forbidden: The team's agents may not write the file either.
         NotFound: The team's checkout is not on this server.
     """
-    path = require_editable(node, sub_teams, path)
-    top = checkout_top(node)
+    path = require_editable(place, sub_teams, path)
+    top = checkout_top(place)
     target = _within(top, path)
     if target.is_dir():
-        raise Invalid(f"{path!r} is a directory")
+        raise Invalid(f"{path!r} is a folder")
     spec = pathspec(path)
     try:
         git(top, ["check-ignore", "--quiet", "--", path])

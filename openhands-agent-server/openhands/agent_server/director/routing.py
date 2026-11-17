@@ -145,9 +145,9 @@ def names_at_top(
     return sorted(names)[:MAX_NAMES]
 
 
-def _line_up(node_id: str, parents: Mapping[str, str | None]) -> list[str]:
+def _line_up(team_id: str, parents: Mapping[str, str | None]) -> list[str]:
     """A team and every team above it, nearest first."""
-    line = [node_id]
+    line = [team_id]
     while (above := parents.get(line[-1])) is not None:
         line.append(above)
     return line
@@ -157,7 +157,7 @@ def lowest_holding(
     node_ids: Collection[str], parents: Mapping[str, str | None]
 ) -> str | None:
     """The lowest team that is, or is above, every one of ``node_ids``."""
-    lines = [_line_up(node_id, parents) for node_id in node_ids]
+    lines = [_line_up(team_id, parents) for team_id in node_ids]
     if not lines:
         return None
     return next(
@@ -191,12 +191,12 @@ def word_scores(text: str, cards: Sequence[Card]) -> dict[str, float]:
     held = {card.node_id: _card_words(card) for card in cards}
     scores: dict[str, float] = {}
     for word in asked:
-        having = [node_id for node_id, words in held.items() if word in words]
+        having = [team_id for team_id, words in held.items() if word in words]
         if not having:
             continue
         weight = math.log(1 + len(cards) / len(having))
-        for node_id in having:
-            scores[node_id] = scores.get(node_id, 0.0) + weight
+        for team_id in having:
+            scores[team_id] = scores.get(team_id, 0.0) + weight
     return scores
 
 
@@ -220,10 +220,10 @@ def cards_to_show(text: str, cards: Sequence[Card]) -> list[Card]:
     # A team's card shares the words of the teams above it, so a team and
     # the teams below it often score alike. The higher team goes first, or
     # the sub-teams of one team crowd out the team beside it.
-    depth = {node_id: len(_line_up(node_id, parents)) for node_id in scores}
-    best = sorted(scores, key=lambda node_id: (-scores[node_id], depth[node_id]))
+    depth = {team_id: len(_line_up(team_id, parents)) for team_id in scores}
+    best = sorted(scores, key=lambda team_id: (-scores[team_id], depth[team_id]))
     best = best[:CARDS_KEPT]
-    kept = {above for node_id in best for above in _line_up(node_id, parents)}
+    kept = {above for team_id in best for above in _line_up(team_id, parents)}
     kept.update(card.node_id for card in cards if card.parent_id is None)
     return [card for card in cards if card.node_id in kept]
 
@@ -252,7 +252,7 @@ def outline(cards: Sequence[Card], *, turned: bool = False) -> str:
             pad = "  " * depth
             lines.append(
                 f"{pad}- id: {card.node_id} | {card.title} | "
-                f"directory: {card.directory or '. (the whole repository)'}"
+                f"folder: {card.directory or '. (the whole repository)'}"
             )
             if card.purpose:
                 lines.append(f"{pad}  for: {_clip(card.purpose, _MAX_PURPOSE_LENGTH)}")
@@ -351,10 +351,10 @@ def choose(
     def unsure(why: str) -> Choice:
         return Choice(start, "top", False, why, named_owners, tuple(answers), worded)
 
-    def sure(node_id: str, by: ChosenBy, why: str) -> Choice:
-        if start not in _line_up(node_id, parents):
+    def sure(team_id: str, by: ChosenBy, why: str) -> Choice:
+        if start not in _line_up(team_id, parents):
             return unsure("the choice is not below where the request was made")
-        return Choice(node_id, by, True, why, named_owners, tuple(answers), worded)
+        return Choice(team_id, by, True, why, named_owners, tuple(answers), worded)
 
     by_name = settled(named_owners) if named_owners else None
     given = [answer for answer in answers if answer is not None]

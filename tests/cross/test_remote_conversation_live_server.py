@@ -3533,6 +3533,12 @@ def _scripted_org_llm(
     scripted = {"API": api_ic or [], "Web": web_ic or [], "Checkout": top_ic or []}
 
     def tool_call(name: str, arguments: dict) -> dict:
+        # A value the script can know only when the call is made is given
+        # as a function.
+        arguments = {
+            key: value() if callable(value) else value
+            for key, value in arguments.items()
+        }
         return {
             "role": "assistant",
             "content": None,
@@ -3592,11 +3598,11 @@ def _scripted_org_llm(
         if asked:
             # One call a turn: the teams of the request, in its order.
             request = text_of(messages[asked[-1]])
-            waiting = re.findall(r"`review_team` for node (\S+):", request)
+            waiting = re.findall(r"`review_team` for team (\S+):", request)
             reviewed = sum(m.role == "tool" for m in messages[asked[-1] :])
             if reviewed < len(waiting):
                 return tool_call(
-                    "review_team", {"node_id": waiting[reviewed], "decision": "accept"}
+                    "review_team", {"team": waiting[reviewed], "decision": "accept"}
                 )
         if last.role == "user" and "in hand-over mode" in text:
             return {"role": "assistant", "content": "Nothing to pass on."}
@@ -3604,18 +3610,25 @@ def _scripted_org_llm(
             return tool_call("submit_review", {"summary": "Shown, not served."})
         if last.role == "user" and "You are the IC of the team 'Checkout'" in text:
             return tool_call(
-                "msg_manager",
+                "propose_teams",
                 {
-                    "text": "Two teams can build this side by side.\n\n"
-                    "```teams\n"
-                    "contracts: POST /checkout returns an order id\n"
-                    "teams:\n"
-                    "  - {name: API, path: services/api, instruction: Serve it}\n"
-                    "  - {name: Web, path: apps/web, instruction: Show it}\n"
-                    "```"
+                    "text": "Two teams can build this side by side.",
+                    "contracts": "POST /checkout returns an order id",
+                    "teams": [
+                        {
+                            "name": "API",
+                            "path": "services/api",
+                            "instruction": "Serve it",
+                        },
+                        {"name": "Web", "path": "apps/web", "instruction": "Show it"},
+                    ],
                 },
             )
-        if last.role == "user" and "Your IC writes:" in text and "```teams" in text:
+        if (
+            last.role == "user"
+            and "Your IC writes:" in text
+            and "Proposed sub-teams:" in text
+        ):
             return tool_call("approve_teams", {})
         if last.role == "user" and "The IC of team 'API'" in text:
             return tool_call(
@@ -3626,7 +3639,7 @@ def _scripted_org_llm(
             return tool_call(
                 "prune_team",
                 {
-                    "node_id": "services.api",
+                    "team": "services.api",
                     "reason": "The file grew past what one agent can hold.",
                 },
             )
@@ -3729,7 +3742,7 @@ def test_director_runs_an_org_whose_root_splits_into_sub_teams(
             top["id"],
         )
         [proposal] = thread["messages"]
-        assert proposal["sender"] == "ic" and "```teams" in proposal["text"]
+        assert proposal["sender"] == "ic" and "Proposed sub-teams:" in proposal["text"]
         # A team starts with its IC; its Manager came with the proposal.
         [first] = opened["session"]["teams"][0]["agents"]
         assert (first["role"], first["conversation_id"]) == (
@@ -3938,8 +3951,6 @@ def test_director_has_submitted_work_reviewed_once_all_teams_submitted(
             "accepted",
             True,
         )
-        pulled = client.post("/api/director/org/memory/pull")
-        assert pulled.status_code == 404, pulled.text
 
 
 def test_director_opens_a_session_beside_a_team_and_closes_it(
@@ -4172,6 +4183,18 @@ def test_director_starts_an_org_from_a_message_and_holds_teams_to_their_director
     server_env, monkeypatch: pytest.MonkeyPatch
 ):
     repo = server_env["workspace_path"]
+
+    def checkout() -> Path:
+        """The worktree the session works in."""
+        listed = run_git_command(["git", "worktree", "list", "--porcelain"], repo)
+        [other] = [
+            Path(line.removeprefix("worktree "))
+            for line in listed.splitlines()
+            if line.startswith("worktree ")
+            and Path(line.removeprefix("worktree ")).resolve() != repo.resolve()
+        ]
+        return other
+
     _scripted_org_llm(
         monkeypatch,
         api_ic=[
@@ -4179,7 +4202,7 @@ def test_director_starts_an_org_from_a_message_and_holds_teams_to_their_director
                 "file_editor",
                 {
                     "command": "create",
-                    "path": str(repo / "by-editor.txt"),
+                    "path": lambda: str(checkout() / "by-editor.txt"),
                     "file_text": "x",
                 },
             ),
@@ -4187,7 +4210,9 @@ def test_director_starts_an_org_from_a_message_and_holds_teams_to_their_director
                 "file_editor",
                 {
                     "command": "create",
-                    "path": str(repo / "services" / "api" / "by-editor.txt"),
+                    "path": lambda: str(
+                        checkout() / "services" / "api" / "by-editor.txt"
+                    ),
                     "file_text": "x",
                 },
             ),
@@ -4221,11 +4246,6 @@ def test_director_starts_an_org_from_a_message_and_holds_teams_to_their_director
     )
 
     with httpx.Client(base_url=server_env["host"], timeout=30) as client:
-        # The teams write where the script says: in the repository's checkout.
-        settings = client.patch(
-            "/api/director/settings", json={"session_worktrees": False}
-        )
-        assert settings.status_code == 200, settings.text
         started = client.post(
             "/api/director/org/messages",
             json={
@@ -4293,17 +4313,18 @@ def test_director_starts_an_org_from_a_message_and_holds_teams_to_their_director
         ]
         assert len(rejections) == 1
         assert "outside your team's boundary (services/api)" in rejections[0]
-        assert not (repo / "by-editor.txt").exists()
-        assert (repo / "services" / "api" / "by-editor.txt").read_text() == "x"
+        work = checkout()
+        assert not (work / "by-editor.txt").exists()
+        assert (work / "services" / "api" / "by-editor.txt").read_text() == "x"
 
         if confined != "sandbox":
             pytest.skip(
                 "this machine cannot confine a shell; only file tools are checked"
             )
         # The shell starts in the team's directory and can write nowhere else.
-        assert (repo / "services" / "api" / "by-shell.txt").exists()
-        assert not (repo / "by-shell.txt").exists()
-        assert not (repo / "apps" / "by-shell.txt").exists()
+        assert (work / "services" / "api" / "by-shell.txt").exists()
+        assert not (work / "by-shell.txt").exists()
+        assert not (work / "apps" / "by-shell.txt").exists()
 
         # What is said from a team's directory opens a session at that team,
         # which the org has once the work of its first session is accepted.

@@ -108,7 +108,7 @@ def test_teams_of_the_tree_own_files_and_have_no_work_to_collide(org: Path):
     assert (found.collisions, found.collisions_checked) == ([], False)
 
 
-def test_only_the_files_of_the_nodes_own_boundary_are_listed(org: Path):
+def test_only_the_files_of_the_teams_own_boundary_are_listed(org: Path):
     api = team("api", "svc/api", org)
 
     found = node_ownership(api, [team("db", "svc/api/db", org, parent="api")], org)
