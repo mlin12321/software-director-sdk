@@ -291,13 +291,6 @@ class Config(BaseModel):
             "under the hidden refs `refs/agents/*`. Defaults to `workspace_path`."
         ),
     )
-    director_fixture: bool = Field(
-        default=False,
-        description=(
-            "Serve the director's built-in 487-node fixture org tree instead of "
-            "the one stored in the repository. For developing clients."
-        ),
-    )
     director_server_url: str | None = Field(
         default=None,
         description=(

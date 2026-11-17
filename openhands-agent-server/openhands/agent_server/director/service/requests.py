@@ -8,15 +8,13 @@ from openhands.agent_server.director import routing
 from openhands.agent_server.director.boundary import owns
 from openhands.agent_server.director.git import GitError, git
 from openhands.agent_server.director.git_store import team_key
-from openhands.agent_server.director.models import OrgNode, RoutedRequest
+from openhands.agent_server.director.models import OrgNode, RoutedRequest, SessionTeam
 from openhands.agent_server.director.org_store import (
     AGENT_LOST,
     reviews_only,
-    session_id_of,
 )
 from openhands.agent_server.director.prompts import misrouted_notice
 from openhands.agent_server.director.routing import Card, Choice
-from openhands.agent_server.director.service.state import team_of
 from openhands.agent_server.director.service.teams import Teams
 from openhands.sdk.errors import Invalid
 
@@ -36,7 +34,7 @@ def _tracked(checkout: Path) -> list[str]:
     return [path for path in listed.split("\0") if path]
 
 
-def takes_requests(node: OrgNode) -> bool:
+def takes_requests(node: SessionTeam) -> bool:
     """Whether a request may be sent straight to a team now.
 
     Not to one that was only set up, which has not had its task from the IC
@@ -60,7 +58,7 @@ class Requests(Teams):
         text: str,
         start: OrgNode,
         *,
-        asker: OrgNode | None = None,
+        asker: SessionTeam | None = None,
         within: str = "",
     ) -> Choice:
         """The team at or below ``start`` that what is asked in ``text``
@@ -75,7 +73,10 @@ class Requests(Teams):
                 begin a new one.
         """
         store = self.store
-        within = session_id_of(asker) if asker else within
+        within = asker.session if asker else within
+        started: set[str] = set()
+        able: set[str] | None = None
+        checkout = self._repo_dir
         if not within:
             # What the human asks anew opens a session of its own, which
             # any team of the org can have.
@@ -87,8 +88,8 @@ class Requests(Teams):
             places = [
                 place for place in store.session(within) if not reviews_only(place)
             ]
-            ids = {place.id: team_of(place) for place in places}
-            nodes = [
+            ids = {place.id: place.team_id for place in places}
+            rebased = [
                 place.model_copy(
                     update={
                         "id": ids[place.id],
@@ -97,7 +98,14 @@ class Requests(Teams):
                 )
                 for place in places
             ]
+            nodes = list[OrgNode](rebased)
             start = nodes[0] if nodes else start
+            started = {place.id for place in rebased if place.agents}
+            able = {place.id for place in rebased if takes_requests(place)}
+            # A session's own checkout has the directories of the teams it
+            # set up.
+            if places:
+                checkout = Path(places[0].worktree_path)
         parents = {node.id: node.parent_id for node in nodes}
 
         def under(node_id: str | None) -> bool:
@@ -110,14 +118,11 @@ class Requests(Teams):
             return False
 
         below = [node for node in nodes if under(node.id)]
-        takes = {node.id for node in below if not within or takes_requests(node)} | {
+        takes = {node.id for node in below if able is None or node.id in able} | {
             start.id
         }
         if len(takes) == 1:
             return Choice(start.id, "top", False, "no team below can take it")
-        root = store.get(store.root_id) if store.root_id else None
-        # A session's own checkout has the directories of the teams it set up.
-        checkout = Path((start if within else root or start).worktree_path)
         tracked = await asyncio.to_thread(_tracked, checkout)
         named = routing.paths_named(text, tracked)
         owners = [
@@ -132,7 +137,7 @@ class Requests(Teams):
             [
                 node
                 for node in below
-                if not within or node.id == start.id or node.agents
+                if not within or node.id == start.id or node.id in started
             ],
             tracked,
         )
@@ -140,7 +145,7 @@ class Requests(Teams):
             {
                 node.id
                 for node in below
-                if routing.on_one_line(node.id, team_of(asker), parents)
+                if routing.on_one_line(node.id, asker.team_id, parents)
             }
             if asker
             else set()
@@ -213,7 +218,7 @@ class Requests(Teams):
         reason = next((r for r in map(routing.reason_of, raw) if r), "")
         return [routing.parse_answer(answer, known) for answer in raw], reason
 
-    def not_ours(self, node: OrgNode, why: str) -> str:
+    def not_ours(self, node: SessionTeam, why: str) -> str:
         """A team's IC says the request the human's words brought it
         directly is not its team's: hand it to the IC of the team above.
         Safe from any thread.
@@ -225,7 +230,7 @@ class Requests(Teams):
         mine = [
             request for request in self.routed_requests() if request.team_id == node.id
         ]
-        above = self.store.get(node.parent_id) if node.parent_id else None
+        above = self.store.place(node.parent_id) if node.parent_id else None
         if above is None or not mine or mine[-1].kind != "asked":
             raise Invalid(
                 "Nothing was sent to your team directly that is still with "
@@ -237,7 +242,7 @@ class Requests(Teams):
         return self._hand_on(node, above, request, why)
 
     def _hand_on(
-        self, node: OrgNode, above: OrgNode, request: RoutedRequest, why: str
+        self, node: SessionTeam, above: SessionTeam, request: RoutedRequest, why: str
     ) -> str:
         """Give a request a team said is not its own to the IC above it."""
         self.tell_ic(above.id, misrouted_notice(node, request.text, why))

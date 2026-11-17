@@ -11,11 +11,11 @@ from uuid import UUID
 from pydantic import BaseModel, Field, ValidationError
 
 from openhands.agent_server.director.git import GitError
-from openhands.agent_server.director.pod_actions import caller_of
+from openhands.agent_server.director.pod_actions import Caller, caller_of
 from openhands.agent_server.director.service import (
     HAND_OVER_TOOLS,
-    TOOLS_OF,
     DirectorService,
+    tools_of,
 )
 from openhands.agent_server.director.tools.definition import DIRECTOR_TOOLS
 from openhands.sdk.errors import DomainError, NotFound
@@ -38,14 +38,19 @@ class ToolAnswer(BaseModel):
     )
 
 
+def _offered(caller: Caller) -> tuple[str, ...]:
+    if caller.hand_over:
+        return HAND_OVER_TOOLS
+    return tools_of(caller.node, caller.role)
+
+
 def list_tools(service: DirectorService, conversation_id: UUID) -> list[RemoteTool]:
     """The director's tools the agent of ``conversation_id`` is offered.
 
     Raises:
         NotFound: The conversation is not an agent of the org.
     """
-    caller = caller_of(service, conversation_id)
-    offered = HAND_OVER_TOOLS if caller.hand_over else TOOLS_OF[caller.role]
+    offered = _offered(caller_of(service, conversation_id))
     return [
         RemoteTool(
             name=name,
@@ -74,6 +79,8 @@ def call_tool(
         return ToolAnswer(text=str(error), is_error=True)
     try:
         caller = caller_of(service, conversation_id)
+        if name not in _offered(caller):
+            return ToolAnswer(text=f"{name} is not one of your tools.", is_error=True)
         return ToolAnswer(text=tool.act()(service, caller, action), is_error=False)
     except (DomainError, GitError) as error:
         return ToolAnswer(text=str(error), is_error=True)

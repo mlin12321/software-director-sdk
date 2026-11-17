@@ -2,24 +2,44 @@
 
 import pytest
 
-from openhands.agent_server.director.models import SplitChild
-from openhands.agent_server.director.org_store import OrgStore, OrgStoreError
+from openhands.agent_server.director.models import DirectorSettings, SplitChild
+from openhands.agent_server.director.org_store import (
+    OrgStore,
+    OrgStoreError,
+    session_team_id,
+)
 from openhands.agent_server.director.split import (
     MAX_SPLIT_CHILDREN,
     Split,
+    check_limits,
     home_of,
     normalize_split,
     proposed_teams,
 )
-from tests.agent_server.director.conftest import make_node, small_tree
+from tests.agent_server.director.conftest import (
+    make_node,
+    open_session_in,
+    small_tree,
+)
+
+
+SESSION = "s"
+
+
+def at(team_id: str) -> str:
+    """The place the session has at a team."""
+    return session_team_id(team_id, SESSION)
 
 
 @pytest.fixture
 def store() -> OrgStore:
-    """The small tree, each team in a checkout of its own."""
+    """A session at the top of the small tree, each of its places in a
+    checkout of its own."""
     store = OrgStore()
-    for node in small_tree():
-        store.upsert(node.model_copy(update={"worktree_path": f"/wt/{node.id}"}))
+    store.replace_all(small_tree())
+    open_session_in(store, "root", SESSION)
+    for team in small_tree():
+        store.update_place(at(team.id), worktree_path=f"/wt/{team.id}")
     return store
 
 
@@ -27,14 +47,14 @@ def child(title: str, path: str, **fields) -> SplitChild:
     return SplitChild(title=title, path=path, task=f"build {title}", **fields)
 
 
-def check(store: OrgStore, node_id: str, children: list[SplitChild]) -> Split:
-    node = store.get(node_id)
-    assert node is not None
-    return normalize_split(store, node, children)
+def check(store: OrgStore, team_id: str, children: list[SplitChild]) -> Split:
+    place = store.place(at(team_id))
+    assert place is not None
+    return normalize_split(store, place, children)
 
 
 def replaced(split: Split) -> list[str]:
-    return [team.id for team in split.replaces]
+    return [team.team_id for team in split.replaces]
 
 
 WRITTEN = """\
@@ -192,7 +212,7 @@ def test_refuses_a_split_that_cannot_be_told_apart(store: OrgStore, children):
 def test_a_team_proposes_only_inside_what_it_may_write(store: OrgStore):
     b = make_node("b", "root", path="svc/b")
     narrow = b.boundary.model_copy(update={"writable": ["svc/b/src/**"]})
-    store.upsert(b.model_copy(update={"boundary": narrow}))
+    store.update_place(at("b"), boundary=narrow)
 
     assert check(store, "b", [child("core", "svc/b/src/core")]).children
     with pytest.raises(OrgStoreError, match="inside what your team may write"):
@@ -236,9 +256,9 @@ def test_a_new_team_may_not_sit_inside_a_team_that_stays(store: OrgStore):
 
 
 def test_a_team_others_work_in_the_checkout_of_cannot_be_replaced(store: OrgStore):
-    a, a2 = store.get("a"), make_node("a2", "a", path="svc/a/two")
+    a = store.place(at("a"))
     assert a is not None
-    store.upsert(a2.model_copy(update={"worktree_path": a.worktree_path}))
+    store.update_place(at("a2"), worktree_path=a.worktree_path)
 
     with pytest.raises(OrgStoreError, match="work in its checkout"):
         check(store, "root", [child("services", "svc")])
@@ -247,7 +267,7 @@ def test_a_team_others_work_in_the_checkout_of_cannot_be_replaced(store: OrgStor
 def test_the_sub_teams_of_a_replaced_team_report_to_the_team_that_holds_them(
     store: OrgStore,
 ):
-    a1, a2 = store.children("a")
+    a1, a2 = store.below(at("a"))
 
     assert home_of(a1, "root", {"svc/a/one": "new.one", "docs": "docs"}) == "new.one"
     assert home_of(a1, "root", {"svc": "services"}) == "services"
@@ -257,16 +277,49 @@ def test_the_sub_teams_of_a_replaced_team_report_to_the_team_that_holds_them(
 def test_what_a_proposal_keeps_is_asked_for_only_when_it_is_first_checked(
     store: OrgStore,
 ):
-    root = store.get("root")
+    root = store.place(at("root"))
     assert root is not None
     new = [child("C", "svc/c")]
 
     kept = normalize_split(store, root, new, ["a", "b"])
     again = normalize_split(store, root, new)
 
-    assert [team.id for team in kept.keeps] == ["a", "b"]
+    assert [team.team_id for team in kept.keeps] == ["a", "b"]
     assert (replaced(kept), again.keeps) == ([], [])
     with pytest.raises(OrgStoreError, match="neither replaced by a proposed team"):
         normalize_split(store, root, new, ["a"])
     with pytest.raises(OrgStoreError, match="neither replaced by a proposed team"):
         normalize_split(store, root, new, [])
+
+
+def limits_under_a(max_depth: int = 4, max_teams: int = 32) -> tuple[OrgStore, str]:
+    """A session opened at ``a``, one team below the top, and the id of its
+    place at ``a1``."""
+    store = OrgStore()
+    store.replace_all(small_tree())
+    open_session_in(store, "a", "low")
+    return store, session_team_id("a1", "low")
+
+
+def test_levels_are_counted_from_the_top_of_the_org_not_of_the_session():
+    store, a1 = limits_under_a()
+    place = store.place(a1)
+    assert place is not None
+
+    # root, a and a1 are three levels, so teams under a1 are the fourth.
+    check_limits(store, place, 1, DirectorSettings(max_depth=4))
+    with pytest.raises(OrgStoreError, match="would be level 4"):
+        check_limits(store, place, 1, DirectorSettings(max_depth=3))
+
+
+def test_teams_are_counted_for_the_teams_of_the_org_above_the_session_too():
+    store, a1 = limits_under_a()
+    place = store.place(a1)
+    assert place is not None
+
+    # The org is five teams and a is three of them.
+    check_limits(store, place, 1, DirectorSettings(max_teams=6))
+    with pytest.raises(OrgStoreError, match="'root' is 5"):
+        check_limits(store, place, 1, DirectorSettings(max_teams=5))
+    with pytest.raises(OrgStoreError, match="'a' is 3"):
+        check_limits(store, place, 1, DirectorSettings(max_teams=3))

@@ -12,13 +12,12 @@ from openhands.agent_server.director.git import (
 from openhands.agent_server.director.git_store import team_key
 from openhands.agent_server.director.models import (
     Escalation,
-    OrgNode,
+    SessionTeam,
     Stopped,
 )
 from openhands.agent_server.director.org_store import (
     AGENT_LOST,
     reviews_only,
-    session_id_of,
 )
 from openhands.agent_server.director.prompts import (
     NEED_ASKED,
@@ -43,7 +42,6 @@ from openhands.agent_server.director.service.state import (
     _now,
     _progress_of,
     agent_conversation,
-    team_of,
 )
 from openhands.sdk.errors import (
     Conflict,
@@ -62,8 +60,8 @@ class Watch(Reviews):
     def hand_escalation(
         self,
         holder_id: str,
-        raiser: OrgNode,
-        through: OrgNode,
+        raiser: SessionTeam,
+        through: SessionTeam,
         escalation: Escalation,
         passed_up: list[str],
     ) -> None:
@@ -73,7 +71,7 @@ class Watch(Reviews):
             through: The team directly below the holder that it comes from:
                 the one that raised it, or the one that passed it up.
         """
-        holder = self.store.get(holder_id)
+        holder = self.store.place(holder_id)
         if holder is None:
             return
         history = "".join(f"\nPassed up by {entry}" for entry in passed_up)
@@ -101,14 +99,14 @@ class Watch(Reviews):
 
     async def _ask_team(self, node_id: str, escalation_id: str, team_for: str) -> None:
         store = self.store
-        raiser = store.get(node_id)
+        raiser = store.place(node_id)
         escalation = next(
             (e for e in raiser.escalations if e.id == escalation_id)
             if raiser
             else iter(()),
             None,
         )
-        root = store.get(store.root_id) if store.root_id else None
+        root = store.team(store.root_id) if store.root_id else None
         if raiser is None or escalation is None or root is None:
             return
         if escalation.held_by is None or escalation.asked_of is not None:
@@ -117,7 +115,7 @@ class Watch(Reviews):
         choice = await self.choose_team(asked, root, asker=raiser)
         # The team as it is in the session that asks: a request never
         # leaves the session it was made in.
-        owner = store.instance(choice.node_id, session_id_of(raiser))
+        owner = store.instance(choice.node_id, raiser.session)
         if not choice.sure or owner is None or not self._may_ask(raiser, owner):
             self.hand_escalation(escalation.held_by, raiser, raiser, escalation, [])
             return
@@ -125,9 +123,9 @@ class Watch(Reviews):
             raiser.id, escalation.id, owner.id, self._clock().isoformat()
         )
         self._save_soon()
-        parents = {node.id: node.parent_id for node in store.all()}
-        above = store.get(
-            routing.lowest_holding([raiser.id, owner.id], parents) or root.id
+        parents = {node.id: node.parent_id for node in store.places()}
+        above = store.place(
+            routing.lowest_holding([raiser.id, owner.id], parents) or ""
         )
         if above is not None:
             await asyncio.to_thread(
@@ -135,13 +133,13 @@ class Watch(Reviews):
             )
         self.tell_ic(owner.id, asked_by_team(raiser, escalation, team_for))
 
-    def _may_ask(self, raiser: OrgNode, owner: OrgNode) -> bool:
+    def _may_ask(self, raiser: SessionTeam, owner: SessionTeam) -> bool:
         """Whether a team's IC may be asked directly by another's: not a
         team above or below the one that asks, not one that cannot take a
         request now, not one that itself waits on the asking team, and not
         one the asking team already has several requests open with."""
         store = self.store
-        parents = {node.id: node.parent_id for node in store.all()}
+        parents = {node.id: node.parent_id for node in store.places()}
         if routing.on_one_line(raiser.id, owner.id, parents):
             return False
         if not takes_requests(owner):
@@ -152,7 +150,11 @@ class Watch(Reviews):
         return open_with < OPEN_REQUESTS_TO_ONE_TEAM
 
     def _note_request(
-        self, above: OrgNode, raiser: OrgNode, owner: OrgNode, escalation: Escalation
+        self,
+        above: SessionTeam,
+        raiser: SessionTeam,
+        owner: SessionTeam,
+        escalation: Escalation,
     ) -> None:
         """Keep a direct request in the record of the team above both, count
         it between that team's two sub-teams it passed between, and wake
@@ -164,7 +166,7 @@ class Watch(Reviews):
             next(
                 (
                     team
-                    for team in (*store.ancestors(node.id), node)
+                    for team in (*store.above(node.id), node)
                     if team.parent_id == above.id
                 ),
                 None,
@@ -186,7 +188,7 @@ class Watch(Reviews):
             (
                 r
                 for r in table
-                if (r["from_node"], r["to_node"]) == (team_of(raiser), team_of(owner))
+                if (r["from_node"], r["to_node"]) == (raiser.team_id, owner.team_id)
             ),
             None,
         )
@@ -194,11 +196,11 @@ class Watch(Reviews):
             self.tell_ic(above.id, many_requests_notice(row, table))
 
     def answered_directly(
-        self, raiser: OrgNode, escalation: Escalation, action: str, text: str
+        self, raiser: SessionTeam, escalation: Escalation, action: str, text: str
     ) -> str:
         """The IC of a team that was asked directly settles what was asked,
         or cannot. Safe from any thread."""
-        owner = self.store.get(escalation.asked_of or "")
+        owner = self.store.place(escalation.asked_of or "")
         title = owner.title if owner else "a team that is gone"
         if action != "settle":
             self._back_to_chain(raiser, escalation, title, PASSED_UP, text)
@@ -217,7 +219,12 @@ class Watch(Reviews):
         return "Settled; the IC that asked has your answer."
 
     def _back_to_chain(
-        self, raiser: OrgNode, escalation: Escalation, title: str, how: str, why: str
+        self,
+        raiser: SessionTeam,
+        escalation: Escalation,
+        title: str,
+        how: str,
+        why: str,
     ) -> None:
         """A team that was asked directly did not settle a request: it goes
         to the IC of the team above the one that asked, as it would have
@@ -235,16 +242,18 @@ class Watch(Reviews):
             [f"{title}, which was asked directly ({how}): {why}"],
         )
 
-    def _note_answer(self, raiser: OrgNode, escalation: Escalation, how: str) -> None:
+    def _note_answer(
+        self, raiser: SessionTeam, escalation: Escalation, how: str
+    ) -> None:
         """Keep how a direct request ended, in the record that has it."""
         asked = escalation.asked_of
-        for above in self.store.ancestors(raiser.id):
+        for above in self.store.above(raiser.id):
             made = [
                 event
                 for event in self.team_memory.history(above.id)
                 if event.kind == "asked_team"
                 and (event.team_id, event.other_id)
-                == (team_of(raiser), team_key(asked or ""))
+                == (raiser.team_id, team_key(asked or ""))
             ]
             if made:
                 self.record_event(
@@ -261,15 +270,15 @@ class Watch(Reviews):
         that it can no longer answer, or has not answered for as long as a
         team may show no progress."""
         store = self._store
-        if store is None or self._paused is not None or self._fixture:
+        if store is None or self._paused is not None:
             return
         limit = self.settings.stall_check_minutes
         now = self._clock()
-        for raiser in store.all():
+        for raiser in store.places():
             for escalation in raiser.escalations:
                 if escalation.asked_of is None:
                     continue
-                owner = store.get(escalation.asked_of)
+                owner = store.place(escalation.asked_of)
                 ic = (
                     next((a for a in owner.agents if a.role == "ic"), None)
                     if owner
@@ -306,7 +315,7 @@ class Watch(Reviews):
             Conflict: It is stopped already.
         """
         store = self.store
-        team = store.get(node_id)
+        team = store.place(node_id)
         if team is None:
             raise NotFound(f"Node {node_id} does not exist")
         if team.stopped is not None:
@@ -343,7 +352,7 @@ class Watch(Reviews):
                 self._enqueue(self._check_asks, STALL_LANE)
                 self._enqueue(self._check_stalls, STALL_LANE)
 
-    def _may_stall(self, team: OrgNode) -> bool:
+    def _may_stall(self, team: SessionTeam) -> bool:
         """Whether a team owes work nobody waits to give it: it has not
         submitted, or its work was sent back, and nothing holds it."""
         return (
@@ -352,22 +361,22 @@ class Watch(Reviews):
             and not team.waiting_to_start
             and (team.review is None or team.review.state == "changes_requested")
             and agent_conversation(team, "ic") is not None
-            and not any(above.stopped for above in self.store.ancestors(team.id))
+            and not any(above.stopped for above in self.store.above(team.id))
         )
 
-    def _waits_for_a_task(self, team: OrgNode) -> bool:
+    def _waits_for_a_task(self, team: SessionTeam) -> bool:
         """Whether a team was set up and never given a task, with nothing
         that holds the team above from giving it one."""
         return (
             team.parent_id is not None
             # A team the org already had is there for the session's IC to
             # use or not; one the session set up itself is owed a task.
-            and self.store.team(team_of(team)) is None
+            and self.store.team(team.team_id) is None
             and not reviews_only(team)
             and not team.agents
             and not team.waiting_to_start
             and team.stopped is None
-            and not any(above.stopped for above in self.store.ancestors(team.id))
+            and not any(above.stopped for above in self.store.above(team.id))
         )
 
     async def _check_stalls(self) -> None:
@@ -375,11 +384,11 @@ class Watch(Reviews):
         longer than the org allows, once for every such stretch of time."""
         limit = self.settings.stall_check_minutes
         store = self._store
-        if not limit or store is None or self._paused is not None or self._fixture:
+        if not limit or store is None or self._paused is not None:
             return
         run = self._runs()
         marks = run.marked(PROGRESS)
-        teams = {team.id: team for team in store.all()}
+        teams = {team.id: team for team in store.places()}
         for gone in marks.keys() - teams.keys():
             run.unmark(PROGRESS, gone)
         for team in teams.values():
@@ -429,8 +438,8 @@ class Watch(Reviews):
 
     async def _tell_of_stall(self, node_id: str, minutes: int) -> None:
         store = self.store
-        team = store.get(node_id)
-        above = store.get(team.parent_id) if team and team.parent_id else None
+        team = store.place(node_id)
+        above = store.place(team.parent_id) if team and team.parent_id else None
         if team is None or above is None or self._paused is not None:
             return
         if not self._may_stall(team):

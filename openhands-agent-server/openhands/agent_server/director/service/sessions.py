@@ -1,4 +1,4 @@
-"""Sessions: lines of work the human opens at a team beside the org's own."""
+"""Sessions: the lines of work the human opens at a team. All work is in one."""
 
 import asyncio
 import logging
@@ -31,7 +31,6 @@ from openhands.agent_server.director.prompts import (
     POD_PROTOCOL,
     handed_up,
     session_brief,
-    session_closed,
 )
 from openhands.agent_server.director.run_state import (
     CHECKS,
@@ -50,9 +49,7 @@ from openhands.agent_server.director.service.state import (
     _base_of,
     _branch_of,
     _new_pod,
-    agent_conversation,
     apart,
-    team_of,
 )
 from openhands.agent_server.director.split import shape_of
 from openhands.sdk.conversation.request import (
@@ -123,7 +120,7 @@ class Sessions(Splits):
             team = store.team(request.node_id)
             if team is None:
                 raise NotFound(f"Unknown node: {request.node_id}")
-        elif self.settings.route_requests and store.children(root.id):
+        elif self.settings.route_requests and store.sub_teams(root.id):
             choice = await self.choose_team(text, root)
             chosen_by, reason = choice.by, choice.reason
             team = store.team(choice.node_id) or root
@@ -139,15 +136,15 @@ class Sessions(Splits):
             )
         shape = [team]
         for current in shape:
-            shape.extend(store.children(current.id))
+            shape.extend(store.sub_teams(current.id))
         session_id = f"s{uuid4().hex[:6]}"
         title = request.title.strip() or provisional_summary(text).title
         title = title[:_TITLE_LENGTH]
         others = sorted(
             {
                 store.session_title(other)
-                for other in store.all()
-                if team_of(other) == team.id and other.agents
+                for other in store.places()
+                if other.team_id == team.id and other.agents
             }
         )
         run = self._runs()
@@ -256,7 +253,7 @@ class Sessions(Splits):
         """
         store = self.store
         ic_id = conversation.conversation_id or uuid4()
-        store.update_node(top.id, agents=_new_pod(ic_id))
+        store.update_place(top.id, agents=_new_pod(ic_id))
         additions = conversation.agent_launch_additions or AgentLaunchAdditions()
         suffix = "\n\n".join(
             part
@@ -295,7 +292,7 @@ class Sessions(Splits):
             ),
         )
         store.set_agent(top.id, "ic", kind=started.kind, acp_server=started.acp_server)
-        store.update_node(
+        store.update_place(
             top.id,
             worktree_path=started.workspace,
             isolation=started.isolation if apart else "shared",
@@ -313,14 +310,14 @@ class Sessions(Splits):
         return str(ic_id)
 
     def _hand_on(
-        self, node: OrgNode, above: OrgNode, request: RoutedRequest, why: str
+        self, node: SessionTeam, above: SessionTeam, request: RoutedRequest, why: str
     ) -> str:
         """Nobody works above the team a session was opened at, so a
         request that team says is not its own goes one team up the org, in
         a session of its own, and to the human only from the top."""
         if not reviews_only(above):
             return super()._hand_on(node, above, request, why)
-        own = self.store.team(team_of(node))
+        own = self.store.team(node.team_id)
         higher = self.store.team(own.parent_id or "") if own else None
         try:
             top = self._lift(node, higher) if higher else None
@@ -346,7 +343,7 @@ class Sessions(Splits):
             "that IC gives you a task if it has one for you."
         )
 
-    def _lift(self, node: OrgNode, higher: OrgNode) -> SessionTeam:
+    def _lift(self, node: SessionTeam, higher: OrgNode) -> SessionTeam:
         """Make the session opened at ``node`` one opened at ``higher``,
         the team above it in the org, in the checkout it has.
 
@@ -355,16 +352,16 @@ class Sessions(Splits):
         """
         store = self.store
         session = store.session_of(node)
-        reviewed_from = store.get(node.parent_id or "")
+        reviewed_from = store.place(node.parent_id or "")
         above = store.team(higher.parent_id) if higher.parent_id else higher
         if session is None or reviewed_from is None or above is None:
             raise OrgStoreError(f"{node.id} is not what a session was opened at")
         sid = session.id
         shape = [higher]
         for current in shape:
-            shape.extend(store.children(current.id))
+            shape.extend(store.sub_teams(current.id))
         # What it has below its own team stays as the session made it.
-        has = {team_of(place) for place in store.session(sid)}
+        has = {place.team_id for place in store.session(sid)}
         added: list[OrgNode] = []
         for current in shape[1:]:
             if current.id not in has and (
@@ -438,13 +435,13 @@ class Sessions(Splits):
                 for current in added
             ],
         )
-        store.update_node(node.id, isolation="shared")
+        store.update_place(node.id, isolation="shared")
         run = self._runs()
         for current in [higher, *added]:
             run.mark(TASK, session_team_id(current.id, sid), self._purpose(current))
         return top
 
-    def _tell_human_misrouted(self, node: OrgNode, text: str, why: str) -> None:
+    def _tell_human_misrouted(self, node: SessionTeam, text: str, why: str) -> None:
         """Put a request no team took before the human, who asked."""
         taken = {escalation.id for escalation in node.escalations}
         self.store.raise_escalation(
@@ -476,7 +473,7 @@ class Sessions(Splits):
         node_id = intent.node_id
         launcher = self._require_launcher()
         if "planned" not in intent.steps:
-            top = store.get(node_id)
+            top = store.place(node_id)
             session = store.session_of(top) if top else None
             if top is None or session is None:
                 return
@@ -510,19 +507,16 @@ class Sessions(Splits):
             # Only teams that started have a checkout with work of theirs.
             started = [
                 team
-                for team in map(store.get, plan["teams"])
+                for team in map(store.place, plan["teams"])
                 if team is not None and team.agents
             ]
-            top, above = store.get(node_id), store.get(plan["parent"])
+            top = store.place(node_id)
+            # The place it is reviewed from is in the repository's checkout.
+            above = store.place(top.parent_id or "") if top else None
             kept = None
             # A session whose IC never started has no checkout of its own:
             # what is in the checkout above is not its work.
-            if (
-                started
-                and isinstance(top, SessionTeam)
-                and above is not None
-                and apart(top, above)
-            ):
+            if started and top and above and apart(top, above):
                 kept = await asyncio.to_thread(
                     self._keep_unmerged, top, above, plan["stamp"]
                 )
@@ -534,8 +528,8 @@ class Sessions(Splits):
                 run.unmark(TOLD, str(conversation_id))
             intent = run.step_done(intent, "deleted")
         if "removed" not in intent.steps:
-            top = store.get(node_id)
-            for team in map(store.get, plan["teams"]):
+            top = store.place(node_id)
+            for team in map(store.place, plan["teams"]):
                 if team is not None:
                     for kind in (TASK, PROGRESS, CHECKS, DRAFT, REPORTS):
                         run.unmark(kind, team.id)
@@ -551,14 +545,9 @@ class Sessions(Splits):
             await self._save()
             intent = run.step_done(intent, "removed")
         self._settling.pop(intent.id, None)
-        above = store.get(plan["parent"])
-        self.notify(
-            agent_conversation(above, "ic") if above else None,
-            session_closed(plan["title"], plan["team"], intent.payload["kept"]),
-        )
 
     def _keep_unmerged(
-        self, top: SessionTeam, above: OrgNode, stamp: str
+        self, top: SessionTeam, above: SessionTeam, stamp: str
     ) -> str | None:
         """Keep the last commit of a session whose commits are not all in
         the checkout above.

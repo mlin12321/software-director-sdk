@@ -108,7 +108,9 @@ def own_checkout(
     run_git(repo, "worktree", "add", "--quiet", "-b", name, str(worktree))
     for team in service.store.session(session_id_of(node(service, node_id))):
         if not team.review_only:
-            service.store.update_node(team.id, worktree_path=str(worktree), branch=name)
+            service.store.update_place(
+                team.id, worktree_path=str(worktree), branch=name
+            )
     return worktree
 
 
@@ -148,11 +150,7 @@ async def test_a_session_is_beside_the_org_tree_with_a_place_at_each_of_its_team
     # The tree is what it was: no node, no child and no count is the session's.
     assert [team.model_dump() for team in service.store.teams()] == tree_before
     assert service.store.team(top.id) is None and len(service.store) == 4
-    assert [team.id for team in service.store.children("root")] == [API, WEB]
-    assert [team.id for team in service.store.opened_under("root")] == [
-        node(service, "root").id,
-        top.id,
-    ]
+    assert [team.id for team in service.store.sub_teams("root")] == [API, WEB]
     now = service.store.snapshot("root", full=True)
     assert snapshot is not None and now is not None
     assert [team.id for team in now.nodes] == [team.id for team in snapshot.nodes]
@@ -265,7 +263,7 @@ async def test_a_session_at_the_top_team_is_reviewed_from_a_place_of_that_team(
         False,
     ]
     # The top team keeps its sub-teams and gains none.
-    assert [team.id for team in service.store.children("root")] == [API, WEB]
+    assert [team.id for team in service.store.sub_teams("root")] == [API, WEB]
 
 
 async def test_a_session_is_refused_where_it_cannot_be_found_or_started(
@@ -412,18 +410,16 @@ async def test_sub_teams_a_session_changes_are_its_own_until_its_work_is_accepte
         PruneTeamAction(node_id=top, reason="Not needed"),
     )
 
-    assert [team.title for team in service.store.children(top)] == ["DB", "Routes"]
+    assert [team.title for team in service.store.below(top)] == ["DB", "Routes"]
     assert "not a team directly below yours" in by_another.text
     # Neither the org nor the other session at the team has the new one.
-    assert [team.id for team in service.store.children(API)] == [DB]
-    assert [team.title for team in service.store.children(node(service, API).id)] == [
-        "DB"
-    ]
+    assert [team.id for team in service.store.sub_teams(API)] == [DB]
+    assert [team.title for team in service.store.below(node(service, API).id)] == ["DB"]
 
     await use(service, ic(service, top), SubmitReviewTool, DONE)
     await use(service, reviewer(service, top), ReviewTeamTool, accept(top))
 
-    assert [team.id for team in service.store.children(API)] == [
+    assert [team.id for team in service.store.sub_teams(API)] == [
         DB,
         "services.api.routes",
     ]
@@ -476,7 +472,7 @@ async def test_a_request_to_the_org_opens_a_session_and_reaches_no_other(
     launcher.answers[USAGE_ID] = f"Teams: {API}\nReason: It is the API's."
     heard = {
         place.id: len(launcher.messages_to(ic(service, place.id)))
-        for place in service.store.all()
+        for place in service.store.places()
         if place.agents
     }
 
@@ -522,7 +518,7 @@ async def test_what_a_session_waits_on_the_human_for_is_told_with_its_team(
         top, "name", kind="design_decision", title="Which name?"
     )
 
-    [waiting] = service.store.escalations("root")
+    [waiting] = service.store.escalations()
 
     assert raised.held_by is None
     # It names the team of the org, which a client can show, and the session.
@@ -532,8 +528,6 @@ async def test_what_a_session_waits_on_the_human_for_is_told_with_its_team(
         "Refunds",
     )
     assert [step.id for step in waiting.path] == ["root"]
-    root = service.store.team("root")
-    assert root is not None and root.escalation_count == 0
 
 
 async def test_a_session_is_kept_on_its_machine_and_what_it_changes_with_the_org(

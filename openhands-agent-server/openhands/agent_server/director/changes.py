@@ -16,7 +16,7 @@ from openhands.agent_server.director.models import (
     ChangeKind,
     FileEdit,
     FileSides,
-    OrgNode,
+    SessionTeam,
     TeamChanges,
 )
 from openhands.sdk.errors import Forbidden, Invalid, NotFound
@@ -27,7 +27,7 @@ MAX_FILE_BYTES = 1_000_000
 _KINDS: dict[str, ChangeKind] = {"A": "added", "D": "deleted"}
 
 
-def checkout_top(node: OrgNode) -> Path:
+def checkout_top(node: SessionTeam) -> Path:
     """The top of the checkout the team works in, symlinks resolved."""
     workspace = Path(node.worktree_path)
     try:
@@ -37,7 +37,7 @@ def checkout_top(node: OrgNode) -> Path:
     return Path(os.path.realpath(top))
 
 
-def team_changes(node: OrgNode) -> TeamChanges:
+def team_changes(node: SessionTeam) -> TeamChanges:
     """The files in the team's directory that differ from where its work
     started or was last accepted, uncommitted and new files included.
 
@@ -106,7 +106,7 @@ def team_changes(node: OrgNode) -> TeamChanges:
     )
 
 
-def file_sides(node: OrgNode, path: str) -> FileSides:
+def file_sides(node: SessionTeam, path: str) -> FileSides:
     """One file of the team's directory as it was at the team's base and as
     it is in its checkout now.
 
@@ -130,7 +130,9 @@ def file_sides(node: OrgNode, path: str) -> FileSides:
     )
 
 
-def edit_refusal(node: OrgNode, sub_teams: list[OrgNode], path: str) -> str | None:
+def edit_refusal(
+    node: SessionTeam, sub_teams: list[SessionTeam], path: str
+) -> str | None:
     """Why a person may not change ``path`` through this team, if not."""
     directory = node.boundary.path or "the repository"
     if path == ".git" or path.startswith(".git/"):
@@ -152,7 +154,7 @@ def edit_refusal(node: OrgNode, sub_teams: list[OrgNode], path: str) -> str | No
     return None
 
 
-def require_editable(node: OrgNode, sub_teams: list[OrgNode], path: str) -> str:
+def require_editable(node: SessionTeam, sub_teams: list[SessionTeam], path: str) -> str:
     """``path`` in its plain form, when a person may change it through
     this team.
 
@@ -168,7 +170,7 @@ def require_editable(node: OrgNode, sub_teams: list[OrgNode], path: str) -> str:
 
 
 def write_by_hand(
-    node: OrgNode, sub_teams: list[OrgNode], path: str, content: str
+    node: SessionTeam, sub_teams: list[SessionTeam], path: str, content: str
 ) -> FileEdit:
     """Write one file in the team's checkout and commit it alone.
 

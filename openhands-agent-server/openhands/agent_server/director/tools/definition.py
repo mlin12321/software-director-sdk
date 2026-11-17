@@ -526,9 +526,8 @@ class SubmitReviewTool(_DirectorTool[SubmitReviewAction]):
     summary = (
         "IC only. Submit your team's work when it is complete: commit it "
         "first, say what you delivered, then stop. The IC of the team above "
-        "reviews it and you are woken with the outcome; the top team's work "
-        "is shown to the human. Work of your sub-teams that you accepted "
-        "goes with it."
+        "reviews it and you are woken with the outcome. Work of your "
+        "sub-teams that you accepted goes with it."
     )
 
     @classmethod

@@ -20,13 +20,12 @@ from openhands.agent_server.director.git import (
 from openhands.agent_server.director.headline import provisional_summary
 from openhands.agent_server.director.models import (
     AgentRole,
-    OrgNode,
     Report,
+    SessionTeam,
 )
 from openhands.agent_server.director.org_store import (
     AGENT_LOST,
     reviews_only,
-    session_id_of,
 )
 from openhands.agent_server.director.prompts import (
     from_director,
@@ -47,7 +46,6 @@ from openhands.agent_server.director.service.state import (
     _instant,
     _lane_for,
     agent_conversation,
-    team_of,
 )
 from openhands.agent_server.event_service import ConversationRunLimitExceeded
 from openhands.sdk.errors import (
@@ -65,7 +63,7 @@ class Delivery(Records):
 
     def refresh_headline(self, node_id: str, report: str) -> None:
         """Have a node's headline rewritten after it reported. Any thread."""
-        node = self.store.get(node_id)
+        node = self.store.place(node_id)
         if node is not None:
             task = f"{node.spec_summary}\n\nLatest report of the team: {report}"
             self._enqueue(lambda: self._summarize(node_id, task), f"headline:{node_id}")
@@ -82,7 +80,7 @@ class Delivery(Records):
         if conversation_id is not None:
             self._post(conversation_id, from_director(text), at_once=at_once)
 
-    def report(self, node: OrgNode, role: AgentRole, text: str) -> None:
+    def report(self, node: SessionTeam, role: AgentRole, text: str) -> None:
         """Record something for the two agents of a team. Safe from any
         thread.
 
@@ -92,14 +90,14 @@ class Delivery(Records):
         text = text.strip()
         if not text:
             raise Invalid("A report cannot be empty")
-        node_id = team_of(node)
+        node_id = node.team_id
         report = Report(
             at=_instant(),
             role=role,
             text=text,
             session=self.store.session_title(node),
         )
-        if session_id_of(node) and not reviews_only(node):
+        if node.session and not reviews_only(node):
             # Its session's alone until the session's work is accepted.
             self._keep_report(node, report)
             return
@@ -262,7 +260,7 @@ class Delivery(Records):
         """
         self._settling[intent.id] = (set(node_ids), _lane_for(intent))
         store = self.store
-        for team in map(store.get, node_ids):
+        for team in map(store.place, node_ids):
             for agent in team.agents if team else []:
                 if agent.conversation_id in self._running:
                     raise _Held
@@ -271,7 +269,7 @@ class Delivery(Records):
         """Deliver what waited for the teams a step has now changed."""
         teams, _ = self._settling.pop(intent.id, (set(), ""))
         store = self.store
-        for team in map(store.get, teams):
+        for team in map(store.place, teams):
             for agent in team.agents if team else []:
                 if agent.conversation_id is not None:
                     self._deliver_what_waited(agent.conversation_id)
@@ -308,7 +306,7 @@ class Delivery(Records):
         run = self._runs()
         run.mark(WAITING, node_id)
         with suppress(NotFound):
-            store.update_node(node_id, waiting_to_start=True)
+            store.update_place(node_id, waiting_to_start=True)
         keeps_place = False
         try:
             async with self._start_gate:
@@ -333,7 +331,7 @@ class Delivery(Records):
             if not keeps_place:
                 run.unmark(WAITING, node_id)
             with suppress(NotFound):
-                store.update_node(node_id, waiting_to_start=False)
+                store.update_place(node_id, waiting_to_start=False)
 
     def _note_running(self, conversation_id: str, node_id: str, running: bool) -> None:
         if running == (conversation_id in self._running):
@@ -436,14 +434,14 @@ class Delivery(Records):
         store = self.store
 
         def reported() -> bool:
-            current = store.get(node_id)
+            current = store.place(node_id)
             return (
                 first
                 and current is not None
                 and current.headline != provisional_summary(task).headline
             )
 
-        node = store.get(node_id)
+        node = store.place(node_id)
         conversation_id = agent_conversation(node, "ic") if node else None
         if node is None or conversation_id is None or reported():
             return
@@ -464,14 +462,14 @@ class Delivery(Records):
         if rename:
             changes["title"] = summary.title
         try:
-            node = store.update_node(node_id, **changes)
+            node = store.update_place(node_id, **changes)
         except NotFound:
             return
         if not rename:
             return
         if store.opens_session(node):
             # A session the human gave no name is called what it is for.
-            store.rename_session(session_id_of(node), summary.title)
+            store.rename_session(node.session, summary.title)
         for agent in node.agents:
             if agent.conversation_id is not None:
                 with suppress(NotFound):

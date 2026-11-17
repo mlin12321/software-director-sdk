@@ -26,7 +26,6 @@ from openhands.agent_server.director.acp import (
     conversation_of,
     tools_server,
 )
-from openhands.agent_server.director.fixture import build_fixture_nodes
 from openhands.agent_server.director.git import (
     GitError,
     enclosing_repository,
@@ -54,13 +53,12 @@ from openhands.agent_server.director.models import (
     DirectorSettingsUpdate,
     FormerTeam,
     HandOverMode,
-    OrgNode,
-    OrgNodeInput,
     OrgStateEvent,
     OrgSummary,
     PauseReason,
     RecoveryItem,
     RoutedRequest,
+    SessionTeam,
     SessionTeamInput,
     SplitChild,
     TeamEnforcement,
@@ -73,19 +71,14 @@ from openhands.agent_server.director.org_persistence import (
 )
 from openhands.agent_server.director.org_store import (
     OrgStore,
-    session_id_of,
+    reviews_only,
     session_team_id,
-    team_id_of,
 )
 from openhands.agent_server.director.pods import PodLauncher
-from openhands.agent_server.director.recovery import (
-    fingerprint,
-)
 from openhands.agent_server.director.run_state import (
     PROGRESS,
     RUNNING,
     SESSION,
-    TEAM,
     Intent,
     RunState,
     RunStateError,
@@ -154,6 +147,15 @@ REVIEW_TOOLS = ("read_node_context", "report", "review_team")
 # What a Manager has there: it settles the sub-teams a session and the org
 # each made something else of.
 REVIEW_MANAGER_TOOLS = ("read_node_context", "report", "settle_teams")
+
+
+def tools_of(node: SessionTeam, role: AgentRole) -> tuple[str, ...]:
+    """The director's tools an agent of ``node`` is offered."""
+    if reviews_only(node):
+        return REVIEW_TOOLS if role == "ic" else REVIEW_MANAGER_TOOLS
+    return TOOLS_OF[role]
+
+
 DIRECTOR_TOOL_NAMES = tuple(
     dict.fromkeys((*TOOLS_OF["ic"], *TOOLS_OF["manager"], *REVIEW_MANAGER_TOOLS))
 )
@@ -179,7 +181,7 @@ TOGETHER_WORTH_SAYING = 3
 # How many earlier declines for the same directories a proposal is shown with.
 DECLINED_TOLD = 3
 # How long a model may take to name a team before the team keeps the name
-# it has; the root's agents are not briefed until then.
+# it has; a session's first IC is not briefed until then.
 SUMMARY_TIMEOUT_SECONDS = 20.0
 # How long a model may take over a team's diff, or over an agent's reports.
 MODEL_CALL_TIMEOUT_SECONDS = 120.0
@@ -201,12 +203,6 @@ RESTART_NOTE = (
     "The server was restarted while you were working. The command or edit "
     "you were in the middle of may not have finished: check what is there "
     "before you carry on with your task."
-)
-# What a team's IC is told when a pull found other commits for its branch.
-OTHER_WORK_NOTE = (
-    "A pull brought other commits for your team's branch {branch} from "
-    "{remote}. They are at {ref} and are not in your checkout. Merge them "
-    "into your branch (`git merge {ref}`), settle what clashes, and carry on."
 )
 # How often a merge is made again because the org was saved meanwhile.
 _MERGE_ATTEMPTS = 4
@@ -250,7 +246,7 @@ class _Held(Exception):
     """The org was paused before a step could be finished."""
 
 
-def agent_conversation(node: OrgNode, role: AgentRole) -> str | None:
+def agent_conversation(node: SessionTeam, role: AgentRole) -> str | None:
     """The conversation of the node's agent in ``role``, if it has one."""
     for agent in node.agents:
         if agent.role == role:
@@ -258,14 +254,7 @@ def agent_conversation(node: OrgNode, role: AgentRole) -> str | None:
     return None
 
 
-def team_of(node: OrgNode) -> str:
-    """The team of the org ``node`` is, or is the work of in a session.
-    What is kept for a team whatever session worked on it, such as its
-    reports, is kept under this."""
-    return team_id_of(node)
-
-
-def hand_over_of(node: OrgNode) -> HandOverMode | None:
+def hand_over_of(node: SessionTeam) -> HandOverMode | None:
     """The hand-over mode of the node's IC, if it is or was in it."""
     for agent in node.agents:
         if agent.role == "ic":
@@ -298,7 +287,7 @@ def _checkout_root(workspace: str) -> Path:
     return Path(os.path.realpath(top))
 
 
-def apart(team: OrgNode, above: OrgNode) -> bool:
+def apart(team: SessionTeam, above: SessionTeam) -> bool:
     """Whether a team works in a checkout of its own, not in the one of
     the team above."""
     return _checkout_root(team.worktree_path) != _checkout_root(above.worktree_path)
@@ -315,7 +304,6 @@ class ServiceState:
         self,
         repo_dir: Path,
         *,
-        fixture: bool = False,
         save_delay: float = SAVE_DELAY_SECONDS,
         run_limit_retry: float = RUN_LIMIT_RETRY_SECONDS,
         worktree_root: Path | None = None,
@@ -354,7 +342,6 @@ class ServiceState:
         self._directory = repo_dir
         # Where the org is; moves up when the store is loaded from above.
         self._repo_dir = repo_dir
-        self._fixture = fixture
         self._worktree_root = worktree_root
         self._find_sandbox = find_sandbox
         self._summary_timeout = summary_timeout
@@ -435,7 +422,6 @@ class ServiceState:
     def from_config(cls, config: Config) -> Self:
         return cls(
             config.director_repo_path or config.workspace_path,
-            fixture=config.director_fixture,
             worktree_root=config.conversation_worktree_root,
             find_sandbox=find_bwrap,
             remembered=config.conversations_path.parent / _REMEMBERED_FILE,
@@ -466,6 +452,12 @@ class ServiceState:
                 "repository. Point OH_DIRECTOR_REPO_PATH at one."
             )
         return self._memory()
+
+    @property
+    def repo_dir(self) -> Path:
+        """The repository the org is in."""
+        _ = self.store  # settles which repository the org is in
+        return self._repo_dir
 
     def _memory(self) -> GitStore:
         return GitStore(self._repo_dir)
@@ -515,7 +507,6 @@ class ServiceState:
             repo_path=str(self._repo_dir),
             directory=self._home(),
             is_git_repository=is_git_repository(self._repo_dir),
-            fixture=self._fixture,
             boundary_enforcement="sandbox" if self._bwrap else "checks",
             paused=self._paused if self._runs() else None,
             merging=self._runs().get("merge") is not None,
@@ -671,7 +662,7 @@ class ServiceState:
             await self._quiet.wait()
             await asyncio.sleep(0)
 
-    def _conversations_below(self, team: OrgNode) -> list[str]:
+    def _conversations_below(self, team: SessionTeam) -> list[str]:
         """The conversations of a team and of every team below it."""
         store = self.store
         teams = [team]
@@ -696,7 +687,7 @@ class ServiceState:
             return False
         node = found[0]
         return node.stopped is not None or any(
-            above.stopped is not None for above in store.ancestors(node.id)
+            above.stopped is not None for above in store.above(node.id)
         )
 
     def _restart_clocks(self, run: RunState) -> None:
@@ -744,7 +735,7 @@ class ServiceState:
             return self._run
 
     def _open_run_state(self) -> RunState:
-        if self._fixture or not is_git_repository(self._repo_dir):
+        if not is_git_repository(self._repo_dir):
             return RunState(None)
         try:
             return RunState(self._shells().parent / _RUN_STATE)
@@ -832,7 +823,7 @@ class ServiceState:
             What to start the agent's terminal with, or None when it needs
             no shell of its own.
         """
-        node = self.store.get(node_id)
+        node = self.store.place(node_id)
         conversation_id = hand_over or (
             agent_conversation(node, role) if node else None
         )
@@ -846,7 +837,7 @@ class ServiceState:
             return None
         shells = self._shells()
         git_dir = str(shells.parent)
-        children = self.store.children(node_id)
+        children = self.store.below(node_id)
         sub_teams = [child.boundary.path for child in children]
         # Its git commits nothing in a sub-team's directory; it may still
         # write in that of a team that has not started.
@@ -904,7 +895,7 @@ class ServiceState:
         return {"terminal": {"terminal_type": "subprocess", "shell_path": str(script)}}
 
     def _confine_all(self) -> None:
-        for node in self.store.all():
+        for node in self.store.places():
             for agent in node.agents:
                 try:
                     self._confine(node.id, agent.role)
@@ -918,10 +909,6 @@ class ServiceState:
 
     def _load_store(self) -> OrgStore:
         store = OrgStore()
-        if self._fixture:
-            store.replace_all(build_fixture_nodes())
-            logger.info("Director serving the fixture tree (%d nodes)", len(store))
-            return store
         remembered = self._remembered_repo()
         if remembered is None or not self._load_from(remembered, store):
             self._load_from(self._directory, store)
@@ -1102,7 +1089,7 @@ class ServiceState:
 
     async def _save(self) -> None:
         store = self._store
-        if store is None or self._fixture:
+        if store is None:
             return
         try:
             await asyncio.to_thread(self._save_tree, store)
@@ -1114,12 +1101,8 @@ class ServiceState:
             board = create_org_board(self._repo_dir)
             save_org(board, store)
             run = self._runs()
-            run.replace_marks(
-                TEAM, {node.id: fingerprint(node) for node in store.all()}
-            )
             # Sessions are this machine's: kept here, not with the org.
             run.replace_marks(SESSION, kept_sessions(store))
-            run.put("org_commit", board.head())
 
     def _wait_for_save(self) -> None:
         with self._saving:
@@ -1134,7 +1117,7 @@ class ServiceState:
                 return AGENT_PAUSED
         return _AGENT_STATUS.get(status, "idle")
 
-    def _forget_shells(self, team: OrgNode) -> None:
+    def _forget_shells(self, team: SessionTeam) -> None:
         """Remove what the shells of a team's agents were made of."""
         try:
             common, own = (
@@ -1175,7 +1158,9 @@ def _spec_file(directory: str) -> str:
     return f"{directory}/{SPEC_FILE}" if directory else SPEC_FILE
 
 
-def _child_node(taken: set[str], parent: OrgNode, child: SplitChild) -> OrgNodeInput:
+def _child_node(
+    taken: set[str], parent: SessionTeam, child: SplitChild
+) -> SessionTeamInput:
     """The team a split makes of ``child`` in the session of ``parent``,
     for a team whose id is not in ``taken`` and is added to it."""
     base = ".".join(
@@ -1186,8 +1171,10 @@ def _child_node(taken: set[str], parent: OrgNode, child: SplitChild) -> OrgNodeI
         attempt += 1
         team_id = f"{base}-{attempt}"
     taken.add(team_id)
-    made = OrgNodeInput(
-        id=team_id,
+    return SessionTeamInput(
+        id=session_team_id(team_id, parent.session),
+        session=parent.session,
+        team_id=team_id,
         parent_id=parent.id,
         title=child.title,
         boundary=child_boundary(child),
@@ -1200,31 +1187,6 @@ def _child_node(taken: set[str], parent: OrgNode, child: SplitChild) -> OrgNodeI
         headline=provisional_summary(child.task).headline,
         spec_summary=_summary_of(child.task),
     )
-    session = session_id_of(parent)
-    if not session:
-        return made
-    return SessionTeamInput(
-        **made.model_dump(exclude={"id"}),
-        id=session_team_id(team_id, session),
-        session=session,
-        team_id=team_id,
-    )
-
-
-def _unit(kept: dict[str, Any]) -> OrgNodeInput:
-    """A team as it was kept in a plan: of the org, or of a session."""
-    if "session" in kept:
-        return SessionTeamInput.model_validate(kept)
-    return OrgNodeInput.model_validate(kept)
-
-
-def _shared_root(nodes: list[dict[str, Any]]) -> str | None:
-    """Where the repository is on the machine that saved ``nodes``, when
-    their root team works in the repository's own checkout."""
-    root = next((node for node in nodes if node["parent_id"] is None), None)
-    if root is None or root["isolation"] != "shared":
-        return None
-    return root["worktree_path"]
 
 
 # Steps whose outcome is in the tree alone. The steps that start agents are

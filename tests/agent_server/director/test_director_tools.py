@@ -14,12 +14,11 @@ from openhands.agent_server.director import pod_actions
 from openhands.agent_server.director.models import (
     AgentRole,
     CreateOrgRequest,
-    OrgNode,
+    SessionTeam,
     SplitChild,
 )
 from openhands.agent_server.director.org_store import (
     review_place_id,
-    reviews_only,
     session_id_of,
     team_id_of,
 )
@@ -109,20 +108,18 @@ async def use(
     return observation
 
 
-def node(service: DirectorService, node_id: str) -> OrgNode:
+def node(service: DirectorService, node_id: str) -> SessionTeam:
     """A place by its id, or the place of the session opened first at the
     team of that id."""
-    found = service.store.get(node_id)
+    found = service.store.place(node_id)
     if "@" not in node_id:
         found = next(
             (
                 place
-                for place in service.store.all()
-                if session_id_of(place)
-                and not reviews_only(place)
-                and team_id_of(place) == node_id
+                for place in service.store.places()
+                if not place.review_only and place.team_id == node_id
             ),
-            found,
+            None,
         )
     assert found is not None
     return found
@@ -130,7 +127,7 @@ def node(service: DirectorService, node_id: str) -> OrgNode:
 
 def reviewer(service: DirectorService, node_id: str = "root") -> str | None:
     """The IC that reviews the session of the place ``node_id``."""
-    place = service.store.get(review_place_of(service, node_id))
+    place = service.store.place(review_place_of(service, node_id))
     assert place is not None
     return agent_conversation(place, "ic")
 
@@ -187,16 +184,16 @@ async def split_root(service: DirectorService) -> None:
     await tasked(service)
 
 
-def sub_teams(service: DirectorService, node_id: str = "root") -> list[OrgNode]:
+def sub_teams(service: DirectorService, node_id: str = "root") -> list[SessionTeam]:
     """What the session opened first has directly below a team."""
-    return service.store.children(node(service, node_id).id)
+    return service.store.below(node(service, node_id).id)
 
 
 def has_place(service: DirectorService, team_id: str) -> bool:
     """Whether a session has the team ``team_id``."""
     return any(
         session_id_of(place) and team_id_of(place) == team_id
-        for place in service.store.all()
+        for place in service.store.places()
     )
 
 
@@ -649,7 +646,7 @@ async def test_what_an_ic_escalates_goes_to_the_ic_above_and_then_to_the_human(
     told = launcher.messages_to(ic(service))[-1]
     assert "The IC of team 'API'" in told and "Cents or decimals?" in told
     assert len(launcher.messages_to(manager(service))) == to_manager
-    assert service.store.escalations("root") == []
+    assert service.store.escalations() == []
     seen = {
         role: json.loads((await use(service, agent, ReadNodeContextTool, READ)).text)
         for role, agent in (("ic", ic(service)), ("manager", manager(service)))
@@ -682,7 +679,7 @@ async def test_what_an_ic_escalates_goes_to_the_ic_above_and_then_to_the_human(
     assert by_a_peer.is_error and "not with your team" in by_a_peer.text
     assert by_the_manager.is_error and "raised by an IC" in by_the_manager.text
     assert not passed.is_error and "waits on the human" in passed.text
-    [waiting] = service.store.escalations("root")
+    [waiting] = service.store.escalations()
     assert waiting.escalation.held_by is None
     assert waiting.escalation.handoffs[0].reason == "Finance has to choose."
 
@@ -775,7 +772,7 @@ async def test_what_the_top_team_escalates_waits_on_the_human(
     raised = await use(service, raiser, RaiseEscalationTool, CENTS)
 
     assert "waits on the human" in raised.text
-    [waiting] = service.store.escalations("root")
+    [waiting] = service.store.escalations()
     assert waiting.escalation.held_by is None
     assert node(service, "root").status == ("blocked" if role == "ic" else "idle")
 

@@ -1,16 +1,15 @@
-"""OrgStore, the fixture tree and persistence in a hidden git ref."""
+"""OrgStore and persistence in a hidden git ref."""
 
 from pathlib import Path
 
 import pytest
 
-from openhands.agent_server.director.fixture import build_fixture_nodes
 from openhands.agent_server.director.models import (
     AgentRef,
     AgentRole,
+    Escalation,
     Review,
     ReviewState,
-    StatusCounts,
 )
 from openhands.agent_server.director.org_persistence import (
     ORG_REF,
@@ -22,18 +21,28 @@ from openhands.agent_server.director.org_store import (
     OrgChange,
     OrgStore,
     OrgStoreError,
+    review_place_id,
+    session_team_id,
     status_of,
 )
 from openhands.sdk.errors import NotFound
 from tests.agent_server.director.conftest import (
     make_escalation,
     make_node,
+    open_session_in,
     run_git,
+    session_places,
     small_tree,
 )
 
 
 AT = "2026-01-01T00:00:00+00:00"
+SESSION = "s"
+
+
+def at(team_id: str) -> str:
+    """The place the session has at a team."""
+    return session_team_id(team_id, SESSION)
 
 
 @pytest.fixture
@@ -44,13 +53,21 @@ def store() -> OrgStore:
     return store
 
 
-def record(store: OrgStore, focus_id: str) -> list[OrgChange]:
+@pytest.fixture
+def working(store: OrgStore) -> OrgStore:
+    """The small tree with a session opened at its top team."""
+    open_session_in(store, "root", SESSION)
+    return store
+
+
+def record(store: OrgStore, focus_id: str, *, full: bool = False) -> list[OrgChange]:
     events: list[OrgChange] = []
-    store.subscribe(focus_id, events.append)
+    store.subscribe(focus_id, events.append, full=full)
     return events
 
 
 def describe(events: list[OrgChange]) -> list[tuple[str, str]]:
+    """The changes to the tree and to what waits on the human."""
     described: list[tuple[str, str]] = []
     for event in events:
         if event.type == "node_upsert":
@@ -63,15 +80,14 @@ def describe(events: list[OrgChange]) -> list[tuple[str, str]]:
     return described
 
 
-def test_derives_children_ancestors_and_subtree_rollups(store: OrgStore):
-    root = store.get("root")
+def test_derives_the_teams_below_and_above_each_team(store: OrgStore):
+    root = store.team("root")
     assert root is not None
 
     assert root.child_ids == ["a", "b"]
-    assert [node.id for node in store.ancestors("a2")] == ["root", "a"]
-    assert [node.id for node in store.all()] == ["root", "a", "b", "a1", "a2"]
-    assert root.descendant_counts == StatusCounts(blocked=1, done=2, idle=1)
-    assert store.children("a")[0].descendant_counts == StatusCounts()
+    assert [node.id for node in store.sub_teams("a")] == ["a1", "a2"]
+    assert [node.id for node in store.teams_above("a2")] == ["root", "a"]
+    assert [node.id for node in store.teams()] == ["root", "a", "b", "a1", "a2"]
 
 
 def test_snapshot_holds_the_focus_its_ancestors_and_direct_reports(store: OrgStore):
@@ -96,74 +112,82 @@ def test_subscribers_hear_about_the_reports_of_nodes_they_expanded(store: OrgSto
     store.subscribe("root", collapsed.append)
     store.subscribe("root", expanded.append, ["a"])
 
-    store.upsert(make_node("a1", "a", status="done", path="renamed"))
+    store.upsert(make_node("a1", "a", path="renamed"))
     store.remove("a2")
 
-    assert describe(collapsed) == [("node_upsert", "a"), ("node_upsert", "root")]
+    assert describe(collapsed) == [("node_upsert", "a")]
     assert describe(expanded) == [
         ("node_upsert", "a1"),
         ("node_removed", "a2"),
         ("node_upsert", "a"),
-        ("node_upsert", "root"),
     ]
+
+
+def test_a_session_has_a_place_at_its_team_and_at_every_team_below(store: OrgStore):
+    opened = open_session_in(store, "a", SESSION)
+
+    assert opened.id == at("a") and store.opens_session(opened)
+    assert opened.parent_id == review_place_id("root", SESSION)
+    assert [place.id for place in store.below(at("a"))] == [at("a1"), at("a2")]
+    assert [place.id for place in store.above(at("a2"))] == [at("a")]
+    assert store.above(at("a")) == []
+    assert store.teams_below(at("a")) == 2
+    assert store.instance("a2", SESSION) == store.place(at("a2"))
+    assert store.place(at("b")) is None
+
+
+def test_a_place_is_no_team_of_the_tree(working: OrgStore):
+    snapshot = working.snapshot("root", full=True)
+    root = working.team("root")
+
+    assert snapshot is not None and root is not None
+    assert [node.id for node in snapshot.nodes] == ["root", "a", "b", "a1", "a2"]
+    assert root.child_ids == ["a", "b"]
+    assert working.team(at("a")) is None and working.place("a") is None
+    assert working.get(at("a")) == working.place(at("a"))
+    assert working.get("a") == working.team("a")
 
 
 class TestEscalations:
     @pytest.fixture
-    def store(self, store: OrgStore) -> OrgStore:
-        store.upsert(
-            make_node(
-                "a2",
-                "a",
-                escalations=[
-                    make_escalation(
-                        "late",
-                        raised_at="2026-11-12T00:00:00Z",
-                        passed_up_by=("a", "root"),
-                    )
-                ],
-            )
+    def store(self, working: OrgStore) -> OrgStore:
+        working.update_place(
+            at("a2"),
+            escalations=[
+                make_escalation(
+                    "late",
+                    raised_at="2026-11-12T00:00:00Z",
+                    passed_up_by=(at("a"), at("root")),
+                )
+            ],
         )
-        store.upsert(
-            make_node(
-                "b",
-                "root",
-                escalations=[
-                    make_escalation("early", passed_up_by=("root",)),
-                    make_escalation(
-                        "broken",
-                        kind="critical_issue",
-                        raised_at="2026-11-13T00:00:00Z",
-                        passed_up_by=("root",),
-                    ),
-                ],
-            )
+        working.update_place(
+            at("b"),
+            escalations=[
+                make_escalation("early", passed_up_by=(at("root"),)),
+                make_escalation(
+                    "broken",
+                    kind="critical_issue",
+                    raised_at="2026-11-13T00:00:00Z",
+                    passed_up_by=(at("root"),),
+                ),
+            ],
         )
-        return store
-
-    def test_every_node_counts_the_escalations_at_or_below_it(self, store: OrgStore):
-        counts = {node.id: node.escalation_count for node in store.all()}
-
-        assert counts == {"root": 3, "a": 1, "b": 2, "a1": 0, "a2": 1}
+        return working
 
     def test_lists_critical_issues_first_then_the_longest_waiting(
         self, store: OrgStore
     ):
-        listed = store.escalations("root")
+        listed = store.escalations()
 
         assert [item.escalation.id for item in listed] == ["broken", "early", "late"]
         assert [step.id for step in listed[-1].path] == ["root", "a", "a2"]
-        assert listed[-1].node_id == "a2"
-
-    def test_lists_only_what_is_at_or_below_the_focused_node(self, store: OrgStore):
-        assert [item.escalation.id for item in store.escalations("a")] == ["late"]
-        assert store.escalations("a1") == []
-        assert store.escalations("missing") == []
+        assert (listed[-1].node_id, listed[-1].session_id) == ("a2", SESSION)
 
     def test_a_snapshot_carries_what_waits_on_the_human_anywhere_in_the_tree(
         self, store: OrgStore
     ):
-        snapshot = store.snapshot("a")
+        snapshot = store.snapshot("a1")
 
         assert snapshot is not None
         assert [item.escalation.id for item in snapshot.escalations] == [
@@ -175,77 +199,73 @@ class TestEscalations:
     def test_raising_and_settling_announce_the_new_list(self, store: OrgStore):
         events = record(store, "a")
 
-        store.upsert(
-            make_node(
-                "a1",
-                "a",
-                escalations=[
-                    make_escalation(
-                        "new", kind="critical_issue", passed_up_by=("a", "root")
-                    )
-                ],
-            )
+        store.update_place(
+            at("a1"),
+            escalations=[
+                make_escalation(
+                    "new", kind="critical_issue", passed_up_by=(at("a"), at("root"))
+                )
+            ],
         )
-        store.upsert(make_node("a2", "a"))
+        store.update_place(at("a2"), escalations=[])
 
         assert describe(events) == [
-            ("node_upsert", "a1"),
-            ("node_upsert", "a"),
-            ("node_upsert", "root"),
             ("escalations", "new,broken,early,late"),
-            ("node_upsert", "a2"),
-            ("node_upsert", "a"),
-            ("node_upsert", "root"),
             ("escalations", "new,broken,early"),
         ]
 
     def test_changes_that_leave_the_list_alone_announce_nothing(self, store: OrgStore):
         events = record(store, "a")
 
-        store.upsert(make_node("a1", "a", status="working"))
-        # Held by the node above: not the human's business yet.
-        store.upsert(
-            make_node("a1", "a", escalations=[make_escalation("held", held_by="a")])
+        store.set_agent(at("a1"), "ic", status="working")
+        # Held by the place above: not the human's business yet.
+        store.update_place(
+            at("a1"), escalations=[make_escalation("held", held_by=at("a"))]
         )
 
         assert "escalations" not in [event.type for event in events]
 
-    def test_removing_a_subtree_drops_its_escalations(self, store: OrgStore):
+    def test_removing_a_place_drops_its_escalations_and_those_below(
+        self, store: OrgStore
+    ):
         events = record(store, "root")
 
-        store.remove("a")
+        store.remove(at("a"))
 
-        root = store.get("root")
-        assert root is not None
-        assert root.escalation_count == 2
-        assert describe(events)[-1] == ("escalations", "broken,early")
+        assert [item.escalation.id for item in store.escalations()] == [
+            "broken",
+            "early",
+        ]
+        assert describe(events) == [("escalations", "broken,early")]
 
-    def test_renaming_a_node_on_the_path_announces_the_new_path(self, store: OrgStore):
+    def test_closing_a_session_drops_its_escalations(self, store: OrgStore):
         events = record(store, "root")
 
-        store.upsert(
-            make_node("a", "root", status="blocked").model_copy(
-                update={"title": "renamed"}
-            )
-        )
+        assert store.close_session(SESSION) is True
 
-        last = events[-1]
-        assert last.type == "escalations"
-        assert [step.title for step in last.escalations[-1].path] == [
+        assert store.escalations() == []
+        assert describe(events) == [("escalations", "")]
+
+    def test_renaming_a_place_on_the_path_announces_the_new_path(self, store: OrgStore):
+        events = record(store, "root")
+
+        store.update_place(at("a"), title="renamed")
+
+        told = [event for event in events if event.type == "escalations"]
+        assert len(told) == 1
+        assert [step.title for step in told[0].escalations[-1].path] == [
             "root",
             "renamed",
             "a2",
         ]
 
-    def test_only_what_waits_on_the_human_is_listed_and_counted(self, store: OrgStore):
-        store.upsert(
-            make_node("a1", "a", escalations=[make_escalation("held", held_by="a")])
+    def test_only_what_waits_on_the_human_is_listed(self, store: OrgStore):
+        store.update_place(
+            at("a1"), escalations=[make_escalation("held", held_by=at("a"))]
         )
 
-        root = store.get("root")
-        assert root is not None
-        assert root.escalation_count == 3
-        assert "held" not in [e.escalation.id for e in store.escalations("root")]
+        assert "held" not in [item.escalation.id for item in store.escalations()]
+        assert len(store.escalations()) == 3
 
     def test_escalations_are_not_saved_with_the_tree(self, store: OrgStore, repo: Path):
         # What a team waits on is of the work, which is done in sessions
@@ -256,133 +276,147 @@ class TestEscalations:
 
         load_org(board, loaded)
 
-        assert store.escalations("root")
-        assert [node.escalations for node in loaded.all()] == [[]] * len(store.all())
-        assert loaded.escalations("root") == []
+        assert store.escalations()
+        assert len(loaded) == len(store)
+        assert (loaded.places(), loaded.escalations()) == ([], [])
 
 
 class TestEscalationChain:
-    """An escalation climbs one node at a time and reaches the human last."""
+    """An escalation climbs one place at a time and reaches the human last."""
 
-    def test_a_raised_escalation_goes_to_the_node_above_not_to_the_human(
+    @pytest.fixture
+    def store(self, working: OrgStore) -> OrgStore:
+        return working
+
+    def test_a_raised_escalation_goes_to_the_place_above_not_to_the_human(
         self, store: OrgStore
     ):
         events = record(store, "root")
 
         raised = store.raise_escalation(
-            "a2", "jwt", kind="design_decision", title="JWT or opaque?"
+            at("a2"), "jwt", kind="design_decision", title="JWT or opaque?"
         )
 
-        root = store.get("root")
-        assert root is not None
-        assert (raised.held_by, raised.handoffs) == ("a", [])
-        assert root.escalation_count == 0
-        assert store.escalations("root") == []
+        assert (raised.held_by, raised.handoffs) == (at("a"), [])
+        assert store.escalations() == []
         assert "escalations" not in [event.type for event in events]
 
-    def test_reaches_the_human_only_after_every_node_above_passed_it_up(
+    def test_reaches_the_human_only_after_every_place_above_passed_it_up(
         self, store: OrgStore
     ):
-        store.raise_escalation("a2", "jwt", kind="design_decision", title="t")
+        store.raise_escalation(at("a2"), "jwt", kind="design_decision", title="t")
         events = record(store, "root")
 
-        first = store.pass_up_escalation("a2", "jwt", reason="  needs b too ")
-        waiting_after_first = store.escalations("root")
-        second = store.pass_up_escalation("a2", "jwt", reason="needs a human")
+        first = store.pass_up_escalation(at("a2"), "jwt", reason="  needs b too ")
+        waiting_after_first = store.escalations()
+        second = store.pass_up_escalation(at("a2"), "jwt", reason="needs a human")
 
-        assert first.held_by == "root"
+        assert first.held_by == at("root")
         assert waiting_after_first == []
         assert second.held_by is None
         assert [(h.node_id, h.reason) for h in second.handoffs] == [
-            ("a", "needs b too"),
-            ("root", "needs a human"),
+            (at("a"), "needs b too"),
+            (at("root"), "needs a human"),
         ]
-        assert [e.escalation.id for e in store.escalations("root")] == ["jwt"]
-        assert {node.id: node.escalation_count for node in store.all()} == {
-            "root": 1,
-            "a": 1,
-            "b": 0,
-            "a1": 0,
-            "a2": 1,
-        }
-        assert describe(events)[-1] == ("escalations", "jwt")
+        assert [e.escalation.id for e in store.escalations()] == ["jwt"]
+        assert describe(events) == [("escalations", "jwt")]
 
-    def test_an_escalation_raised_by_the_root_has_only_the_human_above_it(
+    def test_an_escalation_of_the_place_a_session_was_opened_at_waits_on_the_human(
         self, store: OrgStore
     ):
+        # The place the session is reviewed from is above, and nobody
+        # stands there.
         raised = store.raise_escalation(
-            "root", "budget", kind="critical_issue", title="t"
+            at("root"), "budget", kind="critical_issue", title="t"
         )
 
         assert raised.held_by is None
-        assert [e.escalation.id for e in store.escalations("root")] == ["budget"]
+        assert [e.escalation.id for e in store.escalations()] == ["budget"]
+
+    def test_a_team_of_the_tree_raises_nothing(self, store: OrgStore):
+        with pytest.raises(NotFound):
+            store.raise_escalation("a2", "jwt", kind="design_decision", title="t")
+
+        assert store.escalations() == []
 
     def test_settling_closes_it_wherever_it_is_held(self, store: OrgStore):
-        store.raise_escalation("a2", "jwt", kind="design_decision", title="t")
-        store.raise_escalation("b", "leak", kind="critical_issue", title="t")
-        store.pass_up_escalation("b", "leak", reason="cannot")
+        store.raise_escalation(at("a2"), "jwt", kind="design_decision", title="t")
+        store.raise_escalation(at("b"), "leak", kind="critical_issue", title="t")
+        store.pass_up_escalation(at("b"), "leak", reason="cannot")
 
-        store.settle_escalation("a2", "jwt")
-        store.settle_escalation("b", "leak")
+        store.settle_escalation(at("a2"), "jwt")
+        store.settle_escalation(at("b"), "leak")
 
-        assert [node.escalations for node in store.all()] == [[]] * 5
-        assert store.escalations("root") == []
+        assert [place.escalations for place in store.places()] == [[]] * 6
+        assert store.escalations() == []
 
     def test_cannot_be_passed_up_past_the_human_or_without_a_reason(
         self, store: OrgStore
     ):
-        store.raise_escalation("b", "leak", kind="critical_issue", title="t")
+        store.raise_escalation(at("b"), "leak", kind="critical_issue", title="t")
 
         with pytest.raises(OrgStoreError, match="needs a reason"):
-            store.pass_up_escalation("b", "leak", reason="   ")
-        store.pass_up_escalation("b", "leak", reason="cannot")
+            store.pass_up_escalation(at("b"), "leak", reason="   ")
+        store.pass_up_escalation(at("b"), "leak", reason="cannot")
         with pytest.raises(OrgStoreError, match="already waits on the human"):
-            store.pass_up_escalation("b", "leak", reason="again")
+            store.pass_up_escalation(at("b"), "leak", reason="again")
 
-    def test_refuses_a_duplicate_id_and_unknown_nodes_or_escalations(
+    def test_refuses_a_duplicate_id_and_unknown_places_or_escalations(
         self, store: OrgStore
     ):
-        store.raise_escalation("b", "leak", kind="critical_issue", title="t")
+        store.raise_escalation(at("b"), "leak", kind="critical_issue", title="t")
 
         with pytest.raises(OrgStoreError, match="already has an escalation"):
-            store.raise_escalation("b", "leak", kind="critical_issue", title="t")
+            store.raise_escalation(at("b"), "leak", kind="critical_issue", title="t")
         with pytest.raises(NotFound):
             store.raise_escalation("nope", "x", kind="critical_issue", title="t")
         with pytest.raises(NotFound):
-            store.pass_up_escalation("b", "nope", reason="r")
+            store.pass_up_escalation(at("b"), "nope", reason="r")
         with pytest.raises(NotFound):
-            store.settle_escalation("b", "nope")
+            store.settle_escalation(at("b"), "nope")
 
     @pytest.mark.parametrize(
         "escalation",
         [
             # Straight to the human.
             make_escalation("x"),
-            # Skipped its parent.
-            make_escalation("x", passed_up_by=("root",)),
-            # Passed up by its parent but still held by it.
-            make_escalation("x", passed_up_by=("a",), held_by="a"),
-            # Held by a node that is not above it.
-            make_escalation("x", held_by="b"),
+            # Skipped the place above.
+            make_escalation("x", passed_up_by=(at("root"),)),
+            # Passed up by the place above but still held by it.
+            make_escalation("x", passed_up_by=(at("a"),), held_by=at("a")),
+            # Held by a place that is not above it.
+            make_escalation("x", held_by=at("b")),
+            # Held by the place the session is reviewed from.
+            make_escalation(
+                "x",
+                passed_up_by=(at("a"), at("root")),
+                held_by=review_place_id("root", SESSION),
+            ),
         ],
-        ids=["no-handoffs", "skipped-parent", "wrong-holder", "holder-not-above"],
+        ids=[
+            "no-handoffs",
+            "skipped-parent",
+            "wrong-holder",
+            "holder-not-above",
+            "held-by-the-review-place",
+        ],
     )
-    def test_refuses_an_escalation_that_skipped_a_node_on_its_way_up(
-        self, store: OrgStore, escalation
+    def test_refuses_an_escalation_that_skipped_a_place_on_its_way_up(
+        self, store: OrgStore, escalation: Escalation
     ):
-        before = store.all()
+        before = store.places()
+        fresh = OrgStore()
+        fresh.replace_all(small_tree())
+        session, places = session_places(small_tree(), "root", SESSION)
+        places[-1] = places[-1].model_copy(update={"escalations": [escalation]})
 
         with pytest.raises(OrgStoreError, match="must be passed up through"):
-            store.upsert(make_node("a2", "a", escalations=[escalation]))
+            store.update_place(at("a2"), escalations=[escalation])
         with pytest.raises(OrgStoreError, match="must be passed up through"):
-            OrgStore().replace_all(
-                [
-                    *small_tree()[:4],
-                    make_node("a2", "a", escalations=[escalation]),
-                ]
-            )
+            fresh.open_session(session, places)
 
-        assert store.all() == before
+        assert store.places() == before
+        assert (fresh.places(), fresh.sessions()) == ([], [])
 
 
 class TestFullSubscription:
@@ -397,8 +431,7 @@ class TestFullSubscription:
     def test_a_full_subscriber_hears_about_every_node_below_its_focus(
         self, store: OrgStore
     ):
-        events: list[OrgChange] = []
-        store.subscribe("a", events.append, full=True)
+        events = record(store, "a", full=True)
 
         store.upsert(make_node("deep", "a1"))
         store.upsert(make_node("deeper", "deep"))
@@ -408,62 +441,36 @@ class TestFullSubscription:
         assert describe(events) == [
             ("node_upsert", "deep"),
             ("node_upsert", "a1"),
-            ("node_upsert", "a"),
-            ("node_upsert", "root"),
             ("node_upsert", "deeper"),
             ("node_upsert", "deep"),
-            ("node_upsert", "a1"),
-            ("node_upsert", "a"),
-            ("node_upsert", "root"),
-            ("node_upsert", "root"),
             ("node_removed", "deeper"),
             ("node_removed", "deep"),
             ("node_upsert", "a1"),
-            ("node_upsert", "a"),
-            ("node_upsert", "root"),
         ]
 
 
-def test_a_status_change_announces_each_ancestor_whose_rollup_changed(
-    store: OrgStore,
-):
+def test_an_update_announces_only_the_node(store: OrgStore):
     events = record(store, "a2")
 
-    store.upsert(make_node("a2", "a", status="done", path="svc/a/two"))
-
-    assert describe(events) == [
-        ("node_upsert", "a2"),
-        ("node_upsert", "a"),
-        ("node_upsert", "root"),
-    ]
-    root = store.get("root")
-    assert root is not None
-    assert root.descendant_counts == StatusCounts(blocked=1, done=3)
-
-
-def test_an_update_that_keeps_the_rollups_announces_only_the_node(store: OrgStore):
-    events = record(store, "a2")
-    unchanged_status = make_node("a2", "a", status="idle", path="svc/a/two")
-
-    store.upsert(unchanged_status.model_copy(update={"title": "renamed"}))
+    store.update_team("a2", title="renamed")
 
     assert describe(events) == [("node_upsert", "a2")]
 
 
-def test_updating_a_node_keeps_its_children_and_rollup(store: OrgStore):
-    updated = store.upsert(make_node("a", "root", status="done", path="svc/a"))
+def test_updating_a_node_keeps_its_children(store: OrgStore):
+    updated = store.upsert(make_node("a", "root", path="svc/a"))
 
     assert updated.child_ids == ["a1", "a2"]
-    assert updated.descendant_counts == StatusCounts(done=1, idle=1)
 
 
 def test_subscribers_only_hear_about_nodes_in_their_snapshot(store: OrgStore):
     at_b = record(store, "b")
     at_root = record(store, "root")
 
-    # a1 is a grandchild of root and unrelated to b; its change alters a's
-    # rollup (a child of root) and root's own.
-    store.upsert(make_node("a1", "a", status="working", path="svc/a/one"))
+    # a1 is a grandchild of root and unrelated to b; a is a child of root.
+    store.update_team("a1", headline="one")
+    store.update_team("a", headline="two")
+    store.update_team("root", headline="three")
 
     assert describe(at_root) == [("node_upsert", "a"), ("node_upsert", "root")]
     assert describe(at_b) == [("node_upsert", "root")]
@@ -474,17 +481,16 @@ def test_a_new_child_announces_itself_and_its_parents_child_list(store: OrgStore
 
     store.upsert(make_node("b1", "b", path="svc/b/one"))
 
-    assert describe(events)[:2] == [("node_upsert", "b1"), ("node_upsert", "b")]
+    assert describe(events) == [("node_upsert", "b1"), ("node_upsert", "b")]
     parent = events[1]
     assert parent.type == "node_upsert"
     assert parent.node.child_ids == ["b1"]
 
 
-def test_removing_a_subtree_announces_leaves_first_and_fixes_rollups(
-    store: OrgStore,
-):
+def test_removing_a_subtree_announces_leaves_first(store: OrgStore):
     inside = record(store, "a1")
     above = record(store, "root")
+    whole = record(store, "root", full=True)
 
     assert store.remove("a") is True
 
@@ -492,11 +498,15 @@ def test_removing_a_subtree_announces_leaves_first_and_fixes_rollups(
     # root go, and nothing after that.
     assert describe(inside) == [("node_removed", "a1"), ("node_removed", "a")]
     assert describe(above) == [("node_removed", "a"), ("node_upsert", "root")]
-    root = store.get("root")
+    assert describe(whole)[-2:] == [("node_removed", "a"), ("node_upsert", "root")]
+    assert sorted(describe(whole)[:2]) == [
+        ("node_removed", "a1"),
+        ("node_removed", "a2"),
+    ]
+    root = store.team("root")
     assert root is not None
     assert root.child_ids == ["b"]
-    assert root.descendant_counts == StatusCounts(done=1)
-    assert store.get("a2") is None
+    assert store.team("a2") is None
     assert store.remove("a") is False
 
 
@@ -514,7 +524,7 @@ def test_unsubscribing_stops_delivery(store: OrgStore):
     assert snapshot is not None
 
     unsubscribe()
-    store.upsert(make_node("b", "root", status="blocked", path="svc/b"))
+    store.update_team("b", headline="changed")
 
     assert events == []
 
@@ -539,24 +549,24 @@ def test_subscribing_to_an_unknown_node_registers_nothing(store: OrgStore):
     ids=["second root", "missing parent", "moved to another parent"],
 )
 def test_rejects_nodes_that_do_not_fit_the_tree(store: OrgStore, node):
-    before = store.all()
+    before = store.teams()
 
     with pytest.raises(OrgStoreError):
         store.upsert(node)
 
-    assert store.all() == before
+    assert store.teams() == before
 
 
 class TestReplaceAll:
-    def test_loads_nodes_in_any_order_and_computes_rollups(self):
+    def test_loads_nodes_in_any_order(self):
         store = OrgStore()
 
         store.replace_all(reversed(small_tree()))
 
-        root = store.get("root")
+        root = store.team("root")
         assert root is not None
         assert root.child_ids == ["b", "a"]
-        assert root.descendant_counts == StatusCounts(blocked=1, done=2, idle=1)
+        assert [node.id for node in store.teams_above("a1")] == ["root", "a"]
 
     def test_accepts_an_empty_tree(self, store: OrgStore):
         store.replace_all([])
@@ -576,32 +586,12 @@ class TestReplaceAll:
         ids=["duplicate id", "orphan", "two roots", "no root", "detached cycle"],
     )
     def test_a_malformed_tree_leaves_the_store_untouched(self, store: OrgStore, nodes):
-        before = store.all()
+        before = store.teams()
 
         with pytest.raises(OrgStoreError):
             store.replace_all(nodes)
 
-        assert store.all() == before
-
-
-def test_the_fixture_is_one_consistent_deterministic_tree():
-    store = OrgStore()
-
-    store.replace_all(build_fixture_nodes())
-
-    root = store.get("root")
-    assert root is not None
-    assert len(store) == 487
-    assert sum(root.descendant_counts.model_dump().values()) == 486
-    assert len(root.child_ids) == 6
-    # Four are open; three are still held by a node above the one that
-    # raised them.
-    assert sum(len(node.escalations) for node in store.all()) == 4
-    assert root.escalation_count == 1
-    assert [item.node_id for item in store.escalations("root")] == [
-        "data.worker.module-03"
-    ]
-    assert build_fixture_nodes() == build_fixture_nodes()
+        assert store.teams() == before
 
 
 class TestPersistence:
@@ -609,8 +599,6 @@ class TestPersistence:
         self, repo: Path, store: OrgStore
     ):
         board = create_org_board(repo)
-        # Whether a node is working is not saved; see the test for that below.
-        store.update_node("root", status="idle")
 
         save_org(board, store)
         head = board.head()
@@ -618,18 +606,7 @@ class TestPersistence:
         loaded = OrgStore()
 
         assert load_org(board, loaded) is True
-        # The teams come back as the org's reference: nothing of the work.
-        assert [
-            (node.id, node.parent_id, node.title, node.boundary)
-            for node in loaded.all()
-        ] == [
-            (node.id, node.parent_id, node.title, node.boundary) for node in store.all()
-        ]
-        assert all(
-            (node.agents, node.status, node.escalations, node.review)
-            == ([], "idle", [], None)
-            for node in loaded.all()
-        )
+        assert loaded.teams() == store.teams()
         # Saving an unchanged tree adds no commit, and nothing leaks into the
         # working tree.
         assert board.head() == head
@@ -650,60 +627,70 @@ class TestPersistence:
             load_org(board, OrgStore())
 
 
-def with_pod(node_id: str, parent_id: str | None, path: str, ic: str, manager: str):
-    return make_node(node_id, parent_id, path=path).model_copy(
-        update={
-            "agents": [
-                AgentRef(role="ic", conversation_id=ic, status="idle"),
-                AgentRef(role="manager", conversation_id=manager, status="idle"),
-            ]
-        }
+def give_pod(store: OrgStore, place_id: str, ic: str, manager: str) -> None:
+    store.update_place(
+        place_id,
+        agents=[
+            AgentRef(role="ic", conversation_id=ic, status="idle"),
+            AgentRef(role="manager", conversation_id=manager, status="idle"),
+        ],
     )
 
 
-def test_an_agents_conversation_leads_back_to_its_node_and_role():
-    store = OrgStore()
-    store.upsert(with_pod("root", None, "", "conv-ic", "conv-mgr"))
+def test_an_agents_conversation_leads_back_to_its_place_and_role(working: OrgStore):
+    give_pod(working, at("root"), "conv-ic", "conv-mgr")
 
-    found = store.find_by_conversation("conv-mgr")
+    found = working.find_by_conversation("conv-mgr")
 
     assert found is not None
-    node, role = found
-    assert (node.id, role) == ("root", "manager")
-    assert store.find_by_conversation("conv-unknown") is None
+    place, role = found
+    assert (place.id, role) == (at("root"), "manager")
+    assert working.find_by_conversation("conv-unknown") is None
 
 
-def test_a_removed_or_replaced_conversation_no_longer_leads_to_a_node():
-    store = OrgStore()
-    store.upsert(with_pod("root", None, "", "conv-ic", "conv-mgr"))
-    store.upsert(with_pod("a", "root", "svc/a", "conv-a-ic", "conv-a-mgr"))
+def test_a_removed_or_replaced_conversation_no_longer_leads_to_a_place(
+    working: OrgStore,
+):
+    give_pod(working, at("root"), "conv-ic", "conv-mgr")
+    give_pod(working, at("a"), "conv-a-ic", "conv-a-mgr")
 
-    store.set_agent("root", "ic", conversation_id="conv-ic-2")
-    store.remove("a")
+    working.set_agent(at("root"), "ic", conversation_id="conv-ic-2")
+    working.remove(at("a"))
 
-    assert store.find_by_conversation("conv-ic") is None
-    assert store.find_by_conversation("conv-a-ic") is None
-    found = store.find_by_conversation("conv-ic-2")
+    assert working.find_by_conversation("conv-ic") is None
+    assert working.find_by_conversation("conv-a-ic") is None
+    found = working.find_by_conversation("conv-ic-2")
     assert found is not None and found[1] == "ic"
 
 
-def test_a_loaded_tree_knows_its_agents_conversations():
-    store = OrgStore()
+def test_a_closed_sessions_conversations_lead_nowhere(working: OrgStore):
+    give_pod(working, at("a"), "conv-a-ic", "conv-a-mgr")
 
-    store.replace_all([with_pod("root", None, "", "conv-ic", "conv-mgr")])
+    working.close_session(SESSION)
 
-    assert store.find_by_conversation("conv-ic") is not None
+    assert working.find_by_conversation("conv-a-ic") is None
+    assert working.places() == []
 
 
-def test_setting_an_agent_status_announces_the_node_once(store: OrgStore):
-    events = record(store, "a2")
+def test_a_replaced_tree_keeps_its_sessions_and_their_agents(working: OrgStore):
+    give_pod(working, at("a"), "conv-a-ic", "conv-a-mgr")
 
-    store.set_agent("a2", "ic", status="working")
-    store.set_agent("a2", "ic", status="working")
+    working.replace_all(small_tree())
 
-    assert describe(events).count(("node_upsert", "a2")) == 1
-    node = store.get("a2")
-    assert node is not None and node.agents[0].status == "working"
+    found = working.find_by_conversation("conv-a-ic")
+    assert found is not None and found[0].id == at("a")
+    assert [session.id for session in working.sessions()] == [SESSION]
+
+
+def test_setting_an_agent_status_announces_the_session_once(working: OrgStore):
+    events = record(working, "a2")
+
+    working.set_agent(at("a2"), "ic", status="working")
+    working.set_agent(at("a2"), "ic", status="working")
+
+    assert [event.type for event in events] == ["sessions"]
+    place = working.place(at("a2"))
+    assert place is not None and place.agents[0].status == "working"
 
 
 @pytest.mark.parametrize(
@@ -716,7 +703,6 @@ def test_setting_an_agent_status_announces_the_node_once(store: OrgStore):
         pytest.param("idle", "pending", None, "done", id="its work waits for review"),
         pytest.param("idle", "changes_requested", None, "idle", id="work sent back"),
         pytest.param("idle", "accepted", None, "done", id="its work is accepted"),
-        pytest.param("idle", "unreviewed", None, "done", id="the top team submitted"),
         pytest.param("working", "accepted", None, "working", id="it works on"),
         pytest.param("lost", "accepted", None, "done", id="done and then gone"),
         pytest.param("working", None, "ic", "blocked", id="its IC waits on an answer"),
@@ -725,118 +711,157 @@ def test_setting_an_agent_status_announces_the_node_once(store: OrgStore):
     ],
 )
 def test_a_teams_status_is_worked_out_and_never_declared(
-    store: OrgStore,
+    working: OrgStore,
     agent: str,
     review: ReviewState | None,
     escalated_by: AgentRole | None,
     expected: str,
 ):
     if review is not None:
-        store.set_review("a2", Review(state=review, at=AT))
+        working.set_review(at("a2"), Review(state=review, at=AT))
     if escalated_by is not None:
-        store.raise_escalation(
-            "a2", "jwt", kind="design_decision", title="JWT?", raised_by=escalated_by
+        working.raise_escalation(
+            at("a2"),
+            "jwt",
+            kind="design_decision",
+            title="JWT?",
+            raised_by=escalated_by,
         )
 
-    node = store.set_agent("a2", "ic", status=agent)
+    place = working.set_agent(at("a2"), "ic", status=agent)
 
-    assert node.status == expected
-    assert status_of(node) == expected
+    assert place.status == expected
+    assert status_of(place) == expected
 
 
 def test_a_team_stops_being_blocked_when_its_ics_escalation_is_settled(
-    store: OrgStore,
+    working: OrgStore,
 ):
-    store.set_agent("a2", "ic", status="working")
-    blocked = store.raise_escalation(
-        "a2", "jwt", kind="design_decision", title="JWT?", raised_by="ic"
+    working.set_agent(at("a2"), "ic", status="working")
+    blocked = working.raise_escalation(
+        at("a2"), "jwt", kind="design_decision", title="JWT?", raised_by="ic"
     )
-    waiting = store.get("a2")
+    waiting = working.place(at("a2"))
 
-    store.settle_escalation("a2", blocked.id)
-    after = store.get("a2")
+    working.settle_escalation(at("a2"), blocked.id)
+    after = working.place(at("a2"))
 
     assert waiting is not None and waiting.status == "blocked"
     assert after is not None and after.status == "working"
 
 
 def test_a_review_set_on_a_team_shows_in_its_status_and_keeps_other_changes(
-    store: OrgStore,
+    working: OrgStore,
 ):
-    node = store.set_review("a2", Review(state="accepted", at=AT), base_commit="abc")
+    place = working.set_review(
+        at("a2"), Review(state="accepted", at=AT), base_commit="abc"
+    )
 
-    assert (node.status, node.base_commit) == ("done", "abc")
-    parent = store.get("a")
-    assert parent is not None and parent.descendant_counts.done == 2
+    assert (place.status, place.base_commit) == ("done", "abc")
     with pytest.raises(NotFound):
-        store.set_review("nowhere", Review(state="pending", at=AT))
+        working.set_review("a2", Review(state="pending", at=AT))
 
 
-def test_a_node_blocked_by_a_failed_agent_resumes_when_that_agent_does(
-    store: OrgStore,
+def test_a_place_blocked_by_a_failed_agent_resumes_when_that_agent_does(
+    working: OrgStore,
 ):
-    store.set_agent("a2", "ic", status="blocked")
+    working.set_agent(at("a2"), "ic", status="blocked")
 
-    assert store.set_agent("a2", "ic", status="working").status == "working"
+    assert working.set_agent(at("a2"), "ic", status="working").status == "working"
 
 
-def test_setting_an_agent_a_node_does_not_have_is_refused(store: OrgStore):
+def test_setting_an_agent_that_is_not_there_is_refused(working: OrgStore):
     with pytest.raises(NotFound):
-        store.set_agent("a", "manager", status="working")
+        working.set_agent(at("a"), "manager", status="working")
     with pytest.raises(NotFound):
-        store.set_agent("nowhere", "ic", status="working")
+        working.set_agent("nowhere", "ic", status="working")
+    # A team of the tree has no agents: only its places do.
+    with pytest.raises(NotFound):
+        working.set_agent("a", "ic", status="working")
 
 
-def test_updating_a_node_keeps_its_other_fields_and_rollups(store: OrgStore):
-    store.update_node("a1", status="blocked", spec_summary="stuck on the schema")
+def test_updating_a_team_keeps_its_other_fields(store: OrgStore):
+    store.update_team("a1", spec_summary="stuck on the schema")
 
-    node = store.get("a1")
+    node = store.team("a1")
     assert node is not None
-    assert (node.status, node.spec_summary) == ("blocked", "stuck on the schema")
-    assert node.boundary.path == "svc/a/one"
-    parent = store.get("a")
-    assert parent is not None and parent.descendant_counts.blocked == 1
+    assert node.spec_summary == "stuck on the schema"
+    assert (node.boundary.path, node.parent_id) == ("svc/a/one", "a")
+    with pytest.raises(NotFound):
+        store.update_team("missing", spec_summary="x")
 
 
-def test_updating_a_node_cannot_move_it(store: OrgStore):
+def test_updating_a_place_keeps_its_other_fields(working: OrgStore):
+    working.update_place(at("a1"), base_commit="abc")
+
+    place = working.place(at("a1"))
+    assert place is not None
+    assert (place.base_commit, place.team_id) == ("abc", "a1")
+    assert [agent.role for agent in place.agents] == ["ic"]
+    with pytest.raises(NotFound):
+        working.update_place("a1", base_commit="abc")
+
+
+def test_updating_a_node_cannot_move_it(working: OrgStore):
     with pytest.raises(OrgStoreError):
-        store.update_node("a1", parent_id="b")
+        working.update_team("a1", parent_id="b")
+    with pytest.raises(OrgStoreError):
+        working.update_place(at("a1"), parent_id=at("b"))
 
 
-def test_a_moved_node_takes_what_is_below_it_and_the_rollups_follow(
-    store: OrgStore,
-):
-    events = record(store, "root")
+def test_a_moved_team_takes_what_is_below_it(store: OrgStore):
+    events = record(store, "root", full=True)
 
     moved = store.move("a", "b")
 
     assert moved.parent_id == "b"
-    assert [node.id for node in store.children("root")] == ["b"]
-    assert [node.id for node in store.children("b")] == ["a"]
-    assert [node.id for node in store.ancestors("a1")] == ["root", "b", "a"]
-    b = store.get("b")
-    assert b is not None and (b.descendant_counts.blocked, b.child_ids) == (1, ["a"])
-    # Both parents are announced with their new reports; the node is not
-    # announced as removed, since it is still in the org.
-    assert {"root", "b"} <= {node_id for _, node_id in describe(events)}
-    assert ("node_removed", "a") not in describe(events)
+    assert [node.id for node in store.sub_teams("root")] == ["b"]
+    assert [node.id for node in store.sub_teams("b")] == ["a"]
+    assert [node.id for node in store.teams_above("a1")] == ["root", "b", "a"]
+    # The team and both parents are announced; the team is not announced as
+    # removed, since it is still in the org.
+    assert describe(events) == [
+        ("node_upsert", "a"),
+        ("node_upsert", "root"),
+        ("node_upsert", "b"),
+    ]
 
 
-def test_an_escalation_of_a_moved_team_is_held_by_the_team_now_above_it(
-    store: OrgStore,
+def test_moving_a_team_of_the_tree_leaves_the_places_of_a_session(working: OrgStore):
+    working.move("a1", "b")
+
+    assert [place.id for place in working.below(at("a"))] == [at("a1"), at("a2")]
+    assert working.below(at("b")) == []
+
+
+def test_a_moved_place_takes_what_is_below_it(working: OrgStore):
+    moved = working.move_place(at("a"), at("b"))
+
+    assert moved.parent_id == at("b")
+    assert [place.id for place in working.below(at("root"))] == [at("b")]
+    assert [place.id for place in working.above(at("a1"))] == [
+        at("root"),
+        at("b"),
+        at("a"),
+    ]
+    assert [node.id for node in working.sub_teams("root")] == ["a", "b"]
+
+
+def test_an_escalation_of_a_moved_place_is_held_by_the_place_now_above_it(
+    working: OrgStore,
 ):
-    store.raise_escalation("a1", "jwt", kind="design_decision", title="JWT?")
-    store.pass_up_escalation("a1", "jwt", reason="needs b too")
-    store.raise_escalation("a2", "fresh", kind="design_decision", title="Cache?")
+    working.raise_escalation(at("a1"), "jwt", kind="design_decision", title="JWT?")
+    working.pass_up_escalation(at("a1"), "jwt", reason="needs b too")
+    working.raise_escalation(at("a2"), "fresh", kind="design_decision", title="Cache?")
 
-    store.move("a1", "b")
-    store.move("a2", "root")
+    working.move_place(at("a1"), at("b"))
+    working.move_place(at("a2"), at("root"))
 
-    a1, a2 = store.get("a1"), store.get("a2")
+    a1, a2 = working.place(at("a1")), working.place(at("a2"))
     assert a1 is not None and a2 is not None
     # a is no longer above a1, so what it said goes and b gets to answer.
-    assert (a1.escalations[0].held_by, a1.escalations[0].handoffs) == ("b", [])
-    assert a2.escalations[0].held_by == "root"
+    assert (a1.escalations[0].held_by, a1.escalations[0].handoffs) == (at("b"), [])
+    assert a2.escalations[0].held_by == at("root")
 
 
 @pytest.mark.parametrize(
@@ -855,35 +880,68 @@ def test_a_node_moves_only_to_where_the_tree_stays_a_tree(
     with pytest.raises(error):
         store.move(node_id, parent_id)
 
-    assert [node.id for node in store.children("root")] == ["a", "b"]
+    assert [node.id for node in store.sub_teams("root")] == ["a", "b"]
+
+
+@pytest.mark.parametrize(
+    ("place_id", "parent_id", "error"),
+    [
+        pytest.param(at("root"), at("a"), OrgStoreError, id="where it was opened"),
+        pytest.param(at("a"), at("a"), OrgStoreError, id="under itself"),
+        pytest.param(at("a"), at("a1"), OrgStoreError, id="under a place below it"),
+        pytest.param(
+            at("a1"),
+            review_place_id("root", SESSION),
+            OrgStoreError,
+            id="under where it is reviewed from",
+        ),
+        pytest.param(
+            at("a1"),
+            session_team_id("b", "other"),
+            OrgStoreError,
+            id="under a place of another session",
+        ),
+        pytest.param(at("a"), "b", NotFound, id="under a team of the tree"),
+        pytest.param("a", at("b"), NotFound, id="a team of the tree"),
+    ],
+)
+def test_a_place_moves_only_inside_its_own_session(
+    working: OrgStore, place_id: str, parent_id: str, error: type[Exception]
+):
+    open_session_in(working, "b", "other")
+
+    with pytest.raises(error):
+        working.move_place(place_id, parent_id)
+
+    assert [place.id for place in working.below(at("root"))] == [at("a"), at("b")]
+    assert [place.id for place in working.below(at("a"))] == [at("a1"), at("a2")]
 
 
 def test_change_listeners_hear_every_change_until_stopped(store: OrgStore):
     calls: list[int] = []
     stop = store.on_change(lambda: calls.append(1))
 
-    store.update_node("b", status="idle")
+    store.update_team("b", headline="one")
     store.remove("a2")
     stop()
-    store.update_node("b", status="done")
+    store.update_team("b", headline="two")
 
     assert len(calls) == 2
 
 
-def test_saving_does_not_record_whether_agents_are_running(repo: Path):
-    store = OrgStore()
-    store.upsert(with_pod("root", None, "", "conv-ic", "conv-mgr"))
+def test_saving_does_not_record_the_sessions_or_their_agents(
+    repo: Path, working: OrgStore
+):
     board = create_org_board(repo)
-    save_org(board, store)
+    save_org(board, working)
     saved = run_git(repo, "rev-parse", ORG_REF)
 
-    store.set_agent("root", "ic", status="working")
-    store.update_node("root", status="idle")
-    store.update_node("root", status="working")
-    save_org(board, store)
+    give_pod(working, at("root"), "conv-ic", "conv-mgr")
+    working.set_agent(at("root"), "ic", status="working")
+    save_org(board, working)
 
     assert run_git(repo, "rev-parse", ORG_REF) == saved
     loaded = OrgStore()
     assert load_org(board, loaded)
-    # Nor the agents themselves: they are of a session, kept with it.
     assert loaded.find_by_conversation("conv-ic") is None
+    assert loaded.sessions() == []

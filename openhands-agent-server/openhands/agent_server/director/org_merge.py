@@ -6,9 +6,8 @@ from that side. What is left for the human is a conflict: the same field
 changed on both sides, or a team removed on one side and changed, or given
 sub-teams, on the other.
 
-Where a team's agents run and where its checkout is belong to the machine
-that runs them, so those fields are never taken from the other side for a
-team that is here.
+A saved team has only what the org keeps of it. Agents, checkouts and
+reviews are of sessions, which are no part of the tree and are not merged.
 """
 
 import json
@@ -19,9 +18,6 @@ from openhands.agent_server.director.models import OrgConflict, Side
 
 
 type Nodes = dict[str, dict[str, Any]]
-
-# What only the machine that runs a team knows.
-LOCAL_FIELDS = ("worktree_path", "agents")
 _REMOVED = "The team is removed."
 _KEPT = "The team is kept, with what was changed in it or below it."
 
@@ -107,7 +103,7 @@ def _merge_node(
     node = dict(mine)
     for field in [*mine, *(each for each in theirs if each not in mine)]:
         ours, other, before = mine.get(field), theirs.get(field), base.get(field)
-        if field in LOCAL_FIELDS or ours == other or other == before:
+        if ours == other or other == before:
             continue
         if ours == before:
             node[field] = other
@@ -156,29 +152,3 @@ def _parents_first(nodes: Nodes) -> list[dict[str, Any]]:
         placed.update(node["id"] for node in ready)
         waiting = [node for node in waiting if node["id"] not in placed]
     return ordered
-
-
-def rehomed(
-    nodes: list[dict[str, Any]], here: Nodes, there_root: str | None, here_root: str
-) -> list[dict[str, Any]]:
-    """Point the teams that came from the other side at this machine.
-
-    A team that works in the repository's own checkout is at another path
-    here. A team with a checkout of its own keeps its path and gets the
-    checkout made from its branch.
-
-    Args:
-        here: The teams this machine had before the merge.
-        there_root: Where the repository is on the other side.
-        here_root: Where it is here.
-    """
-    if not there_root or there_root == here_root:
-        return nodes
-    moved: list[dict[str, Any]] = []
-    for node in nodes:
-        path = node["worktree_path"]
-        inside = path == there_root or path.startswith(f"{there_root}/")
-        if node["id"] not in here and inside:
-            node = {**node, "worktree_path": here_root + path[len(there_root) :]}
-        moved.append(node)
-    return moved

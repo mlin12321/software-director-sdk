@@ -1,5 +1,6 @@
 """Which team owns which file below a node, and where their work collides."""
 
+from collections.abc import Sequence
 from functools import lru_cache
 from itertools import combinations
 from pathlib import Path
@@ -17,6 +18,7 @@ from openhands.agent_server.director.models import (
     NodeOwnership,
     OrgNode,
     OwnedFile,
+    SessionTeam,
 )
 
 
@@ -27,13 +29,17 @@ MAX_CHECKOUTS_COMPARED_PAIRWISE = 12
 _MERGE_TREE_MIN_GIT = (2, 38)
 
 
-def node_ownership(node: OrgNode, reports: list[OrgNode]) -> NodeOwnership:
-    """The files of a node's boundary by the direct report that owns them,
-    and the files the committed work of two of these teams both changed in
-    ways that do not merge."""
-    checkout = Path(node.worktree_path)
+def node_ownership(
+    node: OrgNode, reports: Sequence[OrgNode], checkout: Path
+) -> NodeOwnership:
+    """The files of a node's boundary in ``checkout`` by the direct report
+    that owns them. For a place of a session, also the files the committed
+    work of two of these teams both changed in ways that do not merge."""
     files, truncated = _files(checkout, node.boundary.path)
-    collisions, checked = _collisions(node, reports)
+    places = [report for report in reports if isinstance(report, SessionTeam)]
+    collisions, checked = (
+        _collisions(node, places) if isinstance(node, SessionTeam) else ([], False)
+    )
     return NodeOwnership(
         node_id=node.id,
         owners=[
@@ -42,7 +48,7 @@ def node_ownership(node: OrgNode, reports: list[OrgNode]) -> NodeOwnership:
                 title=report.title,
                 path=report.boundary.path,
                 isolation=report.isolation,
-                branch=report.branch,
+                branch=report.branch if isinstance(report, SessionTeam) else "",
             )
             for report in reports
         ],
@@ -53,7 +59,7 @@ def node_ownership(node: OrgNode, reports: list[OrgNode]) -> NodeOwnership:
     )
 
 
-def _owner(path: str, reports: list[OrgNode]) -> str | None:
+def _owner(path: str, reports: Sequence[OrgNode]) -> str | None:
     owners = [
         report
         for report in reports
@@ -86,7 +92,9 @@ def can_merge_in_memory(checkout: Path) -> bool:
         return False
 
 
-def _collisions(node: OrgNode, reports: list[OrgNode]) -> tuple[list[Collision], bool]:
+def _collisions(
+    node: SessionTeam, reports: list[SessionTeam]
+) -> tuple[list[Collision], bool]:
     checkout = Path(node.worktree_path)
     if not can_merge_in_memory(checkout):
         return [], False

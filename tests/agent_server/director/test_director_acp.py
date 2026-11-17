@@ -62,6 +62,7 @@ from tests.agent_server.director.test_director_tools import (
     manager,
     node,
     proposing,
+    reviewer,
     use,
     woken,
 )
@@ -348,7 +349,7 @@ async def test_an_agent_calls_the_directors_tools_with_its_token_alone(
     assert spec.json()["is_error"] is False
     assert service.specs_of(node(service, "root"))[0].spec == "# Spec"
     assert refused.status_code == 200 and refused.json()["is_error"] is True
-    assert "Manager" in refused.json()["text"]
+    assert "not one of your tools" in refused.json()["text"]
     assert malformed.json()["is_error"] is True
 
 
@@ -378,6 +379,38 @@ async def test_a_manager_is_listed_its_own_tools_and_a_stranger_none(
     assert {"approve_teams", "decline_teams", "prune_team", "msg_ic"} <= names
     assert not {"submit_review", "write_spec", "msg_team"} & names
     assert stranger.status_code == 404
+
+
+async def test_an_ic_that_only_reviews_a_session_has_the_tools_for_that_alone(
+    running, repo: Path
+):
+    client, service = running
+    await service.create_org(
+        CreateOrgRequest(
+            title="Checkout", task="Build", conversation=root_conversation(repo)
+        )
+    )
+    await service.settled()
+    await use(
+        service, ic(service), SubmitReviewTool, SubmitReviewAction(summary="Done")
+    )
+    await service.settled()
+    reviewing = reviewer(service)
+    assert reviewing is not None
+    headers = {mcp_shim.TOKEN_HEADER: agent_token(service._key(), reviewing)}
+
+    listed = await client.get("/api/director/tools", headers=headers)
+    refused = await client.post(
+        "/api/director/tools/write_spec", headers=headers, json={"text": "# Spec"}
+    )
+
+    assert {tool["name"] for tool in listed.json()} == {
+        "read_node_context",
+        "report",
+        "review_team",
+    }
+    assert refused.json()["is_error"] is True
+    assert "not one of your tools" in refused.json()["text"]
 
 
 async def test_the_tool_routes_refuse_whoever_has_no_agents_token(running, repo: Path):

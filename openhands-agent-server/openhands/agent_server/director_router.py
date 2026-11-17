@@ -6,6 +6,7 @@ team memory that applies to each node. State lives in ``director/``.
 
 import asyncio
 from collections.abc import AsyncIterator
+from pathlib import Path
 from typing import Annotated, Any
 from uuid import UUID
 
@@ -127,11 +128,19 @@ def _require_node(service: DirectorService, node_id: str) -> OrgNode:
     return node
 
 
-def _require_place(service: DirectorService, node_id: str) -> OrgNode:
-    """A node of the org tree, or what a session has at a team, by its id."""
+def _require_any(service: DirectorService, node_id: str) -> OrgNode:
+    """A team of the org tree, or a place of a session, by its id."""
     node = service.store.get(node_id)
     if node is None:
         raise NotFound(f"Unknown node: {node_id}")
+    return node
+
+
+def _require_place(service: DirectorService, node_id: str) -> SessionTeam:
+    """A place of a session: where a team is worked on."""
+    node = service.store.place(node_id)
+    if node is None:
+        raise NotFound(f"Nobody works at {node_id}: name a team of a session")
     return node
 
 
@@ -154,12 +163,13 @@ def _sse(event: SnapshotEvent | OrgChange | OrgStateEvent) -> str:
             "description": (
                 "Server-sent events. The first is a `snapshot` of the focused "
                 "node, its ancestors, its direct reports, the direct reports of "
-                "every expanded node, and every escalation in the tree that "
-                "waits on the human. `node_upsert` and "
-                "`node_removed` events for those same nodes follow, and an "
-                "`escalations` event carries the whole new list whenever it "
-                "changes. The snapshot says whether the org is paused and "
-                "whether a pull waits for choices; an `org_state` event "
+                "every expanded node, the open sessions, and every "
+                "escalation that waits on the human. `node_upsert` and "
+                "`node_removed` events for those same nodes follow, and a "
+                "`sessions` or an `escalations` event carries the whole new "
+                "list whenever it changes. The snapshot says whether the org "
+                "is paused and whether a pull waits for choices; an "
+                "`org_state` event "
                 "follows whenever either changes."
             ),
             "content": {"text/event-stream": {"schema": {"type": "string"}}},
@@ -199,6 +209,7 @@ async def stream_org_tree(
     the nodes it has expanded, so its traffic grows with what is on screen
     and not with the size of the tree. To expand or collapse a node, open a
     new stream with the new set. `full` follows the whole subtree instead.
+    The nodes are the teams of the org; the work at them is in `sessions`.
     """
     # The first use reads the tree from git.
     store = await asyncio.to_thread(lambda: service.store)
@@ -308,7 +319,7 @@ def search_org(
     status_code=status.HTTP_201_CREATED,
     responses=error_responses(
         {
-            Conflict: "The director already has an org, or serves the fixture",
+            Conflict: "The director already has an org",
             Invalid: (
                 "The conversation cannot lead an org: it runs in Docker, or "
                 "its agent is an ACP agent"
@@ -342,7 +353,7 @@ async def create_org(
     response_model=Recovery,
     responses=error_responses(
         {
-            Conflict: "There is no org, or the director serves the fixture",
+            Conflict: "There is no org",
             Unavailable: "The director is not running agents",
         }
     ),
@@ -419,19 +430,18 @@ async def route_message(
 ) -> RoutedMessage:
     """Say something to the org from a directory of the repository.
 
-    The message goes to the IC of the nearest team: the search starts at
-    `path` (by default the directory the server was started for) and moves
-    up one directory at a time until it reaches a directory a team owns,
-    skipping a team whose IC is gone or that may only read `path`. The root
-    team takes what no team below it does. A server started in a git
+    The message opens a session at the nearest team, whose IC works on it:
+    the search starts at `path` (by default the directory the server was
+    started for) and moves up one directory at a time until it reaches a
+    directory a team owns, skipping a team that may only read `path`. The
+    root team takes what no team below it does. A server started in a git
     submodule that has no org of its own searches on through the repository
     that has the submodule.
 
-    With `auto`, the director may then send it to a team below that one: the
-    lowest team that holds every team the text concerns, by the files it
-    names and by what a model makes of it. It does so only when it is sure,
-    and the answer says how the team was chosen. The ICs above that team are
-    not woken; they are told of the message in their context.
+    With `auto`, the director may open the session at a team below that
+    one: the lowest team that holds every team the text concerns, by the
+    files it names and by what a model makes of it. It does so only when it
+    is sure, and the answer says how the team was chosen.
 
     With `session_id` the message continues that session and opens none: it
     goes to the IC of the team the session was opened at, or of a team the
@@ -441,9 +451,9 @@ async def route_message(
     When there is no org yet, the message needs a `conversation`. If the
     repository of that conversation's workspace (or one above that has it as
     a submodule) has a saved org, the director takes that org up and routes
-    the message in it. Otherwise the message starts an org there: the root
-    team is briefed with it as its task and named by a model that summarizes
-    it.
+    the message in it. Otherwise the message starts an org there: its first
+    session is briefed with it as its task, and the root team is named by a
+    model that summarizes it.
     """
     return await service.route_message(request)
 
@@ -456,12 +466,13 @@ async def route_message(
 def get_org_node(
     node_id: str, service: DirectorService = Depends(get_director_service)
 ) -> OrgNodeDetail:
-    """Get a node with its ancestors and its direct reports."""
+    """Get a team of the org tree with the teams above it and its
+    sub-teams. A place of a session is read with its session."""
     node = _require_node(service, node_id)
     return OrgNodeDetail(
         node=node,
-        ancestors=service.store.ancestors(node_id),
-        children=service.store.children(node_id),
+        ancestors=service.store.teams_above(node_id),
+        children=service.store.sub_teams(node_id),
     )
 
 
@@ -476,9 +487,10 @@ def get_conversation_place(
     """Say where an agent's conversation is in the org.
 
     With it come the conversations one level away: the agents of the team
-    above, the other agent of the same team, the ICs of the teams directly
-    below, and the ICs of the sessions whose work the team reviews. A client
-    shows them as links from one conversation to the next.
+    above, the other agent of the same team, and the ICs of the teams
+    directly below; for an agent that reviews a session's work, the
+    session's IC is the one below. A client shows them as links from one
+    conversation to the next.
     """
     return service.place_of(conversation_id)
 
@@ -515,9 +527,9 @@ def list_sessions(
 ) -> list[Session]:
     """List the sessions that are open.
 
-    A session is a line of work the human opened at a team beside the
-    org's own. It is no part of the org tree: the tree is the org's
-    structure, and a session has agents and a checkout of its own at the
+    A session is a line of work the human opened at a team; all work of an
+    org is done in sessions. It is no part of the org tree: the tree is the
+    org's structure, and a session has agents and a checkout of its own at the
     team it was opened at and, once they are given a task in it, at the
     teams below that one (`teams`).
     """
@@ -574,9 +586,8 @@ def answer_session_escalation(
         {
             NotFound: "There is no such team",
             Conflict: (
-                "There is no org, it is paused, the team's sub-teams are "
-                "being set up, or the IC that would review the session's "
-                "work is not running"
+                "There is no org, it is paused, or no conversation of the "
+                "org runs on this server to start the session's IC from"
             ),
             Unavailable: "The director is not running agents",
         }
@@ -588,13 +599,14 @@ async def open_session(
 ) -> OpenedSession:
     """Open a session at a team and start it with a request.
 
-    The team gets one more IC for the request, in a git worktree and on a
-    branch of its own, so that it can work on the team's directory while
-    the team's own IC and other sessions do. The session has a place for
-    each team below, which starts when that IC gives it a task. The IC
-    of the team above reviews the session's work like a sub-team's and an
-    accept merges it into that team's checkout; the work of a session
-    opened at the top team is reviewed by the top team's own IC.
+    The team gets an IC for the request, in a git worktree and on a branch
+    of its own (unless `session_worktrees` is off), so that it can work on
+    the team's directory while other sessions do. The session has a place
+    for each team below, which starts when that IC gives it a task. An IC
+    at the team above, started for it and only reviewing, reviews the
+    session's work like a sub-team's, and an accept merges it into the
+    repository's checkout; the work of a session opened at the top team is
+    reviewed from the top team itself.
 
     Without `node_id` the director chooses the team by what the text
     concerns, as for a message sent with `auto`. Opening a session adds no
@@ -649,7 +661,7 @@ def get_node_memory(
     """Get what a node works to: the spec of its boundary, the contracts
     between its sub-teams and the ones the team above set for it, and
     what its two agents reported."""
-    node = _require_place(service, node_id)
+    node = _require_any(service, node_id)
     above = service._works_above(node)
     _, contracts = service.team_memory.applies_to(
         node.boundary.path, above.boundary.path if above else None
@@ -674,10 +686,16 @@ def get_node_memory(
 def get_node_messages(
     node_id: str, service: DirectorService = Depends(get_director_service)
 ) -> list[Thread]:
-    """Get what a node's agents have said to Managers and ICs: its IC and
-    its Manager to each other, its Manager to the ICs directly below, and
-    the Manager above to its IC."""
-    return service.threads_of(_require_place(service, node_id))
+    """Get what the agents of a place of a session have said to Managers
+    and ICs: its IC and its Manager to each other, its Manager and its IC to
+    the ICs directly below, and the Manager and the IC above to its IC.
+    Empty for a team of the org tree."""
+    place = service.store.place(node_id)
+    if place is None:
+        # Nobody works at a team of the org itself, so nothing was said there.
+        _require_node(service, node_id)
+        return []
+    return service.threads_of(place)
 
 
 @director_router.get(
@@ -691,15 +709,22 @@ def get_node_ownership(
     """Get which direct report owns each file of a node's boundary, and the
     files where the committed work of two of these teams does not merge.
 
-    The files are those of the node's own checkout. A team that works in a
-    git worktree of its own is compared by the tip of that worktree.
+    For a team of the org the files are those of the repository's checkout
+    and no collisions are looked for (`collisions_checked` is false).
+    For a place of a session they are those of its own checkout, and a
+    place below it that works in a git worktree of its own is compared by
+    the tip of that worktree.
     """
+    store = service.store
+    place = store.place(node_id)
+    if place is not None:
+        return node_ownership(place, store.below(node_id), Path(place.worktree_path))
     node = _require_node(service, node_id)
-    return node_ownership(node, service.store.children(node_id))
+    return node_ownership(node, store.sub_teams(node_id), service.repo_dir)
 
 
 _NO_CHECKOUT: dict[type[DomainError], str] = {
-    NotFound: "No such node, or its checkout is not on this server",
+    NotFound: "No such place of a session, or its checkout is not on this server",
 }
 
 
@@ -712,7 +737,8 @@ def get_node_changes(
     node_id: str, service: DirectorService = Depends(get_director_service)
 ) -> TeamChanges:
     """List the files a team changed in its directory since its work
-    started or was last accepted, uncommitted and new files included."""
+    started or was last accepted, uncommitted and new files included.
+    `node_id` is a place of a session."""
     return team_changes(_require_place(service, node_id))
 
 
@@ -733,7 +759,7 @@ def get_node_changed_file(
     service: DirectorService = Depends(get_director_service),
 ) -> FileSides:
     """Get one file as it was at the team's base commit and as it is in the
-    team's checkout now."""
+    team's checkout now. `node_id` is a place of a session."""
     return file_sides(_require_place(service, node_id), path)
 
 
@@ -755,7 +781,7 @@ async def edit_node_file(
     path: Annotated[str, Query(description="Relative to the top of the repository.")],
     service: DirectorService = Depends(get_director_service),
 ) -> FileEdit:
-    """Write one file of a team by hand.
+    """Write one file of a team by hand. `node_id` is a place of a session.
 
     The file is committed alone in the team's checkout and the team's IC is
     told. Refused while an agent of the team is in the middle of a turn, and
@@ -810,7 +836,7 @@ def push_memory(
     responses=error_responses(
         {
             **_NO_REMOTE,
-            Conflict: "A merge waits for choices, or this is the fixture",
+            Conflict: "A merge waits for choices",
             Unavailable: "The director is not running, or has no repository",
         }
     ),
@@ -821,9 +847,10 @@ async def pull_org(
 ) -> OrgSync:
     """Take in the org a remote of the repository has, as git merges a branch.
 
-    The tree, the team memory and the branches of the teams' work are
-    fetched. A team changed on one side only is taken from that side, and so
-    is a field of a team; a repository without an org takes the remote's.
+    The tree and the team memory are fetched; sessions, with their
+    checkouts and branches, stay on the machine that has them. A team
+    changed on one side only is taken from that side, and so is a field of
+    a team; a repository without an org takes the remote's.
     Where both sides changed the same thing the result is `conflicts`:
     nothing is written, the org stays paused, and `merge` lists what to
     choose with `POST /org/merge/resolve`.
@@ -848,11 +875,11 @@ async def push_org(
     request: OrgSyncRequest | None = None,
     service: DirectorService = Depends(get_director_service),
 ) -> OrgSync:
-    """Give a remote of the repository the org, the team memory and the
-    branches of the teams' work.
+    """Give a remote of the repository the org tree and the team memory.
 
-    The branches are kept on the remote under `refs/agents/teams/`. A push
-    is refused while the remote has changes of the org that are not here.
+    Sessions, with their checkouts and branches, stay on this machine. A
+    push is refused while the remote has changes of the org that are not
+    here.
     """
     return await service.push_org((request or OrgSyncRequest()).remote)
 
@@ -933,7 +960,8 @@ async def start_team_again(
 def list_agent_tools(
     request: Request, conversation_id: UUID = Depends(_calling_agent)
 ) -> list[RemoteTool]:
-    """The director's tools the calling agent is offered: its role's."""
+    """The director's tools the calling agent is offered: its role's, or
+    the few of an agent that only reviews a session's work."""
     service: DirectorService = request.app.state.director_service
     try:
         return list_tools(service, conversation_id)

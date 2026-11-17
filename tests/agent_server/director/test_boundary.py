@@ -8,7 +8,7 @@ from openhands.agent_server.director.boundary import (
     write_refusal,
     written_paths,
 )
-from openhands.agent_server.director.models import AgentRef, Boundary, OrgNode
+from openhands.agent_server.director.models import Boundary, OrgNode
 
 
 def team(
@@ -17,7 +17,6 @@ def team(
     *,
     writable: list[str] | None = None,
     readonly: list[str] | None = None,
-    ic: str | None = "idle",
 ) -> OrgNode:
     return OrgNode(
         id=node_id,
@@ -31,16 +30,6 @@ def team(
             readonly=readonly or [],
         ),
         isolation="shared",
-        worktree_path=".",
-        branch="main",
-        agents=[
-            AgentRef(
-                role="ic",
-                conversation_id=None if ic is None else f"{node_id}-ic",
-                status=ic or "idle",
-            )
-        ],
-        status="idle",
     )
 
 
@@ -137,7 +126,7 @@ def test_a_request_goes_to_the_team_that_owns_the_nearest_directory_above():
     nodes = [root, svc, api]
 
     def goes_to(path: str) -> str | None:
-        found = nearest_team(nodes, path, lost="lost")
+        found = nearest_team(nodes, path)
         return found.id if found else None
 
     assert goes_to("svc/api/handlers/deep") == "api"
@@ -147,18 +136,6 @@ def test_a_request_goes_to_the_team_that_owns_the_nearest_directory_above():
     assert goes_to("") == "root"
 
 
-def test_a_team_without_a_running_ic_is_passed_over():
-    nodes = [
-        team("root", ""),
-        team("svc", "svc", ic="lost"),
-        team("api", "svc/api", ic=None),
-    ]
-
-    found = nearest_team(nodes, "svc/api/handlers", lost="lost")
-
-    assert found is not None and found.id == "root"
-
-
 def test_a_team_that_may_only_read_the_directory_is_passed_over():
     nodes = [
         team("root", ""),
@@ -166,16 +143,12 @@ def test_a_team_that_may_only_read_the_directory_is_passed_over():
     ]
 
     def goes_to(path: str) -> str | None:
-        found = nearest_team(nodes, path, lost="lost")
+        found = nearest_team(nodes, path)
         return found.id if found else None
 
     assert goes_to("svc/api/gen") == "root"
     assert goes_to("svc/api/gen/models") == "root"
     assert goes_to("svc/api/handlers") == "api"
-
-
-def test_no_team_takes_a_request_when_even_the_root_ic_is_gone():
-    assert nearest_team([team("root", "", ic="lost")], "svc", lost="lost") is None
 
 
 def test_no_agent_writes_what_belongs_to_git():

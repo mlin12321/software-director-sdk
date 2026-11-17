@@ -44,7 +44,7 @@ export interface StreamOrgTreeOptions {
   signal?: AbortSignal;
 }
 
-/** Start an org: a root team that works on `task`. */
+/** Start an org: its top team, and the session that works on `task`. */
 export interface CreateOrgRequest {
   /**
    * The root team's name. Left out, the team is first named after the
@@ -53,10 +53,10 @@ export interface CreateOrgRequest {
   title?: string;
   task: string;
   /**
-   * How to start the root team's IC, as for a normal conversation. Every
-   * other agent of the org is derived from it. The org lives in the git
-   * repository of its workspace. Its initial message is ignored: the IC is
-   * briefed with `task`.
+   * How to start the IC of the org's first session, as for a normal
+   * conversation. Every other agent of the org is derived from one that
+   * runs already. The org lives in the git repository of its workspace. Its
+   * initial message is ignored: the IC is briefed with `task`.
    */
   conversation: CreateConversationPayload;
 }
@@ -84,15 +84,16 @@ export interface RouteMessageRequest {
    */
   session_id?: string;
   /**
-   * How to start the root team's IC when there is no org yet. If the git
-   * repository of its workspace already has a saved org, that org is taken
-   * up and the message routed in it; otherwise the message starts an org
-   * there and becomes its task. Ignored when an org exists.
+   * How to start the IC of the session the message opens; without it that
+   * IC is derived from one that runs already. Needed when there is no org
+   * yet: if the git repository of its workspace already has a saved org,
+   * that org is taken up and the message routed in it; otherwise the message
+   * starts an org there and becomes its task.
    */
   conversation?: CreateConversationPayload;
 }
 
-/** A request the human wants worked on beside what a team is doing. */
+/** A request the human wants worked on, in a session of its own. */
 export interface OpenSessionRequest {
   /** What the session is to do. */
   text: string;
@@ -196,10 +197,11 @@ export class DirectorClient {
   /**
    * Say something to the org from a directory of the repository.
    *
-   * The message goes to the IC of the nearest team: the search starts at
+   * The message opens a session at the nearest team: the search starts at
    * `path` and moves up one directory at a time until it reaches a directory
-   * a team owns, skipping a team whose IC is gone or that may only read
-   * `path`. Without an org the message starts one and becomes its task.
+   * a team owns, skipping a team that may only read `path`. With
+   * `session_id` it is said in that session instead. Without an org the
+   * message starts one and becomes its task.
    *
    * @throws HttpError 409 when no team can take the message; 422 when the
    *   path is outside the repository, or there is no org and `conversation`
@@ -220,13 +222,13 @@ export class DirectorClient {
   }
 
   /**
-   * Open a session at a team and start it with a request: the team gets one
-   * more IC for it, in a git worktree of its own, whose work the IC of the
-   * team above reviews. It adds no team to the org.
+   * Open a session at a team and start it with a request: the team gets an
+   * IC for it, in a git worktree of its own, whose work an IC at the team
+   * above, started only to review, reviews. It adds no team to the org.
    *
    * @throws HttpError 404 when there is no such team; 409 when there is no
-   *   org, it is paused, the team's sub-teams are being set up, or the IC
-   *   that would review the session's work is not running.
+   *   org, it is paused, or no conversation of the org runs on the server
+   *   to start the session's IC from.
    */
   async openSession(request: OpenSessionRequest): Promise<DirectorOpenedSession> {
     const response = await this.client.post<DirectorOpenedSession>(
@@ -301,7 +303,7 @@ export class DirectorClient {
     return response.data;
   }
 
-  /** A node with its ancestors and its direct reports. */
+  /** A team of the org tree with the teams above it and its sub-teams. */
   async getNode(nodeId: DirectorNodeId): Promise<DirectorOrgNodeDetail> {
     const response = await this.client.get<DirectorOrgNodeDetail>(nodePath(nodeId));
     return response.data;
@@ -325,9 +327,10 @@ export class DirectorClient {
   }
 
   /**
-   * The threads a node's agents take part in: its IC and its Manager with
-   * each other, its Manager with the ICs directly below, and the Manager above
-   * with its IC. Threads nobody wrote in are left out.
+   * The threads the agents of a place of a session take part in: its IC and
+   * its Manager with each other, its Manager and its IC with the ICs directly
+   * below, and the Manager and the IC above with its IC. Threads nobody wrote
+   * in are left out. Empty for a team of the org tree.
    */
   async getNodeMessages(nodeId: DirectorNodeId): Promise<DirectorThread[]> {
     const response = await this.client.get<DirectorThread[]>(nodePath(nodeId, 'messages'));
@@ -336,7 +339,8 @@ export class DirectorClient {
 
   /**
    * Which direct report owns each file of a node's boundary, and the files
-   * where the committed work of two of these teams does not merge.
+   * where the committed work of two of these teams does not merge. For a
+   * team of the org tree no collisions are looked for.
    */
   async getNodeOwnership(nodeId: DirectorNodeId): Promise<DirectorNodeOwnership> {
     const response = await this.client.get<DirectorNodeOwnership>(nodePath(nodeId, 'ownership'));
@@ -347,7 +351,8 @@ export class DirectorClient {
    * The files a team changed in its directory since its work started or
    * was last accepted, uncommitted and new files included.
    *
-   * @throws HttpError 404 when the team or its checkout is not on the server.
+   * @param nodeId A place of a session.
+   * @throws HttpError 404 when the place or its checkout is not on the server.
    */
   async getNodeChanges(nodeId: DirectorNodeId): Promise<DirectorTeamChanges> {
     const response = await this.client.get<DirectorTeamChanges>(nodePath(nodeId, 'changes'));
@@ -418,8 +423,8 @@ export class DirectorClient {
   }
 
   /**
-   * Take in the org a remote of the repository has, as a merge: the tree,
-   * the team memory and the branches of the teams' work. When both sides
+   * Take in the org a remote of the repository has, as a merge: the tree
+   * and the team memory. Sessions stay on their machine. When both sides
    * changed the same thing the result is `conflicts` and nothing is written
    * until `resolveMerge` has a choice for each, or `abortMerge` is called.
    *
@@ -434,8 +439,7 @@ export class DirectorClient {
   }
 
   /**
-   * Give a remote of the repository the org, the team memory and the branches
-   * of the teams' work.
+   * Give a remote of the repository the org and the team memory.
    *
    * @throws HttpError 409 when there is no org, a merge waits, or the remote
    *   has changes that were not pulled.

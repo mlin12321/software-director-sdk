@@ -10,11 +10,11 @@ written to the team memory like anybody's.
 
 import json
 import logging
+from typing import Any
 
 from pydantic import BaseModel, ValidationError
 
 from openhands.agent_server.director.models import SessionInput, SessionTeamInput
-from openhands.agent_server.director.org_persistence import persisted
 from openhands.agent_server.director.org_store import OrgStore
 
 
@@ -26,13 +26,28 @@ class _KeptSession(BaseModel):
     teams: list[SessionTeamInput]
 
 
+def _kept(place: SessionTeamInput) -> dict[str, Any]:
+    """A place without what its agents' conversations determine.
+
+    Whether an agent is running changes many times a minute and is read back
+    from the conversations on load.
+    """
+    data = place.model_dump(include=set(SessionTeamInput.model_fields))
+    for agent in data["agents"]:
+        agent["status"] = "idle"
+    if data["status"] == "working":
+        data["status"] = "idle"
+    data["waiting_to_start"] = False
+    return data
+
+
 def kept_sessions(store: OrgStore) -> dict[str, str]:
     """The open sessions of ``store`` as they are kept, by session id."""
     return {
         session.id: json.dumps(
             {
                 "session": session.model_dump(include=set(SessionInput.model_fields)),
-                "teams": [persisted(team) for team in session.teams],
+                "teams": [_kept(team) for team in session.teams],
             }
         )
         for session in store.sessions()

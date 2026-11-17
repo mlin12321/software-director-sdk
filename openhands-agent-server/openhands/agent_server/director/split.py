@@ -18,8 +18,8 @@ from openhands.agent_server.director.models import (
     Boundary,
     DirectorSettings,
     IsolationMode,
-    OrgNode,
     OrgNodeInput,
+    SessionTeam,
     SplitChild,
 )
 from openhands.agent_server.director.org_store import (
@@ -37,30 +37,47 @@ _TEAMS_BLOCK = re.compile(
 )
 
 
+def _size(store: OrgStore, team_id: str) -> int:
+    """How many teams of the org the team ``team_id`` is with those below it."""
+    return 1 + sum(_size(store, team.id) for team in store.sub_teams(team_id))
+
+
 def check_limits(
-    store: OrgStore, node: OrgNode, added: int, settings: DirectorSettings
+    store: OrgStore, node: SessionTeam, added: int, settings: DirectorSettings
 ) -> None:
     """Refuse ``added`` new sub-teams of ``node`` that the org has no room for.
+
+    A session is counted where it is in the org: its levels from the top
+    team, and its teams for every team of the org above it as well.
 
     Raises:
         OrgStoreError: They would be too deep, or make ``node`` or a team
             above it more teams than a team may be with those below it.
     """
-    above = store.ancestors(node.id)
-    level = len(above) + 2
+    above = store.above(node.id)
+    top = above[0] if above else node
+    higher = store.teams_above(top.team_id)
+    level = len(higher) + len(above) + 2
     if level > settings.max_depth:
         raise OrgStoreError(
             f"An org may have at most {settings.max_depth} levels of teams, "
             f"and sub-teams of {node.title!r} would be level {level}. Do the "
             "work in your own team."
         )
-    for team in (node, *reversed(above)):
-        teams = 1 + store.teams_below(team.id)
+    sizes = [
+        (team.title, 1 + store.teams_below(team.id))
+        for team in (node, *reversed(above))
+    ]
+    # What the session has at the team it was opened at stands in for what
+    # the org has there.
+    grown = sizes[-1][1] - (_size(store, top.team_id) if higher else 0)
+    sizes += [(team.title, _size(store, team.id) + grown) for team in reversed(higher)]
+    for title, teams in sizes:
         room = settings.max_teams - teams
         if added > room:
             raise OrgStoreError(
                 f"A team may be at most {settings.max_teams} teams together "
-                f"with the teams below it. {team.title!r} is {teams}, and "
+                f"with the teams below it. {title!r} is {teams}, and "
                 f"you propose {added} more. "
                 + (
                     f"At most {room} more sub-teams fit."
@@ -158,10 +175,10 @@ class Split(NamedTuple):
     """Proposed sub-teams that passed the checks."""
 
     children: list[SplitChild]
-    replaces: list[OrgNode]
+    replaces: list[SessionTeam]
     """The sub-teams the node has now that the proposed ones take the place
     of."""
-    keeps: list[OrgNode]
+    keeps: list[SessionTeam]
     """The sub-teams the node has now that stay as they are."""
 
 
@@ -169,7 +186,7 @@ def _overlap(path: str, other: str) -> bool:
     return path == other or is_inside(path, other) or is_inside(other, path)
 
 
-def _may_write(parent: OrgNode, path: str) -> bool:
+def _may_write(parent: SessionTeam, path: str) -> bool:
     """Whether a directory is part of what the parent's own agents may
     write, as far as that can be told from its globs' directories."""
     if not parent.boundary.writable:
@@ -182,8 +199,8 @@ def _may_write(parent: OrgNode, path: str) -> bool:
 
 
 def _kept(
-    existing: list[OrgNode], replaced: dict[str, OrgNode], keep: list[str]
-) -> list[OrgNode]:
+    existing: list[SessionTeam], replaced: dict[str, SessionTeam], keep: list[str]
+) -> list[SessionTeam]:
     """The sub-teams a proposal says are to stay.
 
     Raises:
@@ -233,7 +250,7 @@ def _kept(
 
 def normalize_split(
     store: OrgStore,
-    parent: OrgNode,
+    parent: SessionTeam,
     children: list[SplitChild],
     keep: list[str] | None = None,
 ) -> Split:
@@ -261,9 +278,9 @@ def normalize_split(
         raise OrgStoreError(
             f"A split needs between 1 and {MAX_SPLIT_CHILDREN} sub-teams"
         )
-    existing = store.children(parent.id)
+    existing = store.below(parent.id)
     proposed: dict[str, str] = {}
-    replaced: dict[str, OrgNode] = {}
+    replaced: dict[str, SessionTeam] = {}
     normalized: list[SplitChild] = []
     for child in children:
         path = clean_path(child.path)
@@ -300,7 +317,7 @@ def normalize_split(
         if team.isolation == "worktree":
             sharing = [
                 below.title
-                for below in store.children(team.id)
+                for below in store.below(team.id)
                 if below.worktree_path == team.worktree_path
             ]
             if sharing:
@@ -308,7 +325,7 @@ def normalize_split(
                     f"{team.title!r} cannot be replaced while {', '.join(sharing)} "
                     "work in its checkout; have your Manager remove them first"
                 )
-        for below in store.children(team.id):
+        for below in store.below(team.id):
             for path, title in proposed.items():
                 if path == below.boundary.path or is_inside(path, below.boundary.path):
                     raise OrgStoreError(
@@ -325,7 +342,7 @@ def normalize_split(
     return Split(normalized, list(replaced.values()), kept)
 
 
-def home_of(below: OrgNode, parent_id: str, teams: dict[str, str]) -> str:
+def home_of(below: SessionTeam, parent_id: str, teams: dict[str, str]) -> str:
     """The team a sub-team of a replaced team reports to afterwards.
 
     Args:

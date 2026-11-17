@@ -466,7 +466,7 @@ def in_own_worktree(
     worktree = tmp_path / name
     run_git(repo, "worktree", "add", "--quiet", "-b", name, str(worktree))
     for team in teams:
-        service.store.update_node(
+        service.store.update_place(
             node(service, team).id, worktree_path=str(worktree), branch=name
         )
     return worktree

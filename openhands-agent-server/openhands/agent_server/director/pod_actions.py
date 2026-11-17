@@ -17,12 +17,11 @@ from openhands.agent_server.director.models import (
     ROLE_NAMES,
     AgentRole,
     EscalationKind,
-    OrgNode,
     Review,
     ReviewFinding,
+    SessionTeam,
     SplitProposal,
 )
-from openhands.agent_server.director.org_store import session_id_of
 from openhands.agent_server.director.service import (
     DirectorService,
     agent_conversation,
@@ -41,7 +40,7 @@ from openhands.sdk.errors import Conflict, Invalid, NotFound
 class Caller:
     """The agent that uses a tool."""
 
-    node: OrgNode
+    node: SessionTeam
     role: AgentRole
     # Whether it is an IC that calls from its hand-over conversation.
     hand_over: bool = False
@@ -104,14 +103,14 @@ def write_spec(service: DirectorService, caller: Caller, content: str) -> str:
     service.write_spec(caller.node, content)
     summary = content.strip().splitlines()[0].lstrip("# ").strip()[:200]
     # With a spec of its own, what teams before it left is no longer its guide.
-    service.store.update_node(caller.node.id, spec_summary=summary, old_specs=[])
+    service.store.update_place(caller.node.id, spec_summary=summary, old_specs=[])
     if caller.hand_over:
         service.note_hand_over(caller.node.id, spec=True)
     return f"Saved the spec of {path or 'the repository'}."
 
 
 def _checked(
-    service: DirectorService, node: OrgNode, proposed: Proposed
+    service: DirectorService, node: SessionTeam, proposed: Proposed
 ) -> SplitProposal:
     """The sub-teams a message proposes, held to what the org allows."""
     store = service.store
@@ -151,7 +150,7 @@ def _paths(proposal: SplitProposal) -> list[str]:
     return [child.path for child in proposal.children]
 
 
-def _waiting(node: OrgNode) -> SplitProposal | None:
+def _waiting(node: SessionTeam) -> SplitProposal | None:
     """The sub-teams a team's IC proposed that still wait on its Manager."""
     proposal = node.pending_split
     return proposal if proposal and proposal.status == "proposed" else None
@@ -166,7 +165,7 @@ def msg_manager(service: DirectorService, caller: Caller, text: str) -> str:
     if not text:
         raise Invalid("A message cannot be empty")
     proposed = proposed_teams(text)
-    if proposed is None and not service.store.children(node.id):
+    if proposed is None and not service.store.below(node.id):
         raise Invalid(
             "A team without sub-teams messages its Manager only to propose "
             f"some, in a ```{TEAMS_FENCE} block. Raise anything else with "
@@ -177,10 +176,10 @@ def msg_manager(service: DirectorService, caller: Caller, text: str) -> str:
         if node.pending_split and node.pending_split.status == "approved":
             raise Conflict("The sub-teams your Manager approved are still being set up")
         proposal = _checked(service, node, proposed)
-        service.store.update_node(node.id, pending_split=proposal)
+        service.store.update_place(node.id, pending_split=proposal)
         store = service.store
-        replaced = [team.title for team in map(store.get, proposal.replaces) if team]
-        kept = [team.title for team in map(store.get, proposal.keeps) if team]
+        replaced = [team.title for team in map(store.place, proposal.replaces) if team]
+        kept = [team.title for team in map(store.place, proposal.keeps) if team]
         note = (
             "\n\n[director] The sub-teams in this message passed the org's "
             "checks."
@@ -255,7 +254,7 @@ def approve_teams(service: DirectorService, caller: Caller) -> str:
         len(split.children) - len(split.replaces),
         service.settings,
     )
-    service.store.update_node(
+    service.store.update_place(
         node.id,
         pending_split=proposal.model_copy(
             update={
@@ -298,9 +297,9 @@ def decline_teams(service: DirectorService, caller: Caller, reason: str) -> str:
     if proposal is None:
         raise Conflict("Your IC has no proposed sub-teams waiting for you")
     store = service.store
-    replaced = [team.title for team in map(store.get, proposal.replaces) if team]
+    replaced = [team.title for team in map(store.place, proposal.replaces) if team]
     named = _named(proposal, replaced)
-    store.update_node(node.id, pending_split=None)
+    store.update_place(node.id, pending_split=None)
     service.record_event(
         node.id, "declined", None, f"{named}. Reason: {reason}", _paths(proposal)
     )
@@ -432,7 +431,7 @@ def resolve_escalation(
 
 def submit_review(service: DirectorService, caller: Caller, summary: str) -> str:
     """Hand the work of the caller's team to the IC of the team above for
-    review; the top team's is shown to the human."""
+    review."""
     _only(caller, "ic", "submit its team's work")
     store = service.store
     node = caller.node
@@ -442,36 +441,36 @@ def submit_review(service: DirectorService, caller: Caller, summary: str) -> str
     review = node.review
     if review is not None and review.state == "pending":
         raise Conflict("Your team's work already waits for its review")
-    parent = store.get(node.parent_id) if node.parent_id else None
-    if parent is not None:
-        left = uncommitted(Path(node.worktree_path), node.boundary.path)
-        for team in store.children(node.id):
-            theirs = [path for path in left if owns(team, path)]
-            if theirs:
-                raise Conflict(
-                    f"{', '.join(theirs[:10])}"
-                    + (f" and {len(theirs) - 10} more" if len(theirs) > 10 else "")
-                    + f" in the directory of your sub-team {team.title!r} "
-                    "is not committed, and is that team's to commit. "
-                    + (
-                        "Wait until it has submitted its work and you have accepted it."
-                        if team.agents
-                        else "Give the team its task with msg_team; it "
-                        "commits and submits what is there, and you review "
-                        "that."
-                    )
-                )
-        if left:
+    if node.parent_id is None:
+        raise Conflict("A session's work is reviewed from here; nothing is submitted")
+    left = uncommitted(Path(node.worktree_path), node.boundary.path)
+    for team in store.below(node.id):
+        theirs = [path for path in left if owns(team, path)]
+        if theirs:
             raise Conflict(
-                "Commit your team's work before you submit it. Not "
-                f"committed: {', '.join(left[:10])}"
-                + (f" and {len(left) - 10} more" if len(left) > 10 else "")
+                f"{', '.join(theirs[:10])}"
+                + (f" and {len(theirs) - 10} more" if len(theirs) > 10 else "")
+                + f" in the directory of your sub-team {team.title!r} "
+                "is not committed, and is that team's to commit. "
+                + (
+                    "Wait until it has submitted its work and you have accepted it."
+                    if team.agents
+                    else "Give the team its task with msg_team; it "
+                    "commits and submits what is there, and you review "
+                    "that."
+                )
             )
+    if left:
+        raise Conflict(
+            "Commit your team's work before you submit it. Not "
+            f"committed: {', '.join(left[:10])}"
+            + (f" and {len(left) - 10} more" if len(left) > 10 else "")
+        )
     again = review is not None and review.state == "changes_requested"
     store.set_review(
         node.id,
         Review(
-            state="unreviewed" if parent is None else "pending",
+            state="pending",
             round=review.round + 1 if review is not None and again else 1,
             summary=summary,
             at=datetime.now(UTC).isoformat(timespec="seconds"),
@@ -481,11 +480,6 @@ def submit_review(service: DirectorService, caller: Caller, summary: str) -> str
     service.rest(node.id)
     service.request_review(node.id)
     service.refresh_headline(node.id, f"it submitted its work. {summary}")
-    if parent is None:
-        return (
-            "Submitted. Nobody is above your team: the human sees its work. "
-            "Your turn ends here."
-        )
     return (
         "Submitted. The IC of the team above reviews it. Your turn ends "
         "here: you are woken when it is accepted or sent back, or when "
@@ -540,18 +534,20 @@ def report(service: DirectorService, caller: Caller, text: str) -> str:
     return "Recorded for you and the other agent of your team."
 
 
-def _team_named(service: DirectorService, caller: Caller, name: str) -> OrgNode | None:
+def _team_named(
+    service: DirectorService, caller: Caller, name: str
+) -> SessionTeam | None:
     """The team an agent names: by the id of its place in the agent's own
     session, or by the team's id in the org, which is then its place in
     that session."""
     name = name.strip()
     store = service.store
     if "@" in name:
-        return store.get(name)
-    return store.instance(name, session_id_of(caller.node)) or store.get(name)
+        return store.place(name)
+    return store.instance(name, caller.node.session)
 
 
-def _team_below(service: DirectorService, caller: Caller, node_id: str) -> OrgNode:
+def _team_below(service: DirectorService, caller: Caller, node_id: str) -> SessionTeam:
     team = _team_named(service, caller, node_id)
     if team is None or team.parent_id != caller.node.id:
         raise Invalid(f"{node_id.strip()} is not a team directly below yours")
