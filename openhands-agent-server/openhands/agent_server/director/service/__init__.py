@@ -17,6 +17,7 @@ from openhands.agent_server.director.git import (
     is_git_repository,
 )
 from openhands.agent_server.director.headline import provisional_summary
+from openhands.agent_server.director.merge_checkout import MergeCheckout
 from openhands.agent_server.director.models import (
     Boundary,
     ChosenBy,
@@ -39,6 +40,7 @@ from openhands.agent_server.director.recovery import (
     has_work,
 )
 from openhands.agent_server.director.run_state import (
+    MERGING,
     Intent,
 )
 from openhands.agent_server.director.runtime import bind_director
@@ -47,6 +49,7 @@ from openhands.agent_server.director.service.state import (
     DIRECTOR_TOOL_NAMES,
     HAND_OVER_TOOLS,
     MERGE_WAITS,
+    ORG_WAITS,
     RESTART_NOTE,
     ROOT_ID,
     TOOLS_OF,
@@ -227,7 +230,8 @@ class DirectorService(Sync):
         if request.title is None:
             # The org is named after what its first session is for.
             top = opened.session.teams[0].id
-            self._enqueue(lambda: self._name_org(top), top)
+            # In the lane of that team, after the model that names it.
+            self._enqueue(lambda: self._in_base(lambda: self._name_org(top)), top)
         return opened
 
     async def _name_org(self, top_id: str) -> None:
@@ -380,9 +384,36 @@ class DirectorService(Sync):
         # the IC above may finish what it has there.
         sub_teams = [team for team in store.below(node.id) if team.agents]
         top = _checkout_root(node.worktree_path)
+        merges = {
+            team_id: MergeCheckout.model_validate_json(kept)
+            for team_id, kept in self._runs().marked(MERGING).items()
+        }
         for named in paths:
             target = Path(os.path.realpath(Path(node.worktree_path) / named))
-            if _is_in(target, top):
+            merging = next(
+                (
+                    (team_id, merge)
+                    for team_id, merge in merges.items()
+                    if _is_in(target, Path(os.path.realpath(merge.where)))
+                ),
+                None,
+            )
+            if merging is not None:
+                # Only what does not merge is its reviewer's to write.
+                team = store.place(merging[0])
+                if role != "ic" or team is None or team.parent_id != node.id:
+                    return (
+                        f"{named!r} is in a merge another team's reviewer "
+                        "finishes, so it was not changed."
+                    )
+                files = merging[1].files
+                relative = target.relative_to(os.path.realpath(merging[1].where))
+                if relative.as_posix() not in files:
+                    return (
+                        f"{named!r} merged by itself, so it was not changed. "
+                        f"Yours to edit in that merge: {', '.join(files)}"
+                    )
+            elif _is_in(target, top):
                 relative = target.relative_to(top).as_posix()
                 refusal = write_refusal(
                     node, role, sub_teams, "" if relative == "." else relative
@@ -432,6 +463,10 @@ class DirectorService(Sync):
             # merged now, with nobody asked again.
             self._begin("accept", node_id, needed_above="", reconciled="")
             return store.place(node_id) or node
+        if escalation_id == ORG_WAITS:
+            # The human goes on without the Manager.
+            self._begin("land_org", node_id, org_holds=True)
+            return store.place(node_id) or node
         self.notify(
             agent_conversation(node, escalation.raised_by),
             f"The human answered your escalation {escalation.title!r}:\n{answer}",
@@ -449,6 +484,7 @@ class DirectorService(Sync):
             "hand_over": self._do_hand_over,
             "request_review": self._do_request_review,
             "accept": self._do_accept,
+            "land_org": self._do_land_org,
             "prune": self._prune,
             "close_session": self._close_session,
         }

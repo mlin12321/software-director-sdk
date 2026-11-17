@@ -26,7 +26,7 @@ from openhands.agent_server.director.tools.definition import (
     StopTeamAction,
 )
 from openhands.sdk.conversation.state import ConversationExecutionStatus
-from tests.agent_server.director.conftest import FakeLauncher, tasked
+from tests.agent_server.director.conftest import FakeLauncher, record_of, tasked
 from tests.agent_server.director.test_director_acp import started
 from tests.agent_server.director.test_director_review import (
     DONE,
@@ -456,9 +456,7 @@ async def test_a_team_set_up_and_given_no_task_is_told_to_the_ic_above(
     assert "`msg_team`" in told[0] and "pruned" in told[0]
     # Nobody is there to ask, and it is not counted as work that stalled.
     assert not any("Team 'API'" in text for text in notices(service, launcher))
-    stalled = [
-        e.team for e in service.team_memory.history("root") if e.kind == "stalled"
-    ]
+    stalled = [e.team for e in record_of(service, "root") if e.kind == "stalled"]
     assert "API" not in stalled
 
     # Said once: a team may be left without a task on purpose, and an org

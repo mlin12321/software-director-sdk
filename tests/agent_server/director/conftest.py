@@ -13,7 +13,7 @@ from openhands.agent_server.conversation_service import (
     ExecutionStatusListener,
     ToolParams,
 )
-from openhands.agent_server.director.git_store import team_key
+from openhands.agent_server.director.git_store import GitStore, Landing, team_key
 from openhands.agent_server.director.headline import TeamSummary
 from openhands.agent_server.director.models import (
     AgentKind,
@@ -25,10 +25,12 @@ from openhands.agent_server.director.models import (
     FormerTeam,
     IsolationMode,
     OrgNodeInput,
+    Report,
     SessionInput,
     SessionTeam,
     SessionTeamInput,
     SplitChild,
+    TeamEvent,
 )
 from openhands.agent_server.director.org_store import (
     OrgStore,
@@ -553,6 +555,38 @@ def former_of(service: DirectorService, team_id: str) -> list[FormerTeam]:
         if record.id == team_key(team_id)
     ]
     return [*service.team_memory.former(team_id), *kept]
+
+
+def record_of(service: DirectorService, team_id: str) -> list[TeamEvent]:
+    """What became of the teams below a team: the org's record, and what
+    the open sessions kept since their work was last accepted."""
+    own = [
+        event
+        for session in service.store.sessions()
+        for event in service.own_events(session.id, team_id)
+    ]
+    return [*service.team_memory.history(team_id), *own]
+
+
+def take_in(
+    store: GitStore,
+    *,
+    reports: dict[str, list[Report]] | None = None,
+    events: dict[str, list[TeamEvent]] | None = None,
+) -> None:
+    """Add to team memory as an acceptance does."""
+    store.take_in(
+        Landing(
+            files={},
+            seen={},
+            reports=reports or {},
+            former=[],
+            forget=[],
+            events=events or {},
+            routed=[],
+        ),
+        "memory: for a test",
+    )
 
 
 def memory_of(service: DirectorService, file: str) -> str | None:

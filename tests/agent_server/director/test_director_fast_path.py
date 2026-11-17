@@ -23,7 +23,7 @@ from openhands.agent_server.director.tools.definition import (
     RaiseEscalationAction,
     WriteSpecAction,
 )
-from tests.agent_server.director.conftest import FakeLauncher, run_git
+from tests.agent_server.director.conftest import FakeLauncher, record_of, run_git
 from tests.agent_server.director.test_director_landing import landed
 from tests.agent_server.director.test_director_limits import started
 from tests.agent_server.director.test_director_review import DONE
@@ -131,9 +131,11 @@ async def test_it_is_on_the_record_of_the_team_above_and_told_to_its_reviewer(
 
     sent = await ask(service, "Add an index on orders.")
 
-    [event] = [e for e in service.team_memory.history(API) if e.kind == "asked"]
+    [event] = [e for e in record_of(service, API) if e.kind == "asked"]
     assert (event.team_id, event.detail) == (DB, "Add an index on orders.")
     [kept] = service.routed_requests()
+    # It is its session's alone until the session's work is accepted.
+    assert service.team_memory.routed() == []
     assert (kept.team, kept.text, kept.chosen_by) == (
         "DB",
         "Add an index on orders.",

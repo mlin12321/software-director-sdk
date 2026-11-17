@@ -11,6 +11,7 @@ import shutil
 import threading
 from collections import deque
 from collections.abc import Awaitable, Callable, Sequence
+from contextvars import ContextVar
 from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path
@@ -42,9 +43,13 @@ from openhands.agent_server.director.git_store import (
     CONTRACTS_FILE,
     SPEC_FILE,
     GitStore,
+    Landing,
     normalize_store_path,
+    swap_together,
+    taking_in,
 )
 from openhands.agent_server.director.headline import provisional_summary
+from openhands.agent_server.director.merge_checkout import MergeCheckout, discard
 from openhands.agent_server.director.models import (
     ROLE_NAMES,
     AgentKind,
@@ -70,6 +75,7 @@ from openhands.agent_server.director.org_persistence import (
     create_org_board,
     load_org,
     save_org,
+    saving,
 )
 from openhands.agent_server.director.org_store import (
     OrgStore,
@@ -78,6 +84,7 @@ from openhands.agent_server.director.org_store import (
 )
 from openhands.agent_server.director.pods import PodLauncher
 from openhands.agent_server.director.run_state import (
+    MERGING,
     PROGRESS,
     RUNNING,
     SESSION,
@@ -105,6 +112,7 @@ from openhands.sdk.conversation.state import ConversationExecutionStatus
 from openhands.sdk.errors import (
     DomainError,
     NotFound,
+    OperationFailed,
     Unavailable,
     Unprocessable,
 )
@@ -214,11 +222,16 @@ _RUN_STATE = "director/state.db"
 # Where, in the repository's git directory, the director keeps the shells
 # its agents' terminals start, and what those shells need.
 _SHELLS_DIR = "director-shells"
+# In the repository's git directory: the merges reviewers finish.
+_MERGING_DIR = "director-merging"
 # After a conversation id: the script an ACP agent's process is started by.
 _ACP_LAUNCHER = ".acp.sh"
 _REMEMBERED_FILE = "director.json"
 # The lane of what concerns the org as a whole, such as saving its tree.
 ORG_LANE = "org"
+# The lane of everything that changes what the org shares: the repository's
+# checkout, the tree and team memory. One thing at a time, in order.
+BASE_LANE = "base"
 # The lane reports are rewritten shorter in.
 MODELS_LANE = "models"
 # The lane agents are paused in, so that nothing waits for their last step.
@@ -228,6 +241,9 @@ STALL_LANE = "stalls"
 _REVIEW_STEPS = ("request_review", "accept")
 # The escalation that asks the human to clear the way for a merge.
 MERGE_WAITS = "merge-waits"
+# The id of the escalation raised when a Manager does not settle the teams
+# and contracts of accepted work.
+ORG_WAITS = "org-waits"
 # How many of the director's own model calls run at once.
 MODEL_CALLS_AT_ONCE = 2
 
@@ -242,6 +258,10 @@ _REST_CHECKS = 600
 _REST_CHECK_SECONDS = 0.05
 
 type Effect = Callable[[], Awaitable[None]]
+# The lane the running step is carried out in; '' outside the lanes.
+_LANE: ContextVar[str] = ContextVar("director_lane", default="")
+# How often a landing is tried when another writer moves a ref first.
+_LANDING_ATTEMPTS = 8
 
 
 class _Held(Exception):
@@ -369,6 +389,7 @@ class ServiceState:
         # The conversations a resume is about to run again.
         self._resuming: set[str] = set()
         self._save_asked = False
+        self._sessions_asked = False
         # Teams that waited for a run when the org was paused, in the order
         # they waited: each tries to start only when it is the first.
         self._line: deque[str] = deque()
@@ -385,8 +406,11 @@ class ServiceState:
         # Held from looking a need up in the record to keeping it, so that
         # an agent that tries the same file again is counted once.
         self._keeping_needs = threading.Lock()
+        # Held while one of a session's own records is read and added to.
+        self._keeping = threading.Lock()
         self._saving = threading.Lock()
-        self._landing = threading.Lock()
+        # Held while what waits of a session's work is read and changed.
+        self._weighing = threading.RLock()
         self._adding_manager = threading.Lock()
         self._counting = threading.Lock()
         self._clock = clock
@@ -634,6 +658,20 @@ class ServiceState:
             self._repo_dir, ["rev-parse", "--path-format=absolute", "--git-common-dir"]
         ).strip()
         return Path(git_dir) / _SHELLS_DIR
+
+    def _merging_root(self) -> Path:
+        return self._shells().parent / _MERGING_DIR
+
+    def merge_checkout(self, node_id: str) -> MergeCheckout | None:
+        """The merge of a team's work that its reviewer finishes."""
+        kept = self._runs().marked(MERGING).get(node_id)
+        return MergeCheckout.model_validate_json(kept) if kept else None
+
+    def _drop_merge_checkout(self, node_id: str) -> None:
+        merge = self.merge_checkout(node_id)
+        if merge is not None:
+            discard(self._repo_dir, Path(merge.where))
+            self._runs().unmark(MERGING, node_id)
 
     def _enforcement(self, kind: AgentKind) -> TeamEnforcement:
         if self._bwrap is not None:
@@ -996,6 +1034,7 @@ class ServiceState:
 
     async def _work(self, lane: str) -> None:
         waiting = self._lanes[lane]
+        _LANE.set(lane)
         try:
             while waiting:
                 effect = waiting.popleft()
@@ -1009,6 +1048,30 @@ class ServiceState:
                         self._quiet.set()
         finally:
             del self._lanes[lane]
+
+    def next_submission(self) -> int:
+        """The place in the order of the work that is submitted now."""
+        return self._runs().count("submitted")
+
+    async def _in_base(self, effect: Effect) -> None:
+        """Carry ``effect`` out in the lane of what the org shares and wait
+        for it: after everything that was asked for there before."""
+        if _LANE.get() == BASE_LANE:
+            await effect()
+            return
+        loop = asyncio.get_running_loop()
+        done: asyncio.Future[None] = loop.create_future()
+
+        async def carried_out() -> None:
+            try:
+                await effect()
+            except Exception as error:
+                done.set_exception(error)
+            else:
+                done.set_result(None)
+
+        self._put(carried_out, BASE_LANE)
+        await done
 
     def _begin(self, kind: str, node_id: str, **payload: object) -> None:
         """Record something of several steps the director does for a team,
@@ -1069,11 +1132,44 @@ class ServiceState:
 
     def _arm_save(self) -> None:
         loop = self._loop
-        if loop is None or self._save_timer is not None:
+        if loop is None:
+            return
+        if not self._sessions_asked:
+            # What a session has is only here: it is kept at once, not
+            # when the tree is next saved.
+            self._sessions_asked = True
+            self._enqueue(self._keep_sessions)
+        if self._save_timer is not None:
             return
         self._save_timer = loop.call_later(
             self._save_delay, lambda: self._enqueue(self._save_due)
         )
+
+    async def _keep_sessions(self) -> None:
+        self._sessions_asked = False
+        store = self._store
+        if store is None:
+            return
+
+        def keep() -> None:
+            with self._saving:
+                self._runs().replace_marks(SESSION, kept_sessions(store))
+
+        try:
+            await asyncio.to_thread(keep)
+        except (GitError, RunStateError):
+            logger.exception("Could not keep the sessions of %s", self._repo_dir)
+
+    async def _base[T](self, work: Callable[[], Awaitable[T]]) -> T:
+        """What ``work`` returns, carried out in the lane of what the org
+        shares."""
+        results: list[T] = []
+
+        async def effect() -> None:
+            results.append(await work())
+
+        await self._in_base(effect)
+        return results[0]
 
     async def _save_due(self) -> None:
         self._save_timer = None
@@ -1098,6 +1194,42 @@ class ServiceState:
             await asyncio.to_thread(self._save_tree, store)
         except GitError:
             logger.exception("Could not save the org tree to %s", self._repo_dir)
+
+    def _commit_landing(
+        self, landing: Landing, message: str, tree: bool
+    ) -> dict[str, str | None]:
+        """Take a landing into team memory, and with ``tree`` save the org
+        tree as it is now with it: both refs move together or neither.
+
+        Returns:
+            The files that were not written, with the text each has now.
+
+        Raises:
+            OperationFailed: Another writer kept moving a ref first.
+        """
+        memory = self._memory()
+        if not tree:
+            return memory.take_in(landing, message)
+        store = self.store
+        with self._saving:
+            for _ in range(_LANDING_ATTEMPTS):
+                mutate, left = taking_in(landing)
+                board = create_org_board(self._repo_dir)
+                staged = [
+                    made
+                    for made in (
+                        memory.stage(mutate, message),
+                        board.stage(saving(store), f"org: {message}"),
+                    )
+                    if made is not None
+                ]
+                if not staged or swap_together(self._repo_dir, staged):
+                    self._runs().replace_marks(SESSION, kept_sessions(store))
+                    return dict(left)
+        raise OperationFailed(
+            f"Gave up landing in {self._repo_dir} after {_LANDING_ATTEMPTS} "
+            "contended attempts"
+        )
 
     def _save_tree(self, store: OrgStore) -> None:
         with self._saving:
@@ -1201,10 +1333,14 @@ def _child_node(
 
 # Steps whose outcome is in the tree alone. The steps that start agents are
 # not among them: their outcome is the conversation.
-_SAVED_BEFORE_FORGOTTEN = frozenset({"accept", "finish_split", "request_review"})
+_SAVED_BEFORE_FORGOTTEN = frozenset(
+    {"accept", "finish_split", "request_review", "land_org"}
+)
 
 
 def _lane_for(intent: Intent) -> str:
+    if intent.kind == "land_org" or intent.payload.get("base"):
+        return BASE_LANE
     if intent.kind in _REVIEW_STEPS:
         return f"review:{intent.node_id}"
     return intent.node_id

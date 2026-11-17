@@ -41,7 +41,7 @@ from openhands.agent_server.director.tools.definition import (
     WriteSpecAction,
 )
 from openhands.sdk.errors import Conflict, NotFound
-from tests.agent_server.director.conftest import FakeLauncher, run_git
+from tests.agent_server.director.conftest import FakeLauncher, record_of, run_git
 from tests.agent_server.director.test_director_landing import landed
 from tests.agent_server.director.test_director_limits import started
 from tests.agent_server.director.test_director_pause import again
@@ -54,6 +54,7 @@ from tests.agent_server.director.test_director_teams import (
 from tests.agent_server.director.test_director_tools import (
     ic,
     node,
+    review_place_of,
     reviewer,
     split_root,
     use,
@@ -160,7 +161,7 @@ async def test_a_session_is_beside_the_org_tree_with_a_place_at_each_of_its_team
     assert [open.id for open in service.sessions()] == [first.id, found.id]
     [event] = [
         event
-        for event in service.team_memory.history("root")
+        for event in record_of(service, "root")
         if event.kind == "session_opened" and event.session == "Refunds"
     ]
     assert (event.team_id, event.detail) == (API, REFUNDS)
@@ -333,13 +334,24 @@ async def test_each_session_has_a_reviewer_of_its_own_and_the_second_meets_the_f
     await use(service, reviewer(service, first), ReviewTeamTool, accept(first))
     await use(service, reviewer(service, second), ReviewTeamTool, accept(second))
 
+    # What does not merge with the first is the second's reviewer's to
+    # merge: its team is not sent back and keeps its turn.
     assert (repo / "services/api/routes.ts").read_text() == "refunds\n"
     reviews = [node(service, team).review for team in (first, second)]
-    assert [review.state for review in reviews if review] == [
-        "accepted",
-        "changes_requested",
+    assert [review.state for review in reviews if review] == ["accepted", "pending"]
+    merge = service.merge_checkout(second)
+    assert merge is not None and merge.files == ["services/api/routes.ts"]
+    assert merge.where in launcher.messages_to(reviewer(service, second))[-1]
+    waits = node(service, review_place_of(service, second)).merge
+    assert waits is not None
+    assert [(item.kind, item.key, item.gate) for item in waits.items] == [
+        ("code", "services/api/routes.ts", "ic")
     ]
-    assert "do not merge" in launcher.messages_to(ic(service, second))[-1]
+    (Path(merge.where) / "services/api/routes.ts").write_text("refunds\nvouchers\n")
+    await use(service, reviewer(service, second), ReviewTeamTool, accept(second))
+    assert (repo / "services/api/routes.ts").read_text() == "refunds\nvouchers\n"
+    review = node(service, second).review
+    assert review is not None and review.state == "accepted"
     # An accepted session stays open, with its conversation, until the human
     # closes it.
     await service.settled()
@@ -558,7 +570,7 @@ async def test_a_session_is_kept_on_its_machine_and_what_it_changes_with_the_org
         # That it was opened is with the team's memory.
         assert [
             event.session
-            for event in restarted.team_memory.history("root")
+            for event in record_of(restarted, "root")
             if event.kind == "session_opened"
         ] == ["Checkout", "Refunds"]
         # The sessions themselves come back from what this machine kept,
@@ -602,12 +614,8 @@ async def test_closing_a_session_removes_it_and_keeps_what_was_not_merged(
     ).split()
     assert kept == [tip]
     assert (repo / "services/api/own.ts").exists()
-    [event] = [
-        event
-        for event in service.team_memory.history("root")
-        if event.kind == "session_closed"
-    ]
-    assert event.detail == "with work that was not merged"
+    # None of its work was accepted, so it is not on the org's record.
+    assert "session_closed" not in [e.kind for e in record_of(service, "root")]
     with pytest.raises(NotFound):
         service.close_session(session.session.id)
 
@@ -732,7 +740,7 @@ async def test_work_that_meets_merged_work_is_reconciled_before_it_is_merged(
     )
 
     assert (repo / ROUTES).read_text() == "refunds\ntwo\nthree\nfour\nvouchers\n"
-    history = service.team_memory.history("root")
+    history = record_of(service, "root")
     assert [e.detail for e in history if e.kind == "reconciled"] == ["Both lines hold."]
 
 

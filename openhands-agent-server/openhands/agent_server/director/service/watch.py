@@ -183,7 +183,7 @@ class Watch(Reviews):
                 sides[1],
             )
         limit = self.settings.manager_check_ic_setbacks
-        table = requests_between(self.team_memory.history(above.id))
+        table = requests_between(self.history_of(above.id))
         row = next(
             (
                 r
@@ -250,7 +250,7 @@ class Watch(Reviews):
         for above in self.store.above(raiser.id):
             made = [
                 event
-                for event in self.team_memory.history(above.id)
+                for event in self.history_of(above.id)
                 if event.kind == "asked_team"
                 and (event.team_id, event.other_id)
                 == (raiser.team_id, team_key(asked or ""))
@@ -386,6 +386,7 @@ class Watch(Reviews):
         store = self._store
         if not limit or store is None or self._paused is not None:
             return
+        await asyncio.to_thread(self._check_managers)
         run = self._runs()
         marks = run.marked(PROGRESS)
         teams = {team.id: team for team in store.places()}

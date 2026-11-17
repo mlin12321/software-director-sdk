@@ -5,6 +5,7 @@ on start.
 """
 
 import json
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -68,14 +69,19 @@ def stored_nodes(store: OrgStore) -> list[dict[str, Any]]:
     return [reference(node) for node in store.teams()]
 
 
-def save_org(board: GitStore, store: OrgStore) -> None:
-    """Write the tree to ``board`` unless it is already stored unchanged."""
+def saving(store: OrgStore) -> Callable[[StoreReader], list[StoreChange]]:
+    """What saving the tree changes: nothing when it is stored unchanged."""
     content = org_file(stored_nodes(store)).content
 
     def mutate(read: StoreReader) -> list[StoreChange]:
         return [] if read(_ORG_FILE) == content else [StoreChange(_ORG_FILE, content)]
 
-    board.commit(mutate, "org: save tree")
+    return mutate
+
+
+def save_org(board: GitStore, store: OrgStore) -> None:
+    """Write the tree to ``board`` unless it is already stored unchanged."""
+    board.commit(saving(store), "org: save tree")
 
 
 def load_org(board: GitStore, store: OrgStore) -> bool:

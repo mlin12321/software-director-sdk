@@ -559,7 +559,7 @@ class Splits(Watch):
                 contracts=contracts or "",
                 session=self.store.session_title(team),
                 since=team.since,
-                threads=await asyncio.to_thread(self._memory().take_threads, team.id),
+                threads=self._take_threads(team.id),
             )
             # The record is the session's until its work is accepted, and
             # so is the directory without the contracts of a team that is

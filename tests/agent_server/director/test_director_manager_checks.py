@@ -22,7 +22,7 @@ from openhands.agent_server.director.tools.definition import (
     ReadNodeContextAction,
     ResolveEscalationAction,
 )
-from tests.agent_server.director.conftest import FakeLauncher, tasked
+from tests.agent_server.director.conftest import FakeLauncher, record_of, tasked
 from tests.agent_server.director.test_director_acp import started
 from tests.agent_server.director.test_director_review import (
     DONE,
@@ -321,7 +321,7 @@ async def test_what_became_of_its_teams_is_kept_for_a_teams_two_agents(
 
     kinds = [
         (event.team, event.kind, event.detail)
-        for event in service.team_memory.history("root")
+        for event in record_of(service, "root")
         if event.team and event.kind != "session_opened"
     ]
     assert [kind for _, kind, _ in kinds[:2]] == ["set_up", "set_up"]
@@ -361,7 +361,7 @@ async def test_a_manager_is_shown_what_became_of_teams_that_are_gone(
     look = looks(service, launcher)[-1]
     assert "Teams that were here before and are gone:" in look
     assert "- 'API' (node services.api), pruned: 3 sent back" in look
-    history = service.team_memory.history("root")
+    history = record_of(service, "root")
     assert [e.detail for e in history if e.kind == "woken"] == [
         "your IC has sent the work of 'API' back 3 times.",
         "your IC has accepted 1 reviews since the last look of this kind.",

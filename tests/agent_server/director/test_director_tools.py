@@ -63,6 +63,7 @@ from openhands.sdk.conversation.state import (
 from openhands.sdk.tool.tool import Action, ToolDefinition
 from tests.agent_server.director.conftest import (
     FakeLauncher,
+    record_of,
     root_conversation,
     run_git,
     tasked,
@@ -391,7 +392,7 @@ async def test_a_manager_declines_proposed_teams_and_the_reason_is_kept(
     assert "Your Manager declined the sub-teams you proposed (API (services/api)" in (
         told
     )
-    last = service.team_memory.history("root")[-1]
+    last = record_of(service, "root")[-1]
     assert (last.kind, last.paths) == ("declined", ["services/api", "apps/web"])
     assert last.detail.endswith(
         "Reason: Web and API share a schema; keep them together."

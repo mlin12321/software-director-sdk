@@ -23,7 +23,12 @@ from openhands.agent_server.director.tools.definition import (
     MsgTeamAction,
 )
 from openhands.sdk.conversation.state import ConversationExecutionStatus
-from tests.agent_server.director.conftest import FakeLauncher, run_git, tasked
+from tests.agent_server.director.conftest import (
+    FakeLauncher,
+    record_of,
+    run_git,
+    tasked,
+)
 from tests.agent_server.director.test_director_landing import landed
 from tests.agent_server.director.test_director_limits import started
 from tests.agent_server.director.test_director_pause import (
@@ -207,11 +212,7 @@ async def test_work_that_does_not_merge_leaves_every_team_as_it_was(
     assert "could not be set up" in told and "apps/web/page.tsx" in told
     assert "Nothing was changed" in told
     # The Manager that approved them finds it in the record.
-    [kept] = [
-        event
-        for event in service.team_memory.history("root")
-        if event.kind == "declined"
-    ]
+    [kept] = [event for event in record_of(service, "root") if event.kind == "declined"]
     assert kept.detail.startswith("approved, and the runtime could not set them up")
     assert kept.paths == ["apps"]
 

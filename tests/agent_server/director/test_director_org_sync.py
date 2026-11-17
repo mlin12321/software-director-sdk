@@ -220,6 +220,35 @@ async def test_a_pushed_org_is_whole_in_another_clone_except_for_its_sessions(
     await there.aclose()
 
 
+async def test_a_pull_takes_only_the_org_and_team_memory(
+    repo: Path, launcher: FakeLauncher, remote: Path, tmp_path: Path
+):
+    here = await started(repo, launcher)
+    await split_root(here)
+    await landed(here)
+    await here.push_org("origin")
+    # What a server keeps for itself is never given, and never taken where
+    # someone put it on the remote all the same.
+    head = run_git(repo, "rev-parse", "HEAD").strip()
+    run_git(repo, "push", "--quiet", "origin", f"{head}:refs/agents/aside/left")
+    assert sorted(
+        line.split()[-1]
+        for line in run_git(repo, "ls-remote", "origin", "refs/agents/*").splitlines()
+    ) == ["refs/agents/aside/left", "refs/agents/memory", "refs/agents/org"]
+
+    there, clone = await elsewhere(remote, tmp_path)
+    await there.pull_org("origin")
+    await there.settled()
+
+    assert sorted(
+        run_git(
+            clone, "for-each-ref", "--format=%(refname)", "refs/remotes/origin/agents"
+        ).split()
+    ) == ["refs/remotes/origin/agents/memory", "refs/remotes/origin/agents/org"]
+    await here.aclose()
+    await there.aclose()
+
+
 async def test_what_each_side_changed_is_merged_and_goes_back_with_the_next_push(
     repo: Path, launcher: FakeLauncher, remote: Path, tmp_path: Path
 ):

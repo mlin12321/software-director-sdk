@@ -19,7 +19,7 @@ from openhands.agent_server.director.tools.definition import (
     ResolveEscalationAction,
     StopTeamAction,
 )
-from tests.agent_server.director.conftest import FakeLauncher
+from tests.agent_server.director.conftest import FakeLauncher, record_of
 from tests.agent_server.director.test_director_landing import landed
 from tests.agent_server.director.test_director_limits import started
 from tests.agent_server.director.test_director_stalls import Clock
@@ -100,7 +100,7 @@ def the_one(service: DirectorService, node_id: str = DB):
 
 
 def kinds(service: DirectorService, above: str = "root") -> list[str]:
-    return [event.kind for event in service.team_memory.history(above)]
+    return [event.kind for event in record_of(service, above)]
 
 
 async def answer(
@@ -172,7 +172,7 @@ async def test_the_team_above_both_keeps_sight_of_what_they_asked_of_each_other(
     await use(service, ic(service, DB), RaiseEscalationTool, need())
 
     assert kinds(service)[-2:] == ["asked_team", "needed"]
-    counted = service.team_memory.history("root")[-1]
+    counted = record_of(service, "root")[-1]
     # Between the two teams directly below, which is what a merge would join.
     assert (counted.team_id, counted.other_id, counted.detail) == (API, WEB, NEED_ASKED)
     [row] = service.context_of(node(service, "root"), "ic")[

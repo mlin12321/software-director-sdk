@@ -22,10 +22,11 @@ from openhands.agent_server.director.git_store import (
 from openhands.agent_server.director.models import (
     FormerTeam,
     Report,
-    ThreadMessage,
+    RoutedRequest,
+    TeamEvent,
 )
 from openhands.sdk.errors import NotSupported
-from tests.agent_server.director.conftest import run_git
+from tests.agent_server.director.conftest import run_git, take_in
 
 
 @pytest.fixture
@@ -144,40 +145,15 @@ def test_an_absolute_looking_file_stays_inside_the_scope(board: GitStore):
     assert board.read("svc/a/etc/passwd") == "x"
 
 
-def test_reports_are_added_in_order_and_kept_apart_by_agent(board: GitStore):
-    first, second = a_report("Chose SQLite."), a_report("The ORM was too slow.")
-
-    board.append_report("api", "ic", first)
-    kept = board.append_report("api", "ic", second)
-
-    assert kept == board.reports("api", "ic") == [first, second]
-    assert board.reports("api", "manager") == []
-
-
 def test_reports_are_replaced_only_as_they_were_read(board: GitStore):
-    read = board.append_report("api", "ic", a_report("Long."))
+    take_in(board, reports={"api": [a_report("Long.")]})
+    read = board.reports("api", "ic")
     shorter = [a_report("Short.").model_copy(update={"compacted": True})]
-    board.append_report("api", "ic", a_report("Added meanwhile."))
+    take_in(board, reports={"api": [a_report("Added meanwhile.")]})
 
     assert not board.replace_reports("api", "ic", read, shorter)
     assert board.replace_reports("api", "ic", board.reports("api", "ic"), shorter)
     assert board.reports("api", "ic") == shorter
-
-
-def said(text: str, at: str = "2026-11-01T00:00:00+00:00") -> ThreadMessage:
-    return ThreadMessage(at=at, sender="ic", text=text)
-
-
-def test_messages_are_kept_in_order_and_apart_by_manager_and_ic(board: GitStore):
-    first, second = said("Split in two?"), said("Or three?")
-
-    board.append_message("root", "root", first)
-    board.append_message("root", "root", second)
-    board.append_message("root", "svc.a", said("Status?"))
-
-    assert board.thread("root", "root") == [first, second]
-    assert [message.text for message in board.thread("root", "svc.a")] == ["Status?"]
-    assert board.thread("svc.a", "svc.a") == []
 
 
 def a_landing(
@@ -186,9 +162,17 @@ def a_landing(
     reports: dict[str, list[Report]] | None = None,
     former: list[FormerTeam] | None = None,
     forget: list[str] | None = None,
+    events: dict[str, list[TeamEvent]] | None = None,
+    routed: list[RoutedRequest] | None = None,
 ) -> Landing:
     return Landing(
-        dict(files or {}), dict(seen or {}), reports or {}, former or [], forget or []
+        dict(files or {}),
+        dict(seen or {}),
+        reports or {},
+        former or [],
+        forget or [],
+        events or {},
+        routed or [],
     )
 
 
@@ -239,7 +223,7 @@ def test_a_file_a_session_removed_is_removed_where_it_still_stands(board: GitSto
 
 
 def test_taking_in_the_same_reports_twice_adds_them_once(board: GitStore):
-    board.append_report("api", "ic", a_report("Before."))
+    take_in(board, reports={"api": [a_report("Before.")]})
     mine = [
         a_report("Chose REST.").model_copy(update={"id": "r1"}),
         Report(at="2026-11-02T00:00:00+00:00", role="manager", text="Agreed.", id="r2"),
@@ -252,10 +236,42 @@ def test_taking_in_the_same_reports_twice_adds_them_once(board: GitStore):
     assert [r.text for r in board.reports("api", "manager")] == ["Agreed."]
 
 
+def test_events_and_routed_requests_are_taken_in_once_and_in_order(board: GitStore):
+    def event(name: str, kind: str = "accepted") -> TeamEvent:
+        return TeamEvent.model_validate(
+            {
+                "at": "2026-11-01T00:00:00+00:00",
+                "kind": kind,
+                "team_id": "api",
+                "id": name,
+            }
+        )
+
+    asked = RoutedRequest(
+        at="2026-11-01T00:00:00+00:00",
+        kind="asked",
+        team_id="api@s1",
+        team="API",
+        text="Add an index.",
+        id="q1",
+    )
+    take_in(board, events={"root": [event("e1", "set_up")]})
+    landing = a_landing(
+        events={"root": [event("e1", "set_up"), event("e2")]}, routed=[asked]
+    )
+
+    board.take_in(landing, "accepted")
+    board.take_in(landing, "accepted again")
+
+    assert [e.id for e in board.history("root")] == ["e1", "e2"]
+    assert board.history("api") == []
+    assert board.routed() == [asked]
+
+
 def test_a_team_that_is_forgotten_leaves_its_record_and_none_of_its_reports(
     board: GitStore,
 ):
-    board.append_report("api", "ic", a_report("The old team's."))
+    take_in(board, reports={"api": [a_report("The old team's.")]})
     record = FormerTeam(
         id="api",
         title="API",
@@ -275,23 +291,11 @@ def test_a_team_that_is_forgotten_leaves_its_record_and_none_of_its_reports(
     assert board.former("api") == [record]
 
 
-def test_what_a_place_said_is_taken_out_with_it(board: GitStore):
-    board.append_message("api@s1", "api@s1", said("To my IC."))
-    board.append_message("api@s2", "api@s2", said("Another session's."))
-
-    taken = board.take_threads("api@s1")
-
-    assert [m.text for thread in taken for m in thread.messages] == ["To my IC."]
-    assert board.thread("api@s1", "api@s1") == []
-    assert [m.text for m in board.thread("api@s2", "api@s2")] == ["Another session's."]
-    assert board.take_threads("api@s1") == []
-
-
 def test_racing_writers_lose_no_update(board: GitStore):
     reports = [a_report(f"report {i}") for i in range(6)]
 
     with ThreadPoolExecutor(max_workers=len(reports)) as pool:
-        list(pool.map(lambda report: board.append_report("api", "ic", report), reports))
+        list(pool.map(lambda r: take_in(board, reports={"api": [r]}), reports))
 
     assert sorted(report.text for report in board.reports("api", "ic")) == [
         report.text for report in reports
@@ -367,32 +371,35 @@ class TestMerge:
         shared = a_report("Shared.", "2026-11-01T00:00:00+00:00")
         ours = a_report("Ours.", "2026-11-03T00:00:00+00:00")
         their = a_report("Theirs.", "2026-11-02T00:00:00+00:00")
-        board.append_report("api", "ic", shared)
-        board.append_report("api", "ic", ours)
-        theirs.append_report("api", "ic", shared)
-        theirs.append_report("api", "ic", their)
+        take_in(board, reports={"api": [shared, ours]})
+        take_in(theirs, reports={"api": [shared, their]})
 
         merged = board.merge(theirs.ref)
 
         assert merged.kept_local == []
         assert board.reports("api", "ic") == [shared, their, ours]
 
-    def test_messages_both_sides_added_are_all_kept_in_order(
+    def test_events_both_sides_added_are_all_kept_in_order(
         self, board: GitStore, theirs: GitStore, merge_supported: bool
     ):
         if not merge_supported:
             pytest.skip("needs git 2.38")
-        shared = said("Shared.", "2026-11-01T00:00:00+00:00")
-        ours = said("Ours.", "2026-11-03T00:00:00+00:00")
-        their = said("Theirs.", "2026-11-02T00:00:00+00:00")
-        for store, own in ((board, ours), (theirs, their)):
-            store.append_message("root", "root", shared)
-            store.append_message("root", "root", own)
+
+        def event(name: str, at: str) -> TeamEvent:
+            return TeamEvent.model_validate(
+                {"at": at, "kind": "accepted", "team_id": "api", "id": name}
+            )
+
+        shared = event("shared", "2026-11-01T00:00:00+00:00")
+        ours = event("ours", "2026-11-03T00:00:00+00:00")
+        their = event("theirs", "2026-11-02T00:00:00+00:00")
+        take_in(board, events={"root": [shared, ours]})
+        take_in(theirs, events={"root": [shared, their]})
 
         merged = board.merge(theirs.ref)
 
         assert merged.kept_local == []
-        assert board.thread("root", "root") == [shared, their, ours]
+        assert board.history("root") == [shared, their, ours]
 
     def test_of_a_spec_both_sides_changed_ours_is_kept_and_named(
         self, board: GitStore, theirs: GitStore, merge_supported: bool

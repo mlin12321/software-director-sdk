@@ -1,6 +1,7 @@
 """What the director tells the agents of an org."""
 
 import json
+from collections.abc import Sequence
 from datetime import datetime
 from typing import Any
 
@@ -11,7 +12,7 @@ from openhands.agent_server.director.models import (
     Escalation,
     FormerTeam,
     InheritedSpec,
-    OrgChange,
+    MergeItem,
     Report,
     Review,
     ReviewFinding,
@@ -119,6 +120,12 @@ delivers into the repository's own checkout and do nothing else: you do not
 write files, give tasks or change teams. Read the work in the session's
 checkout, run its checks there if you need to, and decide with
 `review_team`. Accepting merges it into the repository's checkout at once.
+The one thing you write: when the work does not merge by itself, the
+director lays the merge out for you and names the files that do not merge.
+You edit those files there, and no others, so that the session keeps its
+turn; then you accept again. With `specs` you may also decide, for each
+spec of the work, whether the org's stays, the session's holds, or a text
+you write from both does.
 Judge it by what the human asked of the session and by your team's spec,
 contracts and records. Use `report` for what the team must remember."""
 
@@ -126,19 +133,23 @@ REVIEW_MANAGER_ROLE = """\
 <ORG_ROLE>
 You are the Manager of your team in review mode, not its IC: what is said
 above of the IC is not yours to do. You do not write files, give tasks or
-review code. A session's code was accepted and merged already. The session
-also changed its sub-teams, or the contracts between them, while the org's
-were changed by other accepted work, and you decide, one by one, which
-holds. The director tells you each such team and each such contracts with
-what the session made of it and what the org has now; everything else of
-the session's teams is settled.
+review code: the IC beside you reviews the session's code, and neither of
+you waits for the other. The session changed its sub-teams, or the
+contracts between them, while the org's were changed by other accepted
+work, and you decide, one by one, which holds. The director tells you each
+such team and each such contracts with what the session made of it and
+what the org has now; everything else of the session's teams is settled.
+What you decide is the org's once the session's code is accepted, and
+sessions that submitted later wait for it with their teams and contracts,
+so decide soon.
 Decide by your team's spec, contracts and records, which `read_node_context`
-returns, and settle all of it with one call of `settle_teams`: name in
-`org_teams` the teams for which the org's stays, and the others become what
-the session made of them. For contracts, say in `contracts` which holds, or
-write the text that keeps what both need: taking one side whole often
-breaks what the other side's teams rely on. Use `report` for what the team
-must remember.
+returns, and settle all of it with one call of `settle_teams`: say in
+`teams` for each team whether the org's holds or the session's. A team you
+take from the session you may put under another team or call otherwise, so
+that it fits the org as it is now. For contracts, say in `contracts` which
+holds, or write the text that keeps what both need: taking one side whole
+often breaks what the other side's teams rely on. Use `report` for what the
+team must remember.
 </ORG_ROLE>"""
 
 MANAGER_ROLE = """\
@@ -654,8 +665,23 @@ def session_work(team: SessionTeam, title: str, request: str) -> str:
     )
 
 
-def accept_in_order(team: SessionTeam, first: SessionTeam) -> str:
-    """Why work is not accepted while work submitted before it waits."""
+def accept_in_order(team: SessionTeam, first: SessionTeam, session: str = "") -> str:
+    """Why work is not accepted while work submitted before it waits.
+
+    Args:
+        session: What the session of the earlier work is called, when
+            another reviewer than the one that is told decides on it.
+    """
+    if session:
+        return (
+            f"The work of {first.title!r} in the session {session!r} was "
+            f"submitted before that of {team.title!r}, and its reviewer has "
+            "not decided on it yet. Work is accepted in the order it was "
+            "submitted, so that each is checked against what was merged "
+            "before it. There is nothing for you to do until then: you are "
+            "told when it is your turn, and accept with `review_team` again "
+            "then."
+        )
     return (
         f"The work of {first.title!r} (node {first.id}) was submitted before "
         f"that of {team.title!r} and still waits for your review. Work is "
@@ -672,6 +698,7 @@ def reconcile_request(
     files: list[str],
     landed: list[str],
     specs: list[tuple[str, str, str]],
+    inherited: Sequence[tuple[str, str, str, str]] = (),
 ) -> str:
     """What a reviewing IC is told when work it accepts meets other work.
 
@@ -683,6 +710,9 @@ def reconcile_request(
         landed: The teams whose work was merged there meanwhile.
         specs: For each spec it wrote while the team's spec changed: the
             directory, the team's spec now and the one it wrote.
+        inherited: For each spec it wrote for a team the org no longer
+            has: the directory of the team it is kept with, that team's
+            spec now, what the lost team was called and the spec.
     """
     lines = [
         f"Not merged yet: the work of {team.title!r} (node {team.id}) meets "
@@ -713,71 +743,139 @@ def reconcile_request(
             "The spec it wrote:",
             written,
         ]
+    for home, theirs, lost, written in inherited:
+        lines += [
+            "",
+            f"It wrote a spec for {lost!r}, a team the org no longer has. "
+            f"The team that holds its directory now is the one in "
+            f"{home or 'the repository'}, which is left that spec as an old "
+            "one. If something in it has to hold on, write the spec of "
+            f"{home or 'the repository'} from both in `specs`; otherwise "
+            "the next session there is told to.",
+            f"The spec of {home or 'the repository'} now:",
+            theirs or "(none)",
+            f"The spec written for {lost!r}:",
+            written,
+        ]
     lines += [
         "",
         "Decide what holds. If its work must change, reject it with what "
         "must change. If what is already in your checkout must change, "
         "change it or give that team the task. Then accept again with "
         "`review_team` and say in `reconciled` what you decided; without "
-        "that it is not merged.",
+        "that it is not merged."
+        + (
+            " For each spec above you may say in `specs` whether the org's "
+            "stays, the session's holds, or a text you write from both does; "
+            "unnamed, the session's holds."
+            if specs or inherited
+            else ""
+        ),
     ]
     return "\n".join(lines)
 
 
-def org_change_request(team: SessionTeam, session: str, change: OrgChange) -> str:
+def merge_prepared(team: SessionTeam, where: str, files: list[str]) -> str:
+    """What a reviewer is told when the work it accepts does not merge by
+    itself: the merge is laid out for it to finish."""
+    return (
+        f"The work of {team.title!r} (node {team.id}) does not merge with your "
+        f"checkout by itself. These files do not merge: {', '.join(files)}\n\n"
+        f"The merge is laid out in {where}, with git's conflict markers in "
+        "those files and everything else merged. It is yours to finish, so "
+        "that the team does not lose its turn:\n"
+        "- Edit those files there until each is what both sides need, with "
+        "no conflict markers left. Change no other file there.\n"
+        "- Do not run git there: the merge is committed for you.\n"
+        "- Then accept the work again with `review_team`, and say in "
+        "`reconciled` what you made of them. The merge is taken as you left "
+        "it and the team is told what you changed.\n\n"
+        "If it is not yours to decide, send the work back with `review_team` "
+        "and decision 'reject' instead."
+    )
+
+
+def merge_request(
+    team: SessionTeam, session: str, waiting: list[MergeItem], accepted: bool
+) -> str:
     """What the Manager of the place a session is reviewed from is told
-    when sub-teams of the session wait for it."""
+    when teams or contracts of the session wait for it.
+
+    Args:
+        waiting: What waits for it, with what it decided before of what is
+            unchanged.
+        accepted: Whether the session's code is accepted and merged.
+    """
     lines = [
         f"The work of {team.title!r} (node {team.id}) in the session "
-        f"{session!r} is accepted and merged. What it made of its sub-teams "
-        "is the org's now, but for this, which the org made something else "
-        "of while the session worked:",
+        f"{session!r} "
+        + (
+            "is accepted and its code is merged."
+            if accepted
+            else "is submitted and its IC reviews the code."
+        )
+        + " This of its teams and contracts the org made something else of "
+        "while the session worked:",
     ]
-    for waiting in change.teams:
-        lines += [
-            "",
-            f"- {waiting.title or waiting.team_id} (team {waiting.team_id})",
-            f"  the session: {waiting.session}",
-            f"  the org now: {waiting.org}",
-        ]
-        if waiting.moved_to is not None:
+    for item in waiting:
+        if item.kind == "team":
+            lines += [
+                "",
+                f"- {item.title or item.key} (team {item.key})",
+                f"  the session: {item.session}",
+                f"  the org now: {item.org}",
+            ]
+            if item.moved_to is not None:
+                lines.append(
+                    "  the team it was set up under is not in the org any more: "
+                    f"taken, it goes under team {item.moved_to}, and that "
+                    "team's sub-teams inside its directory go under it. The "
+                    "team that is gone is not put back."
+                )
+        else:
+            lines += [
+                "",
+                f"- the contracts between the sub-teams of "
+                f"{item.key or 'the repository'}"
+                + (
+                    f" (they come with team {item.with_team} and hold only if "
+                    "it is taken)"
+                    if item.with_team
+                    else ""
+                ),
+                "  the session's:",
+                *(f"    {line}" for line in (item.session or "(none)").splitlines()),
+                "  the org's now:",
+                *(f"    {line}" for line in (item.org or "(none)").splitlines()),
+            ]
+        if item.take is not None:
             lines.append(
-                "  the team it was set up under is not in the org any more: "
-                f"taken, it goes under team {waiting.moved_to}, and that "
-                "team's sub-teams inside its directory go under it. The "
-                "team that is gone is not put back."
+                f"  you decided: {item.take}"
+                + (f", under {item.under}" if item.under else "")
+                + (f", called {item.named!r}" if item.named else "")
             )
-    for agreed in change.contracts:
-        lines += [
-            "",
-            f"- the contracts between the sub-teams of "
-            f"{agreed.path or 'the repository'}"
-            + (
-                f" (they come with team {agreed.with_team} and hold only if "
-                "it is taken)"
-                if agreed.with_team
-                else ""
-            ),
-            "  the session's:",
-            *(f"    {line}" for line in (agreed.session or "(none)").splitlines()),
-            "  the org's now:",
-            *(f"    {line}" for line in (agreed.org or "(none)").splitlines()),
-        ]
+    contracts = any(item.kind == "contracts" for item in waiting)
     lines += [
         "",
-        "Until you settle it the org's stay. Call `settle_teams` once: name "
-        "in `org_teams` every team above for which the org's holds; the "
-        "others become what the session made of them."
+        "Nothing the session made of its teams and contracts is the org's "
+        "until you settle this. Call `settle_teams` once: say in `teams` "
+        "for each team above whether the 'org' holds or the 'session'; "
+        "unnamed, a team becomes what the session made of it. A team you "
+        "take from the session you may put under another team of the org "
+        "(`under`) or call otherwise (`title`), so that it fits the org as "
+        "it is now."
         + (
             " For each contracts above say in `contracts` which holds: "
             "'org', 'session', or 'text' with the contracts you write from "
             "both. Unnamed, the session's hold."
-            if change.contracts
+            if contracts
             else ""
         ),
-        "What the session wrote for a team the org does not take is kept "
-        "as that team's record with the nearest team that holds its "
-        "directory.",
+        "What you settle becomes the org's together, once the session's "
+        "code is accepted and what sessions that submitted earlier made of "
+        "the org is in. What the session wrote for a team the org does not "
+        "take is kept as that team's record with the nearest team that "
+        "holds its directory.",
     ]
     return "\n".join(lines)
 
