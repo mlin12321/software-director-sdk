@@ -525,8 +525,13 @@ class ConversationTeamLauncher:
                 continue
             metrics = state.stats.get_combined_metrics()
             tokens = metrics.accumulated_token_usage
+            read = tokens.prompt_tokens if tokens else 0
+            if tokens and isinstance(state.agent, ACPAgent):
+                # Such an agent reports what it read from and wrote to its
+                # cache apart from its input, and that is nearly all of it.
+                read += tokens.cache_read_tokens + tokens.cache_write_tokens
             found[conversation_id] = Usage(
-                input_tokens=tokens.prompt_tokens if tokens else 0,
+                input_tokens=read,
                 output_tokens=tokens.completion_tokens if tokens else 0,
                 cost=metrics.accumulated_cost,
             ).plus(self._own_use.get(conversation_id, Usage()))

@@ -55,7 +55,10 @@ All are in the settings of the org page. The two on use are off (0) until
 you set them.
 
 - **Tokens a session may use.** A session that reaches it rests, and you are
-  asked; your answer lets it go on for as many again.
+  asked; your answer lets it go on for as many again. For Claude Code the
+  count includes what it reads from and writes to its cache, which is
+  nearly all of it: the first real run (five agents, two small teams, one
+  review sent back) used 2.8 million tokens and $4.84 in nine minutes.
 - **Sessions open at once.**
 - **Teams and depth** of the org.
 - **`OH_MAX_CONCURRENT_RUNS`** (server): how many agents run at once.
@@ -70,3 +73,6 @@ you set them.
   the top of the org page.
 - **Use is counted about once a minute,** so a session can pass its limit by
   what its agents use in that minute.
+- **A team run by Claude Code is named a little late.** It cannot be asked
+  for a headline before its first turn, so it is asked when that turn is
+  over. Until then the team shows the start of its task.

@@ -446,7 +446,13 @@ class Delivery(Records):
         return shorter[0].text if shorter else full
 
     async def _summarize(
-        self, place_id: str, task: str, *, rename: bool = False, first: bool = False
+        self,
+        place_id: str,
+        task: str,
+        *,
+        rename: bool = False,
+        first: bool = False,
+        again: bool = False,
     ) -> None:
         """Have a model write a team's headline and, with ``rename``, its title.
 
@@ -454,6 +460,7 @@ class Delivery(Records):
             first: This is the summary of the task the team was made for. It
                 is dropped once the team has reported, which may happen
                 before the model was asked.
+            again: It is asked for a second time, and not a third.
         """
         store = self.store
 
@@ -480,6 +487,11 @@ class Delivery(Records):
                 )
         except (NotFound, TimeoutError):
             return
+        if summary is None and first and not again and not reported():
+            asked = next((a for a in place.agents if a.role == "ic"), None)
+            if asked is not None and asked.kind == "acp":
+                # It is asked again when its first turn is over.
+                self._summary_owed[place_id] = (task, rename)
         if summary is None or reported():
             return
         changes: dict[str, object] = {"headline": summary.headline}
