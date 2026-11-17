@@ -32,6 +32,7 @@ from openhands.agent_server.director.models import (
     SessionTeamInput,
     SnapshotEvent,
     Stopped,
+    Usage,
 )
 from openhands.sdk.errors import Invalid, NotFound
 
@@ -343,6 +344,27 @@ class OrgStore:
                 self._sessions[session_id] = session.model_copy(update={"title": title})
                 self._announce_sessions()
                 self._announce_escalations()
+
+    def set_session_use(
+        self, session_id: str, usage: Usage, token_allowance: int
+    ) -> Session | None:
+        """Keep what a session has used and how much it may use.
+
+        Returns:
+            The session as it is now; None when it is not open.
+        """
+        with self._lock:
+            session = self._sessions.get(session_id)
+            if session is None:
+                return None
+            changed = session.model_copy(
+                update={"usage": usage, "token_allowance": token_allowance}
+            )
+            if changed != session:
+                self._sessions[session_id] = changed
+                self._announce_sessions()
+                self._changed()
+            return self._session_view(changed)
 
     def close_session(self, session_id: str) -> bool:
         """Forget a session and everything it has at its teams.

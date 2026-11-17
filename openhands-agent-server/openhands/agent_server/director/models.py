@@ -860,6 +860,20 @@ class DirectorSettings(BaseModel):
             "directory gives."
         ),
     )
+    session_token_limit: int = Field(
+        default=0,
+        ge=0,
+        description=(
+            "How many tokens, input and output together, the agents of one "
+            "session may use before they are put to rest and the human is "
+            "asked whether it goes on for as many again. 0: no limit."
+        ),
+    )
+    max_open_sessions: int = Field(
+        default=0,
+        ge=0,
+        description="How many sessions may be open at once. 0: no limit.",
+    )
 
 
 class DirectorSettingsUpdate(BaseModel):
@@ -874,6 +888,8 @@ class DirectorSettingsUpdate(BaseModel):
     manager_check_accepted_reviews: int | None = Field(default=None, ge=0)
     manager_check_ic_setbacks: int | None = Field(default=None, ge=0)
     route_requests: bool | None = None
+    session_token_limit: int | None = Field(default=None, ge=0)
+    max_open_sessions: int | None = Field(default=None, ge=0)
 
 
 class DirectorSettingsState(DirectorSettings):
@@ -1402,6 +1418,28 @@ class SessionTeam(SessionTeamInput, OrgNode):
     ``child_ids`` are the session's records for the team's sub-teams."""
 
 
+class Usage(BaseModel):
+    """What agents have used of their models."""
+
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cost: float = Field(
+        default=0.0,
+        description="In US dollars, as far as the agents' models report it.",
+    )
+
+    @property
+    def tokens(self) -> int:
+        return self.input_tokens + self.output_tokens
+
+    def plus(self, other: "Usage") -> "Usage":
+        return Usage(
+            input_tokens=self.input_tokens + other.input_tokens,
+            output_tokens=self.output_tokens + other.output_tokens,
+            cost=self.cost + other.cost,
+        )
+
+
 class SessionInput(BaseModel):
     """A line of work the human opened at a team. All work of an org is
     done in sessions."""
@@ -1418,6 +1456,21 @@ class SessionInput(BaseModel):
             "The branch the repository's checkout was on when the session "
             "was opened. Its accepted work is merged into that branch only; "
             "'' when it was on none."
+        ),
+    )
+    usage: Usage = Field(
+        default_factory=Usage,
+        description=(
+            "What its agents have used so far, with the director's own "
+            "model calls for them."
+        ),
+    )
+    token_allowance: int = Field(
+        default=0,
+        description=(
+            "How many tokens, input and output together, it may use before "
+            "its agents are put to rest and the human is asked; 0 while "
+            "nothing limits it."
         ),
     )
     shape: list[tuple[str, str, str, str]] = Field(

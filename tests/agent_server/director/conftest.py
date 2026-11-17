@@ -31,6 +31,7 @@ from openhands.agent_server.director.models import (
     SessionTeamInput,
     SplitChild,
     TeamEvent,
+    Usage,
 )
 from openhands.agent_server.director.org_store import (
     OrgStore,
@@ -289,6 +290,8 @@ class FakeLauncher:
     # the server in the middle of a step by raising from it.
     before: Callable[[str], None] = lambda _: None
     deleted: list[UUID] = field(default_factory=list)
+    # What each conversation's agent has used of its model.
+    used: dict[UUID, Usage] = field(default_factory=dict)
     # What a conversation that failed said of it.
     failures: dict[UUID, str] = field(default_factory=dict)
     # What starting the next derived agent fails with.
@@ -466,6 +469,13 @@ class FakeLauncher:
     ) -> dict[UUID, ConversationExecutionStatus]:
         return {
             conversation_id: self.known[conversation_id]
+            for conversation_id in conversation_ids
+            if conversation_id in self.known
+        }
+
+    async def usage(self, conversation_ids: Collection[UUID]) -> dict[UUID, Usage]:
+        return {
+            conversation_id: self.used.get(conversation_id, Usage())
             for conversation_id in conversation_ids
             if conversation_id in self.known
         }

@@ -111,6 +111,13 @@ class Sessions(Splits):
             raise Conflict("There is no org to open a session in")
         if self._paused is not None:
             raise Conflict("The org is paused; resume it before opening a session")
+        most = self.settings.max_open_sessions
+        if most and len(store.sessions()) >= most:
+            raise Conflict(
+                f"The org's settings allow {most} open "
+                f"{'session' if most == 1 else 'sessions'} at once. Close "
+                "one, or raise the limit in the settings."
+            )
         text = request.text.strip()
         chosen_by: ChosenBy = "path"
         reason = ""
@@ -159,6 +166,7 @@ class Sessions(Splits):
                 request=text[:ASKED_KEPT],
                 opened_at=datetime.now(UTC).isoformat(),
                 branch="" if branch == "HEAD" else branch,
+                token_allowance=self.settings.session_token_limit,
                 shape=shape_of(shape),
             ),
             [

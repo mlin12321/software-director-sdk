@@ -247,6 +247,9 @@ MERGE_WAITS = "merge-waits"
 # The id of the escalation raised when a Manager does not settle the teams
 # and contracts of accepted work.
 ORG_WAITS = "org-waits"
+# The escalation that asks the human whether a session that reached its
+# token limit goes on.
+LIMIT_WAITS = "limit-reached"
 # How much of an error is kept as the reason an agent failed.
 _REASON_KEPT = 600
 # The escalation that tells the human a team shows no progress where no IC
