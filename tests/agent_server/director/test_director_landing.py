@@ -40,7 +40,12 @@ from openhands.agent_server.director.tools.definition import (
     WriteSpecAction,
 )
 from openhands.sdk.errors import NotFound
-from tests.agent_server.director.conftest import FakeLauncher, run_git
+from tests.agent_server.director.conftest import (
+    FakeLauncher,
+    record_of,
+    run_git,
+    take_in,
+)
 from tests.agent_server.director.test_director_limits import started
 from tests.agent_server.director.test_director_review import DONE, accept, commit
 from tests.agent_server.director.test_director_tools import (
@@ -122,6 +127,68 @@ async def test_what_a_session_records_is_the_teams_once_its_work_is_accepted(
         "Chose REST."
     ]
     assert service.own_reports(node(service, "root")) == []
+
+
+async def test_what_became_of_a_sessions_teams_is_on_record_once_it_is_accepted(
+    service: DirectorService,
+):
+    await split_root(service)
+    top = node(service, "root")
+
+    own = service.history_of(top.id)
+    assert "set_up" in [event.kind for event in own]
+    assert all(event.unaccepted for event in own)
+    assert service.team_memory.history("root") == []
+
+    await landed(service)
+
+    kept = service.team_memory.history("root")
+    assert {"set_up", "accepted"} <= {event.kind for event in kept}
+    assert not any(event.unaccepted for event in kept)
+    assert service.own_events(top.session, "root") == []
+
+
+async def test_what_a_reviewer_records_is_the_teams_once_the_work_is_accepted(
+    service: DirectorService,
+):
+    await use(service, ic(service), SubmitReviewTool, DONE)
+    asked = reviewer(service)
+    assert asked is not None
+    await use(service, asked, ReportTool, ReportAction(text="Read the diff twice."))
+
+    assert service.team_memory.reports("root", "ic") == []
+
+    await use(service, asked, ReviewTeamTool, accept(node(service, "root").id))
+
+    assert [r.text for r in service.team_memory.reports("root", "ic")] == [
+        "Read the diff twice."
+    ]
+
+
+async def test_what_agents_write_to_each_other_is_never_the_orgs(
+    service: DirectorService, repo: Path
+):
+    top = node(service, "root")
+    service.message(top.id, top.id, "ic", "Split in two?")
+
+    await landed(service)
+
+    [thread] = service.threads_of(node(service, "root"))
+    assert [message.text for message in thread.messages] == ["Split in two?"]
+    kept = run_git(repo, "ls-tree", "-r", "--name-only", "refs/agents/memory")
+    assert ".threads" not in kept
+
+
+async def test_the_end_of_a_session_the_org_knows_is_on_its_record(
+    service: DirectorService,
+):
+    await landed(service)
+
+    service.close_session(node(service, "root").session)
+    await service.settled()
+
+    kinds = [event.kind for event in service.team_memory.history("root")]
+    assert kinds.count("session_opened") == kinds.count("session_closed") == 1
 
 
 def own_worktree(service: DirectorService, repo: Path, tmp_path: Path) -> Path:
@@ -293,7 +360,7 @@ async def test_work_is_accepted_and_a_team_the_org_lost_meanwhile_stays_gone(
     assert (left.ended, left.above) == ("not_taken", "root")
     assert [report.text for report in left.reports] == ["Refunds are in."]
     assert service.team_memory.reports("services.api", "ic") == []
-    assert "not_taken" in [e.kind for e in service.team_memory.history("root")]
+    assert "not_taken" in [e.kind for e in record_of(service, "root")]
 
 
 JOBS = "services.api.jobs"
@@ -486,7 +553,7 @@ async def test_a_team_set_up_under_one_the_org_lost_goes_under_the_nearest_team(
     jobs = service.store.team(JOBS)
     assert jobs is not None and jobs.parent_id == "root"
     assert path_of(service, JOBS) == "services/api/jobs"
-    assert "moved" in [event.kind for event in service.team_memory.history("root")]
+    assert "moved" in [event.kind for event in record_of(service, "root")]
     # They are added to the contracts of the team it went under.
     assert service.team_memory.read("contracts.md") == (
         f"{before.rstrip()}\n\n{IDEMPOTENT}\n"
@@ -668,7 +735,7 @@ async def test_a_team_only_the_session_renamed_is_renamed_in_the_org(
     assert waiting(service, top) == []
 
 
-async def test_closing_a_session_names_what_it_wrote_and_never_had_accepted(
+async def test_closing_a_session_leaves_the_org_nothing_it_never_had_accepted(
     service: DirectorService,
 ):
     top, conversation = await at_api(service)
@@ -681,12 +748,8 @@ async def test_closing_a_session_names_what_it_wrote_and_never_had_accepted(
 
     assert service.team_memory.read(API_SPEC) is None
     assert service.team_memory.reports("services.api", "ic") == []
-    [closed] = [
-        event
-        for event in service.team_memory.history("root")
-        if event.kind == "session_closed"
-    ]
-    assert "1 reports" in closed.detail and API_SPEC in closed.detail
+    # Nor is it on the org's record that it was closed.
+    assert "session_closed" not in [e.kind for e in record_of(service, "root")]
     assert service.drafts(place.session) == {}
 
 
@@ -719,7 +782,7 @@ async def test_a_team_a_session_prunes_is_the_orgs_until_its_work_is_accepted(
     await landed(service)
     await service.settled()
     kept = Report(at="2026-11-01T00:00:00+00:00", role="ic", text="Chose REST.")
-    service.team_memory.append_report("services.api", "ic", kept)
+    take_in(service.team_memory, reports={"services.api": [kept]})
 
     await use(service, manager(service), PruneTeamTool, PRUNE_API)
     await service.settled()

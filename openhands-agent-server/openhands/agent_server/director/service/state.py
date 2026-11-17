@@ -385,6 +385,8 @@ class ServiceState:
         # Held from looking a need up in the record to keeping it, so that
         # an agent that tries the same file again is counted once.
         self._keeping_needs = threading.Lock()
+        # Held while one of a session's own records is read and added to.
+        self._keeping = threading.Lock()
         self._saving = threading.Lock()
         self._landing = threading.Lock()
         self._adding_manager = threading.Lock()

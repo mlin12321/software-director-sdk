@@ -38,6 +38,7 @@ from tests.agent_server.director.conftest import (
     root_conversation,
     run_git,
     small_tree,
+    take_in,
 )
 
 
@@ -187,9 +188,7 @@ class TestTeamMemory:
         earlier = Report(
             at="2026-11-01T00:00:00+00:00", role="manager", text="Two sub-teams."
         )
-        board.append_report("a", "ic", later)
-        board.append_report("a", "manager", earlier)
-        board.append_report("b", "ic", later)
+        take_in(board, reports={"a": [later, earlier], "b": [later]})
 
         response = make_client(repo).get("/api/director/org/nodes/a/memory")
 
@@ -223,10 +222,9 @@ class TestTeamMemory:
         told = ThreadMessage(
             at="2026-11-02T00:00:00+00:00", sender="manager", text="Status?"
         )
-        board = GitStore(repo)
-        board.append_message(top, top, asked)
-        board.append_message(top, "below@other", told)
-        board.append_message("above@other", "below@other", told)
+        service._keep_message(top, top, asked)
+        service._keep_message(top, "below@other", told)
+        service._keep_message("above@other", "below@other", told)
 
         response = await client.get(f"/api/director/org/nodes/{top}/messages")
         at_the_team = await client.get("/api/director/org/nodes/root/messages")
@@ -692,7 +690,7 @@ def test_the_history_of_the_org_is_one_list_newest_first(saved_tree: Path):
 
     def happened(above: str, at: str, kind: str, team: str) -> None:
         event = {"at": at, "kind": kind, "team_id": team, "team": team.upper()}
-        memory.append_history(above, TeamEvent.model_validate(event))
+        take_in(memory, events={above: [TeamEvent.model_validate(event)]})
 
     happened("root", "2026-11-01T10:00:00+00:00", "set_up", "a")
     happened("a", "2026-11-01T11:00:00+00:00", "accepted", "a1")

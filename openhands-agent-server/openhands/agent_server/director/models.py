@@ -458,6 +458,17 @@ class TeamEvent(BaseModel):
         ),
     )
     other: str = Field(default="", description="The title of that team.")
+    id: str = Field(
+        default="",
+        description="Names the event, so that it is added to a record once.",
+    )
+    unaccepted: bool = Field(
+        default=False,
+        description=(
+            "True while it is only its session's: the session's work is not "
+            "accepted yet."
+        ),
+    )
 
 
 class Report(BaseModel):
@@ -524,7 +535,7 @@ class InheritedSpec(BaseModel):
 class FormerThread(BaseModel):
     """Messages a removed team took part in, as they were kept."""
 
-    file: str = Field(description="Where team memory kept them.")
+    file: str = Field(description="What names them: who wrote to whom.")
     messages: list[ThreadMessage]
 
 
@@ -1434,6 +1445,10 @@ class RoutedRequest(BaseModel):
     text: str
     chosen_by: ChosenBy = "model"
     reason: str = ""
+    id: str = Field(
+        default="",
+        description="Names the request, so that it is kept for the org once.",
+    )
 
 
 class AnswerEscalationRequest(BaseModel):

@@ -1011,18 +1011,18 @@ class Reviews(Requests):
             )
             self.progressed(above.id)
             self._work_accepted(node)
+            if meets is not None:
+                self.record_event(above.id, "reconciled", node, reconciled[:ASKED_KEPT])
+            self.record_event(
+                above.id,
+                "accepted",
+                node,
+                "at the first review"
+                if node.review.round <= 1
+                else f"at review {node.review.round}",
+            )
             await self._landed(node, meets.seen if meets else None)
             self._runs().unmark(SHOWN, node_id)
-        if meets is not None:
-            self.record_event(above.id, "reconciled", node, reconciled[:ASKED_KEPT])
-        self.record_event(
-            above.id,
-            "accepted",
-            node,
-            "at the first review"
-            if node.review.round <= 1
-            else f"at review {node.review.round}",
-        )
         if not reviews_only(above):
             self.count_accepted_review(above.id)
         self.notify(

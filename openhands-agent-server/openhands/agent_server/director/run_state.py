@@ -37,6 +37,12 @@ FILES = "files"
 # session id, team id and time -> the record of a team the session removed
 FORMER = "former"
 SHOWN = "shown"  # node id -> what its reviewer was shown to reconcile
+# session id and team id -> what became of the teams below that team there
+EVENTS = "events"
+# who wrote, to whom and which of the two kinds -> what was written
+THREADS = "threads"
+# session id and a name -> a request of it that went straight to a team
+ROUTED = "routed"
 
 _TABLES = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);

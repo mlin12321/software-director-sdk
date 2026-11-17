@@ -41,7 +41,7 @@ from openhands.agent_server.director.tools.definition import (
     WriteSpecAction,
 )
 from openhands.sdk.errors import Conflict, NotFound
-from tests.agent_server.director.conftest import FakeLauncher, run_git
+from tests.agent_server.director.conftest import FakeLauncher, record_of, run_git
 from tests.agent_server.director.test_director_landing import landed
 from tests.agent_server.director.test_director_limits import started
 from tests.agent_server.director.test_director_pause import again
@@ -160,7 +160,7 @@ async def test_a_session_is_beside_the_org_tree_with_a_place_at_each_of_its_team
     assert [open.id for open in service.sessions()] == [first.id, found.id]
     [event] = [
         event
-        for event in service.team_memory.history("root")
+        for event in record_of(service, "root")
         if event.kind == "session_opened" and event.session == "Refunds"
     ]
     assert (event.team_id, event.detail) == (API, REFUNDS)
@@ -558,7 +558,7 @@ async def test_a_session_is_kept_on_its_machine_and_what_it_changes_with_the_org
         # That it was opened is with the team's memory.
         assert [
             event.session
-            for event in restarted.team_memory.history("root")
+            for event in record_of(restarted, "root")
             if event.kind == "session_opened"
         ] == ["Checkout", "Refunds"]
         # The sessions themselves come back from what this machine kept,
@@ -602,12 +602,8 @@ async def test_closing_a_session_removes_it_and_keeps_what_was_not_merged(
     ).split()
     assert kept == [tip]
     assert (repo / "services/api/own.ts").exists()
-    [event] = [
-        event
-        for event in service.team_memory.history("root")
-        if event.kind == "session_closed"
-    ]
-    assert event.detail == "with work that was not merged"
+    # None of its work was accepted, so it is not on the org's record.
+    assert "session_closed" not in [e.kind for e in record_of(service, "root")]
     with pytest.raises(NotFound):
         service.close_session(session.session.id)
 
@@ -732,7 +728,7 @@ async def test_work_that_meets_merged_work_is_reconciled_before_it_is_merged(
     )
 
     assert (repo / ROUTES).read_text() == "refunds\ntwo\nthree\nfour\nvouchers\n"
-    history = service.team_memory.history("root")
+    history = record_of(service, "root")
     assert [e.detail for e in history if e.kind == "reconciled"] == ["Both lines hold."]
 
 

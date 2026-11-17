@@ -12,7 +12,7 @@ from openhands.agent_server.director.git_store import (
 )
 from openhands.agent_server.director.models import Report
 from openhands.sdk.errors import Conflict, NotFound, UpstreamFailed
-from tests.agent_server.director.conftest import run_git
+from tests.agent_server.director.conftest import run_git, take_in
 
 
 @pytest.fixture
@@ -36,7 +36,7 @@ def note(store: GitStore, text: str) -> None:
         if text == "Theirs."
         else "2026-11-01T00:00:00+00:00"
     )
-    store.append_report("root", "ic", Report(at=at, role="ic", text=text))
+    take_in(store, reports={"root": [Report(at=at, role="ic", text=text)]})
 
 
 def noted(store: GitStore) -> list[str]:

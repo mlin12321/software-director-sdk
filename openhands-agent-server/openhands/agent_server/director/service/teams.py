@@ -100,7 +100,7 @@ class Teams(Delivery):
         manager_node, ic_node = store.place(manager_node_id), store.place(ic_node_id)
         if manager_node is None or ic_node is None:
             raise NotFound("That team is no longer in the org")
-        self._memory().append_message(
+        self._keep_message(
             manager_node_id,
             ic_node_id,
             ThreadMessage(at=_instant(), sender=sender, text=text),
@@ -246,7 +246,7 @@ class Teams(Delivery):
         node, team = store.place(node_id), store.place(team_id)
         if node is None or team is None:
             raise NotFound("That team is no longer in the org")
-        self._memory().append_message(
+        self._keep_message(
             node_id,
             team_id,
             ThreadMessage(at=_instant(), sender="ic", text=text),
@@ -356,7 +356,7 @@ class Teams(Delivery):
                 quiet,
                 waiting,
                 counted["escalations"],
-                self.team_memory.history(node_id),
+                self.history_of(node_id),
                 after_successes=after_successes,
                 escalation_limit=self.settings.manager_check_ic_setbacks,
             ),

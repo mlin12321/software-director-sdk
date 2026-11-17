@@ -537,25 +537,35 @@ class Sessions(Splits):
                         run.unmark(kind, team.id)
                     self._work_accepted(team)
             if top is not None:
-                gone = await asyncio.to_thread(self._leave, top)
-                self.record_event(
-                    plan["parent"],
-                    "session_closed",
-                    top,
-                    "; ".join(
-                        said
-                        for said in (
-                            "with work that was not merged"
-                            if intent.payload["kept"]
-                            else "",
-                            f"what it wrote and never had accepted went with it "
-                            f"({gone})"
-                            if gone
-                            else "",
-                        )
-                        if said
-                    ),
+                # A session none of whose work was accepted is not on the
+                # org's record, and so neither is its end.
+                known = all(
+                    event.kind != "session_opened" or event.team_id != top.team_id
+                    for event in self.own_events(plan["session"], plan["parent"])
                 )
+                gone = await asyncio.to_thread(self._leave, top)
+                if known:
+                    await asyncio.to_thread(
+                        self._land_event,
+                        plan["parent"],
+                        self._event(
+                            "session_closed",
+                            top,
+                            "; ".join(
+                                said
+                                for said in (
+                                    "with work that was not merged"
+                                    if intent.payload["kept"]
+                                    else "",
+                                    "what it wrote and never had accepted went "
+                                    f"with it ({gone})"
+                                    if gone
+                                    else "",
+                                )
+                                if said
+                            ),
+                        ),
+                    )
             store.close_session(plan["session"])
             await self._save()
             intent = run.step_done(intent, "removed")

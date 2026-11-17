@@ -30,7 +30,7 @@ from openhands.agent_server.director.tools.definition import (
     PruneTeamAction,
     ReviewTeamAction,
 )
-from tests.agent_server.director.conftest import FakeLauncher
+from tests.agent_server.director.conftest import FakeLauncher, record_of
 from tests.agent_server.director.test_director_acp import started
 from tests.agent_server.director.test_director_manager_checks import (
     accepted,
@@ -129,7 +129,7 @@ async def test_a_look_tells_the_success_rate_of_each_team(
     ) in look
     assert "wait until a team has had enough tasks to judge it by" in look
     # The limit being reached is kept with the team it was reached by.
-    [woken] = [e for e in service.team_memory.history("root") if e.kind == "woken"]
+    [woken] = [e for e in record_of(service, "root") if e.kind == "woken"]
     assert (woken.team_id, woken.team) == (API, "API")
     assert "has escalated 3 times" in woken.detail
     assert "nothing here is a call to prune" in look
@@ -149,7 +149,7 @@ async def test_a_look_after_accepted_work_says_that_nothing_went_wrong(
 def record_of_api(service: DirectorService) -> dict:
     [api] = [
         record
-        for record in track_records(service.team_memory.history("root"))
+        for record in track_records(record_of(service, "root"))
         if record["node_id"] == API
     ]
     return api
@@ -279,7 +279,7 @@ async def test_what_an_ic_proposed_and_what_was_approved_is_kept(
 
     kept = [
         (event.kind, event.detail)
-        for event in service.team_memory.history("root")
+        for event in record_of(service, "root")
         if event.kind in ("proposed", "approved")
     ]
     assert kept[-2:] == [
@@ -344,7 +344,7 @@ async def test_a_refused_write_into_a_team_beside_is_kept_once_for_each_file(
     attempt(service, ic(service, API), "file_editor", create(repo / "README.md"))
     await service.settled()
 
-    [kept] = [e for e in service.team_memory.history("root") if e.kind == "needed"]
+    [kept] = [e for e in record_of(service, "root") if e.kind == "needed"]
     assert (kept.team_id, kept.other_id, kept.other) == (API, WEB, "Web")
     assert (kept.detail, kept.paths) == ("write refused", ["apps/web/page.js"])
     # Once is not worth saying.
@@ -368,9 +368,7 @@ async def test_a_need_is_kept_once_across_a_restart_of_the_server(
         refused_in_web(again, repo, "other.js")
         await again.settled()
         needed_files = [
-            event.paths
-            for event in again.team_memory.history("root")
-            if event.kind == "needed"
+            event.paths for event in record_of(again, "root") if event.kind == "needed"
         ]
     finally:
         await again.aclose()

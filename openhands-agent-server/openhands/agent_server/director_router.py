@@ -670,7 +670,7 @@ def get_node_memory(
             FormerTeamSummary.model_validate(former.model_dump())
             for former in service.former_teams_of(node)
         ],
-        history=service.team_memory.history(node.id),
+        history=service.history_of(node.id),
     )
 
 
