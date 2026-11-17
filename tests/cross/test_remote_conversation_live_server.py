@@ -3661,7 +3661,7 @@ def _work_places(client: httpx.Client, session_id: str) -> dict[str, dict]:
     """What a session has at each team it works at, by the team's id."""
     response = client.get(f"/api/director/org/sessions/{session_id}")
     teams = response.json()["teams"] if response.status_code == 200 else []
-    return {team["team_id"]: team for team in teams if not team["review_only"]}
+    return {team["team_id"]: team for team in teams if not team["division_lead"]}
 
 
 def test_director_runs_an_org_whose_root_splits_into_sub_teams(

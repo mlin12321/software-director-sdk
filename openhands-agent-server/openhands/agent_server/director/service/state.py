@@ -79,7 +79,7 @@ from openhands.agent_server.director.org_persistence import (
 )
 from openhands.agent_server.director.org_store import (
     OrgStore,
-    reviews_only,
+    is_division_lead,
     session_team_id,
 )
 from openhands.agent_server.director.pods import PodLauncher
@@ -153,21 +153,21 @@ TOOLS_OF: dict[AgentRole, tuple[str, ...]] = {
 HAND_OVER_TOOLS = ("read_node_context", "hand_over", "write_spec")
 # What an IC has of the director's tools where it only reviews the work of
 # a session.
-REVIEW_TOOLS = ("read_node_context", "report", "review_team")
+DIVISION_LEAD_IC_TOOLS = ("read_node_context", "report", "review_team")
 # What a Manager has there: it settles the sub-teams a session and the org
 # each made something else of.
-REVIEW_MANAGER_TOOLS = ("read_node_context", "report", "settle_teams")
+DIVISION_LEAD_MANAGER_TOOLS = ("read_node_context", "report", "settle_teams")
 
 
 def tools_of(node: SessionTeam, role: AgentRole) -> tuple[str, ...]:
     """The director's tools an agent of ``node`` is offered."""
-    if reviews_only(node):
-        return REVIEW_TOOLS if role == "ic" else REVIEW_MANAGER_TOOLS
+    if is_division_lead(node):
+        return DIVISION_LEAD_IC_TOOLS if role == "ic" else DIVISION_LEAD_MANAGER_TOOLS
     return TOOLS_OF[role]
 
 
 DIRECTOR_TOOL_NAMES = tuple(
-    dict.fromkeys((*TOOLS_OF["ic"], *TOOLS_OF["manager"], *REVIEW_MANAGER_TOOLS))
+    dict.fromkeys((*TOOLS_OF["ic"], *TOOLS_OF["manager"], *DIVISION_LEAD_MANAGER_TOOLS))
 )
 # How a team that was set up and given no task reads to the IC above.
 NOT_STARTED = "not started"
@@ -285,13 +285,14 @@ def hand_over_of(node: SessionTeam) -> HandOverMode | None:
 
 
 def _agent_title(
-    team: str, role: AgentRole, session: str = "", *, review: bool = False
+    team: str, role: AgentRole, session: str = "", *, division_lead: bool = False
 ) -> str:
     """What an agent's conversation is called. The session is named unless
-    it is called what its team is, and an IC that only reviews it is
-    called its reviewer."""
+    it is called what its team is, and the two agents a session's work is
+    reviewed by are called its Division Leads."""
     where = f"{team} · {session}" if session and session != team else team
-    return f"{where} ({'Reviewer' if review else ROLE_NAMES[role]})"
+    name = ROLE_NAMES[role]
+    return f"{where} ({'Division Lead ' + name if division_lead else name})"
 
 
 def _summary_of(text: str) -> str:

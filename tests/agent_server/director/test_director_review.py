@@ -39,11 +39,11 @@ from tests.agent_server.director.conftest import (
 )
 from tests.agent_server.director.test_director_tools import (
     APPROVE,
+    division_lead_ic,
     ic,
     manager,
     node,
     proposing,
-    reviewer,
     split_root,
     use,
     woken,
@@ -651,7 +651,7 @@ async def test_the_top_team_is_done_once_it_submits_and_its_reviewer_gets_the_fi
     assert not done.is_error and root.status == "done"
     assert root.review is not None and root.review.state == "pending"
     start = launcher.derived[-1]
-    assert str(start.conversation_id) == reviewer(service)
+    assert str(start.conversation_id) == division_lead_ic(service)
     assert "Returns a string." in start.task
 
 
@@ -699,7 +699,7 @@ async def test_a_top_team_that_changed_nothing_is_accepted_when_all_below_is(
     assert root.review is not None and root.review.state == "accepted"
     assert root.review.passed_up and root.status == "done"
     # Each change was reviewed once already: nobody is asked again.
-    assert reviewer(service) is None
+    assert division_lead_ic(service) is None
     assert [team.id for team in service.store.teams()] == [
         "root",
         "services.api",

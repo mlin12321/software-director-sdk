@@ -22,8 +22,8 @@ from openhands.agent_server.director.models import (
 )
 from openhands.agent_server.director.org_store import (
     OrgStoreError,
-    review_place_id,
-    reviews_only,
+    division_lead_id,
+    is_division_lead,
     session_team_id,
 )
 from openhands.agent_server.director.pods import PodLauncher
@@ -148,7 +148,7 @@ class Sessions(Splits):
         run = self._runs()
         checkout = str(self._repo_dir)
         branch = await asyncio.to_thread(_branch_of, checkout)
-        reviewing = review_place_id(above.id, session_id)
+        lead_id = division_lead_id(above.id, session_id)
         ids = {current.id: session_team_id(current.id, session_id) for current in shape}
         top = store.open_session(
             SessionInput(
@@ -162,10 +162,10 @@ class Sessions(Splits):
             ),
             [
                 SessionTeamInput(
-                    id=reviewing,
+                    id=lead_id,
                     session=session_id,
                     team_id=above.id,
-                    review_only=True,
+                    division_lead=True,
                     parent_id=None,
                     title=above.title,
                     # It reads the session's work and writes nothing.
@@ -184,7 +184,7 @@ class Sessions(Splits):
                         id=ids[current.id],
                         session=session_id,
                         team_id=current.id,
-                        parent_id=reviewing
+                        parent_id=lead_id
                         if current.id == team.id
                         else ids[current.parent_id or ""],
                         title=current.title,
@@ -315,7 +315,7 @@ class Sessions(Splits):
         """Nobody works above the team a session was opened at, so a
         request that team says is not its own goes one team up the org, in
         a session of its own, and to the human only from the top."""
-        if not reviews_only(above):
+        if not is_division_lead(above):
             return super()._hand_on(node, above, request, why)
         own = self.store.team(node.team_id)
         higher = self.store.team(own.parent_id or "") if own else None
@@ -369,7 +369,7 @@ class Sessions(Splits):
                 or any(current.parent_id == other.id for other in added)
             ):
                 added.append(current)
-        reviewing = review_place_id(above.id, sid)
+        lead_id = division_lead_id(above.id, sid)
         top_id = session_team_id(higher.id, sid)
         top = store.lift_session(
             session.model_copy(
@@ -383,7 +383,7 @@ class Sessions(Splits):
                 id=top_id,
                 session=sid,
                 team_id=higher.id,
-                parent_id=reviewing,
+                parent_id=lead_id,
                 title=higher.title,
                 boundary=higher.boundary,
                 # The session's own checkout is this team's from now on.
@@ -400,10 +400,10 @@ class Sessions(Splits):
                 since=higher.since,
             ),
             SessionTeamInput(
-                id=reviewing,
+                id=lead_id,
                 session=sid,
                 team_id=above.id,
-                review_only=True,
+                division_lead=True,
                 parent_id=None,
                 title=above.title,
                 boundary=above.boundary.model_copy(update={"writable": []}),

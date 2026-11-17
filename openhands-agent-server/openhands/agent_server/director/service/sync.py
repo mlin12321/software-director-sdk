@@ -45,7 +45,7 @@ from openhands.agent_server.director.org_persistence import (
 from openhands.agent_server.director.org_store import (
     AGENT_LOST,
     OrgStore,
-    reviews_only,
+    is_division_lead,
 )
 from openhands.agent_server.director.prompts import (
     POD_PROTOCOL,
@@ -399,7 +399,7 @@ class Sync(Sessions):
         launcher = self._require_launcher()
         store = await asyncio.to_thread(lambda: self.store)
         node = store.place(node_id)
-        if node is None or reviews_only(node):
+        if node is None or is_division_lead(node):
             team = node or store.team(node_id)
             if team is None:
                 raise NotFound(f"There is no team {node_id}")

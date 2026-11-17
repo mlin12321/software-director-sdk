@@ -21,7 +21,7 @@ from openhands.agent_server.director.org_store import (
     OrgChange,
     OrgStore,
     OrgStoreError,
-    review_place_id,
+    division_lead_id,
     session_team_id,
     status_of,
 )
@@ -127,7 +127,7 @@ def test_a_session_has_a_place_at_its_team_and_at_every_team_below(store: OrgSto
     opened = open_session_in(store, "a", SESSION)
 
     assert opened.id == at("a") and store.opens_session(opened)
-    assert opened.parent_id == review_place_id("root", SESSION)
+    assert opened.parent_id == division_lead_id("root", SESSION)
     assert [place.id for place in store.below(at("a"))] == [at("a1"), at("a2")]
     assert [place.id for place in store.above(at("a2"))] == [at("a")]
     assert store.above(at("a")) == []
@@ -390,7 +390,7 @@ class TestEscalationChain:
             make_escalation(
                 "x",
                 passed_up_by=(at("a"), at("root")),
-                held_by=review_place_id("root", SESSION),
+                held_by=division_lead_id("root", SESSION),
             ),
         ],
         ids=[
@@ -891,7 +891,7 @@ def test_a_node_moves_only_to_where_the_tree_stays_a_tree(
         pytest.param(at("a"), at("a1"), OrgStoreError, id="under a place below it"),
         pytest.param(
             at("a1"),
-            review_place_id("root", SESSION),
+            division_lead_id("root", SESSION),
             OrgStoreError,
             id="under where it is reviewed from",
         ),

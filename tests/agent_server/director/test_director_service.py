@@ -48,7 +48,7 @@ from tests.agent_server.director.conftest import (
     teams_block,
 )
 from tests.agent_server.director.test_director_landing import landed
-from tests.agent_server.director.test_director_tools import node, review_place_of
+from tests.agent_server.director.test_director_tools import division_lead_of, node
 
 
 @pytest.fixture
@@ -763,7 +763,7 @@ async def test_a_message_opens_a_session_at_the_nearest_team_above_where_it_was_
         )
         await service.settled()
         place = node(service, routed.node_id)
-        assert place.id not in first and place.parent_id == review_place_of(
+        assert place.id not in first and place.parent_id == division_lead_of(
             service, place.id
         )
         start = launcher.derived[-1]

@@ -34,7 +34,7 @@ from openhands.agent_server.director.models import (
 )
 from openhands.agent_server.director.org_store import (
     OrgStore,
-    review_place_id,
+    division_lead_id,
     session_team_id,
 )
 from openhands.agent_server.director.pods import StartedAgent
@@ -176,23 +176,25 @@ def make_place(
     parent_id: str | None,
     *,
     checkout: str = ".",
-    review_only: bool = False,
+    division_lead: bool = False,
     agents: Sequence[AgentRef] | None = None,
     escalations: Sequence[Escalation] = (),
 ) -> SessionTeamInput:
     """What the session ``session_id`` has at ``team``, below the place
     ``parent_id``: an idle IC unless ``agents`` says otherwise, and nobody
     at the place the session is reviewed from."""
-    standing = [] if review_only else [AgentRef(role="ic", status="idle")]
+    standing = [] if division_lead else [AgentRef(role="ic", status="idle")]
     return SessionTeamInput(
-        id=(review_place_id if review_only else session_team_id)(team.id, session_id),
+        id=(division_lead_id if division_lead else session_team_id)(
+            team.id, session_id
+        ),
         parent_id=parent_id,
         title=team.title,
         boundary=team.boundary,
         isolation=team.isolation,
         session=session_id,
         team_id=team.id,
-        review_only=review_only,
+        division_lead=division_lead,
         worktree_path=checkout,
         branch="main",
         agents=list(standing if agents is None else agents),
@@ -218,7 +220,7 @@ def session_places(
         id=session_id, title=session_id, team_id=team_id, above_id=above_id
     )
     review = make_place(
-        by_id[above_id], session_id, None, checkout=checkout, review_only=True
+        by_id[above_id], session_id, None, checkout=checkout, division_lead=True
     )
     places = [review, make_place(top, session_id, review.id, checkout=checkout)]
     inside = {team_id}

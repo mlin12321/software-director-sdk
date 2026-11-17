@@ -17,7 +17,7 @@ from openhands.agent_server.director.models import (
 )
 from openhands.agent_server.director.org_store import (
     AGENT_LOST,
-    reviews_only,
+    is_division_lead,
 )
 from openhands.agent_server.director.prompts import (
     NEED_ASKED,
@@ -372,7 +372,7 @@ class Watch(Reviews):
             # A team the org already had is there for the session's IC to
             # use or not; one the session set up itself is owed a task.
             and self.store.team(team.team_id) is None
-            and not reviews_only(team)
+            and not is_division_lead(team)
             and not team.agents
             and not team.waiting_to_start
             and team.stopped is None

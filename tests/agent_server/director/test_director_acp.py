@@ -58,11 +58,11 @@ from tests.agent_server.director.conftest import (
 from tests.agent_server.director.test_director_router import server_config
 from tests.agent_server.director.test_director_tools import (
     APPROVE,
+    division_lead_ic,
     ic,
     manager,
     node,
     proposing,
-    reviewer,
     use,
     woken,
 )
@@ -395,7 +395,7 @@ async def test_an_ic_that_only_reviews_a_session_has_the_tools_for_that_alone(
         service, ic(service), SubmitReviewTool, SubmitReviewAction(summary="Done")
     )
     await service.settled()
-    reviewing = reviewer(service)
+    reviewing = division_lead_ic(service)
     assert reviewing is not None
     headers = {mcp_shim.TOKEN_HEADER: agent_token(service._key(), reviewing)}
 

@@ -61,11 +61,11 @@ from tests.agent_server.director.test_director_review import (
 )
 from tests.agent_server.director.test_director_tools import (
     PRUNE_API,
+    division_lead_ic,
+    division_lead_of,
     ic,
     manager,
     node,
-    review_place_of,
-    reviewer,
     split_root,
     use,
 )
@@ -87,7 +87,10 @@ async def landed(service: DirectorService) -> None:
     """Have the work of the session opened first reviewed and accepted."""
     await use(service, ic(service), SubmitReviewTool, DONE)
     await use(
-        service, reviewer(service), ReviewTeamTool, accept(node(service, "root").id)
+        service,
+        division_lead_ic(service),
+        ReviewTeamTool,
+        accept(node(service, "root").id),
     )
 
 
@@ -97,18 +100,18 @@ async def test_the_org_has_a_sessions_sub_teams_once_its_work_is_accepted(
     await split_root(service)
 
     assert [team.id for team in service.store.teams()] == ["root"]
-    assert reviewer(service) is None
+    assert division_lead_ic(service) is None
 
     await use(service, ic(service), SubmitReviewTool, DONE)
 
     # Its reviewer is the top team's IC in review mode, started for this.
-    asked = reviewer(service)
+    asked = division_lead_ic(service)
     assert asked is not None
     start = launcher.derived[-1]
     assert str(start.conversation_id) == asked
     assert "submits its work" in start.task and "review mode" in start.suffixes[0]
-    assert start.title == "Checkout (Reviewer)"
-    assert start.checkout == node(service, review_place_of(service)).worktree_path
+    assert start.title == "Checkout (Division Lead IC)"
+    assert start.checkout == node(service, division_lead_of(service)).worktree_path
 
     await use(service, asked, ReviewTeamTool, accept(node(service, "root").id))
 
@@ -119,7 +122,7 @@ async def test_the_org_has_a_sessions_sub_teams_once_its_work_is_accepted(
     ]
     review = node(service, "root").review
     assert review is not None and review.state == "accepted"
-    assert service.store.place(review_place_of(service)) is not None
+    assert service.store.place(division_lead_of(service)) is not None
 
 
 async def test_what_a_session_records_is_the_teams_once_its_work_is_accepted(
@@ -163,7 +166,7 @@ async def test_what_a_reviewer_records_is_the_teams_once_the_work_is_accepted(
     service: DirectorService,
 ):
     await use(service, ic(service), SubmitReviewTool, DONE)
-    asked = reviewer(service)
+    asked = division_lead_ic(service)
     assert asked is not None
     await use(service, asked, ReportTool, ReportAction(text="Read the diff twice."))
 
@@ -208,7 +211,7 @@ def own_worktree(service: DirectorService, repo: Path, tmp_path: Path) -> Path:
     worktree = tmp_path / "session"
     run_git(repo, "worktree", "add", "--quiet", "-b", "session", str(worktree))
     for place in service.store.session(session_id_of(node(service, "root"))):
-        if not place.review_only:
+        if not place.division_lead:
             service.store.update_place(
                 place.id, worktree_path=str(worktree), branch="session"
             )
@@ -355,7 +358,9 @@ async def test_work_is_accepted_and_a_team_the_org_lost_meanwhile_stays_gone(
     service.store.remove("services.api")
 
     await use(service, conversation, SubmitReviewTool, DONE)
-    accepted = await use(service, reviewer(service, top), ReviewTeamTool, accept(top))
+    accepted = await use(
+        service, division_lead_ic(service, top), ReviewTeamTool, accept(top)
+    )
 
     # The session set up no teams of its own, so nothing is asked and the
     # team stays gone; its code is merged all the same.
@@ -419,7 +424,7 @@ def org_gains(service: DirectorService, team_id: str, path: str) -> None:
 
 def waiting(service: DirectorService, top: str) -> list[str]:
     """The teams of a session that wait to be settled."""
-    place = service.store.place(review_place_of(service, top))
+    place = service.store.place(division_lead_of(service, top))
     assert isinstance(place, SessionTeam)
     return [
         item.key
@@ -429,7 +434,7 @@ def waiting(service: DirectorService, top: str) -> list[str]:
 
 
 def review_manager(service: DirectorService, top: str) -> str | None:
-    place = service.store.place(review_place_of(service, top))
+    place = service.store.place(division_lead_of(service, top))
     assert place is not None
     return agent_conversation(place, "manager")
 
@@ -446,7 +451,9 @@ async def accepted(service: DirectorService, top: str, conversation: str) -> str
         What its reviewer was answered.
     """
     await use(service, conversation, SubmitReviewTool, DONE)
-    answer = await use(service, reviewer(service, top), ReviewTeamTool, accept(top))
+    answer = await use(
+        service, division_lead_ic(service, top), ReviewTeamTool, accept(top)
+    )
     await service.settled()
     return answer.text
 
@@ -470,7 +477,7 @@ async def test_a_stale_session_adds_its_team_and_keeps_what_the_org_gained(
     # What the session did not change is not brought up again either.
     service.store.remove("services.api.cache")
     await use(service, conversation, SubmitReviewTool, DONE)
-    await use(service, reviewer(service, top), ReviewTeamTool, accept(top))
+    await use(service, division_lead_ic(service, top), ReviewTeamTool, accept(top))
     await service.settled()
     assert path_of(service, JOBS) == "services/api/jobs"
     assert service.store.team("services.api.cache") is None
@@ -508,7 +515,7 @@ async def test_a_team_both_made_something_else_of_waits_for_the_manager_above(
     assert service.spec_draft(place) is not None
 
     by_ic = await use(
-        service, reviewer(service, top), SettleTeamsTool, SettleTeamsAction()
+        service, division_lead_ic(service, top), SettleTeamsTool, SettleTeamsAction()
     )
     unknown = await use(
         service,
@@ -688,7 +695,7 @@ async def test_contracts_both_changed_wait_for_the_manager_above(
 
     assert not settled.is_error
     assert service.team_memory.read(API_CONTRACTS) == holds
-    place = service.store.place(review_place_of(service, top))
+    place = service.store.place(division_lead_of(service, top))
     assert place is not None and place.merge is None
     # The session reads what holds now, not what it wrote.
     assert [c.contracts for c in service.contracts_of(api_place(service, top))] == [
@@ -706,19 +713,19 @@ async def test_what_a_reviewer_reconciled_holds_only_for_what_it_was_shown(
     decided = ReviewTeamAction(node_id=top, decision="accept", reconciled="Refunds.")
 
     # Saying it is reconciled before being shown anything settles nothing.
-    unseen = await use(service, reviewer(service, top), ReviewTeamTool, decided)
+    unseen = await use(service, division_lead_ic(service, top), ReviewTeamTool, decided)
     assert unseen.is_error and "# Orders" in unseen.text
 
     # The org's spec changes again before the reviewer answers.
     service.team_memory.write("services/api", "spec.md", "# Orders and carts")
-    stale = await use(service, reviewer(service, top), ReviewTeamTool, decided)
+    stale = await use(service, division_lead_ic(service, top), ReviewTeamTool, decided)
 
     assert stale.is_error
     assert "changed since you were shown it" in stale.text
     assert "# Orders and carts" in stale.text
     assert service.team_memory.read(API_SPEC) == "# Orders and carts"
 
-    again = await use(service, reviewer(service, top), ReviewTeamTool, decided)
+    again = await use(service, division_lead_ic(service, top), ReviewTeamTool, decided)
     await service.settled()
 
     assert not again.is_error
@@ -828,7 +835,7 @@ async def test_a_team_a_session_prunes_is_the_orgs_until_its_work_is_accepted(
 
 
 def merge_of(service: DirectorService, top: str):
-    place = service.store.place(review_place_of(service, top))
+    place = service.store.place(division_lead_of(service, top))
     assert isinstance(place, SessionTeam)
     return place.merge
 
@@ -861,13 +868,17 @@ async def test_what_later_work_makes_of_the_org_waits_for_earlier_work(
 
     # Work is accepted in the order it was submitted.
     early = await use(
-        service, reviewer(service, second), ReviewTeamTool, accept(second)
+        service, division_lead_ic(service, second), ReviewTeamTool, accept(second)
     )
     assert early.is_error and "its reviewer has not decided" in early.text
-    await use(service, reviewer(service, first), ReviewTeamTool, accept(first))
+    await use(service, division_lead_ic(service, first), ReviewTeamTool, accept(first))
     # The reviewer that was made to wait is told when it is its turn.
-    assert "It is your turn" in launcher.messages_to(reviewer(service, second))[-1]
-    await use(service, reviewer(service, second), ReviewTeamTool, accept(second))
+    assert (
+        "It is your turn" in launcher.messages_to(division_lead_ic(service, second))[-1]
+    )
+    await use(
+        service, division_lead_ic(service, second), ReviewTeamTool, accept(second)
+    )
     await service.settled()
 
     # The code of the later work is in although the Manager of the earlier
@@ -880,7 +891,7 @@ async def test_what_later_work_makes_of_the_org_waits_for_earlier_work(
     assert service.store.team(WORKERS) is None
     assert review_manager(service, second) is None
     late = await use(
-        service, reviewer(service, second), SettleTeamsTool, SettleTeamsAction()
+        service, division_lead_ic(service, second), SettleTeamsTool, SettleTeamsAction()
     )
     assert late.is_error
 
@@ -918,7 +929,7 @@ async def test_settled_before_the_code_is_accepted_it_all_lands_in_one_step(
     assert service.team_memory.reports("services.api", "ic") == []
     before = refs(repo)
 
-    await use(service, reviewer(service, top), ReviewTeamTool, accept(top))
+    await use(service, division_lead_ic(service, top), ReviewTeamTool, accept(top))
     await service.settled()
 
     assert path_of(service, JOBS) == "services/api/jobs"
@@ -945,7 +956,7 @@ async def test_work_that_is_sent_back_waits_for_no_manager(
 
     await use(
         service,
-        reviewer(service, top),
+        division_lead_ic(service, top),
         ReviewTeamTool,
         ReviewTeamAction(node_id=top, decision="reject", findings=[FINDING]),
     )
@@ -962,7 +973,9 @@ async def test_a_reviewer_writes_the_spec_that_holds(service: DirectorService):
     await use(service, conversation, WriteSpecTool, WriteSpecAction(text="# Refunds"))
     service.team_memory.write("services/api", "spec.md", "# Orders")
     await use(service, conversation, SubmitReviewTool, DONE)
-    shown = await use(service, reviewer(service, top), ReviewTeamTool, accept(top))
+    shown = await use(
+        service, division_lead_ic(service, top), ReviewTeamTool, accept(top)
+    )
     assert shown.is_error and "say in `specs`" in shown.text
 
     def decided(path: str, take: str, text: str = "") -> ReviewTeamAction:
@@ -977,17 +990,23 @@ async def test_a_reviewer_writes_the_spec_that_holds(service: DirectorService):
 
     # Only the specs of the work are its reviewer's to decide.
     elsewhere = await use(
-        service, reviewer(service, top), ReviewTeamTool, decided("apps/web", "org")
+        service,
+        division_lead_ic(service, top),
+        ReviewTeamTool,
+        decided("apps/web", "org"),
     )
     empty = await use(
-        service, reviewer(service, top), ReviewTeamTool, decided("services/api", "text")
+        service,
+        division_lead_ic(service, top),
+        ReviewTeamTool,
+        decided("services/api", "text"),
     )
     assert elsewhere.is_error and "not a directory of this work" in elsewhere.text
     assert empty.is_error and "in `text`" in empty.text
 
     written = await use(
         service,
-        reviewer(service, top),
+        division_lead_ic(service, top),
         ReviewTeamTool,
         decided("services/api", "text", "# Orders and refunds"),
     )
@@ -1003,11 +1022,11 @@ async def test_a_reviewer_keeps_the_orgs_spec(service: DirectorService):
     await use(service, conversation, WriteSpecTool, WriteSpecAction(text="# Refunds"))
     service.team_memory.write("services/api", "spec.md", "# Orders")
     await use(service, conversation, SubmitReviewTool, DONE)
-    await use(service, reviewer(service, top), ReviewTeamTool, accept(top))
+    await use(service, division_lead_ic(service, top), ReviewTeamTool, accept(top))
 
     await use(
         service,
-        reviewer(service, top),
+        division_lead_ic(service, top),
         ReviewTeamTool,
         ReviewTeamAction(
             node_id=top,
@@ -1063,7 +1082,7 @@ async def test_a_manager_puts_a_team_it_takes_where_it_fits_the_org(
     # Nothing of it is the org's before the code is accepted.
     assert path_of(service, JOBS) == "services/api/workers"
 
-    await use(service, reviewer(service, top), ReviewTeamTool, accept(top))
+    await use(service, division_lead_ic(service, top), ReviewTeamTool, accept(top))
     await service.settled()
 
     jobs = service.store.team(JOBS)
@@ -1087,12 +1106,14 @@ async def test_a_spec_written_for_a_team_the_org_lost_is_left_to_the_team_that_h
 
     # Its reviewer is shown it with the spec of the team that holds the
     # directory now, and may write that one from both.
-    shown = await use(service, reviewer(service, top), ReviewTeamTool, accept(top))
+    shown = await use(
+        service, division_lead_ic(service, top), ReviewTeamTool, accept(top)
+    )
     assert shown.is_error and "a team the org no longer has" in shown.text
     assert "# Refunds" in shown.text
     await use(
         service,
-        reviewer(service, top),
+        division_lead_ic(service, top),
         ReviewTeamTool,
         ReviewTeamAction(
             node_id=top,

@@ -1401,7 +1401,7 @@ class SessionTeamInput(OrgNodeInput):
         ),
     )
     team_id: str = Field(description="The team of the org it is the work of.")
-    review_only: bool = Field(
+    division_lead: bool = Field(
         default=False,
         description=(
             "Whether this is the place the session's work is reviewed from: "

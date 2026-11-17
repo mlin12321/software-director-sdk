@@ -30,7 +30,7 @@ from openhands.agent_server.director.models import (
     SessionTeam,
 )
 from openhands.agent_server.director.org_store import (
-    reviews_only,
+    is_division_lead,
 )
 from openhands.agent_server.director.pods import PodLauncher
 from openhands.agent_server.director.prompts import (
@@ -252,7 +252,7 @@ class DirectorService(Sync):
         """
         store = self.store
         places = [
-            place for place in store.session(session_id) if not reviews_only(place)
+            place for place in store.session(session_id) if not is_division_lead(place)
         ]
         if not places:
             raise NotFound(f"Unknown session: {session_id}")

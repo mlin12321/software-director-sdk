@@ -114,7 +114,7 @@ WITH_SUB_TEAMS = (
     "something has changed.",
 )
 
-REVIEW_ROLE = """\
+DIVISION_LEAD_IC_ROLE = """\
 You are this team's IC in review mode. You review the work a session
 delivers into the repository's own checkout and do nothing else: you do not
 write files, give tasks or change teams. Read the work in the session's
@@ -129,7 +129,7 @@ you write from both does.
 Judge it by what the human asked of the session and by your team's spec,
 contracts and records. Use `report` for what the team must remember."""
 
-REVIEW_MANAGER_ROLE = """\
+DIVISION_LEAD_MANAGER_ROLE = """\
 <ORG_ROLE>
 You are the Manager of your team in review mode, not its IC: what is said
 above of the IC is not yours to do. You do not write files, give tasks or
