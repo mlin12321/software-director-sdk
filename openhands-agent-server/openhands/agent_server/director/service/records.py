@@ -61,6 +61,7 @@ from openhands.agent_server.director.prompts import (
     record_line,
     track_records,
 )
+from openhands.agent_server.director.recovery import STEP_NAMES
 from openhands.agent_server.director.run_state import (
     CHECKS,
     EVENTS,
@@ -71,8 +72,10 @@ from openhands.agent_server.director.run_state import (
     ROUTED,
     TASK,
     THREADS,
+    Intent,
 )
 from openhands.agent_server.director.service.state import (
+    _REASON_KEPT,
     ASKED_KEPT,
     ASKED_TOLD,
     DECLINED_TOLD,
@@ -138,6 +141,20 @@ def _written_by(report: Report, session: str) -> str:
 
 class Records(ServiceState):
     """Reads and keeps what is known of the teams."""
+
+    def _keep_failure(self, intent: Intent, error: Exception) -> None:
+        """Keep a step that failed where the team above and the human read
+        what became of a team."""
+        team = self.store.place(intent.node_id)
+        if team is None:
+            return
+        what = STEP_NAMES.get(intent.kind, intent.kind)
+        self.record_event(
+            team.parent_id or team.id,
+            "failed",
+            team,
+            f"{what}: not done. {type(error).__name__}: {error}"[:_REASON_KEPT],
+        )
 
     def record_event(
         self,

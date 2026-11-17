@@ -251,6 +251,31 @@ async def test_the_human_is_asked_when_their_uncommitted_work_is_in_the_way(
     assert review is not None and review.state == "accepted"
 
 
+async def test_work_is_not_merged_into_another_branch_than_the_session_started_from(
+    service: DirectorService, repo: Path, tmp_path: Path
+):
+    worktree = own_worktree(service, repo, tmp_path)
+    commit(worktree, "app.py", "refunds = True\n")
+    run_git(repo, "checkout", "--quiet", "-b", "elsewhere")
+
+    await landed(service)
+
+    top = node(service, "root")
+    assert top.review is not None and top.review.state == "pending"
+    [asked] = top.escalations
+    assert (asked.id, asked.held_by) == (MERGE_WAITS, None)
+    assert "your checkout is now on 'elsewhere'" in asked.detail
+    assert not (repo / "app.py").exists()
+
+    run_git(repo, "checkout", "--quiet", "-")
+    service.answer_escalation(top.id, MERGE_WAITS, "Switched back.")
+    await service.settled()
+
+    assert (repo / "app.py").read_text() == "refunds = True\n"
+    review = node(service, "root").review
+    assert review is not None and review.state == "accepted"
+
+
 async def test_what_a_team_needs_of_another_goes_to_the_ic_above_both(
     service: DirectorService, launcher: FakeLauncher
 ):

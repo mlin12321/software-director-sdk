@@ -158,6 +158,7 @@ class Sessions(Splits):
                 above_id=above.id,
                 request=text[:ASKED_KEPT],
                 opened_at=datetime.now(UTC).isoformat(),
+                branch="" if branch == "HEAD" else branch,
                 shape=shape_of(shape),
             ),
             [

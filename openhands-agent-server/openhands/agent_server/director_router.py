@@ -317,10 +317,7 @@ def search_org(
     responses=error_responses(
         {
             Conflict: "The director already has an org",
-            Invalid: (
-                "The conversation cannot lead an org: it runs in Docker, or "
-                "its agent is an ACP agent"
-            ),
+            Invalid: ("The conversation cannot lead an org: it runs in Docker"),
             RateLimited: "The server cannot run another conversation now",
             Unavailable: (
                 "The director is not running agents, or the conversation's "

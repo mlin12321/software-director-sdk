@@ -27,6 +27,7 @@ from openhands.agent_server.event_service import (
 )
 from openhands.agent_server.local_storage import conversation_worktree_dir
 from openhands.agent_server.models import (
+    EventSortOrder,
     StartChildConversationRequest,
     StartConversationRequest,
     UpdateConversationRequest,
@@ -43,6 +44,7 @@ from openhands.sdk.conversation.request import (
 from openhands.sdk.conversation.state import ConversationExecutionStatus
 from openhands.sdk.conversation.title_utils import strip_reasoning_blocks
 from openhands.sdk.errors import Conflict, Invalid, NotFound
+from openhands.sdk.event.conversation_error import ConversationErrorEvent
 from openhands.sdk.llm import LLM
 from openhands.sdk.profiles.agent_profile import ACPAgentProfile
 from openhands.sdk.tool.spec import Tool
@@ -57,6 +59,8 @@ STARTED_BY_DIRECTOR = {"startedby": "director"}
 # On a conversation the director started and the human has written in. A
 # client lists it with the conversations the human started.
 HUMAN_JOINED = {"humanjoined": "true"}
+# How much of what a failed conversation said is kept as the agent's reason.
+_FAILURE_KEPT = 600
 
 
 @dataclass(frozen=True)
@@ -206,6 +210,11 @@ class TeamLauncher(Protocol):
         self, conversation_ids: Collection[UUID]
     ) -> dict[UUID, ConversationExecutionStatus]:
         """The status of each conversation that exists."""
+        ...
+
+    async def failure(self, conversation_id: UUID) -> str | None:
+        """What a conversation that failed last said of it; None when it
+        said nothing or does not exist."""
         ...
 
     def on_status(self, listener: ExecutionStatusListener) -> Callable[[], None]:
@@ -477,6 +486,20 @@ class ConversationTeamLauncher:
         self, conversation_ids: Collection[UUID]
     ) -> dict[UUID, ConversationExecutionStatus]:
         return await self._conversations.get_execution_statuses(conversation_ids)
+
+    async def failure(self, conversation_id: UUID) -> str | None:
+        event_service = await self._conversations.get_event_service(conversation_id)
+        if event_service is None:
+            return None
+        page = await event_service.search_events(
+            limit=1,
+            kind=ConversationErrorEvent.__name__,
+            sort_order=EventSortOrder.TIMESTAMP_DESC,
+        )
+        for event in page.items:
+            if isinstance(event, ConversationErrorEvent):
+                return f"{event.code}: {event.detail}"[:_FAILURE_KEPT]
+        return None
 
     def on_status(self, listener: ExecutionStatusListener) -> Callable[[], None]:
         return self._conversations.add_execution_status_listener(listener)

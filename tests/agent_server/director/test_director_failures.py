@@ -1,0 +1,233 @@
+"""Agents and steps that fail, and who is told."""
+
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from uuid import UUID
+
+import pytest
+
+from openhands.agent_server.director.service import DirectorService
+from openhands.agent_server.director.service.state import (
+    STALL_WAITS,
+    failure_waits,
+)
+from openhands.agent_server.director.tools import MsgTeamTool
+from openhands.agent_server.director.tools.definition import MsgTeamAction
+from openhands.sdk.conversation.state import ConversationExecutionStatus
+from tests.agent_server.director.conftest import FakeLauncher, record_of
+from tests.agent_server.director.test_director_acp import started
+from tests.agent_server.director.test_director_tools import (
+    ic,
+    manager,
+    node,
+    split_root,
+    use,
+    woken,
+)
+
+
+API = "services.api"
+NO_KEY = "LLMAuthenticationError: the key was refused"
+
+
+@pytest.fixture
+def launcher() -> FakeLauncher:
+    return FakeLauncher()
+
+
+@pytest.fixture
+async def service(repo: Path, launcher: FakeLauncher):
+    """An org of API and Web whose timer never fires by itself."""
+    now = datetime(2026, 11, 17, tzinfo=UTC)
+    service = await started(repo, launcher, clock=lambda: now, stall_poll=3600)
+    await split_root(service)
+    yield service
+    await service.aclose()
+
+
+async def fails(
+    service: DirectorService,
+    launcher: FakeLauncher,
+    conversation: str | None,
+    said: str | None = NO_KEY,
+    status: ConversationExecutionStatus = ConversationExecutionStatus.ERROR,
+) -> None:
+    assert conversation is not None
+    if said is not None:
+        launcher.failures[UUID(conversation)] = said
+    launcher.report(conversation, status)
+    await service.settled()
+
+
+def notices(service: DirectorService, launcher: FakeLauncher) -> list[str]:
+    """What the top team's IC was told of agents that failed."""
+    return [
+        text
+        for text in launcher.messages_to(ic(service))
+        if "failed and is at rest" in text
+    ]
+
+
+async def test_the_ic_above_is_told_why_an_agent_of_a_team_failed(
+    service: DirectorService, launcher: FakeLauncher
+):
+    await fails(service, launcher, ic(service, API))
+
+    [agent] = [a for a in node(service, API).agents if a.role == "ic"]
+    assert (agent.status, agent.reason) == ("blocked", NO_KEY)
+    [told] = notices(service, launcher)
+    assert "The IC of team 'API'" in told and NO_KEY in told
+    assert "`msg_team`" in told
+    assert node(service, API).escalations == []
+    [event] = [e for e in record_of(service, "root") if e.kind == "failed"]
+    assert event.team == "API" and NO_KEY in event.detail
+
+
+async def test_it_is_told_once_and_the_reason_goes_when_the_agent_runs_again(
+    service: DirectorService, launcher: FakeLauncher
+):
+    api = ic(service, API)
+    await fails(service, launcher, api)
+    await fails(service, launcher, api)
+    assert (
+        len(
+            [
+                t
+                for t in launcher.messages_to(ic(service))
+                if "failed and is at rest" in t
+            ]
+        )
+        == 1
+    )
+
+    await use(
+        service, ic(service), MsgTeamTool, MsgTeamAction(team=API, text="Try again.")
+    )
+    assert api is not None
+    launcher.report(api, ConversationExecutionStatus.RUNNING)
+    await service.settled()
+
+    [agent] = [a for a in node(service, API).agents if a.role == "ic"]
+    assert (agent.status, agent.reason) == ("working", None)
+
+
+async def test_an_agent_that_only_repeats_itself_has_a_reason_too(
+    service: DirectorService, launcher: FakeLauncher
+):
+    await fails(
+        service,
+        launcher,
+        ic(service, API),
+        said=None,
+        status=ConversationExecutionStatus.STUCK,
+    )
+
+    [agent] = [a for a in node(service, API).agents if a.role == "ic"]
+    assert agent.reason == "It repeated the same step without getting anywhere."
+
+
+async def test_the_human_is_asked_when_no_ic_works_above_the_one_that_failed(
+    service: DirectorService, launcher: FakeLauncher
+):
+    top = ic(service)
+    await fails(service, launcher, top)
+
+    [asked] = node(service, "root").escalations
+    assert (asked.id, asked.held_by, asked.raised_by) == (
+        failure_waits("ic"),
+        None,
+        "ic",
+    )
+    assert NO_KEY in asked.detail and "run it again" in asked.detail
+
+    service.answer_escalation(node(service, "root").id, asked.id, "The key is set.")
+    await service.settled()
+
+    assert (
+        "your conversation failed, and says:\nThe key is set."
+        in launcher.messages_to(top)[-1]
+    )
+    assert node(service, "root").escalations == []
+
+
+async def test_an_agent_that_runs_again_by_itself_is_no_longer_asked_about(
+    service: DirectorService, launcher: FakeLauncher
+):
+    top = ic(service)
+    await fails(service, launcher, top)
+    assert top is not None
+
+    launcher.report(top, ConversationExecutionStatus.RUNNING)
+    await service.settled()
+
+    assert node(service, "root").escalations == []
+
+
+async def test_a_manager_that_failed_is_told_of_as_a_manager(
+    service: DirectorService, launcher: FakeLauncher
+):
+    await woken(service, API)
+    await fails(service, launcher, manager(service, API))
+
+    [told] = notices(service, launcher)
+    assert "The Manager of team 'API'" in told and "`msg_team`" not in told
+
+
+async def test_an_agent_that_cannot_be_started_is_lost_with_the_reason(
+    service: DirectorService, launcher: FakeLauncher
+):
+    launcher.derive_error = RuntimeError("npx is not installed")
+    service.tell_manager(node(service, API).id, "Look in on your team.")
+    await service.settled()
+
+    [agent] = [a for a in node(service, API).agents if a.role == "manager"]
+    assert agent.status == "lost"
+    assert agent.reason == "It could not be started: npx is not installed"
+    [told] = notices(service, launcher)
+    assert "npx is not installed" in told
+
+
+async def test_a_step_of_the_director_that_fails_is_kept_in_the_record(
+    service: DirectorService, monkeypatch: pytest.MonkeyPatch
+):
+    async def breaks(_: object) -> None:
+        raise RuntimeError("the disk is full")
+
+    monkeypatch.setattr(service, "_do_launch_manager", breaks)
+    service.tell_manager(node(service, API).id, "Look in on your team.")
+    await service.settled()
+
+    [event] = [e for e in record_of(service, "root") if e.kind == "failed"]
+    assert event.team == "API"
+    assert event.detail == (
+        "Its Manager is started: not done. RuntimeError: the disk is full"
+    )
+
+
+async def test_the_human_is_asked_of_a_stalled_team_with_no_ic_above(
+    repo: Path, launcher: FakeLauncher
+):
+    now = [datetime(2026, 11, 17, tzinfo=UTC)]
+    service = await started(repo, launcher, clock=lambda: now[0], stall_poll=3600)
+    try:
+        await service._check_stalls()
+        await service.settled()
+        now[0] += timedelta(minutes=120)
+        await service._check_stalls()
+        await service.settled()
+
+        top = node(service, "root")
+        [asked] = top.escalations
+        assert (asked.id, asked.held_by) == (STALL_WAITS, None)
+        assert "has shown no progress for 120 min" in asked.title
+
+        service.answer_escalation(top.id, STALL_WAITS, "Start with the tests.")
+        await service.settled()
+
+        assert (
+            "shows no progress, and says:\nStart with the tests."
+            in launcher.messages_to(ic(service))[-1]
+        )
+        assert node(service, "root").escalations == []
+    finally:
+        await service.aclose()

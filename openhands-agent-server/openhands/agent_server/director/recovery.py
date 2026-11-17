@@ -36,7 +36,7 @@ _STARTS = ("start_team", "launch_manager")
 # The steps that start agents of their team: until they are finished, an
 # agent of it without a conversation has not been lost.
 STARTING = ("start_team", "launch_manager", "prune")
-_WHAT: dict[str, str] = {
+STEP_NAMES: dict[str, str] = {
     "brief": "Its IC is given its task",
     "launch_manager": "Its Manager is started",
     "start_team": "The team is started",
@@ -99,7 +99,7 @@ def put_aside_stale(
                 _item(
                     nodes.get(intent.node_id),
                     "dropped",
-                    f"{_WHAT.get(intent.kind, intent.kind)}: not done, {why}.",
+                    f"{STEP_NAMES.get(intent.kind, intent.kind)}: not done, {why}.",
                     place_id=intent.node_id,
                 )
             )
@@ -178,13 +178,13 @@ def describe(
     starting: set[str] = set()
     for intent in sorted(run.open_intents(), key=turn):
         node = nodes.get(intent.node_id)
-        what = _WHAT.get(intent.kind, intent.kind)
+        what = STEP_NAMES.get(intent.kind, intent.kind)
         if intent.kind in STARTING:
             starting.add(intent.node_id)
         if intent.kind == "start_team" and node is not None:
             ic = node.agents[0].conversation_id
             if ic is not None and UUID(ic) in statuses:
-                what = _WHAT["launch_manager"]
+                what = STEP_NAMES["launch_manager"]
         items.append(
             _item(
                 node,

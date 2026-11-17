@@ -32,6 +32,7 @@ from openhands.agent_server.director.org_store import (
     AGENT_LOST,
     is_division_lead,
     session_team_id,
+    utc_now,
 )
 from openhands.agent_server.director.prompts import (
     DIVISION_LEAD_IC_ROLE,
@@ -40,6 +41,7 @@ from openhands.agent_server.director.prompts import (
     MANAGER_ROLE,
     ORG_PROTOCOL,
     brief,
+    failure_notice,
     hand_over_brief,
     left_for_team,
     manager_check,
@@ -54,9 +56,11 @@ from openhands.agent_server.director.run_state import (
 )
 from openhands.agent_server.director.service.delivery import Delivery
 from openhands.agent_server.director.service.state import (
+    _REASON_KEPT,
     _STARTED_WITH,
     HAND_OVER_TOOLS,
     LEFT_REFS,
+    ROLE_NAMES,
     _agent_title,
     _base_of,
     _branch_of,
@@ -66,6 +70,7 @@ from openhands.agent_server.director.service.state import (
     _new_agents,
     _progress_of,
     agent_conversation,
+    failure_waits,
     tools_of,
 )
 from openhands.sdk.errors import (
@@ -141,6 +146,73 @@ class Teams(Delivery):
                 task = self._runs().marked(TASK).get(place_id) or place.spec_summary
                 self._begin("launch_manager", place_id, task=task)
         self.notify(agent_conversation(place, "manager"), text)
+
+    def tell_above(
+        self,
+        team: SessionTeam,
+        notice: str,
+        *,
+        waits: str,
+        title: str,
+        detail: str,
+        raised_by: AgentRole = "ic",
+    ) -> None:
+        """Tell the IC above a team of something wrong with it. Where no IC
+        works above it (the team a session was opened at, and the session's
+        Division Lead place), the human is asked instead, once.
+
+        Args:
+            notice: What the IC above is told.
+            waits: The id of the escalation the human is asked with.
+            raised_by: The agent of the team the human's answer goes to.
+        """
+        store = self.store
+        above = store.place(team.parent_id) if team.parent_id else None
+        if above is not None and not is_division_lead(above):
+            self.tell_ic(above.id, notice)
+            return
+        now = store.place(team.id)
+        if now is None or any(e.id == waits for e in now.escalations):
+            return
+        store.raise_escalation(
+            team.id,
+            waits,
+            kind="critical_issue",
+            title=title,
+            detail=detail,
+            at=utc_now(),
+            raised_by=raised_by,
+        )
+        self._save_soon()
+
+    def tell_of_failure(self, place_id: str, role: AgentRole, reason: str) -> None:
+        """Keep why an agent of a team failed, and tell of it."""
+        store = self.store
+        with suppress(NotFound):
+            store.set_agent(place_id, role, reason=reason)
+        team = store.place(place_id)
+        if team is None:
+            return
+        name = ROLE_NAMES[role]
+        self.record_event(team.parent_id, "failed", team, f"{name}: {reason}")
+        lost = any(a.role == role and a.status == AGENT_LOST for a in team.agents)
+        self.tell_above(
+            team,
+            failure_notice(team, role, reason),
+            waits=failure_waits(role),
+            title=f"The {name} of {team.title!r} failed",
+            detail=(
+                f"{reason}\n"
+                + (
+                    "It has no conversation on this server. Answer this to "
+                    "start the team again."
+                    if lost
+                    else "It is at rest. Answer this to run it again: your "
+                    "answer is sent to it."
+                )
+            ),
+            raised_by=role,
+        )
 
     def tell_ic(
         self,
@@ -574,9 +646,12 @@ class Teams(Delivery):
                     await launcher.pause(UUID(conversation_id))
         except _Held:
             raise
-        except Exception:
+        except Exception as error:
             logger.exception("Could not start the %s of team %s", role, place_id)
             store.set_agent(place_id, role, status=AGENT_LOST)
+            self.tell_of_failure(
+                place_id, role, f"It could not be started: {error}"[:_REASON_KEPT]
+            )
             return False
         store.set_agent(
             place_id, role, kind=started.kind, acp_server=started.acp_server

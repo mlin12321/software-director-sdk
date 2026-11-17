@@ -91,6 +91,7 @@ from openhands.agent_server.director.service.state import (
     BASE_LANE,
     MERGE_WAITS,
     ORG_WAITS,
+    _branch_of,
     _checkout_root,
     _contracts_file,
     _spec_file,
@@ -1478,6 +1479,22 @@ class Reviews(Requests):
     async def _do_request_review(self, intent: Intent) -> None:
         await self._request_review(intent.node_id)
 
+    def _ask_to_clear(self, place_id: str, detail: str) -> None:
+        """Ask the human, once, to clear the way for accepted work into
+        their own checkout. Their answer merges it."""
+        place = self.store.place(place_id)
+        if place is None or any(e.id == MERGE_WAITS for e in place.escalations):
+            return
+        self.store.raise_escalation(
+            place_id,
+            MERGE_WAITS,
+            kind="critical_issue",
+            title="Accepted work cannot be merged into your checkout",
+            detail=detail,
+            at=utc_now(),
+        )
+        self._save_soon()
+
     async def _do_accept(self, intent: Intent) -> None:
         await self._accept(
             intent.node_id,
@@ -1591,6 +1608,28 @@ class Reviews(Requests):
             self.notify(reviewer, refusal)
             return
         if _checkout_root(str(team)) != _checkout_root(str(checkout)):
+            on = await asyncio.to_thread(_branch_of, str(checkout))
+            session = store.session_of(place)
+            started_on = session.branch if session else ""
+            if is_division_lead(above) and started_on and on != started_on:
+                # The human's checkout is somewhere else than where the
+                # session started: the work is not merged into that.
+                self._ask_to_clear(
+                    place_id,
+                    f"The session started from the branch {started_on!r}, "
+                    "and your checkout is now "
+                    + ("on no branch" if on in ("", "HEAD") else f"on {on!r}")
+                    + f".\nSwitch it back to {started_on!r}, then answer "
+                    "this: the work is merged then.",
+                )
+                self.notify(
+                    reviewer,
+                    f"The work of {place.title!r} is accepted and waits for "
+                    "the human, whose checkout is on another branch than the "
+                    "one the session started from. There is nothing more "
+                    "for you to do.",
+                )
+                return
             if not opens:
                 # What is uncommitted in a session's directory is the work
                 # of the team it was opened beside, and stays.
@@ -1626,20 +1665,12 @@ class Reviews(Requests):
             if result.outcome == "refused" and is_division_lead(above):
                 # Only the human can clear their own checkout: they are
                 # asked, and their answer merges the work.
-                if all(e.id != MERGE_WAITS for e in place.escalations):
-                    store.raise_escalation(
-                        place_id,
-                        MERGE_WAITS,
-                        kind="critical_issue",
-                        title="Accepted work cannot be merged into your checkout",
-                        detail=(
-                            f"git would not merge it as the checkout is:\n"
-                            f"{result.detail}\nCommit or put aside what is in "
-                            "the way, then answer this: the work is merged then."
-                        ),
-                        at=utc_now(),
-                    )
-                    self._save_soon()
+                self._ask_to_clear(
+                    place_id,
+                    f"git would not merge it as the checkout is:\n"
+                    f"{result.detail}\nCommit or put aside what is in "
+                    "the way, then answer this: the work is merged then.",
+                )
                 self.notify(
                     reviewer,
                     f"The work of {place.title!r} is accepted and waits for "

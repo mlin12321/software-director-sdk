@@ -1135,12 +1135,37 @@ def stall_notice(
     return "\n".join(lines)
 
 
+def failure_notice(team: SessionTeam, role: AgentRole, reason: str) -> str:
+    """What the IC above is told of a team whose agent failed."""
+    name = "IC" if role == "ic" else "Manager"
+    lines = [
+        f"The {name} of team {team.title!r} (id {team.id}) failed and is at "
+        f"rest: {reason}",
+        "",
+    ]
+    if role == "ic":
+        lines.append(
+            "Nothing runs it again by itself. A message from you with "
+            f"`msg_team` for team {team.id} does. If what failed is not "
+            "something a message can mend (its model cannot be reached, it "
+            "ran out of budget), raise it with `raise_escalation`."
+        )
+    else:
+        lines.append(
+            "It runs again the next time something is sent to it. Nothing is "
+            "asked of you unless that team waits on its Manager; then raise "
+            "it with `raise_escalation`."
+        )
+    return "\n".join(lines)
+
+
 _EVENT_WORDS: dict[TeamEventKind, str] = {
     "set_up": "set up",
     "accepted": "work accepted",
     "sent_back": "work sent back",
     "reconciled": "work reconciled with what was merged meanwhile",
     "stalled": "showed no progress",
+    "failed": "an agent or a step of the director failed",
     "stopped": "stopped by the IC",
     "replaced": "replaced",
     "pruned": "pruned",

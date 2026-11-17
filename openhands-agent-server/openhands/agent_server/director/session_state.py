@@ -35,6 +35,7 @@ def _kept(place: SessionTeamInput) -> dict[str, Any]:
     data = place.model_dump(include=set(SessionTeamInput.model_fields))
     for agent in data["agents"]:
         agent["status"] = "idle"
+        agent["reason"] = None
     if data["status"] == "working":
         data["status"] = "idle"
     data["waiting_to_start"] = False

@@ -247,8 +247,19 @@ MERGE_WAITS = "merge-waits"
 # The id of the escalation raised when a Manager does not settle the teams
 # and contracts of accepted work.
 ORG_WAITS = "org-waits"
+# How much of an error is kept as the reason an agent failed.
+_REASON_KEPT = 600
+# The escalation that tells the human a team shows no progress where no IC
+# works above it.
+STALL_WAITS = "stalled"
 # How many of the director's own model calls run at once.
 MODEL_CALLS_AT_ONCE = 2
+
+
+def failure_waits(role: AgentRole) -> str:
+    """The id of the escalation that tells the human an agent failed."""
+    return f"{role}-failed"
+
 
 _AGENT_STATUS: dict[ConversationExecutionStatus, str] = {
     ConversationExecutionStatus.RUNNING: "working",
@@ -647,6 +658,13 @@ class ServiceState:
                 raise Unavailable(
                     "The director does not know the address of its own "
                     "server, which an ACP agent needs to reach its tools"
+                )
+            if self._bwrap is not None and not launcher.exists():
+                logger.warning(
+                    "The ACP agent of conversation %s starts with nothing that "
+                    "holds its process to its team's folder: %s is missing",
+                    conversation_id,
+                    launcher,
                 )
             return as_org_agent(
                 agent,
@@ -1087,6 +1105,9 @@ class ServiceState:
         self._save_soon()
         self._enqueue(lambda: self._carry_out(intent.id), _lane_for(intent))
 
+    def _keep_failure(self, intent: Intent, error: Exception) -> None:
+        """Keep a step of the director that failed. The service does."""
+
     async def _carry_out(self, intent_id: int) -> None:
         run = self._runs()
         if self._paused is not None or intent_id in self._in_flight:
@@ -1106,9 +1127,10 @@ class ServiceState:
             await step(intent)
         except _Held:
             return
-        except Exception:
+        except Exception as error:
             logger.exception("A director action failed")
             run.finish(intent.id)
+            self._keep_failure(intent, error)
         else:
             if intent.kind in _SAVED_BEFORE_FORGOTTEN:
                 # What it changed in the tree is saved before it is
