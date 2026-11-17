@@ -653,10 +653,24 @@ class Records(ServiceState):
                 }
                 for child in store.below(node.id)
             ],
-            "review_of_your_work": node.review.model_dump() if node.review else None,
+            # What it wrote of its work and what was found in it reach it in
+            # the messages of the review, not a second time here.
+            "review_of_your_work": (
+                {"state": node.review.state, "round": node.review.round}
+                if node.review
+                else None
+            ),
             "agent_profiles_a_sub_team_may_run_on": self.settings.allowed_profiles,
+            # The proposal itself is in the message that made it.
             "pending_split": (
-                node.pending_split.model_dump() if node.pending_split else None
+                None
+                if node.pending_split is None
+                else node.pending_split.model_dump()
+                if in_full
+                else {
+                    "status": node.pending_split.status,
+                    "teams": [child.title for child in node.pending_split.children],
+                }
             ),
             "escalations_you_raised": [
                 {
