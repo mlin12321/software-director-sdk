@@ -571,6 +571,7 @@ class Sessions(Splits):
                     )
             store.close_session(plan["session"])
             await asyncio.to_thread(self._org_turn)
+            self._tell_turns()
             await self._save()
             intent = run.step_done(intent, "removed")
         self._settling.pop(intent.id, None)

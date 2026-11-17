@@ -68,6 +68,7 @@ from openhands.agent_server.director.run_state import (
     HELD,
     MERGING,
     SHOWN,
+    TURN,
     Intent,
 )
 from openhands.agent_server.director.service.records import Taken
@@ -228,6 +229,7 @@ class Reviews(Requests):
         above = store.place(node.parent_id) if node.parent_id else None
         store.set_review(node_id, review)
         self._drop_merge_checkout(node_id)
+        self._tell_turns()
         self.progressed(node_id)
         self.record_event(
             node.parent_id,
@@ -1265,23 +1267,20 @@ class Reviews(Requests):
             ],
         )
 
-    def check_accept(self, node_id: str, reconciled: str) -> None:
-        """Hold the acceptance of a team's work to what is asked of every
-        one: work is accepted in the order it was submitted, and work that
-        meets other work is reconciled with it first.
-
-        Raises:
-            Conflict: Work submitted before it still waits, or it meets
-                work the reviewer has not said it reconciled.
-        """
+    def _before(self, node: SessionTeam) -> SessionTeam | None:
+        """The work submitted first of all that was submitted before that
+        of ``node`` and is not decided on yet; None when it is its turn."""
         store = self.store
-        node = store.place(node_id)
-        above = store.place(node.parent_id) if node and node.parent_id else None
-        if node is None or above is None or node.review is None:
-            return
+        above = store.place(node.parent_id) if node.parent_id else None
+        if above is None:
+            return None
         # Every session's work goes into the one checkout of the repository.
         beside = (
-            [store.session(session.id)[0] for session in store.sessions()]
+            [
+                places[0]
+                for session in store.sessions()
+                if (places := store.session(session.id))
+            ]
             if store.opens_session(node)
             else store.below(above.id)
         )
@@ -1300,8 +1299,56 @@ class Reviews(Requests):
             and other.review.state == "pending"
             and _submitted(other) < _submitted(node)
         ]
-        if waiting:
-            raise Conflict(accept_in_order(node, min(waiting, key=_submitted)))
+        return min(waiting, key=_submitted) if waiting else None
+
+    def _tell_turns(self) -> None:
+        """Tell each reviewer that was made to wait for work submitted
+        earlier that it is its turn, once that work is decided on. Safe
+        from any thread."""
+        store = self.store
+        run = self._runs()
+        for node_id in run.marked(TURN):
+            node = store.place(node_id)
+            above = store.place(node.parent_id or "") if node else None
+            pending = node and node.review and node.review.state == "pending"
+            if node is None or above is None or not pending:
+                run.unmark(TURN, node_id)
+                continue
+            if self._before(node) is not None:
+                continue
+            run.unmark(TURN, node_id)
+            self.notify(
+                agent_conversation(above, "ic"),
+                f"It is your turn: the work submitted before that of "
+                f"{node.title!r} (node {node.id}) is decided on. Accept it "
+                "with `review_team` now, or send it back.",
+            )
+
+    def check_accept(self, node_id: str, reconciled: str) -> None:
+        """Hold the acceptance of a team's work to what is asked of every
+        one: work is accepted in the order it was submitted, and work that
+        meets other work is reconciled with it first.
+
+        Raises:
+            Conflict: Work submitted before it still waits, or it meets
+                work the reviewer has not said it reconciled.
+        """
+        store = self.store
+        node = store.place(node_id)
+        above = store.place(node.parent_id) if node and node.parent_id else None
+        if node is None or above is None or node.review is None:
+            return
+        first = self._before(node)
+        if first is not None:
+            theirs = first.parent_id != node.parent_id
+            if theirs:
+                # Its reviewer is told when the other reviewer has decided.
+                self._runs().mark(TURN, node.id)
+            raise Conflict(
+                accept_in_order(
+                    node, first, store.session_title(first) if theirs else ""
+                )
+            )
         try:
             meets = self._to_reconcile(node, above)
         except (GitError, OSError):
@@ -1605,6 +1652,7 @@ class Reviews(Requests):
                 self._land_accepted, node, meets.seen if meets else None
             )
         self._runs().unmark(SHOWN, node_id)
+        self._tell_turns()
         if not reviews_only(above):
             self.count_accepted_review(above.id)
         self.notify(
@@ -1818,6 +1866,7 @@ class Reviews(Requests):
         self._work_accepted(node)
         if opens:
             await asyncio.to_thread(self._land_accepted, node, None)
+        self._tell_turns()
         if acted:
             self.notify(
                 ic,

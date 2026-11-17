@@ -863,8 +863,10 @@ async def test_what_later_work_makes_of_the_org_waits_for_earlier_work(
     early = await use(
         service, reviewer(service, second), ReviewTeamTool, accept(second)
     )
-    assert early.is_error
+    assert early.is_error and "its reviewer has not decided" in early.text
     await use(service, reviewer(service, first), ReviewTeamTool, accept(first))
+    # The reviewer that was made to wait is told when it is its turn.
+    assert "It is your turn" in launcher.messages_to(reviewer(service, second))[-1]
     await use(service, reviewer(service, second), ReviewTeamTool, accept(second))
     await service.settled()
 

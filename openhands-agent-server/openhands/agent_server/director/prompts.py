@@ -665,8 +665,23 @@ def session_work(team: SessionTeam, title: str, request: str) -> str:
     )
 
 
-def accept_in_order(team: SessionTeam, first: SessionTeam) -> str:
-    """Why work is not accepted while work submitted before it waits."""
+def accept_in_order(team: SessionTeam, first: SessionTeam, session: str = "") -> str:
+    """Why work is not accepted while work submitted before it waits.
+
+    Args:
+        session: What the session of the earlier work is called, when
+            another reviewer than the one that is told decides on it.
+    """
+    if session:
+        return (
+            f"The work of {first.title!r} in the session {session!r} was "
+            f"submitted before that of {team.title!r}, and its reviewer has "
+            "not decided on it yet. Work is accepted in the order it was "
+            "submitted, so that each is checked against what was merged "
+            "before it. There is nothing for you to do until then: you are "
+            "told when it is your turn, and accept with `review_team` again "
+            "then."
+        )
     return (
         f"The work of {first.title!r} (node {first.id}) was submitted before "
         f"that of {team.title!r} and still waits for your review. Work is "
