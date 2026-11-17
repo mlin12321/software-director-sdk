@@ -929,6 +929,37 @@ class Records(ServiceState):
         file = _spec_file(normalize_store_path(node.boundary.path))
         self._draft(node.session, file, content)
 
+    def specs_inherited(self, top: SessionTeam) -> list[tuple[str, str, str, str]]:
+        """The specs a session wrote for teams the org had when it began
+        and has no more.
+
+        Returns:
+            For each, the directory of the team of the org that holds the
+            lost team's directory now, that team's spec, what the lost team
+            was called and the spec the session wrote for it.
+        """
+        store = self.store
+        session = store.session_of(top)
+        if session is None:
+            return []
+        began = {team for team, *_ in session.shape}
+        found = []
+        for place in store.session(top.session):
+            if (
+                reviews_only(place)
+                or place.team_id not in began
+                or store.team(place.team_id) is not None
+            ):
+                continue
+            draft = self.spec_draft(place)
+            home = store.team(self._home_of(top, place.boundary.path))
+            if draft is None or home is None:
+                continue
+            path = normalize_store_path(home.boundary.path)
+            now = self._memory().read(_spec_file(path)) or ""
+            found.append((path, now, place.title, draft[0]))
+        return found
+
     def specs_to_reconcile(self, top: SessionTeam) -> list[tuple[str, str, str]]:
         """The specs a session wrote while the team's spec in the same
         directory was changed by someone else.
@@ -1017,6 +1048,7 @@ class Records(ServiceState):
             if place.team_id not in waits and not self.is_orgs(place)
         }
         files: dict[str, tuple[str | None, str | None]] = {}
+        passed_on: dict[str, SessionTeam] = {}
         of_left: dict[str, dict[str, str]] = {}
         drafts = self.drafts(session)
         for file, text in (chosen or {}).items():
@@ -1030,6 +1062,19 @@ class Records(ServiceState):
             if owner is not None and owner.id in left:
                 kind = "spec" if file.endswith(SPEC_FILE) else "contracts"
                 of_left.setdefault(owner.id, {})[kind] = text or ""
+                if (
+                    kind == "spec"
+                    and text
+                    and store.team(owner.team_id) is None
+                    and all(
+                        normalize_store_path(team.boundary.path) != _directory_of(file)
+                        for team in store.teams()
+                    )
+                ):
+                    # No team has the directory: the spec stays there as an
+                    # old one of the team that holds it now.
+                    files[file] = (text, over)
+                    passed_on[file] = owner
                 continue
             if chosen is not None and file in chosen:
                 files[file] = (chosen[file], self._memory().read(file))
@@ -1140,6 +1185,28 @@ class Records(ServiceState):
             if file in conflicts:
                 continue
             self._undraft(session, file)
+            if file in passed_on:
+                lost = passed_on[file]
+                home = store.team(self._home_of(top, lost.boundary.path))
+                rewritten = (
+                    _spec_file(normalize_store_path(home.boundary.path)) if home else ""
+                )
+                directory = _directory_of(file)
+                if (
+                    home is not None
+                    and not (
+                        files.get(rewritten, (None,))[0] and rewritten not in conflicts
+                    )
+                    and all(old.path != directory for old in home.old_specs)
+                ):
+                    store.update_team(
+                        home.id,
+                        old_specs=[
+                            *home.old_specs,
+                            OldSpec(path=directory, team=lost.title),
+                        ],
+                    )
+                continue
             owner = by_path.get(_directory_of(file))
             if (
                 owner is not None

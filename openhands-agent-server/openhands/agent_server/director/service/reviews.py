@@ -45,7 +45,9 @@ from openhands.agent_server.director.models import (
     ReviewFinding,
     SessionInput,
     SessionTeam,
+    SpecChoice,
     Take,
+    TeamChoice,
 )
 from openhands.agent_server.director.org_store import OrgStoreError, reviews_only
 from openhands.agent_server.director.ownership import can_merge_in_memory, conflicts
@@ -81,6 +83,7 @@ from openhands.agent_server.director.service.state import (
     _checkout_root,
     _contracts_file,
     _now,
+    _spec_file,
     agent_conversation,
 )
 from openhands.agent_server.director.split import (
@@ -336,8 +339,56 @@ class Reviews(Requests):
         session = self.store.session_of(team)
         return session.request if session else ""
 
+    def spec_choices(
+        self, node_id: str, specs: list[SpecChoice]
+    ) -> list[dict[str, str]]:
+        """What a reviewer decided about the specs of a session's work, as
+        it is kept with the acceptance.
+
+        Raises:
+            Invalid: The work is not a session's, a directory is not in
+                it, or a text is missing.
+        """
+        if not specs:
+            return []
+        node = self.store.place(node_id)
+        if node is None or not self.store.opens_session(node):
+            raise Invalid(
+                "Specs are decided where the work of a session is accepted. "
+                "Leave `specs` empty."
+            )
+        own = normalize_store_path(node.boundary.path)
+        homes = {home for home, *_ in self.specs_inherited(node)}
+        chosen = []
+        for choice in specs:
+            path = normalize_store_path(choice.path)
+            if not (path == own or is_inside(path, own) or path in homes):
+                raise Invalid(
+                    f"{choice.path!r} is not a directory of this work "
+                    f"({own or 'the repository'}), so its spec is not yours "
+                    "to decide here."
+                )
+            if choice.take == "text" and not choice.text.strip():
+                raise Invalid(f"Write the spec of {choice.path!r} in `text`.")
+            chosen.append({"path": path, "take": choice.take, "text": choice.text})
+        return chosen
+
+    def _take_spec_choices(self, top: SessionTeam, specs: list[dict[str, str]]) -> None:
+        """Make of the specs a session wrote what its reviewer decided,
+        before they land."""
+        for choice in specs:
+            file = _spec_file(choice["path"])
+            if choice["take"] == "org":
+                self._undraft(top.session, file)
+            elif choice["take"] == "text":
+                self._draft(top.session, file, choice["text"])
+
     def accept_review(
-        self, node_id: str, needed_above: str, reconciled: str = ""
+        self,
+        node_id: str,
+        needed_above: str,
+        reconciled: str = "",
+        specs: list[dict[str, str]] | None = None,
     ) -> None:
         """Take a team's reviewed work into the team above. Safe from any
         thread.
@@ -347,6 +398,7 @@ class Reviews(Requests):
                 none does.
             reconciled: What the reviewer decided about what the work meets
                 in the checkout above; '' when it was asked nothing.
+            specs: What it decided about the specs of a session's work.
         """
         node = self.store.place(node_id)
         self._begin(
@@ -354,6 +406,7 @@ class Reviews(Requests):
             node_id,
             needed_above=needed_above,
             reconciled=reconciled,
+            specs=specs or [],
             # The work of a session goes into what the org shares.
             base=node is not None and self.store.opens_session(node),
         )
@@ -378,12 +431,21 @@ class Reviews(Requests):
         return seats, shape_of(seats), shape_of(teams)
 
     def _put_team(
-        self, session: SessionInput, places: dict[str, SessionTeam], team_id: str
+        self,
+        session: SessionInput,
+        places: dict[str, SessionTeam],
+        team_id: str,
+        under: str | None = None,
+        title: str | None = None,
     ) -> bool:
         """Make a team of the org what a session has at it. A team the org
         lost is never put back for it: where the team above it is not in
         the org, it goes under the nearest team that holds its directory,
         and that team's sub-teams inside its directory go under it.
+
+        Args:
+            under: The team of the org its Manager put it under instead.
+            title: What its Manager called it instead.
 
         Returns:
             Whether the org has it now.
@@ -398,8 +460,10 @@ class Reviews(Requests):
             # The top team of the org.
             return store.team(team_id) is not None
         path = normalize_store_path(seat.boundary.path)
-        moved = store.team(above_id) is None
-        if moved:
+        moved = under is not None or store.team(above_id) is None
+        if under is not None:
+            above_id = under
+        elif moved:
             above_id = self._home_of(places[session.team_id], path)
         home = store.team(above_id)
         if home is None or any(
@@ -412,7 +476,7 @@ class Reviews(Requests):
                 OrgNodeInput(
                     id=team_id,
                     parent_id=above_id,
-                    title=seat.title,
+                    title=title or seat.title,
                     boundary=seat.boundary,
                     isolation=seat.isolation,
                     agent_profile=seat.agent_profile,
@@ -430,7 +494,7 @@ class Reviews(Requests):
                 return False
             store.update_team(
                 team_id,
-                title=seat.title,
+                title=title or seat.title,
                 boundary=seat.boundary,
                 agent_profile=seat.agent_profile,
                 spec_summary=seat.spec_summary,
@@ -442,7 +506,12 @@ class Reviews(Requests):
                 if other.id != team_id and is_inside(other.boundary.path, path):
                     store.move(other.id, team_id)
             self.record_event(
-                above_id, "moved", seat, "the team it was set up under is gone"
+                above_id,
+                "moved",
+                seat,
+                "its Manager put it here"
+                if under is not None
+                else "the team it was set up under is gone",
             )
         return True
 
@@ -594,7 +663,14 @@ class Reviews(Requests):
         items += coming.values()
         decided = {_same(item): item for item in before if item.take}
         return take, [
-            item.model_copy(update={"take": known.take, "text": known.text})
+            item.model_copy(
+                update={
+                    "take": known.take,
+                    "text": known.text,
+                    "under": known.under,
+                    "named": known.named,
+                }
+            )
             if (known := decided.get(_same(item))) is not None
             else item
             for item in items
@@ -657,22 +733,24 @@ class Reviews(Requests):
     def settle_teams(
         self,
         review_id: str,
-        org_teams: list[str],
+        teams: list[TeamChoice],
         note: str,
         contracts: list[ContractsChoice] | None = None,
     ) -> str:
         """Settle what a session's work makes of the org's teams and
-        contracts that waits at the place it is reviewed from: the org's
-        stay for ``org_teams``, and the others become what the session
-        has. Of contracts that wait, the session's hold unless
-        ``contracts`` says otherwise. Nothing is the org's by this alone:
-        it lands when the session's code is accepted and it is its turn.
-        Safe from any thread.
+        contracts that waits at the place it is reviewed from. A team
+        becomes what the session has unless ``teams`` says the org's
+        stays; taken from the session, it may be put under another team
+        of the org or called otherwise. Of contracts that wait, the
+        session's hold unless ``contracts`` says otherwise. Nothing is the
+        org's by this alone: it lands when the session's code is accepted
+        and it is its turn. Safe from any thread.
 
         Raises:
             Conflict: Nothing waits there, or it changed since the Manager
                 was shown it.
-            Invalid: A team or a directory named does not wait.
+            Invalid: A team or a directory named does not wait, or a team
+                cannot be put where it was asked to.
         """
         store = self.store
         with self._weighing:
@@ -687,13 +765,16 @@ class Reviews(Requests):
             if merge is None or session is None or merge.org_queued or not waiting:
                 raise Conflict("Nothing of a session waits for you to settle")
             top = store.session(session.id)[0]
-            teams = [item.key for item in waiting if item.kind == "team"]
-            unknown = [team for team in org_teams if team not in teams]
+            named = [item.key for item in waiting if item.kind == "team"]
+            unknown = [choice.team for choice in teams if choice.team not in named]
             if unknown:
                 raise Invalid(
                     f"Not waiting: {', '.join(unknown)}. The teams that wait: "
-                    f"{', '.join(teams) or 'none'}"
+                    f"{', '.join(named) or 'none'}"
                 )
+            placed = {choice.team: choice for choice in teams}
+            for choice in teams:
+                self._check_placement(top, choice)
             agreed = [item.key for item in waiting if item.kind == "contracts"]
             chosen = {
                 normalize_store_path(choice.path): choice for choice in contracts or []
@@ -720,9 +801,10 @@ class Reviews(Requests):
             settled = []
             for item in waiting:
                 choice = chosen.get(item.key) if item.kind == "contracts" else None
+                place = placed.get(item.key) if item.kind == "team" else None
                 take: Take = "session"
-                if item.kind == "team" and item.key in org_teams:
-                    take = "org"
+                if place is not None:
+                    take = place.take
                 elif choice is not None:
                     take = choice.take
                 settled.append(
@@ -730,6 +812,8 @@ class Reviews(Requests):
                         update={
                             "take": take,
                             "text": choice.text if choice and take == "text" else "",
+                            "under": place.under if place else None,
+                            "named": place.title if place else None,
                         }
                     )
                 )
@@ -746,6 +830,60 @@ class Reviews(Requests):
             else "It becomes the org's when the IC that reviews the session's "
             "work has accepted it."
         )
+
+    def _check_placement(self, top: SessionTeam, choice: TeamChoice) -> None:
+        """Hold where a Manager puts a team it takes from a session, and
+        what it calls it, to what the org allows.
+
+        Raises:
+            Invalid: It cannot be put there or called that.
+        """
+        store = self.store
+        if choice.under is None and choice.title is None:
+            return
+        if choice.take == "org":
+            raise Invalid(
+                f"Team {choice.team} stays as the org has it, so it cannot be "
+                "put or called otherwise. Take it from the session for that."
+            )
+        if choice.title is not None and not choice.title:
+            raise Invalid(f"Say what team {choice.team} is to be called.")
+        if choice.under is None:
+            return
+        shapes = self._shapes(top)
+        seat = next(
+            (
+                seat
+                for seat in (shapes[0] if shapes else [])
+                if seat.team_id == choice.team
+            ),
+            None,
+        )
+        home = store.team(choice.under)
+        if seat is None or home is None or choice.under == choice.team:
+            raise Invalid(
+                f"{choice.under} is not a team of the org that team "
+                f"{choice.team} can go under."
+            )
+        if any(team.id == choice.team for team in store.teams_above(home.id)):
+            raise Invalid(
+                f"Team {choice.under} is below team {choice.team} in the org, "
+                "so that one cannot go under it."
+            )
+        path = normalize_store_path(seat.boundary.path)
+        if not is_inside(path, normalize_store_path(home.boundary.path)):
+            raise Invalid(
+                f"The directory of team {choice.team} ({path}) is not inside "
+                f"that of team {choice.under} "
+                f"({home.boundary.path or 'the repository'}), so it cannot go "
+                "under it."
+            )
+        level = len(store.teams_above(home.id)) + 2
+        if level > self.settings.max_depth:
+            raise Invalid(
+                f"An org may have at most {self.settings.max_depth} levels of "
+                f"teams, and under team {choice.under} it would be level {level}."
+            )
 
     def _land(
         self,
@@ -798,7 +936,14 @@ class Reviews(Requests):
         for team in places:
             settled = team in decided and decided[team].take == "session"
             if take.get(team) is not None or settled:
-                done = self._put_team(session, places, team)
+                item = decided.get(team)
+                done = self._put_team(
+                    session,
+                    places,
+                    team,
+                    item.under if item and settled else None,
+                    item.named if item and settled else None,
+                )
                 if settled:
                     (taken if done else kept).append(team)
         for team in [
@@ -981,8 +1126,10 @@ class Reviews(Requests):
             )
             if not unmergeable:
                 files = [path for path in changes.both if owns(node, path)]
-        specs = self.specs_to_reconcile(node) if self.store.opens_session(node) else []
-        if not files and not specs:
+        opens = self.store.opens_session(node)
+        specs = self.specs_to_reconcile(node) if opens else []
+        inherited = self.specs_inherited(node) if opens else []
+        if not files and not specs and not inherited:
             return None
         text = reconcile_request(
             node,
@@ -991,9 +1138,12 @@ class Reviews(Requests):
             files,
             list(changes.landed) if changes else [],
             specs,
+            inherited,
         )
         there = git(checkout, ["ls-tree", "HEAD", "--", *files]) if files else ""
-        compared = json.dumps([changes.tip if changes else "", there, specs])
+        compared = json.dumps(
+            [changes.tip if changes else "", there, specs, *inherited]
+        )
         return Meets(
             text,
             hashlib.sha256(compared.encode()).hexdigest(),
@@ -1008,6 +1158,17 @@ class Reviews(Requests):
                         kind="spec", key=directory, gate="ic", session=mine, org=now
                     )
                     for directory, now, mine in specs
+                ),
+                *(
+                    MergeItem(
+                        kind="spec",
+                        key=home,
+                        gate="ic",
+                        title=lost,
+                        session=written,
+                        org=now,
+                    )
+                    for home, now, lost, written in inherited
                 ),
             ],
         )
@@ -1105,6 +1266,7 @@ class Reviews(Requests):
             intent.node_id,
             intent.payload["needed_above"],
             intent.payload.get("reconciled", ""),
+            intent.payload.get("specs", []),
         )
 
     async def _own_account(
@@ -1186,7 +1348,11 @@ class Reviews(Requests):
             )
 
     async def _accept(
-        self, node_id: str, needed_above: str, reconciled: str = ""
+        self,
+        node_id: str,
+        needed_above: str,
+        reconciled: str = "",
+        specs: list[dict[str, str]] | None = None,
     ) -> None:
         store = self.store
         node = store.place(node_id)
@@ -1327,6 +1493,7 @@ class Reviews(Requests):
             else f"at review {node.review.round}",
         )
         if opens:
+            self._take_spec_choices(node, specs or [])
             await asyncio.to_thread(
                 self._land_accepted, node, meets.seen if meets else None
             )

@@ -1212,6 +1212,43 @@ class ContractsChoice(BaseModel):
     text: str = Field(default="", description="The contracts, for 'text'.")
 
 
+class SpecChoice(BaseModel):
+    """What a reviewing IC decides about the spec of a directory."""
+
+    path: str = Field(description="The directory whose spec it is.")
+    take: Literal["org", "session", "text"] = Field(
+        description=(
+            "'org': the org's stays. 'session': the session's holds. 'text': "
+            "what is written in `text` holds."
+        )
+    )
+    text: str = Field(default="", description="The spec, for 'text'.")
+
+
+class TeamChoice(BaseModel):
+    """What a Manager decides about a team that waits for it."""
+
+    team: str = Field(description="The id of the waiting team.")
+    take: Literal["org", "session"] = Field(
+        description=(
+            "'org': it stays as the org has it. 'session': it becomes what "
+            "the session made of it."
+        )
+    )
+    under: str | None = Field(
+        default=None,
+        description=(
+            "Only with 'session': the id of the team of the org to put it "
+            "under, instead of where the session has it. Its directory must "
+            "be inside that team's."
+        ),
+    )
+    title: str | None = Field(
+        default=None,
+        description="Only with 'session': what to call it instead.",
+    )
+
+
 # What a session and the org each made something else of. `code`: a file
 # both changed. `spec`, `contracts`: the text of one directory. `team`: a
 # sub-team.
@@ -1260,6 +1297,13 @@ class MergeItem(BaseModel):
             "The waiting team contracts come with: they are the session's "
             "only if that team becomes the org's."
         ),
+    )
+    under: str | None = Field(
+        default=None,
+        description="The team of the org its Manager decided to put a team under.",
+    )
+    named: str | None = Field(
+        default=None, description="What its Manager decided to call a team."
     )
 
 

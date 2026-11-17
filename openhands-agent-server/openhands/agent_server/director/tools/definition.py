@@ -10,6 +10,8 @@ from openhands.agent_server.director.models import (
     ContractsChoice,
     EscalationKind,
     ReviewFinding,
+    SpecChoice,
+    TeamChoice,
 )
 from openhands.agent_server.director.pod_actions import Caller
 from openhands.agent_server.director.service import DirectorService
@@ -95,12 +97,13 @@ class ApproveTeamsAction(Action):
 class SettleTeamsAction(Action):
     """Settle the sub-teams of a session that wait for you."""
 
-    org_teams: list[str] = Field(
+    teams: list[TeamChoice] = Field(
         default_factory=list,
         description=(
-            "The ids of the waiting teams for which what the org has now "
-            "holds. Every other waiting team becomes what the session made "
-            "of it. Empty to take all from the session."
+            "For teams that wait: 'org' where what the org has now holds, "
+            "'session' where the team becomes what the session made of it, "
+            "which you may put under another team of the org or name "
+            "otherwise. Unnamed, a team becomes what the session made of it."
         ),
     )
     contracts: list[ContractsChoice] = Field(
@@ -198,6 +201,15 @@ class ReviewTeamAction(Action):
             "merged since it began: what you decided, having read both. It "
             "holds for what you were shown: if that changed since, you are "
             "shown it again. Leave empty otherwise."
+        ),
+    )
+    specs: list[SpecChoice] = Field(
+        default_factory=list,
+        description=(
+            "Only when you accept the work of a session: for the spec of a "
+            "directory in it, whether the org's stays, the session's holds, "
+            "or a text you write from both does. Unnamed, the session's "
+            "holds."
         ),
     )
 
@@ -449,8 +461,10 @@ class SettleTeamsTool(_DirectorTool[SettleTeamsAction]):
     summary = (
         "Manager in review mode only. Settle the sub-teams of an accepted "
         "session, and the contracts between them, that the org made "
-        "something else of while it worked: the org's stay for the teams "
-        "you name, and the others become what the session made of them."
+        "something else of while it worked: for each you say whether the "
+        "org's holds or the session's, and you may place or name a team "
+        "you take from the session otherwise. It is the org's once the "
+        "session's code is accepted."
     )
 
     @classmethod
@@ -460,7 +474,7 @@ class SettleTeamsTool(_DirectorTool[SettleTeamsAction]):
     @classmethod
     def act(cls):
         return lambda service, caller, action: pod_actions.settle_teams(
-            service, caller, action.org_teams, action.note, action.contracts
+            service, caller, action.teams, action.note, action.contracts
         )
 
 
@@ -558,7 +572,9 @@ class ReviewTeamTool(_DirectorTool[ReviewTeamAction]):
         "nothing itself, accepted work goes on up without another review. "
         "Work is accepted in the order it was submitted. Work that changed "
         "files which also changed in your checkout since it began is not "
-        "merged until you say in `reconciled` what you decided about them."
+        "merged until you say in `reconciled` what you decided about them. "
+        "Work that does not merge by itself is laid out for you to merge. "
+        "Of a session's work you may decide each spec in `specs`."
     )
 
     @classmethod
@@ -575,6 +591,7 @@ class ReviewTeamTool(_DirectorTool[ReviewTeamAction]):
             action.findings,
             action.needed_above,
             action.reconciled,
+            action.specs,
         )
 
 

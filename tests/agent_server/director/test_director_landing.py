@@ -15,6 +15,8 @@ from openhands.agent_server.director.models import (
     RouteMessageRequest,
     SessionTeam,
     SessionTeamInput,
+    SpecChoice,
+    TeamChoice,
 )
 from openhands.agent_server.director.org_store import session_id_of, team_id_of
 from openhands.agent_server.director.routing import USAGE_ID
@@ -505,13 +507,19 @@ async def test_a_team_both_made_something_else_of_waits_for_the_manager_above(
         service, reviewer(service, top), SettleTeamsTool, SettleTeamsAction()
     )
     unknown = await use(
-        service, asked, SettleTeamsTool, SettleTeamsAction(org_teams=["apps.web"])
+        service,
+        asked,
+        SettleTeamsTool,
+        SettleTeamsAction(teams=[TeamChoice(team="apps.web", take="org")]),
     )
     settled = await use(
         service,
         asked,
         SettleTeamsTool,
-        SettleTeamsAction(org_teams=[JOBS] if org_holds else [], note="One queue."),
+        SettleTeamsAction(
+            teams=[TeamChoice(team=JOBS, take="org")] if org_holds else [],
+            note="One queue.",
+        ),
     )
     again = await use(service, asked, SettleTeamsTool, SettleTeamsAction())
 
@@ -941,3 +949,166 @@ async def test_work_that_is_sent_back_waits_for_no_manager(
     gone = await use(service, asked, SettleTeamsTool, SettleTeamsAction())
     assert gone.is_error
     assert path_of(service, JOBS) == "services/api/workers"
+
+
+async def test_a_reviewer_writes_the_spec_that_holds(service: DirectorService):
+    top, conversation = await at_api(service)
+    await use(service, conversation, WriteSpecTool, WriteSpecAction(text="# Refunds"))
+    service.team_memory.write("services/api", "spec.md", "# Orders")
+    await use(service, conversation, SubmitReviewTool, DONE)
+    shown = await use(service, reviewer(service, top), ReviewTeamTool, accept(top))
+    assert shown.is_error and "say in `specs`" in shown.text
+
+    def decided(path: str, take: str, text: str = "") -> ReviewTeamAction:
+        return ReviewTeamAction(
+            node_id=top,
+            decision="accept",
+            reconciled="Both.",
+            specs=[
+                SpecChoice.model_validate({"path": path, "take": take, "text": text})
+            ],
+        )
+
+    # Only the specs of the work are its reviewer's to decide.
+    elsewhere = await use(
+        service, reviewer(service, top), ReviewTeamTool, decided("apps/web", "org")
+    )
+    empty = await use(
+        service, reviewer(service, top), ReviewTeamTool, decided("services/api", "text")
+    )
+    assert elsewhere.is_error and "not a directory of this work" in elsewhere.text
+    assert empty.is_error and "in `text`" in empty.text
+
+    written = await use(
+        service,
+        reviewer(service, top),
+        ReviewTeamTool,
+        decided("services/api", "text", "# Orders and refunds"),
+    )
+    await service.settled()
+
+    assert not written.is_error
+    assert service.team_memory.read(API_SPEC) == "# Orders and refunds"
+    assert service.spec_draft(api_place(service, top)) is None
+
+
+async def test_a_reviewer_keeps_the_orgs_spec(service: DirectorService):
+    top, conversation = await at_api(service)
+    await use(service, conversation, WriteSpecTool, WriteSpecAction(text="# Refunds"))
+    service.team_memory.write("services/api", "spec.md", "# Orders")
+    await use(service, conversation, SubmitReviewTool, DONE)
+    await use(service, reviewer(service, top), ReviewTeamTool, accept(top))
+
+    await use(
+        service,
+        reviewer(service, top),
+        ReviewTeamTool,
+        ReviewTeamAction(
+            node_id=top,
+            decision="accept",
+            reconciled="Theirs.",
+            specs=[SpecChoice(path="services/api", take="org")],
+        ),
+    )
+    await service.settled()
+
+    assert service.team_memory.read(API_SPEC) == "# Orders"
+    assert service.spec_draft(api_place(service, top)) is None
+
+
+async def test_a_manager_puts_a_team_it_takes_where_it_fits_the_org(
+    service: DirectorService, launcher: FakeLauncher
+):
+    top, conversation = await at_api(service)
+    sets_up_jobs(service, top)
+    org_gains(service, JOBS, "services/api/workers")
+    org_gains(service, "services.api.queue", "services/api/queue")
+    await use(service, conversation, SubmitReviewTool, DONE)
+    asked = review_manager(service, top)
+
+    def placed(**choice: str) -> SettleTeamsAction:
+        return SettleTeamsAction(
+            teams=[TeamChoice.model_validate({"team": JOBS, **choice})]
+        )
+
+    # A team goes only under one that holds its directory, and only a team
+    # taken from the session is put or called otherwise.
+    outside = await use(
+        service, asked, SettleTeamsTool, placed(take="session", under="apps.web")
+    )
+    beside = await use(
+        service,
+        asked,
+        SettleTeamsTool,
+        placed(take="session", under="services.api.queue"),
+    )
+    kept = await use(service, asked, SettleTeamsTool, placed(take="org", title="Jobs"))
+    assert outside.is_error and "is not inside" in outside.text
+    assert beside.is_error and "is not inside" in beside.text
+    assert kept.is_error and "stays as the org has it" in kept.text
+
+    settled = await use(
+        service,
+        asked,
+        SettleTeamsTool,
+        placed(take="session", under="root", title="Refund jobs"),
+    )
+    assert not settled.is_error
+    # Nothing of it is the org's before the code is accepted.
+    assert path_of(service, JOBS) == "services/api/workers"
+
+    await use(service, reviewer(service, top), ReviewTeamTool, accept(top))
+    await service.settled()
+
+    jobs = service.store.team(JOBS)
+    assert jobs is not None
+    assert (jobs.parent_id, jobs.title, jobs.boundary.path) == (
+        "root",
+        "Refund jobs",
+        "services/api/jobs",
+    )
+    assert "moved" in [event.kind for event in record_of(service, "root")]
+
+
+@pytest.mark.parametrize("rewritten", [True, False])
+async def test_a_spec_written_for_a_team_the_org_lost_is_left_to_the_team_that_holds_it(
+    service: DirectorService, rewritten: bool
+):
+    top, conversation = await at_api(service)
+    await use(service, conversation, WriteSpecTool, WriteSpecAction(text="# Refunds"))
+    service.store.remove("services.api")
+    await use(service, conversation, SubmitReviewTool, DONE)
+
+    # Its reviewer is shown it with the spec of the team that holds the
+    # directory now, and may write that one from both.
+    shown = await use(service, reviewer(service, top), ReviewTeamTool, accept(top))
+    assert shown.is_error and "a team the org no longer has" in shown.text
+    assert "# Refunds" in shown.text
+    await use(
+        service,
+        reviewer(service, top),
+        ReviewTeamTool,
+        ReviewTeamAction(
+            node_id=top,
+            decision="accept",
+            reconciled="Kept what holds.",
+            specs=[SpecChoice(path="", take="text", text="# Checkout, with refunds")]
+            if rewritten
+            else [],
+        ),
+    )
+    await service.settled()
+
+    root = service.store.team("root")
+    assert root is not None
+    assert service.team_memory.read(API_SPEC) == "# Refunds"
+    if rewritten:
+        assert service.team_memory.read("spec.md") == "# Checkout, with refunds"
+        assert root.old_specs == []
+    else:
+        # Left alone, it is an old spec the next session there is told of.
+        assert [(old.path, old.team) for old in root.old_specs] == [
+            ("services/api", "API")
+        ]
+    [left] = service.team_memory.former("services.api")
+    assert (left.ended, left.spec) == ("not_taken", "# Refunds")

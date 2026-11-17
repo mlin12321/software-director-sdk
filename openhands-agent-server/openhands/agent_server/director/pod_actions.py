@@ -21,7 +21,9 @@ from openhands.agent_server.director.models import (
     Review,
     ReviewFinding,
     SessionTeam,
+    SpecChoice,
     SplitProposal,
+    TeamChoice,
 )
 from openhands.agent_server.director.service import (
     DirectorService,
@@ -497,6 +499,7 @@ def review_team(
     findings: list[ReviewFinding],
     needed_above: str,
     reconciled: str = "",
+    specs: list[SpecChoice] | None = None,
 ) -> str:
     """Accept the work a team directly below submitted, or send it back."""
     _only(caller, "ic", "review the work of a team")
@@ -511,8 +514,9 @@ def review_team(
             raise Invalid("Say what must change before you can accept the work")
         service.request_changes(node_id, findings)
         return f"Sent back to {team.title!r} with what must change."
+    chosen = service.spec_choices(node_id, specs or [])
     service.check_accept(node_id, reconciled.strip())
-    service.accept_review(node_id, needed_above.strip(), reconciled.strip())
+    service.accept_review(node_id, needed_above.strip(), reconciled.strip(), chosen)
     return (
         f"Accepting the work of {team.title!r}. You are told if it cannot be "
         "brought into your checkout."
@@ -522,7 +526,7 @@ def review_team(
 def settle_teams(
     service: DirectorService,
     caller: Caller,
-    org_teams: list[str],
+    teams: list[TeamChoice],
     note: str,
     contracts: list[ContractsChoice] | None = None,
 ) -> str:
@@ -530,7 +534,18 @@ def settle_teams(
     _only(caller, "manager", "settle the sub-teams of a session")
     return service.settle_teams(
         caller.node.id,
-        [team.strip().split("@")[0] for team in org_teams],
+        [
+            choice.model_copy(
+                update={
+                    "team": choice.team.strip().split("@")[0],
+                    "under": choice.under.strip().split("@")[0]
+                    if choice.under
+                    else None,
+                    "title": choice.title.strip() if choice.title else None,
+                }
+            )
+            for choice in teams
+        ],
         note.strip(),
         contracts,
     )
