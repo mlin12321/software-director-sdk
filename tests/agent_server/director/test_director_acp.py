@@ -40,11 +40,11 @@ from openhands.agent_server.director.service import (
 )
 from openhands.agent_server.director.tools import (
     ApproveTeamsTool,
-    MsgManagerTool,
+    ProposeTeamsTool,
     SubmitReviewTool,
 )
 from openhands.agent_server.director.tools.definition import (
-    MsgManagerAction,
+    ProposeTeamsAction,
     SubmitReviewAction,
 )
 from openhands.sdk.agent import ACPAgent
@@ -95,12 +95,12 @@ def starts_of(launcher: FakeLauncher) -> dict[str | None, DerivedStart]:
     return {str(start.conversation_id): start for start in launcher.derived}
 
 
-def split(*children: SplitChild) -> MsgManagerAction:
+def split(*children: SplitChild) -> ProposeTeamsAction:
     return proposing(list(children))
 
 
 async def carry_out(service: DirectorService, *children: SplitChild) -> None:
-    await use(service, ic(service), MsgManagerTool, split(*children))
+    await use(service, ic(service), ProposeTeamsTool, split(*children))
     await use(service, manager(service), ApproveTeamsTool, APPROVE)
     await tasked(service)
 
@@ -532,7 +532,7 @@ async def test_a_sub_team_runs_on_another_agent_profile_when_the_org_allows_it(
     service = await started(repo, launcher)
     codex = SplitChild(title="API", path="svc/api", task="Serve", agent_profile="codex")
 
-    refused = await use(service, ic(service), MsgManagerTool, split(codex))
+    refused = await use(service, ic(service), ProposeTeamsTool, split(codex))
     service.update_settings(DirectorSettingsUpdate(allowed_profiles=["codex"]))
     await carry_out(service, codex, SplitChild(title="Web", path="web", task="Pages"))
 
@@ -564,7 +564,7 @@ async def test_the_profiles_a_sub_team_may_run_on_are_kept_and_told_to_the_ic(
     other = await use(
         service,
         ic(service),
-        MsgManagerTool,
+        ProposeTeamsTool,
         split(SplitChild(title="A", path="a", task="x", agent_profile="claude")),
     )
 

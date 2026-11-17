@@ -12,8 +12,8 @@ from openhands.agent_server.director.models import DirectorSettingsUpdate, Split
 from openhands.agent_server.director.service import DirectorService
 from openhands.agent_server.director.tools import (
     ApproveTeamsTool,
-    MsgManagerTool,
     MsgTeamTool,
+    ProposeTeamsTool,
     PruneTeamTool,
     RaiseEscalationTool,
     ReviewTeamTool,
@@ -295,7 +295,7 @@ async def test_a_stopped_team_rests_with_all_below_it_and_is_sent_nothing(
     service: DirectorService, launcher: FakeLauncher
 ):
     db = [SplitChild(title="DB", path="services/api/db", task="Own the schema")]
-    await use(service, ic(service, API), MsgManagerTool, proposing(db))
+    await use(service, ic(service, API), ProposeTeamsTool, proposing(db))
     await use(service, manager(service, API), ApproveTeamsTool, APPROVE)
     await tasked(service)
     api_ic, db_ic = str(ic(service, API)), str(ic(service, "services.api.db"))
@@ -367,7 +367,7 @@ async def test_teams_that_take_a_stopped_teams_place_replace_it(
     await service.settled()
     services = [SplitChild(title="Services", path="services", task="Serve")]
 
-    await use(service, ic(service), MsgManagerTool, proposing(services, keep=["Web"]))
+    await use(service, ic(service), ProposeTeamsTool, proposing(services, keep=["Web"]))
     await use(service, manager(service), ApproveTeamsTool, APPROVE)
     await tasked(service)
     await service.settled()
@@ -436,7 +436,7 @@ async def test_a_team_set_up_and_given_no_task_is_told_to_the_ic_above(
     repo: Path, launcher: FakeLauncher, clock: Clock
 ):
     service = await started(repo, launcher, clock=clock, stall_poll=3600)
-    await use(service, ic(service), MsgManagerTool, SPLIT)
+    await use(service, ic(service), ProposeTeamsTool, SPLIT)
     await use(service, manager(service), ApproveTeamsTool, APPROVE)
     service.tell_ic(node(service, WEB).id, "Begin.")
     await service.settled()

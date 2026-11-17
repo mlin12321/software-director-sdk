@@ -56,7 +56,7 @@ If you are the IC
   is the Division Lead IC) and you are woken with the result.
 - If you cannot go on, raise an escalation. That shows your team as blocked.
 - Split only by concern. Propose sub-teams to your Manager with
-  `msg_manager`, as a ```teams block of YAML. Each gets a folder inside
+  `propose_teams`. Each gets a folder inside
   yours, an instruction, and the contracts it must keep; a `reason` is
   optional. A sub-team is told nothing else of your team. You keep whatever
   no sub-team takes.
@@ -325,8 +325,8 @@ def _contracts_now(contracts_replaced: bool) -> str:
         )
     return (
         "- The contracts between your sub-teams read as before. If they name "
-        "teams that are gone, restate them: the `contracts` of a ```teams "
-        "block that replaces teams take the place of the old text."
+        "teams that are gone, restate them: the `contracts` of a proposal "
+        "that replaces teams take the place of the old text."
     )
 
 

@@ -15,12 +15,12 @@ from openhands.agent_server.director.models import (
 from openhands.agent_server.director.service import DirectorService
 from openhands.agent_server.director.tools import (
     ApproveTeamsTool,
-    MsgManagerTool,
+    ProposeTeamsTool,
     ReviewTeamTool,
     SubmitReviewTool,
 )
 from openhands.agent_server.director.tools.definition import (
-    MsgManagerAction,
+    ProposeTeamsAction,
     ReviewTeamAction,
     SubmitReviewAction,
 )
@@ -70,7 +70,7 @@ async def service(repo: Path, launcher: FakeLauncher) -> AsyncIterator[DirectorS
     await service.aclose()
 
 
-def split(below: str, count: int) -> MsgManagerAction:
+def split(below: str, count: int) -> ProposeTeamsAction:
     return proposing(
         [
             SplitChild(title=f"{below} {n}", path=f"{below}/t{n}", task="Work")
@@ -106,13 +106,13 @@ async def test_a_split_that_makes_too_many_teams_is_refused_and_says_what_fits(
 ):
     service.update_settings(DirectorSettingsUpdate(max_teams=4))
 
-    refused = await use(service, ic(service), MsgManagerTool, split("a", 4))
+    refused = await use(service, ic(service), ProposeTeamsTool, split("a", 4))
 
     assert refused.is_error and node(service, "root").pending_split is None
     assert "at most 4 teams" in refused.text and "'Checkout' is 1" in refused.text
     assert "At most 3 more sub-teams fit" in refused.text
 
-    fits = await use(service, ic(service), MsgManagerTool, split("a", 3))
+    fits = await use(service, ic(service), ProposeTeamsTool, split("a", 3))
     await use(service, manager(service), ApproveTeamsTool, APPROVE)
     await tasked(service)
 
@@ -126,7 +126,7 @@ async def test_the_teams_above_count_too(service: DirectorService):
     refused = await use(
         service,
         ic(service, "services.api"),
-        MsgManagerTool,
+        ProposeTeamsTool,
         split("services/api", 2),
     )
 
@@ -141,7 +141,7 @@ async def test_teams_cannot_go_deeper_than_the_limit(service: DirectorService):
     refused = await use(
         service,
         ic(service, "services.api"),
-        MsgManagerTool,
+        ProposeTeamsTool,
         split("services/api", 1),
     )
 
@@ -159,14 +159,14 @@ async def test_a_lowered_limit_removes_nothing_and_stops_the_next_split(
 
     assert (state.teams, state.depth) == (3, 2)
     assert len(service.store) == 3
-    refused = await use(service, ic(service), MsgManagerTool, split("a", 1))
+    refused = await use(service, ic(service), ProposeTeamsTool, split("a", 1))
     assert refused.is_error
 
 
 async def test_sub_teams_approved_after_the_limits_were_lowered_go_back_to_the_ic(
     service: DirectorService, launcher: FakeLauncher
 ):
-    await use(service, ic(service), MsgManagerTool, split("a", 3))
+    await use(service, ic(service), ProposeTeamsTool, split("a", 3))
     service.update_settings(DirectorSettingsUpdate(max_teams=2))
 
     told_the_manager = launcher.messages_to(manager(service))
@@ -269,7 +269,7 @@ async def test_teams_wait_for_a_free_run_and_start_when_one_ends(
     service = await started(repo, launcher, run_limit_retry=3600)
     await woken(service)
     launcher.full_for = 1_000_000
-    await use(service, ic(service), MsgManagerTool, split("a", 2))
+    await use(service, ic(service), ProposeTeamsTool, split("a", 2))
     await use(service, manager(service), ApproveTeamsTool, APPROVE)
     top = node(service, "root").id
     for team in service.store.below(top):

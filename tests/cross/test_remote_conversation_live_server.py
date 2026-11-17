@@ -3604,18 +3604,25 @@ def _scripted_org_llm(
             return tool_call("submit_review", {"summary": "Shown, not served."})
         if last.role == "user" and "You are the IC of the team 'Checkout'" in text:
             return tool_call(
-                "msg_manager",
+                "propose_teams",
                 {
-                    "text": "Two teams can build this side by side.\n\n"
-                    "```teams\n"
-                    "contracts: POST /checkout returns an order id\n"
-                    "teams:\n"
-                    "  - {name: API, path: services/api, instruction: Serve it}\n"
-                    "  - {name: Web, path: apps/web, instruction: Show it}\n"
-                    "```"
+                    "text": "Two teams can build this side by side.",
+                    "contracts": "POST /checkout returns an order id",
+                    "teams": [
+                        {
+                            "name": "API",
+                            "path": "services/api",
+                            "instruction": "Serve it",
+                        },
+                        {"name": "Web", "path": "apps/web", "instruction": "Show it"},
+                    ],
                 },
             )
-        if last.role == "user" and "Your IC writes:" in text and "```teams" in text:
+        if (
+            last.role == "user"
+            and "Your IC writes:" in text
+            and "Proposed sub-teams:" in text
+        ):
             return tool_call("approve_teams", {})
         if last.role == "user" and "The IC of team 'API'" in text:
             return tool_call(
@@ -3729,7 +3736,7 @@ def test_director_runs_an_org_whose_root_splits_into_sub_teams(
             top["id"],
         )
         [proposal] = thread["messages"]
-        assert proposal["sender"] == "ic" and "```teams" in proposal["text"]
+        assert proposal["sender"] == "ic" and "Proposed sub-teams:" in proposal["text"]
         # A team starts with its IC; its Manager came with the proposal.
         [first] = opened["session"]["teams"][0]["agents"]
         assert (first["role"], first["conversation_id"]) == (

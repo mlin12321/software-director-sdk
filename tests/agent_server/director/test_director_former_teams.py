@@ -19,11 +19,13 @@ from openhands.agent_server.director.service import (
     DirectorService,
     hand_over_of,
 )
+from openhands.agent_server.director.split import ProposedTeam
 from openhands.agent_server.director.tools import (
     ApproveTeamsTool,
     HandOverTool,
     MsgManagerTool,
     MsgTeamTool,
+    ProposeTeamsTool,
     PruneTeamTool,
     ReadTeamContextTool,
     ReportTool,
@@ -34,6 +36,7 @@ from openhands.agent_server.director.tools.definition import (
     HandOverAction,
     MsgManagerAction,
     MsgTeamAction,
+    ProposeTeamsAction,
     PruneTeamAction,
     ReadTeamContextAction,
     ReportAction,
@@ -84,7 +87,7 @@ async def service(repo: Path, launcher: FakeLauncher):
     """An org of API and Web. API has a spec, two reports and messages with
     its Manager and with the IC above."""
     service = await started(repo, launcher)
-    await use(service, ic(service), MsgManagerTool, TWO)
+    await use(service, ic(service), ProposeTeamsTool, TWO)
     await use(service, manager(service), ApproveTeamsTool, APPROVE)
     await tasked(service)
     api_ic = ic(service, API)
@@ -102,7 +105,7 @@ async def replace(
     service: DirectorService, *teams: SplitChild, keep: list[str], contracts: str = ""
 ):
     proposal = proposing(list(teams), contracts, keep)
-    await use(service, ic(service), MsgManagerTool, proposal)
+    await use(service, ic(service), ProposeTeamsTool, proposal)
     return await use(service, manager(service), ApproveTeamsTool, APPROVE)
 
 
@@ -297,7 +300,7 @@ async def test_sub_teams_of_a_stopped_team_that_is_replaced_go_on(
     service: DirectorService, launcher: FakeLauncher
 ):
     db = SplitChild(title="DB", path="services/api/db", task="Own the schema")
-    await use(service, ic(service, API), MsgManagerTool, proposing([db]))
+    await use(service, ic(service, API), ProposeTeamsTool, proposing([db]))
     await use(service, manager(service, API), ApproveTeamsTool, APPROVE)
     await tasked(service)
     db_ic = str(ic(service, "services.api.db"))
@@ -324,10 +327,12 @@ async def test_what_was_said_to_a_manager_is_archived_with_its_team(
     await use(
         service,
         ic(service, API),
-        MsgManagerTool,
-        MsgManagerAction(
-            text="Splitting.\n\n```teams\nteams:\n"
-            "  - {name: DB, path: services/api/db, instruction: Schema}\n```"
+        ProposeTeamsTool,
+        ProposeTeamsAction(
+            teams=[
+                ProposedTeam(name="DB", path="services/api/db", instruction="Schema")
+            ],
+            text="Splitting.",
         ),
     )
 
@@ -729,7 +734,7 @@ async def test_a_server_that_ends_as_a_hand_over_starts_starts_it_at_its_next_st
     repo: Path, service: DirectorService, launcher: FakeLauncher
 ):
     ended = end_server_at(launcher, "derived")
-    await use(service, ic(service), MsgManagerTool, proposing([ORDERS], "", ["Web"]))
+    await use(service, ic(service), ProposeTeamsTool, proposing([ORDERS], "", ["Web"]))
     with suppress(ServerEnded):
         await use(service, manager(service), ApproveTeamsTool, APPROVE)
     await ended.wait()
@@ -781,7 +786,7 @@ HTTP = SplitChild(title="HTTP", path="services/api/http", task="Serve the routes
 
 async def api_in_hand_over(service: DirectorService, launcher: FakeLauncher) -> str:
     """Have API's IC in hand-over mode, at work on a team its Manager pruned."""
-    await use(service, ic(service, API), MsgManagerTool, proposing([DB, HTTP]))
+    await use(service, ic(service, API), ProposeTeamsTool, proposing([DB, HTTP]))
     await use(service, manager(service, API), ApproveTeamsTool, APPROVE)
     await use(
         service,

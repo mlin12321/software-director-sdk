@@ -8,7 +8,7 @@ from openhands.agent_server.director.models import DirectorSettingsUpdate, Split
 from openhands.agent_server.director.service import DirectorService
 from openhands.agent_server.director.tools import (
     ApproveTeamsTool,
-    MsgManagerTool,
+    ProposeTeamsTool,
     PruneTeamTool,
     RaiseEscalationTool,
     ReadTeamContextTool,
@@ -196,7 +196,7 @@ async def test_an_escalation_passed_up_counts_for_the_team_it_came_through(
     service: DirectorService, launcher: FakeLauncher
 ):
     db = [SplitChild(title="DB", path="services/api/db", task="Own the schema")]
-    await use(service, ic(service, API), MsgManagerTool, proposing(db))
+    await use(service, ic(service, API), ProposeTeamsTool, proposing(db))
     await use(service, manager(service, API), ApproveTeamsTool, APPROVE)
     await tasked(service)
     await escalates(service, "services.api.db", times=3)
@@ -255,7 +255,7 @@ async def test_work_that_goes_up_without_a_review_is_not_counted(
 ):
     service.update_settings(DirectorSettingsUpdate(manager_check_accepted_reviews=1))
     db = [SplitChild(title="DB", path="services/api/db", task="Own the schema")]
-    await use(service, ic(service, API), MsgManagerTool, proposing(db))
+    await use(service, ic(service, API), ProposeTeamsTool, proposing(db))
     await use(service, manager(service, API), ApproveTeamsTool, APPROVE)
     await tasked(service)
     commit(repo, "services/api/db/schema.sql", "create table orders ();\n")
@@ -283,7 +283,7 @@ async def test_a_new_team_in_a_removed_teams_place_starts_from_nothing(
     )
     await service.settled()
     again = [SplitChild(title="Orders", path="services/api", task="Take orders")]
-    await use(service, ic(service), MsgManagerTool, proposing(again, keep=["Web"]))
+    await use(service, ic(service), ProposeTeamsTool, proposing(again, keep=["Web"]))
     await use(service, manager(service), ApproveTeamsTool, APPROVE)
     await tasked(service)
     await service.settled()

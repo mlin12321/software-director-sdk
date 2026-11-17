@@ -6,7 +6,6 @@ from pathlib import Path
 from uuid import UUID
 
 import pytest
-import yaml
 
 from openhands.agent_server.conversation_service import (
     AgentAdapter,
@@ -39,6 +38,7 @@ from openhands.agent_server.director.org_store import (
     session_team_id,
 )
 from openhands.agent_server.director.service import DirectorService
+from openhands.agent_server.director.split import ProposedTeam
 from openhands.agent_server.event_service import (
     ActionGuard,
     ConversationRunLimitExceeded,
@@ -132,31 +132,21 @@ def make_escalation(
     )
 
 
-def teams_block(
-    children: list[SplitChild], contracts: str = "", keep: list[str] | None = None
-) -> str:
-    """The block an IC proposes ``children`` in, as it writes it."""
-    teams = []
-    for child in children:
-        team: dict[str, str | list[str]] = {
-            "name": child.title,
-            "path": child.path,
-            "instruction": child.task,
-        }
-        if child.agent_profile:
-            team["model"] = child.agent_profile
-        if child.writable:
-            team["writable"] = child.writable
-        if child.readonly:
-            team["readonly"] = child.readonly
-        if child.isolation != "shared":
-            team["isolation"] = child.isolation
-        teams.append(team)
-    written: dict[str, object] = {"contracts": contracts} if contracts else {}
-    if keep:
-        written["keep"] = keep
-    written["teams"] = teams
-    return f"```teams\n{yaml.safe_dump(written, sort_keys=False)}```"
+def as_proposed(children: list[SplitChild]) -> list[ProposedTeam]:
+    """``children`` as an IC names them in ``propose_teams``."""
+    return [
+        ProposedTeam(
+            name=child.title,
+            path=child.path,
+            instruction=child.task,
+            reason=child.reason,
+            model=child.agent_profile,
+            writable=child.writable,
+            readonly=child.readonly,
+            isolation=child.isolation,
+        )
+        for child in children
+    ]
 
 
 def small_tree() -> list[OrgNodeInput]:

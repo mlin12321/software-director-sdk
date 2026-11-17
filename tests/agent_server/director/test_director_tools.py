@@ -9,6 +9,7 @@ from typing import Any, Literal, cast
 from uuid import UUID, uuid4
 
 import pytest
+from pydantic import ValidationError
 
 from openhands.agent_server.director import agent_actions
 from openhands.agent_server.director.models import (
@@ -32,6 +33,7 @@ from openhands.agent_server.director.tools import (
     DeclineTeamsTool,
     MsgIcTool,
     MsgManagerTool,
+    ProposeTeamsTool,
     PruneTeamTool,
     RaiseEscalationTool,
     ReadTeamContextTool,
@@ -46,6 +48,7 @@ from openhands.agent_server.director.tools.definition import (
     DeclineTeamsAction,
     MsgIcAction,
     MsgManagerAction,
+    ProposeTeamsAction,
     PruneTeamAction,
     RaiseEscalationAction,
     ReadTeamContextAction,
@@ -63,11 +66,11 @@ from openhands.sdk.conversation.state import (
 from openhands.sdk.tool.tool import Action, ToolDefinition
 from tests.agent_server.director.conftest import (
     FakeLauncher,
+    as_proposed,
     record_of,
     root_conversation,
     run_git,
     tasked,
-    teams_block,
 )
 
 
@@ -153,10 +156,14 @@ async def woken(service: DirectorService, node_id: str = "root") -> str:
 
 
 def proposing(
-    children: list[SplitChild], contracts: str = "", keep: list[str] | None = None
-) -> MsgManagerAction:
-    block = teams_block(children, contracts, keep)
-    return MsgManagerAction(text=f"I propose these sub-teams.\n\n{block}")
+    children: list[SplitChild],
+    contracts: str = "",
+    keep: list[str] | None = None,
+    text: str = "",
+) -> ProposeTeamsAction:
+    return ProposeTeamsAction(
+        teams=as_proposed(children), contracts=contracts, keep=keep or [], text=text
+    )
 
 
 SPLIT = proposing(
@@ -175,7 +182,7 @@ APPROVE = ApproveTeamsAction()
 
 
 async def split_root(service: DirectorService) -> None:
-    await use(service, ic(service), MsgManagerTool, SPLIT)
+    await use(service, ic(service), ProposeTeamsTool, SPLIT)
     await use(service, manager(service), ApproveTeamsTool, APPROVE)
     await tasked(service)
 
@@ -258,7 +265,7 @@ async def test_the_ic_writes_the_spec_its_sub_teams_inherit(service: DirectorSer
 async def test_proposed_sub_teams_wait_for_the_manager(
     service: DirectorService, launcher: FakeLauncher
 ):
-    observation = await use(service, ic(service), MsgManagerTool, SPLIT)
+    observation = await use(service, ic(service), ProposeTeamsTool, SPLIT)
 
     assert not observation.is_error
     proposal = node(service, "root").pending_split
@@ -277,9 +284,9 @@ async def test_proposed_sub_teams_wait_for_the_manager(
 async def test_only_the_ic_proposes_and_only_the_manager_approves(
     service: DirectorService,
 ):
-    by_manager = await use(service, await woken(service), MsgManagerTool, SPLIT)
+    by_manager = await use(service, await woken(service), ProposeTeamsTool, SPLIT)
     nothing_yet = await use(service, await woken(service), ApproveTeamsTool, APPROVE)
-    await use(service, ic(service), MsgManagerTool, SPLIT)
+    await use(service, ic(service), ProposeTeamsTool, SPLIT)
     by_ic = await use(service, ic(service), ApproveTeamsTool, APPROVE)
 
     assert by_manager.is_error and by_ic.is_error
@@ -318,7 +325,7 @@ async def test_sub_teams_that_fail_a_check_never_reach_the_manager(
 ):
     before = launcher.messages_to(manager(service))
 
-    observation = await use(service, ic(service), MsgManagerTool, proposing(children))
+    observation = await use(service, ic(service), ProposeTeamsTool, proposing(children))
 
     assert observation.is_error and refusal in observation.text
     assert node(service, "root").pending_split is None
@@ -326,25 +333,62 @@ async def test_sub_teams_that_fail_a_check_never_reach_the_manager(
     assert service.threads_of(node(service, "root")) == []
 
 
-async def test_a_block_that_cannot_be_read_is_refused_with_what_is_wrong(
-    service: DirectorService,
+@pytest.mark.parametrize(
+    ("written", "problem"),
+    [
+        pytest.param({"teams": []}, "teams", id="no teams"),
+        pytest.param(
+            {"teams": [{"name": "API", "path": "a"}]},
+            "instruction",
+            id="no instruction",
+        ),
+        pytest.param(
+            {
+                "teams": [
+                    {"name": "API", "path": "a", "instruction": "x", "manager": "y"}
+                ]
+            },
+            "manager",
+            id="a field teams do not have",
+        ),
+        pytest.param(
+            {
+                "teams": [
+                    {
+                        "name": "API",
+                        "path": "a",
+                        "instruction": "x",
+                        "isolation": "container",
+                    }
+                ]
+            },
+            "isolation",
+            id="an isolation there is not",
+        ),
+    ],
+)
+def test_a_proposal_the_schema_does_not_allow_is_refused(
+    written: dict[str, object], problem: str
 ):
-    observation = await use(
-        service,
-        ic(service),
-        MsgManagerTool,
-        MsgManagerAction(text="```teams\nteams:\n  - name: API\n```"),
+    with pytest.raises(ValidationError, match=problem):
+        ProposeTeamsAction.model_validate(written)
+
+
+async def test_a_team_without_sub_teams_tells_its_manager_only_a_proposal(
+    service: DirectorService, launcher: FakeLauncher
+):
+    said = await use(
+        service, ic(service), MsgManagerTool, MsgManagerAction(text="Hello.")
     )
 
-    assert observation.is_error
-    assert "teams.0.path" in observation.text
-    assert "teams.0.instruction" in observation.text
+    assert said.is_error and "propose_teams" in said.text
+    assert launcher.messages_to(manager(service)) == []
 
 
 async def test_a_message_from_the_manager_leaves_the_proposal_waiting(
     service: DirectorService, launcher: FakeLauncher
 ):
-    await use(service, ic(service), MsgManagerTool, SPLIT)
+    await use(service, ic(service), ProposeTeamsTool, SPLIT)
 
     answer = await use(
         service,
@@ -372,7 +416,7 @@ DECLINE = DeclineTeamsAction(reason="Web and API share a schema; keep them toget
 async def test_a_manager_declines_proposed_teams_and_the_reason_is_kept(
     service: DirectorService, launcher: FakeLauncher
 ):
-    await use(service, ic(service), MsgManagerTool, SPLIT)
+    await use(service, ic(service), ProposeTeamsTool, SPLIT)
 
     declined = await use(service, manager(service), DeclineTeamsTool, DECLINE)
 
@@ -398,10 +442,10 @@ async def test_a_manager_declines_proposed_teams_and_the_reason_is_kept(
 async def test_a_proposal_for_a_directory_says_what_was_declined_for_it_before(
     service: DirectorService, launcher: FakeLauncher
 ):
-    await use(service, ic(service), MsgManagerTool, SPLIT)
+    await use(service, ic(service), ProposeTeamsTool, SPLIT)
     await use(service, manager(service), DeclineTeamsTool, DECLINE)
 
-    await use(service, ic(service), MsgManagerTool, SPLIT)
+    await use(service, ic(service), ProposeTeamsTool, SPLIT)
 
     told = launcher.messages_to(manager(service))[-1]
     assert (
@@ -415,7 +459,7 @@ async def test_a_proposal_for_a_directory_says_what_was_declined_for_it_before(
 async def test_only_a_manager_with_a_waiting_proposal_declines_and_says_why(
     service: DirectorService,
 ):
-    await use(service, ic(service), MsgManagerTool, SPLIT)
+    await use(service, ic(service), ProposeTeamsTool, SPLIT)
     by_ic = await use(service, ic(service), DeclineTeamsTool, DECLINE)
     no_reason = await use(
         service, manager(service), DeclineTeamsTool, DeclineTeamsAction(reason=" ")
@@ -432,12 +476,12 @@ async def test_only_a_manager_with_a_waiting_proposal_declines_and_says_why(
 async def test_a_later_proposal_takes_the_place_of_the_one_that_waits(
     service: DirectorService,
 ):
-    await use(service, ic(service), MsgManagerTool, SPLIT)
+    await use(service, ic(service), ProposeTeamsTool, SPLIT)
 
     await use(
         service,
         ic(service),
-        MsgManagerTool,
+        ProposeTeamsTool,
         proposing([SplitChild(title="Docs", path="docs", task="Write the docs")]),
     )
     await use(service, manager(service), ApproveTeamsTool, APPROVE)
@@ -491,7 +535,7 @@ async def test_a_manager_writes_to_its_own_ic_and_to_the_ics_directly_below(
     await use(
         service,
         ic(service, api),
-        MsgManagerTool,
+        ProposeTeamsTool,
         proposing([SplitChild(title="DB", path="services/api/db", task="Schema")]),
     )
     await use(service, manager(service, api), ApproveTeamsTool, APPROVE)
@@ -546,7 +590,10 @@ async def test_each_agent_sees_the_threads_it_takes_part_in(service: DirectorSer
         ]
 
     top = node(service, "root").id
-    own = (top, top, [("ic", SPLIT.text), ("ic", "API is slow.")])
+    [proposal, said] = service.threads_of(node(service, "root"))[0].messages
+    assert proposal.text.startswith("I propose these sub-teams.\n\nProposed sub-teams:")
+    own = (top, top, [("ic", proposal.text), ("ic", said.text)])
+    assert said.text == "API is slow."
     down = (top, node(service, api).id, [("manager", "Status?")])
     assert threads("root") == [own, down]
     assert threads(api) == [down]
@@ -598,7 +645,7 @@ async def test_a_sub_team_that_cannot_start_is_shown_as_blocked(
 ):
     root_ic = ic(service)
     assert root_ic is not None
-    await use(service, root_ic, MsgManagerTool, SPLIT)
+    await use(service, root_ic, ProposeTeamsTool, SPLIT)
     # The IC's conversation is deleted before its Manager approves.
     del launcher.known[UUID(root_ic)]
 
@@ -822,7 +869,7 @@ async def test_a_pruned_team_takes_the_teams_below_it_along(
     await use(
         service,
         ic(service, api),
-        MsgManagerTool,
+        ProposeTeamsTool,
         proposing(
             [SplitChild(title="DB", path="services/api/db", task="Own the schema")]
         ),

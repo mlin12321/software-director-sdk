@@ -138,6 +138,7 @@ TOOLS_OF: dict[AgentRole, tuple[str, ...]] = {
         *_TOOLS_OF_BOTH,
         "write_spec",
         "msg_manager",
+        "propose_teams",
         "msg_team",
         "hand_over",
         "stop_team",

@@ -18,15 +18,16 @@ from openhands.agent_server.director.prompts import (
     track_records,
 )
 from openhands.agent_server.director.service import DirectorService
+from openhands.agent_server.director.split import ProposedTeam
 from openhands.agent_server.director.tools import (
     ApproveTeamsTool,
-    MsgManagerTool,
+    ProposeTeamsTool,
     PruneTeamTool,
     ReviewTeamTool,
     SubmitReviewTool,
 )
 from openhands.agent_server.director.tools.definition import (
-    MsgManagerAction,
+    ProposeTeamsAction,
     PruneTeamAction,
     ReviewTeamAction,
 )
@@ -194,18 +195,18 @@ async def test_a_manager_may_prune_a_team_with_nothing_against_it(
     assert [team_id_of(team) for team in sub_teams(service)] == [WEB]
 
 
-ORDERS = """\
-One team for the orders, apart from the pages.
-
-```teams
-reason: Orders and pages change for different reasons.
-keep: [Web]
-teams:
-  - name: Orders
-    path: services/api
-    instruction: Keep the orders.
-    reason: The order rules are a concern of their own.
-```"""
+ORDERS = ProposeTeamsAction(
+    text="Orders and pages change for different reasons.",
+    keep=["Web"],
+    teams=[
+        ProposedTeam(
+            name="Orders",
+            path="services/api",
+            instruction="Keep the orders.",
+            reason="The order rules are a concern of their own.",
+        )
+    ],
+)
 
 
 async def test_a_manager_is_told_what_the_runtime_knows_of_proposed_teams(
@@ -217,7 +218,7 @@ async def test_a_manager_is_told_what_the_runtime_knows_of_proposed_teams(
     await use(service, manager(service), PruneTeamTool, PRUNE)
     await service.settled()
 
-    await use(service, ic(service), MsgManagerTool, MsgManagerAction(text=ORDERS))
+    await use(service, ic(service), ProposeTeamsTool, ORDERS)
 
     told = launcher.messages_to(manager(service))[-1]
     assert "What the runtime knows of them:" in told
@@ -254,7 +255,7 @@ async def test_directories_that_were_changed_together_are_pointed_out(
     for number in range(3):
         both(repo, number)
 
-    await use(service, ic(service), MsgManagerTool, SPLIT)
+    await use(service, ic(service), ProposeTeamsTool, SPLIT)
 
     told = launcher.messages_to(manager(service))[-1]
     # Fewer than three says nothing: a first commit holds everything.
@@ -268,7 +269,7 @@ async def test_directories_that_were_changed_together_are_pointed_out(
 async def test_what_an_ic_proposed_and_what_was_approved_is_kept(
     service: DirectorService,
 ):
-    await use(service, ic(service), MsgManagerTool, MsgManagerAction(text=ORDERS))
+    await use(service, ic(service), ProposeTeamsTool, ORDERS)
     await use(service, manager(service), ApproveTeamsTool, APPROVE)
     await service.settled()
 
@@ -410,7 +411,7 @@ async def test_a_manager_is_told_how_often_teams_replaced_together_needed_each_o
         SplitChild(title="Apps", path="apps", task="Show the shop"),
     ]
 
-    await use(service, ic(service), MsgManagerTool, proposing(redrawn))
+    await use(service, ic(service), ProposeTeamsTool, proposing(redrawn))
 
     told = launcher.messages_to(manager(service))[-1]
     assert (

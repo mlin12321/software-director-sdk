@@ -17,7 +17,7 @@ from openhands.agent_server.director.models import (
 from openhands.agent_server.director.service import DirectorService
 from openhands.agent_server.director.tools import (
     ApproveTeamsTool,
-    MsgManagerTool,
+    ProposeTeamsTool,
     RaiseEscalationTool,
     ReviewTeamTool,
     SubmitReviewTool,
@@ -402,7 +402,7 @@ async def split_api(service: DirectorService) -> None:
     await use(
         service,
         ic(service, "services.api"),
-        MsgManagerTool,
+        ProposeTeamsTool,
         proposing(
             [
                 SplitChild(

@@ -1,4 +1,4 @@
-"""Reads and checks the sub-teams an IC proposes in a message to its Manager.
+"""Checks the sub-teams an IC proposes to its Manager.
 
 Sub-teams own directories, so that two boundaries can be told apart by
 comparing paths: whether two arbitrary sets of globs overlap cannot be
@@ -6,13 +6,12 @@ decided reliably.
 """
 
 import json
-import re
 from collections.abc import Mapping, Sequence
 from pathlib import PurePosixPath
 from typing import NamedTuple
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field
 
 from openhands.agent_server.director.git_store import team_key
 from openhands.agent_server.director.models import (
@@ -31,11 +30,6 @@ from openhands.agent_server.director.org_store import (
 
 
 MAX_SPLIT_CHILDREN = 16
-# The fence a message's team proposal is written in.
-TEAMS_FENCE = "teams"
-_TEAMS_BLOCK = re.compile(
-    rf"^```{TEAMS_FENCE}[ \t]*\n(.*?)^```[ \t]*$", re.DOTALL | re.MULTILINE
-)
 
 
 def _size(store: OrgStore, team_id: str) -> int:
@@ -88,30 +82,33 @@ def check_limits(
             )
 
 
-class _Team(BaseModel):
+class ProposedTeam(BaseModel):
+    """One sub-team an IC proposes."""
+
     model_config = ConfigDict(extra="forbid")
 
     name: str = Field(min_length=1)
-    path: str
-    instruction: str = Field(min_length=1)
-    reason: str = ""
-    model: str | None = None
-    writable: list[str] = Field(default_factory=list)
-    readonly: list[str] = Field(default_factory=list)
+    path: str = Field(description="The folder the team owns, strictly inside your own.")
+    instruction: str = Field(min_length=1, description="What the team is to deliver.")
+    reason: str = Field(
+        default="", description="Why it is a team of its own, for your Manager."
+    )
+    model: str | None = Field(
+        default=None,
+        description="One of the profiles read_team_context lists. Optional.",
+    )
+    writable: list[str] = Field(
+        default_factory=list,
+        description="Globs the team may write; all of `path` when left out.",
+    )
+    readonly: list[str] = Field(
+        default_factory=list, description="Globs the team may only read."
+    )
     isolation: IsolationMode = "shared"
 
 
-class _Teams(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    teams: list[_Team] = Field(min_length=1)
-    keep: list[str] = Field(default_factory=list)
-    contracts: str = ""
-    reason: str = ""
-
-
 class Proposed(NamedTuple):
-    """The sub-teams a message proposes, as written."""
+    """The sub-teams an IC proposes, as written."""
 
     children: list[SplitChild]
     contracts: str
@@ -122,36 +119,10 @@ class Proposed(NamedTuple):
     """Why the proposer wants this make-up of teams, when it says."""
 
 
-def proposed_teams(text: str) -> Proposed | None:
-    """The sub-teams a message proposes in its ``teams`` block, if it has one.
-
-    Raises:
-        OrgStoreError: The message has more than one block, or the block is
-            not the YAML a team proposal is written in.
-    """
-    blocks = _TEAMS_BLOCK.findall(text)
-    if not blocks:
-        return None
-    if len(blocks) > 1:
-        raise OrgStoreError(
-            f"A message can propose sub-teams once: it has {len(blocks)} "
-            f"```{TEAMS_FENCE} blocks"
-        )
-    try:
-        written = _Teams.model_validate(yaml.safe_load(blocks[0]))
-    except yaml.YAMLError as error:
-        raise OrgStoreError(
-            f"The ```{TEAMS_FENCE} block is not YAML: {error}"
-        ) from error
-    except ValidationError as error:
-        problems = "; ".join(
-            f"{'.'.join(str(part) for part in problem['loc']) or 'the block'}: "
-            f"{problem['msg']}"
-            for problem in error.errors()
-        )
-        raise OrgStoreError(
-            f"The ```{TEAMS_FENCE} block does not describe sub-teams: {problems}"
-        ) from error
+def proposed_teams(
+    teams: Sequence[ProposedTeam], contracts: str, keep: Sequence[str], reason: str
+) -> Proposed:
+    """What a call of ``propose_teams`` proposes."""
     return Proposed(
         [
             SplitChild(
@@ -164,12 +135,55 @@ def proposed_teams(text: str) -> Proposed | None:
                 readonly=team.readonly,
                 isolation=team.isolation,
             )
-            for team in written.teams
+            for team in teams
         ],
-        written.contracts,
-        written.keep,
-        written.reason.strip(),
+        contracts,
+        list(keep),
+        reason.strip(),
     )
+
+
+class _Written(yaml.SafeDumper):
+    """Writes text of several lines as a block, so that it reads as written."""
+
+
+def _text(dumper: yaml.SafeDumper, text: str) -> yaml.ScalarNode:
+    style = "|" if "\n" in text else None
+    return dumper.represent_scalar("tag:yaml.org,2002:str", text, style=style)
+
+
+_Written.add_representer(str, _text)
+
+
+def as_written(proposed: Proposed) -> str:
+    """A proposal as the Manager it is put before reads it."""
+    teams = []
+    for child in proposed.children:
+        team: dict[str, object] = {
+            "name": child.title,
+            "path": child.path,
+            "instruction": child.task,
+        }
+        if child.reason:
+            team["reason"] = child.reason
+        if child.agent_profile:
+            team["model"] = child.agent_profile
+        if child.writable:
+            team["writable"] = child.writable
+        if child.readonly:
+            team["readonly"] = child.readonly
+        if child.isolation != "shared":
+            team["isolation"] = child.isolation
+        teams.append(team)
+    written: dict[str, object] = {}
+    if proposed.contracts.strip():
+        written["contracts"] = proposed.contracts
+    if proposed.keep:
+        written["keep"] = proposed.keep
+    written["teams"] = teams
+    return yaml.dump(
+        written, Dumper=_Written, sort_keys=False, allow_unicode=True
+    ).rstrip()
 
 
 class Split(NamedTuple):

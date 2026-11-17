@@ -13,8 +13,8 @@ from openhands.agent_server.director.session_state import kept_sessions
 from openhands.agent_server.director.tools import (
     ApproveTeamsTool,
     MsgIcTool,
-    MsgManagerTool,
     MsgTeamTool,
+    ProposeTeamsTool,
     PruneTeamTool,
     SubmitReviewTool,
 )
@@ -85,7 +85,7 @@ async def propose_and_approve(
     keep: list[str] | None = None,
 ) -> None:
     proposal = proposing(list(children), keep=keep)
-    await use(service, ic(service, node_id), MsgManagerTool, proposal)
+    await use(service, ic(service, node_id), ProposeTeamsTool, proposal)
     await use(service, manager(service, node_id), ApproveTeamsTool, APPROVE)
     await tasked(service)
 
@@ -100,7 +100,7 @@ async def test_a_team_over_existing_ones_replaces_them_and_keeps_their_sub_teams
     gone = {ic(service, API), manager(service, API)}
     kept = ic(service, DB)
 
-    proposed = await use(service, ic(service), MsgManagerTool, SERVICES)
+    proposed = await use(service, ic(service), ProposeTeamsTool, SERVICES)
     told = launcher.messages_to(manager(service))[-1]
     assert "take the place of: API" in told and "Kept as they are: Web." in told
     proposal = node(service, "root").pending_split
@@ -154,7 +154,7 @@ async def test_a_new_team_inside_a_sub_team_that_stays_is_refused(
     refused = await use(
         service,
         ic(service),
-        MsgManagerTool,
+        ProposeTeamsTool,
         proposing(
             [SplitChild(title="Tables", path="services/api/db/tables", task="x")]
         ),
@@ -219,7 +219,7 @@ async def test_teams_are_replaced_only_once_their_agents_are_at_rest(
     assert api_ic is not None and db_ic is not None
     launcher.report(api_ic, ConversationExecutionStatus.RUNNING)
     launcher.report(db_ic, ConversationExecutionStatus.RUNNING)
-    await use(service, ic(service), MsgManagerTool, SERVICES)
+    await use(service, ic(service), ProposeTeamsTool, SERVICES)
 
     answer = await use(service, manager(service), ApproveTeamsTool, APPROVE)
     await tasked(service)
@@ -273,7 +273,7 @@ async def test_work_a_kept_sub_team_had_in_review_goes_to_the_ic_it_now_reports_
     await use(service, ic(service, DB), SubmitReviewTool, DONE)
     assert node(service, DB).review is not None
 
-    await use(service, ic(service), MsgManagerTool, SERVICES)
+    await use(service, ic(service), ProposeTeamsTool, SERVICES)
     await use(service, manager(service), ApproveTeamsTool, APPROVE)
 
     # The request is the first thing sent to the new team, so it starts it.
@@ -294,7 +294,7 @@ async def test_a_replacement_cut_off_by_a_crash_is_finished_once(
     )
     api_ic, db_ic = ic(first, API), ic(first, DB)
     assert api_ic is not None
-    await use(first, ic(first), MsgManagerTool, SERVICES)
+    await use(first, ic(first), ProposeTeamsTool, SERVICES)
     # The approval is saved while the replaced team is still in a turn.
     launcher.report(api_ic, ConversationExecutionStatus.RUNNING)
     await use(first, manager(first), ApproveTeamsTool, APPROVE)
@@ -325,7 +325,7 @@ async def test_an_approval_the_kept_session_does_not_have_is_dropped_and_given_a
 ):
     first = await started(repo, launcher)
     await split_root(first)
-    await use(first, ic(first), MsgManagerTool, SERVICES)
+    await use(first, ic(first), ProposeTeamsTool, SERVICES)
     proposed = kept_sessions(first.store)
     ended = end_server_at(launcher, "stop")
     await cut_off(
@@ -367,7 +367,7 @@ async def test_a_proposal_must_say_what_becomes_of_every_sub_team(
     services = [SplitChild(title="Services", path="services", task="Serve")]
 
     refused = await use(
-        service, ic(service), MsgManagerTool, proposing(services, keep=keep)
+        service, ic(service), ProposeTeamsTool, proposing(services, keep=keep)
     )
 
     assert refused.is_error and problem in refused.text
@@ -380,12 +380,12 @@ async def test_a_sub_team_is_kept_by_its_name_or_its_node_id(
     mobile = [SplitChild(title="Mobile", path="apps/mobile", task="The app")]
 
     refused = await use(
-        service, ic(service), MsgManagerTool, proposing(mobile, keep=["API"])
+        service, ic(service), ProposeTeamsTool, proposing(mobile, keep=["API"])
     )
     taken = await use(
         service,
         ic(service),
-        MsgManagerTool,
+        ProposeTeamsTool,
         proposing(mobile, keep=[node(service, API).id, "Web"]),
     )
 
@@ -410,7 +410,7 @@ async def test_approved_teams_are_set_up_and_start_nothing(
     fresh: DirectorService, launcher: FakeLauncher
 ):
     service = fresh
-    await use(service, ic(service), MsgManagerTool, SPLIT)
+    await use(service, ic(service), ProposeTeamsTool, SPLIT)
     answer = await use(service, manager(service), ApproveTeamsTool, APPROVE)
 
     teams = sub_teams(service)
@@ -439,7 +439,7 @@ async def test_a_split_says_what_the_ic_left_and_lets_it_finish_until_the_team_s
     pay = repo / "services" / "api" / "pay.py"
     pay.parent.mkdir(parents=True)
     pay.write_text("draft\n")
-    await use(service, ic(service), MsgManagerTool, SPLIT)
+    await use(service, ic(service), ProposeTeamsTool, SPLIT)
     await use(service, manager(service), ApproveTeamsTool, APPROVE)
 
     [told] = [
@@ -471,7 +471,7 @@ async def test_a_split_that_leaves_nothing_unfinished_says_so(
     fresh: DirectorService, launcher: FakeLauncher
 ):
     service = fresh
-    await use(service, ic(service), MsgManagerTool, SPLIT)
+    await use(service, ic(service), ProposeTeamsTool, SPLIT)
     await use(service, manager(service), ApproveTeamsTool, APPROVE)
 
     [told] = [
@@ -503,7 +503,7 @@ async def test_a_team_starts_with_the_first_message_from_the_ic_above(
     fresh: DirectorService, launcher: FakeLauncher
 ):
     service = fresh
-    await use(service, ic(service), MsgManagerTool, SPLIT)
+    await use(service, ic(service), ProposeTeamsTool, SPLIT)
     await use(service, manager(service), ApproveTeamsTool, APPROVE)
 
     first = await use(
@@ -532,7 +532,7 @@ async def test_a_message_from_the_human_starts_the_team_in_a_session_of_its_own(
     fresh: DirectorService, launcher: FakeLauncher
 ):
     service = fresh
-    await use(service, ic(service), MsgManagerTool, SPLIT)
+    await use(service, ic(service), ProposeTeamsTool, SPLIT)
     await use(service, manager(service), ApproveTeamsTool, APPROVE)
     await landed(service)
     before = len(launcher.derived)
@@ -554,7 +554,7 @@ async def test_a_team_given_no_task_owes_nothing(
     repo: Path, fresh: DirectorService, launcher: FakeLauncher
 ):
     service = fresh
-    await use(service, ic(service), MsgManagerTool, SPLIT)
+    await use(service, ic(service), ProposeTeamsTool, SPLIT)
     await use(service, manager(service), ApproveTeamsTool, APPROVE)
     await use(service, ic(service), MsgTeamTool, MsgTeamAction(team=API, text="Begin."))
     commit(repo, "services/api/app.py", "order_id = '1'\n")

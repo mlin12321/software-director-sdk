@@ -5,6 +5,7 @@ node does not allow, so a tool cannot reach past its own team.
 """
 
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -31,8 +32,9 @@ from openhands.agent_server.director.service import (
     agent_conversation,
 )
 from openhands.agent_server.director.split import (
-    TEAMS_FENCE,
     Proposed,
+    ProposedTeam,
+    as_written,
     check_limits,
     normalize_split,
     proposed_teams,
@@ -118,7 +120,7 @@ def write_spec(service: DirectorService, caller: Caller, content: str) -> str:
 def _checked(
     service: DirectorService, node: SessionTeam, proposed: Proposed
 ) -> SplitProposal:
-    """The sub-teams a message proposes, held to what the org allows."""
+    """Proposed sub-teams, held to what the org allows."""
     store = service.store
     allowed = service.settings.allowed_profiles
     for child in proposed.children:
@@ -163,56 +165,71 @@ def _waiting(node: SessionTeam) -> SplitProposal | None:
 
 
 def msg_manager(service: DirectorService, caller: Caller, text: str) -> str:
-    """Send the caller's Manager a message, and put before it the sub-teams
-    the message proposes, if any."""
+    """Send the caller's Manager a message."""
     _only(caller, "ic", "message its Manager")
     node = caller.node
     text = text.strip()
     if not text:
         raise Invalid("A message cannot be empty")
-    proposed = proposed_teams(text)
-    if proposed is None and not service.store.below(node.id):
+    if not service.store.below(node.id):
         raise Invalid(
-            "A team without sub-teams messages its Manager only to propose "
-            f"some, in a ```{TEAMS_FENCE} block. Raise anything else with "
+            "A team without sub-teams has nothing to tell its Manager but a "
+            "proposal: use propose_teams. Raise anything else with "
             "raise_escalation."
         )
-    note = ""
-    if proposed is not None:
-        if node.pending_split and node.pending_split.status == "approved":
-            raise Conflict("The sub-teams your Manager approved are still being set up")
-        proposal = _checked(service, node, proposed)
-        service.store.update_place(node.id, pending_split=proposal)
-        service.knows(node.id, "ic", "pending_split")
-        store = service.store
-        replaced = [team.title for team in map(store.place, proposal.replaces) if team]
-        kept = [team.title for team in map(store.place, proposal.keeps) if team]
-        note = (
-            "\n\n[director] The sub-teams in this message passed the org's "
-            "checks."
-            + (
-                f" They take the place of: {', '.join(replaced)}, whose own "
-                "sub-teams stay."
-                if replaced
-                else ""
-            )
-            + (f" Kept as they are: {', '.join(kept)}." if kept else "")
-            + " approve_teams sets them up exactly as written; decline_teams "
-            "declines them, with your reason. They wait on you until you call "
-            "one of the two; msg_ic asks your IC something first."
+    service.message(node.id, node.id, "ic", text)
+    return "Sent to your Manager."
+
+
+def propose_teams(
+    service: DirectorService,
+    caller: Caller,
+    teams: Sequence[ProposedTeam],
+    contracts: str,
+    keep: Sequence[str],
+    text: str,
+) -> str:
+    """Put the sub-teams the caller proposes before its Manager."""
+    _only(caller, "ic", "propose sub-teams")
+    node = caller.node
+    if node.pending_split and node.pending_split.status == "approved":
+        raise Conflict("The sub-teams your Manager approved are still being set up")
+    proposed = proposed_teams(teams, contracts, keep, text)
+    proposal = _checked(service, node, proposed)
+    store = service.store
+    store.update_place(node.id, pending_split=proposal)
+    service.knows(node.id, "ic", "pending_split")
+    replaced = [team.title for team in map(store.place, proposal.replaces) if team]
+    kept = [team.title for team in map(store.place, proposal.keeps) if team]
+    note = (
+        "\n\n[director] These sub-teams passed the org's checks."
+        + (
+            f" They take the place of: {', '.join(replaced)}, whose own sub-teams stay."
+            if replaced
+            else ""
         )
-        facts = service.facts_of_proposal(node, proposal)
-        if facts:
-            note += f"\n\n{facts}"
-        service.record_event(
-            node.id, "proposed", None, _named(proposal, replaced), _paths(proposal)
-        )
-    service.message(node.id, node.id, "ic", text, note)
-    if proposed is None:
-        return "Sent to your Manager."
+        + (f" Kept as they are: {', '.join(kept)}." if kept else "")
+        + " approve_teams sets them up exactly as written; decline_teams "
+        "declines them, with your reason. They wait on you until you call "
+        "one of the two; msg_ic asks your IC something first."
+    )
+    facts = service.facts_of_proposal(node, proposal)
+    if facts:
+        note += f"\n\n{facts}"
+    service.record_event(
+        node.id, "proposed", None, _named(proposal, replaced), _paths(proposal)
+    )
+    said = proposed.reason or "I propose these sub-teams."
+    service.message(
+        node.id,
+        node.id,
+        "ic",
+        f"{said}\n\nProposed sub-teams:\n{as_written(proposed)}",
+        note,
+    )
     return (
-        "Sent to your Manager with the sub-teams you proposed. Nothing "
-        "is set up until it approves; you will hear either way."
+        "Sent to your Manager. Nothing is set up until it approves; you "
+        "will hear either way."
     )
 
 
