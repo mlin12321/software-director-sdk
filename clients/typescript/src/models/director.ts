@@ -984,7 +984,7 @@ export interface DirectorTeamMatch {
   path: string;
 }
 
-/** What a pull or a push of the team memory did. */
+/** What a pull of the org did to the team memory. */
 export interface DirectorMemorySync {
   remote: string;
   /** The local team memory's commit afterwards; `null` when it is empty. */
@@ -996,6 +996,4 @@ export interface DirectorMemorySync {
    * the remote text is in the team memory's history.
    */
   kept_local: string[];
-  /** The remote now has the local team_memory. */
-  pushed: boolean;
 }

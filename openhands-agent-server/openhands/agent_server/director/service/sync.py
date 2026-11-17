@@ -619,7 +619,6 @@ class Sync(Sessions):
             head=merged.head,
             changed=merged.head != before,
             kept_local=merged.kept_local,
-            pushed=False,
         )
 
     def _apply(self, store: OrgStore, nodes: list[dict[str, Any]]) -> None:

@@ -240,26 +240,6 @@ describe('DirectorClient', () => {
     expect(edit).toEqual({ path: 'api/a.py', commit: 'abc' });
   });
 
-  it('pulls and pushes the team memory, from origin unless told otherwise', async () => {
-    const sync = { remote: 'origin', head: 'abc', changed: true, kept_local: [], pushed: false };
-    const fetchMock = mockFetch(() => jsonResponse(sync));
-    const client = new DirectorClient({ host: 'http://example.com' });
-
-    const pulled = await client.pullMemory();
-    await client.pushMemory('upstream');
-
-    const calls = fetchMock.mock.calls;
-    expect(calls.map(([url, init]) => `${init.method} ${url}`)).toEqual([
-      'POST http://example.com/api/director/org/memory/pull',
-      'POST http://example.com/api/director/org/memory/push',
-    ]);
-    expect(calls.map(([, init]) => JSON.parse(init.body))).toEqual([
-      { remote: 'origin' },
-      { remote: 'upstream' },
-    ]);
-    expect(pulled).toEqual(sync);
-  });
-
   it('reads and changes the limits on new teams, and searches teams', async () => {
     const state = {
       max_teams: 32,

@@ -15,7 +15,6 @@ from fastapi.responses import StreamingResponse
 
 # The org's agents get their tools from this server, so it registers them.
 import openhands.agent_server.director.tools  # noqa: F401
-from openhands.agent_server.director import memory_sync
 from openhands.agent_server.director.acp import TOOLS_PATH
 from openhands.agent_server.director.changes import file_sides, team_changes
 from openhands.agent_server.director.mcp_shim import TOKEN_HEADER
@@ -29,8 +28,6 @@ from openhands.agent_server.director.models import (
     FileEdit,
     FileSides,
     FormerTeamSummary,
-    MemorySync,
-    MemorySyncRequest,
     NodeMemory,
     NodeOwnership,
     OpenedSession,
@@ -788,45 +785,6 @@ async def edit_node_file(
     """
     _require_place(service, node_id)
     return await service.edit_file(node_id, path, request.content)
-
-
-@director_router.post(
-    "/org/memory/pull",
-    response_model=MemorySync,
-    responses=error_responses(_NO_REMOTE),
-)
-def pull_memory(
-    request: MemorySyncRequest | None = None,
-    service: DirectorService = Depends(get_director_service),
-) -> MemorySync:
-    """Take in the team memory a remote of the repository has.
-
-    Reports both sides added are kept from both. Where both
-    changed a spec or contracts, the local text is kept and the file is
-    named in `kept_local`.
-    """
-    remote = (request or MemorySyncRequest()).remote
-    return memory_sync.pull(service.team_memory, remote)
-
-
-@director_router.post(
-    "/org/memory/push",
-    response_model=MemorySync,
-    responses=error_responses(
-        {**_NO_REMOTE, Conflict: "There is no team memory to push yet"}
-    ),
-)
-def push_memory(
-    request: MemorySyncRequest | None = None,
-    service: DirectorService = Depends(get_director_service),
-) -> MemorySync:
-    """Give a remote of the repository the local team_memory.
-
-    If the remote has changes the local team memory lacks, they are pulled
-    in first, as `pull` does, and the push is made once more.
-    """
-    remote = (request or MemorySyncRequest()).remote
-    return memory_sync.push(service.team_memory, remote)
 
 
 @director_router.post(

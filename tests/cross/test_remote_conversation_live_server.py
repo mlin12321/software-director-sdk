@@ -3938,8 +3938,6 @@ def test_director_has_submitted_work_reviewed_once_all_teams_submitted(
             "accepted",
             True,
         )
-        pulled = client.post("/api/director/org/memory/pull")
-        assert pulled.status_code == 404, pulled.text
 
 
 def test_director_opens_a_session_beside_a_team_and_closes_it(

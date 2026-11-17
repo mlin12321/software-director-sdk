@@ -768,14 +768,8 @@ class NodeOwnership(BaseModel):
     )
 
 
-class MemorySyncRequest(BaseModel):
-    """Which remote to share the team memory with."""
-
-    remote: str = Field(default="origin", min_length=1)
-
-
 class MemorySync(BaseModel):
-    """What a pull or a push of the team memory did."""
+    """What a pull of the org did to the team memory."""
 
     remote: str
     head: str | None = Field(
@@ -789,7 +783,6 @@ class MemorySync(BaseModel):
             "kept; the remote text is in the team memory's history."
         ),
     )
-    pushed: bool = Field(description="The remote now has the local team memory.")
 
 
 class DirectorSettings(BaseModel):

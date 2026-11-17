@@ -1,7 +1,6 @@
 import { HttpClient, HttpError } from './http-client';
 import type { CreateConversationPayload } from './conversation-client';
 import type {
-  DirectorMemorySync,
   DirectorFileEdit,
   DirectorFileSides,
   DirectorNodeMemory,
@@ -387,37 +386,6 @@ export class DirectorClient {
       nodePath(nodeId, 'files'),
       { content },
       { params: { path } }
-    );
-    return response.data;
-  }
-
-  /**
-   * Take in the team memory a remote of the repository has. Reports of
-   * both sides are kept; of a spec or contracts both changed,
-   * the local text is, and the file is named in `kept_local`.
-   *
-   * @throws HttpError 404 when the repository has no such remote, 502 when
-   *   it cannot be reached.
-   */
-  async pullMemory(remote = 'origin'): Promise<DirectorMemorySync> {
-    const response = await this.client.post<DirectorMemorySync>(
-      `${DIRECTOR_PATH}/org/memory/pull`,
-      { remote }
-    );
-    return response.data;
-  }
-
-  /**
-   * Give a remote of the repository the local team memory. What the remote
-   * has that the local team memory lacks is pulled in first.
-   *
-   * @throws HttpError 404 when the repository has no such remote, 409 when
-   *   there is no team memory yet, 502 when the remote cannot be reached.
-   */
-  async pushMemory(remote = 'origin'): Promise<DirectorMemorySync> {
-    const response = await this.client.post<DirectorMemorySync>(
-      `${DIRECTOR_PATH}/org/memory/push`,
-      { remote }
     );
     return response.data;
   }
