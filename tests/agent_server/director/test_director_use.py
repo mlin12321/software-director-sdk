@@ -20,6 +20,7 @@ from openhands.agent_server.director.models import (
 from openhands.agent_server.director.run_state import USE
 from openhands.agent_server.director.service import DirectorService
 from openhands.agent_server.director.service.state import LIMIT_WAITS
+from openhands.sdk.agent import ACPAgent
 from openhands.sdk.conversation.state import ConversationExecutionStatus
 from openhands.sdk.errors import Conflict
 from openhands.sdk.workspace import LocalWorkspace
@@ -230,3 +231,34 @@ async def test_a_team_started_from_a_profile_spends_under_its_parents_caps(
 
     [request] = started_with
     assert (request.max_iterations, request.max_budget_per_run) == (40, 2.5)
+
+
+async def test_what_an_agent_read_from_its_cache_counts_where_it_reports_it_apart():
+    acp, plain = uuid4(), uuid4()
+    used = SimpleNamespace(
+        accumulated_cost=0.97,
+        accumulated_token_usage=SimpleNamespace(
+            prompt_tokens=298,
+            completion_tokens=10_744,
+            cache_read_tokens=463_280,
+            cache_write_tokens=32_563,
+        ),
+    )
+    agents = {acp: ACPAgent(acp_command=["claude-agent-acp"]), plain: object()}
+
+    async def get_event_service(conversation_id: UUID):
+        async def get_state():
+            return SimpleNamespace(
+                agent=agents[conversation_id],
+                stats=SimpleNamespace(get_combined_metrics=lambda: used),
+            )
+
+        return SimpleNamespace(get_state=get_state)
+
+    conversations = SimpleNamespace(get_event_service=get_event_service)
+    launcher = ConversationTeamLauncher(cast(ConversationService, conversations))
+
+    found = await launcher.usage([acp, plain])
+
+    assert found[acp] == Usage(input_tokens=496_141, output_tokens=10_744, cost=0.97)
+    assert found[plain] == Usage(input_tokens=298, output_tokens=10_744, cost=0.97)

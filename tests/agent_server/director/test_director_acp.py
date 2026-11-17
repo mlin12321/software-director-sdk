@@ -23,6 +23,7 @@ from openhands.agent_server.director.acp import (
     conversation_of,
     tools_server,
 )
+from openhands.agent_server.director.headline import TeamSummary
 from openhands.agent_server.director.models import (
     CreateOrgRequest,
     DirectorSettingsUpdate,
@@ -709,4 +710,48 @@ async def test_an_acp_ic_that_carries_on_after_submitting_is_cut_short(
     await service.settled()
 
     assert launcher.paused == [] and launcher.stopped == [UUID(root_ic)]
+    await service.aclose()
+
+
+async def test_an_agent_that_could_not_be_asked_yet_names_its_team_after_its_turn(
+    repo: Path,
+):
+    # Claude Code cannot be asked anything before its first turn.
+    launcher = FakeLauncher(root_kind="acp")
+    service = await started(repo, launcher)
+    agent = ic(service)
+    assert agent is not None
+    asked = len(launcher.summarized)
+    launcher.summary = TeamSummary(title="Checkout", headline="Builds the checkout.")
+
+    launcher.report(agent, ConversationExecutionStatus.RUNNING)
+    await service.settled()
+    assert len(launcher.summarized) == asked
+
+    launcher.report(agent, ConversationExecutionStatus.FINISHED)
+    await service.settled()
+
+    assert len(launcher.summarized) == asked + 1
+    assert node(service, "root").headline == "Builds the checkout."
+
+    # It is asked once more, not with every turn.
+    launcher.report(agent, ConversationExecutionStatus.RUNNING)
+    launcher.report(agent, ConversationExecutionStatus.FINISHED)
+    await service.settled()
+    assert len(launcher.summarized) == asked + 1
+    await service.aclose()
+
+
+async def test_an_agent_with_a_model_of_the_servers_is_not_asked_again(repo: Path):
+    launcher = FakeLauncher()
+    service = await started(repo, launcher)
+    agent = ic(service)
+    assert agent is not None
+    asked = len(launcher.summarized)
+
+    launcher.report(agent, ConversationExecutionStatus.RUNNING)
+    launcher.report(agent, ConversationExecutionStatus.FINISHED)
+    await service.settled()
+
+    assert len(launcher.summarized) == asked
     await service.aclose()
