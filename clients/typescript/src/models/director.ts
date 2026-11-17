@@ -49,6 +49,11 @@ export interface DirectorAgentRef {
   /** `null` until a conversation has been started for this agent. */
   conversation_id: string | null;
   status: string;
+  /**
+   * Why the agent is `blocked` or `lost`, in words for the human; `null`
+   * when it is neither or the server could not tell.
+   */
+  reason: string | null;
   kind: DirectorAgentKind;
   /**
    * Which external agent an `acp` agent is, such as `claude-code` or
@@ -519,6 +524,12 @@ export interface DirectorSession {
   request: string;
   /** ISO 8601 timestamp. */
   opened_at: string;
+  /**
+   * The branch the repository's checkout was on when the session was
+   * opened. Its accepted work is merged into that branch only; '' when it
+   * was on none.
+   */
+  branch: string;
   /** Of the team it was opened at. */
   status: DirectorNodeStatus;
   /** Where the review of its work stands. */
@@ -695,6 +706,7 @@ export type DirectorTeamEventKind =
   | 'sent_back'
   | 'reconciled'
   | 'stalled'
+  | 'failed'
   | 'stopped'
   | 'replaced'
   | 'pruned'

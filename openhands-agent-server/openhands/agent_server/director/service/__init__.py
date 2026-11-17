@@ -29,8 +29,10 @@ from openhands.agent_server.director.models import (
     RoutedMessage,
     RouteMessageRequest,
     SessionTeam,
+    StartAgainRequest,
 )
 from openhands.agent_server.director.org_store import (
+    AGENT_LOST,
     is_division_lead,
 )
 from openhands.agent_server.director.prompts import (
@@ -52,12 +54,14 @@ from openhands.agent_server.director.service.state import (
     ORG_WAITS,
     RESTART_NOTE,
     ROOT_ID,
+    STALL_WAITS,
     TOOLS_OF,
     _checkout_root,
     _instant,
     _is_in,
     _summary_of,
     agent_conversation,
+    failure_waits,
     hand_over_of,
     tools_of,
 )
@@ -119,7 +123,10 @@ class DirectorService(Sync):
         self._stop_guard = launcher.on_action(self.guard_action)
         self._bwrap = await asyncio.to_thread(self._find_sandbox)
         if self._bwrap is None:
-            logger.info("Director cannot confine shells here; it checks file tools")
+            logger.warning(
+                "Director cannot confine shells here (no bubblewrap): it checks "
+                "file tools, and nothing holds the process of an ACP agent"
+            )
         bind_director(self)
         self._stall_watch = asyncio.create_task(
             self._watch_for_stalls(), name="director-stall-watch"
@@ -435,8 +442,11 @@ class DirectorService(Sync):
         """Settle an escalation that waits on the human with their answer.
 
         The answer goes to the agent that raised it. An escalation the
-        director raised itself (a merge or a Manager that waits) has
-        nobody to send it to: answering only lets the work go on.
+        director raised itself for a merge or a Manager that waits has
+        nobody to send it to: answering only lets the work go on. One it
+        raised for an agent that failed or a team without progress goes to
+        that agent, which runs again; a team whose agent has no conversation
+        here is started again.
 
         Raises:
             NotFound: The team or the escalation does not exist.
@@ -469,11 +479,24 @@ class DirectorService(Sync):
             # The human goes on without the Manager.
             self._begin("land_org", place_id, org_holds=True)
             return store.place(place_id) or place
-        self.notify(
-            agent_conversation(place, escalation.raised_by),
-            f"The human answered your escalation {escalation.title!r}:\n{answer}",
-            at_once=True,
+        role = escalation.raised_by
+        if escalation_id == failure_waits(role) and any(
+            a.role == role and a.status == AGENT_LOST for a in place.agents
+        ):
+            # It has no conversation to answer in: the team starts again.
+            async def again() -> None:
+                await self.start_again(place_id, StartAgainRequest())
+
+            self._enqueue(again, place_id)
+            return store.place(place_id) or place
+        told = (
+            "The human was told that your conversation failed, and says"
+            if escalation_id == failure_waits(role)
+            else "The human was told that your team shows no progress, and says"
+            if escalation_id == STALL_WAITS
+            else f"The human answered your escalation {escalation.title!r}"
         )
+        self.notify(agent_conversation(place, role), f"{told}:\n{answer}", at_once=True)
         return store.place(place_id) or place
 
     def _steps(self) -> dict[str, Callable[[Intent], Awaitable[None]]]:

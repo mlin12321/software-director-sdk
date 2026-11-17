@@ -182,7 +182,16 @@ class Delivery(Records):
             store = self.store
             found = store.find_by_conversation(conversation_id)
             if found is not None:
-                store.set_agent(found[0].id, found[1], status=AGENT_LOST)
+                place, role = found
+                known = any(a.role == role and a.reason for a in place.agents)
+                store.set_agent(
+                    place.id,
+                    role,
+                    status=AGENT_LOST,
+                    reason=None
+                    if known
+                    else "Its conversation is no longer on this server.",
+                )
             logger.warning("Agent conversation %s is gone", conversation_id)
         finally:
             self._delivering.discard(seq)

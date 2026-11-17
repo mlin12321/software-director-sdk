@@ -29,6 +29,7 @@ from openhands.agent_server.director.service.reviews import Reviews
 from openhands.agent_server.director.service.state import (
     ROLE_NAMES,
     STALL_LANE,
+    STALL_WAITS,
     _progress_of,
     agent_conversation,
 )
@@ -223,7 +224,21 @@ class Watch(Reviews):
         self.record_event(above.id, "stalled", team, f"{minutes} min")
         # Its reviewer is woken now anyway, and no longer waits for it.
         self._release_reviews(above.id, now=True)
-        self.tell_ic(
-            above.id,
+        said = (
+            "Its IC is in a turn right now, so it was not asked what it is doing."
+            if in_a_turn
+            else f"Asked just now, its IC says:\n{account.strip()}"
+            if account
+            else "Asked just now what it is doing, its IC gave no answer."
+        )
+        self.tell_above(
+            team,
             stall_notice(team, minutes, in_a_turn=in_a_turn, account=account),
+            waits=STALL_WAITS,
+            title=f"{team.title!r} has shown no progress for {minutes} min",
+            detail=(
+                f"No commit in {team.boundary.path or 'the repository'}, "
+                f"nothing submitted, no escalation.\n{said}\nAnswer this to "
+                "tell its IC what to do: your answer is sent to it."
+            ),
         )

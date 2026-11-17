@@ -43,6 +43,7 @@ from openhands.agent_server.director.org_persistence import (
     stored_nodes,
 )
 from openhands.agent_server.director.org_store import (
+    AGENT_BLOCKED,
     AGENT_LOST,
     OrgStore,
     is_division_lead,
@@ -69,12 +70,14 @@ from openhands.agent_server.director.service.state import (
     ORG_LANE,
     PAUSE_LANE,
     RESTART_NOTE,
+    STALL_WAITS,
     TOOLS_OF,
     _agent_title,
     _lane_for,
     _new_agents,
     agent_conversation,
     apart,
+    failure_waits,
     hand_over_of,
 )
 from openhands.sdk.conversation.request import AgentLaunchAdditions
@@ -733,13 +736,57 @@ class Sync(Sessions):
                 agent, node.id, status == ConversationExecutionStatus.RUNNING
             )
         was = node.status
-        now = store.set_agent(node.id, role, status=self._shown(agent, status))
+        shown = self._shown(agent, status)
+        failed = shown == AGENT_BLOCKED and all(
+            a.status != AGENT_BLOCKED for a in node.agents if a.role == role
+        )
+        now = store.set_agent(node.id, role, status=shown)
         if self._paused is None and self._loop is not None:
+            if failed:
+                self._enqueue(
+                    lambda: self._failed(node.id, role, conversation_id, status),
+                    node.id,
+                )
+            if status == ConversationExecutionStatus.RUNNING:
+                self._runs_again(now, role)
             if now.status == "blocked" and was != "blocked":
                 # A blocked team is no longer waited for.
                 self.release_reviews(node.parent_id)
             if role == "ic" and status == ConversationExecutionStatus.RUNNING:
                 self.release_reviews(node.id, now=True)
+
+    async def _failed(
+        self,
+        place_id: str,
+        role: AgentRole,
+        conversation_id: UUID,
+        status: ConversationExecutionStatus,
+    ) -> None:
+        """Find why an agent's conversation failed, keep it and tell of it."""
+        said = await self._require_launcher().failure(conversation_id)
+        if said is None:
+            said = (
+                "It repeated the same step without getting anywhere."
+                if status == ConversationExecutionStatus.STUCK
+                else "Its conversation ended with an error it gave no account of."
+            )
+        team = self.store.place(place_id)
+        if team is None or all(
+            a.status != AGENT_BLOCKED for a in team.agents if a.role == role
+        ):
+            # It runs again already.
+            return
+        self.tell_of_failure(place_id, role, said)
+
+    def _runs_again(self, team: SessionTeam, role: AgentRole) -> None:
+        """An agent that runs is no longer something the human is asked of."""
+        waits = {failure_waits(role)} | ({STALL_WAITS} if role == "ic" else set())
+        settled = [e.id for e in team.escalations if e.id in waits]
+        for escalation_id in settled:
+            with suppress(NotFound):
+                self.store.settle_escalation(team.id, escalation_id)
+        if settled:
+            self._save_soon()
 
     def _on_hand_over_status(
         self, store: OrgStore, conversation_id: str, status: ConversationExecutionStatus

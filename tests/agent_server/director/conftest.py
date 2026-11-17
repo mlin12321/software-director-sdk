@@ -289,6 +289,10 @@ class FakeLauncher:
     # the server in the middle of a step by raising from it.
     before: Callable[[str], None] = lambda _: None
     deleted: list[UUID] = field(default_factory=list)
+    # What a conversation that failed said of it.
+    failures: dict[UUID, str] = field(default_factory=dict)
+    # What starting the next derived agent fails with.
+    derive_error: Exception | None = None
     joined: list[UUID] = field(default_factory=list)
     # What the model answers to a question of the director, by usage id.
     answers: dict[str, str | list[str | None] | None] = field(default_factory=dict)
@@ -351,6 +355,9 @@ class FakeLauncher:
         if self.full_for > 0:
             self.full_for -= 1
             raise ConversationRunLimitExceeded("full")
+        if self.derive_error is not None:
+            error, self.derive_error = self.derive_error, None
+            raise error
         if parent_id not in self.known:
             raise NotFound(f"Conversation {parent_id} does not exist")
         self.derived.append(
@@ -462,6 +469,9 @@ class FakeLauncher:
             for conversation_id in conversation_ids
             if conversation_id in self.known
         }
+
+    async def failure(self, conversation_id: UUID) -> str | None:
+        return self.failures.get(conversation_id)
 
     def on_status(self, listener: ExecutionStatusListener) -> Callable[[], None]:
         self.listeners.append(listener)

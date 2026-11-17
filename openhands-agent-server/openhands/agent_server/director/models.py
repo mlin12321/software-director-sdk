@@ -92,6 +92,13 @@ class AgentRef(BaseModel):
         description="None until a conversation has been started for this agent.",
     )
     status: str
+    reason: str | None = Field(
+        default=None,
+        description=(
+            "Why the agent is `blocked` or `lost`, in words for the human; "
+            "None when it is neither or the server could not tell."
+        ),
+    )
     kind: AgentKind = "openhands"
     acp_server: str | None = Field(
         default=None,
@@ -399,6 +406,7 @@ TeamEventKind = Literal[
     "sent_back",
     "reconciled",
     "stalled",
+    "failed",
     "stopped",
     "replaced",
     "pruned",
@@ -1404,6 +1412,14 @@ class SessionInput(BaseModel):
     above_id: str = Field(description="The team whose IC reviews its work.")
     request: str = Field(default="", description="What the human asked of it.")
     opened_at: str = Field(default="", description="ISO 8601 timestamp.")
+    branch: str = Field(
+        default="",
+        description=(
+            "The branch the repository's checkout was on when the session "
+            "was opened. Its accepted work is merged into that branch only; "
+            "'' when it was on none."
+        ),
+    )
     shape: list[tuple[str, str, str, str]] = Field(
         default_factory=list,
         description=(

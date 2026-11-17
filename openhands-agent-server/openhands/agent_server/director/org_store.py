@@ -482,11 +482,14 @@ class OrgStore:
         status: str | None = None,
         kind: AgentKind | None = None,
         acp_server: str | None = None,
+        reason: str | None = None,
     ) -> SessionTeam:
         """Change the conversation, the status or the kind of one agent of a
         place.
 
-        The place's status follows (see :func:`status_of`).
+        The place's status follows (see :func:`status_of`). ``reason`` says
+        why the agent is blocked or lost, and is forgotten once it is
+        neither.
 
         Raises:
             NotFound: The place does not exist or has no agent in that role.
@@ -502,6 +505,9 @@ class OrgStore:
                     update={
                         "conversation_id": conversation_id or agent.conversation_id,
                         "status": status or agent.status,
+                        "reason": (reason or agent.reason)
+                        if (status or agent.status) in (AGENT_BLOCKED, AGENT_LOST)
+                        else None,
                         "kind": kind or agent.kind,
                         "acp_server": acp_server or agent.acp_server,
                     }
