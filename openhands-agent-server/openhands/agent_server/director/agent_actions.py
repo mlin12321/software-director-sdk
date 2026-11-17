@@ -48,6 +48,8 @@ class Caller:
 
     node: SessionTeam
     role: AgentRole
+    # Whether it is an IC that calls from its hand-over conversation.
+    hand_over: bool = False
 
 
 def caller_of(service: DirectorService, conversation_id: UUID) -> Caller:
@@ -57,13 +59,36 @@ def caller_of(service: DirectorService, conversation_id: UUID) -> Caller:
         NotFound: The conversation is not an agent of the org.
     """
     found = service.store.find_by_conversation(str(conversation_id))
-    if found is None:
+    if found is not None:
+        return Caller(node=found[0], role=found[1])
+    node = service.store.find_hand_over(str(conversation_id))
+    if node is None:
         raise NotFound("This conversation is not an agent of the org")
-    return Caller(node=found[0], role=found[1])
+    return Caller(node=node, role="ic", hand_over=True)
 
 
-def _only(caller: Caller, role: AgentRole, what: str) -> None:
-    """Refuse an agent that is not in ``role``."""
+_ASIDE = (
+    "You are in hand-over mode, and this conversation is for the hand-over "
+    "alone: of the director's "
+    "tools only `read_team_context`, `hand_over` and `write_spec` work here. "
+    "Leave the rest to your main conversation."
+)
+
+
+def _not_aside(caller: Caller) -> None:
+    if caller.hand_over:
+        raise Invalid(_ASIDE)
+
+
+def _only(caller: Caller, role: AgentRole, what: str, *, aside: bool = False) -> None:
+    """Refuse an agent that is not in ``role``.
+
+    Args:
+        aside: Whether an IC may do this in hand-over mode.
+    """
+    if caller.hand_over and role == "ic" and aside:
+        return
+    _not_aside(caller)
     if caller.role != role:
         raise Invalid(f"Only the {ROLE_NAMES[role]} of a team can {what}")
 
@@ -77,7 +102,7 @@ def node_context(service: DirectorService, caller: Caller) -> str:
 
 def write_spec(service: DirectorService, caller: Caller, content: str) -> str:
     """Replace the spec of the caller's boundary."""
-    _only(caller, "ic", "write its spec")
+    _only(caller, "ic", "write its spec", aside=True)
     if not content.strip():
         raise Invalid("A spec cannot be empty")
     path = caller.node.boundary.path
@@ -85,7 +110,10 @@ def write_spec(service: DirectorService, caller: Caller, content: str) -> str:
     summary = content.strip().splitlines()[0].lstrip("# ").strip()[:200]
     # With a spec of its own, what teams before it left is no longer its guide.
     service.store.update_place(caller.node.id, spec_summary=summary, old_specs=[])
-    service.knows(caller.node.id, "ic", "spec")
+    if caller.hand_over:
+        service.note_hand_over(caller.node.id, spec=True)
+    else:
+        service.knows(caller.node.id, "ic", "spec")
     return f"Saved the spec of {path or 'the repository'}."
 
 
@@ -326,6 +354,7 @@ def raise_escalation(
     """Send something the caller cannot settle to the agent of its own role
     in the team above. `misrouted` hands back what the human's words
     brought the team directly, and is no escalation that waits."""
+    _not_aside(caller)
     if not title.strip():
         raise Invalid("An escalation needs a title")
     if kind == "misrouted":
@@ -368,6 +397,7 @@ def resolve_escalation(
 
     An IC holds what the ICs below raised, a Manager what the Managers did.
     """
+    _not_aside(caller)
     if not text.strip():
         raise Invalid("Say what you decided, or why you cannot")
     store = service.store
@@ -529,6 +559,7 @@ def settle_teams(
 
 def report(service: DirectorService, caller: Caller, text: str) -> str:
     """Record something for the two agents of the caller's team."""
+    _not_aside(caller)
     service.report(caller.node, caller.role, text)
     return "Recorded for you and the other agent of your team."
 
@@ -593,11 +624,13 @@ def hand_over(
     service: DirectorService, caller: Caller, team: str, notes: str, contracts: str
 ) -> str:
     """Pass on to a team directly below what the teams before it left."""
-    _only(caller, "ic", "hand over what removed teams left")
+    _only(caller, "ic", "hand over what removed teams left", aside=True)
     if not notes.strip() and not contracts.strip():
         raise Invalid("Give notes, contracts, or both: there is nothing to hand over")
     target = _team_below(service, caller, team)
     service.hand_over(target, notes, contracts)
+    if caller.hand_over:
+        service.note_hand_over(caller.node.id, team=target.title)
     given = [
         part
         for part, text in (

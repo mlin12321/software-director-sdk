@@ -45,6 +45,7 @@ _WHAT: dict[str, str] = {
     "request_review": "Its work is put up for review",
     "accept": "Its accepted work is merged into the team above",
     "prune": "Pruning it is finished",
+    "hand_over": "What its removed teams left is handed over",
     "land_org": "Its accepted teams and contracts become the org's",
     "close_session": "Its session is closed",
 }
@@ -78,11 +79,15 @@ def put_aside_stale(
             )
         ]
     nodes = {node.id: node for node in store.places()}
+    # An IC's hand-over conversation is held and run again as its own is.
     agents = {
         conversation_id
         for node in nodes.values()
         for agent in node.agents
-        for conversation_id in (agent.conversation_id,)
+        for conversation_id in (
+            agent.conversation_id,
+            agent.hand_over.conversation_id if agent.hand_over else None,
+        )
         if conversation_id is not None
     }
     dropped: list[RecoveryItem] = []
@@ -141,6 +146,8 @@ def describe(
             if agent.conversation_id == conversation_id
         ]
         name = ROLE_NAMES[roles[0]] if roles else ROLE_NAMES["ic"]
+        if store.find_hand_over(conversation_id) is not None:
+            name = f"{ROLE_NAMES['ic']} in hand-over mode"
         status = statuses.get(UUID(conversation_id))
         if status is None:
             items.append(

@@ -8,6 +8,7 @@ from pathlib import Path
 from uuid import UUID
 
 from openhands.agent_server.director.boundary import (
+    hand_over_refusal,
     nearest_team,
     write_refusal,
     written_paths,
@@ -46,6 +47,7 @@ from openhands.agent_server.director.runtime import bind_director
 from openhands.agent_server.director.service.state import (
     AGENT_PAUSED,
     DIRECTOR_TOOL_NAMES,
+    HAND_OVER_TOOLS,
     MERGE_WAITS,
     ORG_WAITS,
     RESTART_NOTE,
@@ -56,6 +58,7 @@ from openhands.agent_server.director.service.state import (
     _is_in,
     _summary_of,
     agent_conversation,
+    hand_over_of,
     tools_of,
 )
 from openhands.agent_server.director.service.sync import Sync
@@ -74,10 +77,12 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "AGENT_PAUSED",
     "DIRECTOR_TOOL_NAMES",
+    "HAND_OVER_TOOLS",
     "RESTART_NOTE",
     "TOOLS_OF",
     "DirectorService",
     "agent_conversation",
+    "hand_over_of",
     "tools_of",
 ]
 
@@ -372,7 +377,8 @@ class DirectorService(Sync):
         if not paths:
             return None
         if found is None:
-            return None
+            in_hand_over = store.find_hand_over(str(conversation_id)) is not None
+            return hand_over_refusal(paths[0]) if in_hand_over else None
         node, role = found
         # A team that has not started holds no one out of its directory:
         # the IC above may finish what it has there.
@@ -477,6 +483,7 @@ class DirectorService(Sync):
             "split": self._carry_out_split,
             "start_team": self._do_start_team,
             "finish_split": self._do_finish_split,
+            "hand_over": self._do_hand_over,
             "request_review": self._do_request_review,
             "accept": self._do_accept,
             "land_org": self._do_land_org,

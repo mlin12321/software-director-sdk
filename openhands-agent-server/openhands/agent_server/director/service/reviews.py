@@ -1390,7 +1390,7 @@ class Reviews(Requests):
             self.notify(
                 agent_conversation(above, "ic"),
                 f"It is your turn: the work submitted before that of "
-                f"{node.title!r} (node {node.id}) is decided on. Accept it "
+                f"{node.title!r} (id {node.id}) is decided on. Accept it "
                 "with `review_team` now, or send it back.",
             )
 
@@ -1732,7 +1732,7 @@ class Reviews(Requests):
         if needed_above and further is not None:
             self.notify(
                 agent_conversation(further, "ic"),
-                f"Team {above.title!r} (node {above.id}) below you accepted the "
+                f"Team {above.title!r} (id {above.id}) below you accepted the "
                 f"work of its sub-team {node.title!r} in {where} and says a team "
                 f"above it waits on that work: {needed_above}\nIt is in "
                 f"{above.worktree_path}"

@@ -108,7 +108,7 @@ class Watch(Reviews):
         if team.parent_id is not None:
             self.tell_manager(
                 team.parent_id,
-                f"Your IC stopped the team {team.title!r} (node {team.id}): "
+                f"Your IC stopped the team {team.title!r} (id {team.id}): "
                 f"{reason}\nIts agents are at rest and nothing is sent to "
                 "them. It goes on when your IC writes to it with msg_team. "
                 "Nothing is asked of you. If it should not go on at all, you "
