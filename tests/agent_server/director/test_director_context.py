@@ -404,8 +404,8 @@ async def test_the_directors_own_notices_bring_what_changed_too(
     # The teams were given their tasks between the two: the one change.
     assert written.startswith("[director] Your Manager writes:\nCarry on.")
     assert [team["status"] for team in told["sub_teams"]["added"]] == [
-        "not started",
-        "not started",
+        "not_started",
+        "not_started",
     ]
     changed = update_of(written)
     assert changed is not None and list(changed) == ["sub_teams"]

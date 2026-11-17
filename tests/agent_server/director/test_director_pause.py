@@ -37,7 +37,7 @@ from openhands.sdk.conversation.state import ConversationExecutionStatus
 from tests.agent_server.director.conftest import (
     FakeLauncher,
     former_of,
-    make_node,
+    make_team,
     memory_of,
     open_session_in,
     run_git,
@@ -641,9 +641,9 @@ def test_a_worktree_that_is_gone_is_made_again_from_its_branch(repo: Path):
     store = OrgStore()
     store.replace_all(
         [
-            make_node("root", None, path=""),
-            make_node("api", "root"),
-            make_node("web", "root"),
+            make_team("root", None, path=""),
+            make_team("api", "root"),
+            make_team("web", "root"),
         ]
     )
     open_session_in(store, checkout=str(repo))
@@ -705,7 +705,7 @@ def test_run_state_of_a_newer_director_is_refused(tmp_path: Path):
 
 def test_run_state_stays_out_of_the_repository(repo: Path):
     service = DirectorService(repo)
-    service.store.replace_all([make_node("root", None)])
+    service.store.replace_all([make_team("root", None)])
 
     assert service.summary().paused is None
     assert run_git(repo, "status", "--porcelain") == ""

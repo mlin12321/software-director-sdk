@@ -103,30 +103,30 @@ class AgentRef(BaseModel):
 
 
 class EscalationHandoff(BaseModel):
-    """A node that tried to settle an escalation, could not, and passed it up."""
+    """A team that tried to settle an escalation, could not, and passed it up."""
 
     node_id: str
-    reason: str = Field(min_length=1, description="Why this node could not settle it.")
+    reason: str = Field(min_length=1, description="Why this team could not settle it.")
     at: str = Field(description="ISO 8601 timestamp.")
 
 
 class Escalation(BaseModel):
-    """Something an agent of a node cannot settle itself.
+    """Something an agent of a team cannot settle itself.
 
-    It goes to the agent of the same role in the node above (an IC's to the
+    It goes to the agent of the same role in the team above (an IC's to the
     IC there, a Manager's to the Manager), which settles it or passes it up
-    in turn. It waits on the human once every node above the one that raised
+    in turn. It waits on the human once every team above the one that raised
     it in its session has passed it up, which for the team the session was
     opened at is at once.
     """
 
-    id: str = Field(description="Unique within the node that raised it.")
+    id: str = Field(description="Unique within the team that raised it.")
     kind: EscalationKind
     raised_by: AgentRole = Field(
         default="ic",
         description=(
-            "Which agent of the node raised it. The agents of that role in "
-            "the nodes above are the ones that settle it or pass it up."
+            "Which agent of the team raised it. The agents of that role in "
+            "the teams above are the ones that settle it or pass it up."
         ),
     )
     title: str
@@ -134,15 +134,15 @@ class Escalation(BaseModel):
     raised_at: str = Field(description="ISO 8601 timestamp.")
     held_by: str | None = Field(
         description=(
-            "The node whose agents are working on it now: the parent of the "
-            "last node that passed it up. None when it waits on the human."
+            "The team whose agents are working on it now: the parent of the "
+            "last team that passed it up. None when it waits on the human."
         )
     )
     handoffs: list[EscalationHandoff] = Field(
         default_factory=list,
         description=(
-            "The nodes that passed it up, nearest to the node that raised it "
-            "first. Always the unbroken chain from that node's parent."
+            "The teams that passed it up, nearest to the team that raised it "
+            "first. Always the unbroken chain from that team's parent."
         ),
     )
 
@@ -154,7 +154,7 @@ class SplitChild(BaseModel):
     path: str = Field(
         description=(
             "Directory the sub-team owns, repo-relative and strictly inside "
-            "the proposing node's boundary."
+            "the proposing team's boundary."
         )
     )
     writable: list[str] = Field(
@@ -198,7 +198,7 @@ class SplitProposal(BaseModel):
     replaces: list[str] = Field(
         default_factory=list,
         description=(
-            "The sub-teams the node already has that the proposed ones take "
+            "The sub-teams the team already has that the proposed ones take "
             "the place of: ones a proposed team covers, and ones a proposed "
             "team takes part of."
         ),
@@ -206,7 +206,7 @@ class SplitProposal(BaseModel):
     keeps: list[str] = Field(
         default_factory=list,
         description=(
-            "The sub-teams the node already has that the IC said are to "
+            "The sub-teams the team already has that the IC said are to "
             "stay as they are."
         ),
     )
@@ -300,12 +300,12 @@ class OrgNodeInput(BaseModel):
     """
 
     id: str
-    parent_id: str | None = Field(description="None for the root node.")
+    parent_id: str | None = Field(description="None for the root team.")
     title: str
     boundary: Boundary
     isolation: IsolationMode = Field(
         description=(
-            "'worktree': the node has its own git worktree. "
+            "'worktree': the team has its own git worktree. "
             "'shared': it works in its parent's directory."
         )
     )
@@ -351,7 +351,7 @@ class OrgNodeDetail(BaseModel):
     """A team of the org tree with the teams around it."""
 
     node: OrgNode
-    ancestors: list[OrgNode] = Field(description="Root first, excluding the node.")
+    ancestors: list[OrgNode] = Field(description="Root first, excluding the team.")
     children: list[OrgNode]
 
 
@@ -506,7 +506,7 @@ class InheritedSpec(BaseModel):
     spec: str
     readonly: bool = Field(
         description=(
-            "False for the spec of the node's own boundary, which its IC writes."
+            "False for the spec of the team's own boundary, which its IC writes."
         )
     )
     old: bool = Field(
@@ -541,7 +541,7 @@ class FormerTeam(BaseModel):
     id: str
     title: str
     above: str = Field(
-        default="", description="The node id of the team above it when it went."
+        default="", description="The team id of the team above it when it went."
     )
     path: str = Field(description="The directory the team owned.")
     purpose: str = Field(description="What the team was for.")
@@ -587,8 +587,8 @@ class BoundaryContracts(BaseModel):
     contracts: str
     own: bool = Field(
         description=(
-            "True for the contracts between the node's own sub-teams. False "
-            "for the ones the team above set, which the node must keep with "
+            "True for the contracts between the team's own sub-teams. False "
+            "for the ones the team above set, which the team must keep with "
             "the teams beside it."
         )
     )
@@ -610,10 +610,10 @@ class FormerTeamSummary(BaseModel):
 
 
 class NodeMemory(BaseModel):
-    """Everything in the team memory that concerns one node."""
+    """Everything in the team memory that concerns one team."""
 
     specs: list[InheritedSpec] = Field(
-        description="The spec of the node's own boundary, when it has one."
+        description="The spec of the team's own boundary, when it has one."
     )
     contracts: list[BoundaryContracts] = Field(default_factory=list)
     reports: list[Report] = Field(
@@ -659,7 +659,7 @@ class OwnedFile(BaseModel):
     owner: str | None = Field(
         description=(
             "The direct report whose boundary the file is in; None for a "
-            "file the node kept for itself."
+            "file the team kept for itself."
         )
     )
 
@@ -670,7 +670,7 @@ class Collision(BaseModel):
 
     path: str
     node_ids: list[str] = Field(
-        description="The teams whose checkouts collide, the node itself included."
+        description="The teams whose checkouts collide, the team itself included."
     )
 
 
@@ -727,13 +727,13 @@ class FileEdit(BaseModel):
 
 
 class NodeOwnership(BaseModel):
-    """How a node's boundary is divided among its direct reports."""
+    """How a team's boundary is divided among its direct reports."""
 
     node_id: str
     owners: list[BoundaryOwner]
     files: list[OwnedFile] = Field(
         description=(
-            "The files of the node's boundary in its own checkout that git "
+            "The files of the team's boundary in its own checkout that git "
             "does not ignore, sorted by path. For a team of the org, in the "
             "repository's checkout."
         )
@@ -741,7 +741,7 @@ class NodeOwnership(BaseModel):
     truncated: bool = Field(description="There were more files than are listed.")
     collisions: list[Collision] = Field(
         description=(
-            "Found by merging the tips of the checkouts of the node and its "
+            "Found by merging the tips of the checkouts of the team and its "
             "direct reports in memory. Uncommitted changes are not compared. "
             "Always empty for a team of the org, whose work is in sessions."
         )
@@ -893,7 +893,9 @@ class TeamMatch(BaseModel):
 class RecoveryItem(BaseModel):
     """One thing a paused org takes up again, or cannot."""
 
-    node_id: str = Field(description="The team it is about; '' for the whole org.")
+    node_id: str = Field(
+        description="The place it is about (a team in a session); '' for the whole org."
+    )
     title: str
     kind: RecoveryKind
     detail: str = Field(description="What it is, in words for the human.")
@@ -1313,7 +1315,7 @@ class Merge(BaseModel):
 class SessionTeamInput(OrgNodeInput):
     """A team as it is at work in one session.
 
-    It is no node of the org tree. It holds what a session has of its own at
+    It is no team of the org tree. It holds what a session has of its own at
     a team: agents, a checkout, a review, escalations. The team's title and
     boundary are the team's, as they were when the session was opened.
     ``parent_id`` is what is above it in the session: the same session's
@@ -1329,13 +1331,13 @@ class SessionTeamInput(OrgNodeInput):
     escalations: list[Escalation] = Field(
         default_factory=list,
         description=(
-            "Open escalations this node raised, oldest first, wherever in the "
+            "Open escalations this team raised, oldest first, wherever in the "
             "chain above they are held."
         ),
     )
     pending_split: SplitProposal | None = Field(
         default=None,
-        description="A split of this node's boundary that is not carried out yet.",
+        description="A split of this team's boundary that is not carried out yet.",
     )
     base_commit: str = Field(
         default="",
@@ -1526,7 +1528,7 @@ class EscalationPathStep(BaseModel):
 
 
 class OpenEscalation(BaseModel):
-    """An escalation that waits on the human, with the nodes it came up through."""
+    """An escalation that waits on the human, with the teams it came up through."""
 
     node_id: str = Field(description="The team that raised it.")
     session_id: str = Field(
@@ -1546,9 +1548,9 @@ class OpenEscalation(BaseModel):
 class SnapshotEvent(BaseModel):
     """The part of the tree one subscriber follows.
 
-    ``nodes`` holds the focused node, its ancestors, its direct reports and
-    the direct reports of every expanded node; or, for a full subscription,
-    the focused node, its ancestors and every node below it.
+    ``nodes`` holds the focused team, its ancestors, its direct reports and
+    the direct reports of every expanded team; or, for a full subscription,
+    the focused team, its ancestors and every team below it.
     """
 
     type: Literal["snapshot"] = "snapshot"
@@ -1576,14 +1578,14 @@ class SnapshotEvent(BaseModel):
 
 
 class NodeUpsertEvent(BaseModel):
-    """A node was added or changed."""
+    """A team was added or changed."""
 
     type: Literal["node_upsert"] = "node_upsert"
     node: OrgNode
 
 
 class NodeRemovedEvent(BaseModel):
-    """A node was removed."""
+    """A team was removed."""
 
     type: Literal["node_removed"] = "node_removed"
     id: str

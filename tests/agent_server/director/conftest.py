@@ -91,7 +91,7 @@ def submodule(repo: Path, tmp_path: Path) -> Path:
     return repo / "libs" / "payments"
 
 
-def make_node(
+def make_team(
     node_id: str, parent_id: str | None, *, path: str | None = None
 ) -> OrgNodeInput:
     """A team of the org tree."""
@@ -152,11 +152,11 @@ def as_proposed(children: list[SplitChild]) -> list[ProposedTeam]:
 def small_tree() -> list[OrgNodeInput]:
     """root -> (a -> (a1, a2), b)."""
     return [
-        make_node("root", None, path=""),
-        make_node("a", "root", path="svc/a"),
-        make_node("b", "root", path="svc/b"),
-        make_node("a1", "a", path="svc/a/one"),
-        make_node("a2", "a", path="svc/a/two"),
+        make_team("root", None, path=""),
+        make_team("a", "root", path="svc/a"),
+        make_team("b", "root", path="svc/b"),
+        make_team("a1", "a", path="svc/a/one"),
+        make_team("a2", "a", path="svc/a/two"),
     ]
 
 

@@ -28,7 +28,7 @@ from openhands.agent_server.director.org_store import (
 from openhands.sdk.errors import NotFound
 from tests.agent_server.director.conftest import (
     make_escalation,
-    make_node,
+    make_team,
     open_session_in,
     run_git,
     session_places,
@@ -99,20 +99,20 @@ def test_snapshot_holds_the_focus_its_ancestors_and_direct_reports(store: OrgSto
     assert store.snapshot("missing") is None
 
 
-def test_snapshot_adds_the_reports_of_expanded_nodes(store: OrgStore):
+def test_snapshot_adds_the_reports_of_expanded_teams(store: OrgStore):
     snapshot = store.snapshot("root", ["a", "b", "missing"])
 
     assert snapshot is not None
     assert [node.id for node in snapshot.nodes] == ["root", "a", "b", "a1", "a2"]
 
 
-def test_subscribers_hear_about_the_reports_of_nodes_they_expanded(store: OrgStore):
+def test_subscribers_hear_about_the_reports_of_teams_they_expanded(store: OrgStore):
     collapsed: list[OrgChange] = []
     expanded: list[OrgChange] = []
     store.subscribe("root", collapsed.append)
     store.subscribe("root", expanded.append, ["a"])
 
-    store.upsert(make_node("a1", "a", path="renamed"))
+    store.upsert(make_team("a1", "a", path="renamed"))
     store.remove("a2")
 
     assert describe(collapsed) == [("node_upsert", "a")]
@@ -433,9 +433,9 @@ class TestFullSubscription:
     ):
         events = record(store, "a", full=True)
 
-        store.upsert(make_node("deep", "a1"))
-        store.upsert(make_node("deeper", "deep"))
-        store.upsert(make_node("elsewhere", "b"))
+        store.upsert(make_team("deep", "a1"))
+        store.upsert(make_team("deeper", "deep"))
+        store.upsert(make_team("elsewhere", "b"))
         store.remove("deep")
 
         assert describe(events) == [
@@ -449,7 +449,7 @@ class TestFullSubscription:
         ]
 
 
-def test_an_update_announces_only_the_node(store: OrgStore):
+def test_an_update_announces_only_the_team(store: OrgStore):
     events = record(store, "a2")
 
     store.update_team("a2", title="renamed")
@@ -457,13 +457,13 @@ def test_an_update_announces_only_the_node(store: OrgStore):
     assert describe(events) == [("node_upsert", "a2")]
 
 
-def test_updating_a_node_keeps_its_children(store: OrgStore):
-    updated = store.upsert(make_node("a", "root", path="svc/a"))
+def test_updating_a_team_keeps_its_children(store: OrgStore):
+    updated = store.upsert(make_team("a", "root", path="svc/a"))
 
     assert updated.child_ids == ["a1", "a2"]
 
 
-def test_subscribers_only_hear_about_nodes_in_their_snapshot(store: OrgStore):
+def test_subscribers_only_hear_about_teams_in_their_snapshot(store: OrgStore):
     at_b = record(store, "b")
     at_root = record(store, "root")
 
@@ -479,7 +479,7 @@ def test_subscribers_only_hear_about_nodes_in_their_snapshot(store: OrgStore):
 def test_a_new_child_announces_itself_and_its_parents_child_list(store: OrgStore):
     events = record(store, "b")
 
-    store.upsert(make_node("b1", "b", path="svc/b/one"))
+    store.upsert(make_team("b1", "b", path="svc/b/one"))
 
     assert describe(events) == [("node_upsert", "b1"), ("node_upsert", "b")]
     parent = events[1]
@@ -515,7 +515,7 @@ def test_the_root_can_be_removed_and_replaced(store: OrgStore):
 
     assert len(store) == 0
     assert store.root_id is None
-    assert store.upsert(make_node("new-root", None)).id == "new-root"
+    assert store.upsert(make_team("new-root", None)).id == "new-root"
 
 
 def test_unsubscribing_stops_delivery(store: OrgStore):
@@ -529,11 +529,11 @@ def test_unsubscribing_stops_delivery(store: OrgStore):
     assert events == []
 
 
-def test_subscribing_to_an_unknown_node_registers_nothing(store: OrgStore):
+def test_subscribing_to_an_unknown_team_registers_nothing(store: OrgStore):
     events: list[OrgChange] = []
 
     snapshot, _ = store.subscribe("missing", events.append)
-    store.upsert(make_node("missing", "root"))
+    store.upsert(make_team("missing", "root"))
 
     assert snapshot is None
     assert events == []
@@ -542,13 +542,13 @@ def test_subscribing_to_an_unknown_node_registers_nothing(store: OrgStore):
 @pytest.mark.parametrize(
     "node",
     [
-        make_node("second-root", None),
-        make_node("orphan", "nowhere"),
-        make_node("a1", "b"),
+        make_team("second-root", None),
+        make_team("orphan", "nowhere"),
+        make_team("a1", "b"),
     ],
     ids=["second root", "missing parent", "moved to another parent"],
 )
-def test_rejects_nodes_that_do_not_fit_the_tree(store: OrgStore, node):
+def test_rejects_teams_that_do_not_fit_the_tree(store: OrgStore, node):
     before = store.teams()
 
     with pytest.raises(OrgStoreError):
@@ -577,11 +577,11 @@ class TestReplaceAll:
     @pytest.mark.parametrize(
         "nodes",
         [
-            [make_node("root", None), make_node("root", None)],
-            [make_node("root", None), make_node("x", "nowhere")],
-            [make_node("r1", None), make_node("r2", None)],
-            [make_node("x", "y"), make_node("y", "x")],
-            [make_node("root", None), make_node("x", "y"), make_node("y", "x")],
+            [make_team("root", None), make_team("root", None)],
+            [make_team("root", None), make_team("x", "nowhere")],
+            [make_team("r1", None), make_team("r2", None)],
+            [make_team("x", "y"), make_team("y", "x")],
+            [make_team("root", None), make_team("x", "y"), make_team("y", "x")],
         ],
         ids=["duplicate id", "orphan", "two roots", "no root", "detached cycle"],
     )
@@ -802,7 +802,7 @@ def test_updating_a_place_keeps_its_other_fields(working: OrgStore):
         working.update_place("a1", base_commit="abc")
 
 
-def test_updating_a_node_cannot_move_it(working: OrgStore):
+def test_updating_a_team_cannot_move_it(working: OrgStore):
     with pytest.raises(OrgStoreError):
         working.update_team("a1", parent_id="b")
     with pytest.raises(OrgStoreError):
@@ -874,7 +874,7 @@ def test_an_escalation_of_a_moved_place_is_held_by_the_place_now_above_it(
         pytest.param("missing", "a", NotFound, id="a team there is not"),
     ],
 )
-def test_a_node_moves_only_to_where_the_tree_stays_a_tree(
+def test_a_team_moves_only_to_where_the_tree_stays_a_tree(
     store: OrgStore, node_id: str, parent_id: str, error: type[Exception]
 ):
     with pytest.raises(error):

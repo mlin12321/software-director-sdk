@@ -150,11 +150,11 @@ class Sync(Sessions):
         self._resuming = set(again)
         self._release()
         await self._resync()
-        for node_id in waited:
-            run.unmark(WAITING, node_id)
+        for place_id in waited:
+            run.unmark(WAITING, place_id)
         intents = run.open_intents()
         starting = {intent.node_id for intent in intents}
-        self._line = deque(node_id for node_id in waited if node_id in starting)
+        self._line = deque(place_id for place_id in waited if place_id in starting)
         for intent in intents:
             self._enqueue(
                 lambda intent=intent: self._carry_out(intent.id), _lane_for(intent)
@@ -166,8 +166,8 @@ class Sync(Sessions):
                 ),
                 held.node_id or ORG_LANE,
             )
-        for node_id in run.marked(HELD):
-            submitted = store.place(node_id)
+        for place_id in run.marked(HELD):
+            submitted = store.place(place_id)
             self.release_reviews(submitted.parent_id if submitted else None)
         for conversation_id, note in again.items():
             self._enqueue(
@@ -339,7 +339,7 @@ class Sync(Sessions):
                 head=await asyncio.to_thread(create_org_board(self._repo_dir).head),
             )
 
-    async def edit_file(self, node_id: str, path: str, content: str) -> FileEdit:
+    async def edit_file(self, place_id: str, path: str, content: str) -> FileEdit:
         """Write one file of a team by hand, commit it and tell its IC.
 
         Raises:
@@ -349,25 +349,25 @@ class Sync(Sessions):
             Invalid: The path does not name a file that can be committed.
         """
         store = await asyncio.to_thread(lambda: self.store)
-        node = store.place(node_id)
-        if node is None:
-            raise NotFound(f"Unknown node: {node_id}")
-        sub_teams = store.below(node_id)
-        require_editable(node, sub_teams, path)
+        place = store.place(place_id)
+        if place is None:
+            raise NotFound(f"Unknown team: {place_id}")
+        sub_teams = store.below(place_id)
+        require_editable(place, sub_teams, path)
         agents = [
             UUID(agent.conversation_id)
-            for agent in node.agents
+            for agent in place.agents
             if agent.conversation_id is not None
         ]
         if agents and self._launcher is not None:
             statuses = await self._launcher.statuses(agents)
             if ConversationExecutionStatus.RUNNING in statuses.values():
                 raise Conflict(
-                    f"An agent of team {node.title!r} is working. Pause the "
+                    f"An agent of team {place.title!r} is working. Pause the "
                     "org or wait for it to finish, then save again."
                 )
-        edit = await asyncio.to_thread(write_by_hand, node, sub_teams, path, content)
-        ic = agent_conversation(node, "ic")
+        edit = await asyncio.to_thread(write_by_hand, place, sub_teams, path, content)
+        ic = agent_conversation(place, "ic")
         if edit.commit is not None and ic is not None and self._loop is not None:
             self.notify(
                 ic,
@@ -398,29 +398,29 @@ class Sync(Sessions):
         """
         launcher = self._require_launcher()
         store = await asyncio.to_thread(lambda: self.store)
-        node = store.place(node_id)
-        if node is None or is_division_lead(node):
-            team = node or store.team(node_id)
+        place = store.place(node_id)
+        if place is None or is_division_lead(place):
+            team = place or store.team(node_id)
             if team is None:
                 raise NotFound(f"There is no team {node_id}")
             raise Conflict(
                 f"Nobody works at {team.title!r} itself: open a session there."
             )
-        if node.status == "done":
-            raise Conflict(f"Team {node.title} is done")
-        ic = agent_conversation(node, "ic")
+        if place.status == "done":
+            raise Conflict(f"Team {place.title} is done")
+        ic = agent_conversation(place, "ic")
         if ic is not None and await launcher.started(UUID(ic)) is not None:
-            raise Conflict(f"The IC of team {node.title} has a conversation here")
+            raise Conflict(f"The IC of team {place.title} has a conversation here")
         conversation = request.conversation
-        above = store.place(node.parent_id) if node.parent_id else None
+        above = store.place(place.parent_id) if place.parent_id else None
         # A session's IC that never started has no checkout yet: it gets
         # one of its own, never the one of the team it works beside.
         own_checkout = not (
-            above is not None and store.opens_session(node) and not apart(node, above)
+            above is not None and store.opens_session(place) and not apart(place, above)
         )
         if conversation is not None and not own_checkout:
             raise Conflict(
-                f"The session {store.session_title(node)!r} has no checkout yet. "
+                f"The session {store.session_title(place)!r} has no checkout yet. "
                 "Start it again without a conversation."
             )
         if (
@@ -430,24 +430,26 @@ class Sync(Sessions):
         ):
             raise Conflict(
                 "No conversation of the org runs on this server to start "
-                f"the IC of {node.title!r} from. Start it again with a "
+                f"the IC of {place.title!r} from. Start it again with a "
                 "conversation."
             )
-        await asyncio.to_thread(restore_worktrees, self._repo_dir, [node], self._home())
+        await asyncio.to_thread(
+            restore_worktrees, self._repo_dir, [place], self._home()
+        )
         ic_id = uuid4()
-        task = await asyncio.to_thread(self._task_of, node)
+        task = await asyncio.to_thread(self._task_of, place)
         if conversation is None:
             store.update_place(node_id, agents=_new_agents(ic_id), status="idle")
             self._begin(
                 "start_team",
                 node_id,
                 task=task,
-                parent=node.parent_id,
-                checkout=node.worktree_path
-                if own_checkout or self._in_place(node)
+                parent=place.parent_id,
+                checkout=place.worktree_path
+                if own_checkout or self._in_place(place)
                 else None,
             )
-            return store.place(node_id) or node
+            return store.place(node_id) or place
         additions = conversation.agent_launch_additions or AgentLaunchAdditions()
         suffix = "\n\n".join(
             part
@@ -464,7 +466,7 @@ class Sync(Sessions):
                         "autotitle": False,
                         "worktree": False,
                         "workspace": conversation.workspace.model_copy(
-                            update={"working_dir": node.worktree_path}
+                            update={"working_dir": place.worktree_path}
                         ),
                         "agent_launch_additions": additions.model_copy(
                             update={"system_message_suffix_append": suffix}
@@ -472,18 +474,18 @@ class Sync(Sessions):
                     }
                 ),
                 [Tool(name=name) for name in TOOLS_OF["ic"]],
-                title=_agent_title(node.title, "ic", store.session_title(node)),
+                title=_agent_title(place.title, "ic", store.session_title(place)),
                 tool_params=await asyncio.to_thread(self._confine, node_id, "ic"),
                 adapt_agent=await asyncio.to_thread(
                     self._adapter, str(ic_id), TOOLS_OF["ic"]
                 ),
             )
         except BaseException:
-            store.update_place(node_id, agents=node.agents, status=node.status)
+            store.update_place(node_id, agents=place.agents, status=place.status)
             raise
         store.set_agent(node_id, "ic", kind=started.kind, acp_server=started.acp_server)
         self._begin("brief", node_id, role="ic", task=task)
-        return store.place(node_id) or node
+        return store.place(node_id) or place
 
     async def _after(self, lane: str) -> None:
         """Wait until what ``lane`` was asked to do so far is done."""
@@ -682,13 +684,13 @@ class Sync(Sessions):
         ]
         statuses = await launcher.statuses([agent for _, _, agent in agents])
         stopping: list[UUID] = []
-        for node_id, role, conversation_id in agents:
+        for place_id, role, conversation_id in agents:
             if statuses.get(conversation_id) != ConversationExecutionStatus.RUNNING:
                 continue
-            run.mark(RUNNING, str(conversation_id), node_id)
+            run.mark(RUNNING, str(conversation_id), place_id)
             self._running.add(str(conversation_id))
             with suppress(NotFound):
-                store.set_agent(node_id, role, status=AGENT_PAUSED)
+                store.set_agent(place_id, role, status=AGENT_PAUSED)
             stopping.append(conversation_id)
         # An IC in hand-over mode is paused in that conversation too.
         modes = [
@@ -699,15 +701,15 @@ class Sync(Sessions):
         running = await launcher.statuses(
             [UUID(mode.conversation_id) for _, mode in modes]
         )
-        for node_id, mode in modes:
+        for place_id, mode in modes:
             aside = UUID(mode.conversation_id)
             if running.get(aside) != ConversationExecutionStatus.RUNNING:
                 continue
-            run.mark(RUNNING, mode.conversation_id, node_id)
+            run.mark(RUNNING, mode.conversation_id, place_id)
             self._running.add(mode.conversation_id)
             with suppress(NotFound):
                 store.set_hand_over(
-                    node_id, mode.model_copy(update={"status": AGENT_PAUSED})
+                    place_id, mode.model_copy(update={"status": AGENT_PAUSED})
                 )
             stopping.append(aside)
         await asyncio.gather(*(launcher.pause(agent) for agent in stopping))
@@ -781,19 +783,19 @@ class Sync(Sessions):
             for intent in self._runs().open_intents()
             if intent.kind in STARTING
         }
-        for node_id, role, conversation_id in agents:
+        for place_id, role, conversation_id in agents:
             status = statuses.get(conversation_id)
             agent = str(conversation_id)
             if self._paused is None:
                 self._note_running(
-                    agent, node_id, status == ConversationExecutionStatus.RUNNING
+                    agent, place_id, status == ConversationExecutionStatus.RUNNING
                 )
             if status is not None:
                 shown = self._shown(agent, status)
             else:
-                shown = "idle" if node_id in starting else AGENT_LOST
+                shown = "idle" if place_id in starting else AGENT_LOST
             with suppress(NotFound):
-                store.set_agent(node_id, role, status=shown)
+                store.set_agent(place_id, role, status=shown)
         await self._resync_hand_overs()
 
     async def _resync_hand_overs(self) -> None:
@@ -815,12 +817,12 @@ class Sync(Sessions):
             for intent in self._runs().open_intents()
             if intent.kind == "hand_over"
         }
-        for node_id, mode in modes:
+        for place_id, mode in modes:
             status = statuses.get(UUID(mode.conversation_id))
             if status is not None:
                 self._on_hand_over_status(store, mode.conversation_id, status)
-            elif node_id not in starting and mode.status != AGENT_LOST:
+            elif place_id not in starting and mode.status != AGENT_LOST:
                 store.set_hand_over(
-                    node_id, mode.model_copy(update={"status": AGENT_LOST})
+                    place_id, mode.model_copy(update={"status": AGENT_LOST})
                 )
-                self._hand_over_ended(node_id)
+                self._hand_over_ended(place_id)

@@ -1,7 +1,7 @@
 """Director router for OpenHands Agent Server.
 
 Serves the org tree of agent teams, a live stream of its changes, and the
-team memory that applies to each node. State lives in ``director/``.
+team memory that applies to each team. State lives in ``director/``.
 """
 
 import asyncio
@@ -84,7 +84,7 @@ director_tools_router = APIRouter(prefix=TOOLS_PATH, tags=["Director"])
 STREAM_HEARTBEAT_SECONDS = 15.0
 
 _NODE_NOT_FOUND: dict[type[DomainError], str] = {
-    NotFound: "No such node in the org tree"
+    NotFound: "No such team in the org tree"
 }
 _NO_MEMORY: dict[type[DomainError], str] = {
     Unavailable: "The director's directory is not a git repository",
@@ -118,10 +118,10 @@ def _calling_agent(
 
 
 def _require_node(service: DirectorService, node_id: str) -> OrgNode:
-    """A node of the org tree. What a session has at a team is no node."""
+    """A team of the org tree. What a session has at a team is no team."""
     node = service.store.team(node_id)
     if node is None:
-        raise NotFound(f"Unknown node: {node_id}")
+        raise NotFound(f"Unknown team: {node_id}")
     return node
 
 
@@ -129,7 +129,7 @@ def _require_any(service: DirectorService, node_id: str) -> OrgNode:
     """A team of the org tree, or a place of a session, by its id."""
     node = service.store.get(node_id)
     if node is None:
-        raise NotFound(f"Unknown node: {node_id}")
+        raise NotFound(f"Unknown team: {node_id}")
     return node
 
 
@@ -159,10 +159,10 @@ def _sse(event: SnapshotEvent | OrgChange | OrgStateEvent) -> str:
         200: {
             "description": (
                 "Server-sent events. The first is a `snapshot` of the focused "
-                "node, its ancestors, its direct reports, the direct reports of "
-                "every expanded node, the open sessions, and every "
+                "team, its ancestors, its direct reports, the direct reports of "
+                "every expanded team, the open sessions, and every "
                 "escalation that waits on the human. `node_upsert` and "
-                "`node_removed` events for those same nodes follow, and a "
+                "`node_removed` events for those same teams follow, and a "
                 "`sessions` or an `escalations` event carries the whole new "
                 "list whenever it changes. The snapshot says whether the org "
                 "is paused and whether a pull waits for choices; an "
@@ -172,20 +172,20 @@ def _sse(event: SnapshotEvent | OrgChange | OrgStateEvent) -> str:
             "content": {"text/event-stream": {"schema": {"type": "string"}}},
         },
         **error_responses(
-            {NotFound: "The node does not exist, or the org tree is empty"}
+            {NotFound: "The team does not exist, or the org tree is empty"}
         ),
     },
 )
 async def stream_org_tree(
     service: DirectorService = Depends(get_director_service),
     node: str | None = Query(
-        default=None, description="Node to focus on. Defaults to the root."
+        default=None, description="Team to focus on. Defaults to the root."
     ),
     expanded: Annotated[
         list[str] | None,
         Query(
             description=(
-                "Nodes whose direct reports to follow as well. Repeat the "
+                "Teams whose direct reports to follow as well. Repeat the "
                 "parameter for each one; unknown ids are ignored."
             ),
         ),
@@ -194,7 +194,7 @@ async def stream_org_tree(
         bool,
         Query(
             description=(
-                "Follow every node below the focused one, for a client that "
+                "Follow every team below the focused one, for a client that "
                 "draws the whole chart."
             ),
         ),
@@ -202,11 +202,11 @@ async def stream_org_tree(
 ) -> StreamingResponse:
     """Stream the part of the org tree a client has open as server-sent events.
 
-    A client subscribes to the node it shows as the root of its chart plus
-    the nodes it has expanded, so its traffic grows with what is on screen
-    and not with the size of the tree. To expand or collapse a node, open a
+    A client subscribes to the team it shows as the root of its chart plus
+    the teams it has expanded, so its traffic grows with what is on screen
+    and not with the size of the tree. To expand or collapse a team, open a
     new stream with the new set. `full` follows the whole subtree instead.
-    The nodes are the teams of the org; the work at them is in `sessions`.
+    The teams are the teams of the org; the work at them is in `sessions`.
     """
     # The first use reads the tree from git.
     store = await asyncio.to_thread(lambda: service.store)
@@ -224,7 +224,7 @@ async def stream_org_tree(
         focus_id, on_change, expanded or (), full=full
     )
     if snapshot is None:
-        raise NotFound(f"Unknown node: {focus_id}")
+        raise NotFound(f"Unknown team: {focus_id}")
     unwatch = service.watch_state(on_change)
     state = await asyncio.to_thread(service.state)
 
@@ -658,7 +658,7 @@ def get_org_history(
 def get_node_memory(
     node_id: str, service: DirectorService = Depends(get_director_service)
 ) -> NodeMemory:
-    """Get what a node works to: the spec of its boundary, the contracts
+    """Get what a team works to: the spec of its boundary, the contracts
     between its sub-teams and the ones the team above set for it, and
     what its two agents reported."""
     node = _require_any(service, node_id)
@@ -702,7 +702,7 @@ def get_node_messages(
 def get_node_ownership(
     node_id: str, service: DirectorService = Depends(get_director_service)
 ) -> NodeOwnership:
-    """Get which direct report owns each file of a node's boundary, and the
+    """Get which direct report owns each file of a team's boundary, and the
     files where the committed work of two of these teams does not merge.
 
     For a team of the org the files are those of the repository's checkout
@@ -885,7 +885,7 @@ async def abort_merge(
 
 
 @director_router.post(
-    "/org/sessions/{session_id}/teams/{node_id}/start_again",
+    "/org/sessions/{session_id}/teams/{node_id}/start-again",
     response_model=SessionTeam,
     responses=error_responses(
         {

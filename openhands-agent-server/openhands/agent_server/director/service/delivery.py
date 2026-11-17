@@ -60,12 +60,14 @@ logger = logging.getLogger(__name__)
 class Delivery(Records):
     """Sends agents what the director has for them."""
 
-    def refresh_headline(self, node_id: str, report: str) -> None:
-        """Have a node's headline rewritten after it reported. Any thread."""
-        node = self.store.place(node_id)
-        if node is not None:
-            task = f"{node.spec_summary}\n\nLatest report of the team: {report}"
-            self._enqueue(lambda: self._summarize(node_id, task), f"headline:{node_id}")
+    def refresh_headline(self, place_id: str, report: str) -> None:
+        """Have a team's headline rewritten after it reported. Any thread."""
+        place = self.store.place(place_id)
+        if place is not None:
+            task = f"{place.spec_summary}\n\nLatest report of the team: {report}"
+            self._enqueue(
+                lambda: self._summarize(place_id, task), f"headline:{place_id}"
+            )
 
     def notify(
         self, conversation_id: str | None, text: str, *, at_once: bool = False
@@ -79,7 +81,7 @@ class Delivery(Records):
         if conversation_id is not None:
             self._post(conversation_id, from_director(text), at_once=at_once)
 
-    def report(self, node: SessionTeam, role: AgentRole, text: str) -> None:
+    def report(self, place: SessionTeam, role: AgentRole, text: str) -> None:
         """Record something for the two agents of a team. Safe from any
         thread.
 
@@ -93,10 +95,10 @@ class Delivery(Records):
             at=_instant(),
             role=role,
             text=text,
-            session=self.store.session_title(node),
+            session=self.store.session_title(place),
         )
         # Its session's alone until the session's work is accepted.
-        self._keep_report(node, report)
+        self._keep_report(place, report)
 
     def reports_grew(self, node_id: str, role: AgentRole) -> None:
         """Compact what one agent of a team recorded, if it has grown past
@@ -143,13 +145,13 @@ class Delivery(Records):
         if self._loop is None:
             raise Unavailable("The director is not running agents on this server")
         found = self.store.find_by_conversation(conversation_id)
-        node_id = found[0].id if found else ""
-        seq = self._runs().hold(conversation_id, node_id, text)
+        place_id = found[0].id if found else ""
+        seq = self._runs().hold(conversation_id, place_id, text)
         if at_once:
             self._at_once.add(seq)
         self._save_soon()
         self._enqueue(
-            lambda: self._deliver(seq, conversation_id, text), node_id or ORG_LANE
+            lambda: self._deliver(seq, conversation_id, text), place_id or ORG_LANE
         )
 
     async def _deliver(self, seq: int, conversation_id: str, text: str) -> None:
@@ -186,18 +188,18 @@ class Delivery(Records):
             self._delivering.discard(seq)
         run.delivered(seq)
 
-    def knows(self, node_id: str, role: AgentRole, *keys: str) -> None:
+    def knows(self, place_id: str, role: AgentRole, *keys: str) -> None:
         """Take as told to an agent the parts of its context it has just
         written itself, so that they are not sent back to it. Safe from any
         thread."""
-        node = self.store.place(node_id)
-        conversation_id = agent_conversation(node, role) if node else None
+        place = self.store.place(place_id)
+        conversation_id = agent_conversation(place, role) if place else None
         run = self._runs()
         before = run.marked(TOLD).get(conversation_id or "")
-        if node is None or conversation_id is None or not before:
+        if place is None or conversation_id is None or not before:
             return
         try:
-            now = steady(self.context_of(node, role))
+            now = steady(self.context_of(place, role))
         except (GitError, OSError):
             return
         told = json.loads(before) | {key: now[key] for key in keys if key in now}
@@ -298,25 +300,25 @@ class Delivery(Records):
             )
 
     async def _when_there_is_room[T](
-        self, node_id: str, start: Callable[[], Awaitable[T]]
+        self, place_id: str, start: Callable[[], Awaitable[T]]
     ) -> T:
         """Run ``start`` for a team; while the server is full, wait in line
         for a conversation to stop running and try again."""
-        while node_id in self._line and self._line[0] != node_id:
+        while place_id in self._line and self._line[0] != place_id:
             await self._line_moved.wait()
         try:
             return await start()
         except ConversationRunLimitExceeded:
-            logger.info("Server is at its run limit; node %s waits", node_id)
+            logger.info("Server is at its run limit; team %s waits", place_id)
         finally:
             # Nothing is awaited from here to the gate, so the team is in
             # line at the gate before the next one tries.
-            self._leave_line(node_id)
+            self._leave_line(place_id)
         store = self.store
         run = self._runs()
-        run.mark(WAITING, node_id)
+        run.mark(WAITING, place_id)
         with suppress(NotFound):
-            store.update_place(node_id, waiting_to_start=True)
+            store.update_place(place_id, waiting_to_start=True)
         keeps_place = False
         try:
             async with self._start_gate:
@@ -339,24 +341,24 @@ class Delivery(Records):
             raise
         finally:
             if not keeps_place:
-                run.unmark(WAITING, node_id)
+                run.unmark(WAITING, place_id)
             with suppress(NotFound):
-                store.update_place(node_id, waiting_to_start=False)
+                store.update_place(place_id, waiting_to_start=False)
 
-    def _note_running(self, conversation_id: str, node_id: str, running: bool) -> None:
+    def _note_running(self, conversation_id: str, place_id: str, running: bool) -> None:
         if running == (conversation_id in self._running):
             return
         run = self._runs()
         if running:
             self._running.add(conversation_id)
-            run.mark(RUNNING, conversation_id, node_id)
+            run.mark(RUNNING, conversation_id, place_id)
         else:
             self._running.discard(conversation_id)
             run.unmark(RUNNING, conversation_id)
             if self._loop is not None:
                 self._deliver_what_waited(conversation_id)
                 for intent_id, (teams, lane) in list(self._settling.items()):
-                    if node_id in teams:
+                    if place_id in teams:
                         self._enqueue(
                             lambda intent_id=intent_id: self._carry_out(intent_id),
                             lane,
@@ -435,9 +437,9 @@ class Delivery(Records):
         return shorter[0].text if shorter else full
 
     async def _summarize(
-        self, node_id: str, task: str, *, rename: bool = False, first: bool = False
+        self, place_id: str, task: str, *, rename: bool = False, first: bool = False
     ) -> None:
-        """Have a model write a node's headline and, with ``rename``, its title.
+        """Have a model write a team's headline and, with ``rename``, its title.
 
         Args:
             first: This is the summary of the task the team was made for. It
@@ -447,16 +449,16 @@ class Delivery(Records):
         store = self.store
 
         def reported() -> bool:
-            current = store.place(node_id)
+            current = store.place(place_id)
             return (
                 first
                 and current is not None
                 and current.headline != provisional_summary(task).headline
             )
 
-        node = store.place(node_id)
-        conversation_id = agent_conversation(node, "ic") if node else None
-        if node is None or conversation_id is None or reported():
+        place = store.place(place_id)
+        conversation_id = agent_conversation(place, "ic") if place else None
+        if place is None or conversation_id is None or reported():
             return
         if self._paused is not None:
             return
@@ -475,20 +477,20 @@ class Delivery(Records):
         if rename:
             changes["title"] = summary.title
         try:
-            node = store.update_place(node_id, **changes)
+            place = store.update_place(place_id, **changes)
         except NotFound:
             return
         if not rename:
             return
-        if store.opens_session(node):
+        if store.opens_session(place):
             # A session the human gave no name is called what it is for.
-            store.rename_session(node.session, summary.title)
-        for agent in node.agents:
+            store.rename_session(place.session, summary.title)
+        for agent in place.agents:
             if agent.conversation_id is not None:
                 with suppress(NotFound):
                     await launcher.rename(
                         UUID(agent.conversation_id),
                         _agent_title(
-                            summary.title, agent.role, store.session_title(node)
+                            summary.title, agent.role, store.session_title(place)
                         ),
                     )

@@ -374,7 +374,7 @@ async def test_a_proposal_must_say_what_becomes_of_every_sub_team(
     assert node(service, "root").pending_split is None
 
 
-async def test_a_sub_team_is_kept_by_its_name_or_its_node_id(
+async def test_a_sub_team_is_kept_by_its_name_or_its_team_id(
     service: DirectorService,
 ):
     mobile = [SplitChild(title="Mobile", path="apps/mobile", task="The app")]
@@ -458,7 +458,7 @@ async def test_a_split_says_what_the_ic_left_and_lets_it_finish_until_the_team_s
     )
     await service.settled()
 
-    assert "The 1 file(s) you left uncommitted in its directory" in given.text
+    assert "The 1 file(s) you left uncommitted in its folder" in given.text
     assert "belongs to your sub-team 'API'" in (
         attempt(service, ic(service), "file_editor", create(pay)) or ""
     )
@@ -493,7 +493,7 @@ async def test_what_is_uncommitted_in_a_sub_teams_directory_is_not_the_ics_to_su
     refused = await use(service, ic(service, API), SubmitReviewTool, DONE)
 
     assert refused.is_error
-    assert "services/api/db/schema.sql in the directory of your sub-team 'DB'" in (
+    assert "services/api/db/schema.sql in the folder of your sub-team 'DB'" in (
         refused.text
     )
     assert "Wait until it has submitted its work" in refused.text

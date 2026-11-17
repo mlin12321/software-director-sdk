@@ -391,7 +391,7 @@ async def test_an_ic_is_told_of_teams_that_keep_needing_each_other(
     await use(service, ic(service, WEB), SubmitReviewTool, DONE)
 
     words = (
-        "needed each other's directory 3 times (2 writes refused, 1 review "
+        "needed each other's folder 3 times (2 writes refused, 1 review "
         "finding): weigh whether the two are one concern"
     )
     asked = "\n".join(requests(service, launcher))
@@ -414,6 +414,6 @@ async def test_a_manager_is_told_how_often_teams_replaced_together_needed_each_o
 
     told = launcher.messages_to(manager(service))[-1]
     assert (
-        "- 'API' and 'Web' needed each other's directory 1 time (1 write "
+        "- 'API' and 'Web' needed each other's folder 1 time (1 write "
         "refused): weigh whether the two are one concern."
     ) in told

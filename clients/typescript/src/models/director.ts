@@ -9,7 +9,7 @@
 export type DirectorNodeId = string;
 
 /**
- * A pod has an IC and a Manager. A team's IC leads that team, is a report
+ * A team has an IC and a Manager. A team's IC leads that team, is a report
  * of the team above, and does the code work in its boundary that no
  * sub-team has taken on.
  */
@@ -70,23 +70,23 @@ export type DirectorAgentKind = 'openhands' | 'acp';
  */
 export type DirectorTeamEnforcement = 'sandbox' | 'checks' | 'merge';
 
-/** A node that tried to settle an escalation, could not, and passed it up. */
+/** A team that tried to settle an escalation, could not, and passed it up. */
 export interface DirectorEscalationHandoff {
   node_id: DirectorNodeId;
-  /** Why this node could not settle it. */
+  /** Why this team could not settle it. */
   reason: string;
   /** ISO 8601 timestamp. */
   at: string;
 }
 
 /**
- * Something a node cannot settle itself. It goes to the node above, which
- * settles it or passes it up in turn; it waits on the human once every node
+ * Something a team cannot settle itself. It goes to the team above, which
+ * settles it or passes it up in turn; it waits on the human once every team
  * above the one that raised it in its session has passed it up, which for
  * the team the session was opened at is at once.
  */
 export interface DirectorEscalation {
-  /** Unique within the node that raised it. */
+  /** Unique within the team that raised it. */
   id: string;
   kind: DirectorEscalationKind;
   title: string;
@@ -94,13 +94,13 @@ export interface DirectorEscalation {
   /** ISO 8601 timestamp. */
   raised_at: string;
   /**
-   * Which agent of the node raised it. The same agent of each node above
+   * Which agent of the team raised it. The same agent of each team above
    * handles it, and the answer goes back to this one.
    */
   raised_by: DirectorAgentRole;
-  /** The node working on it now; `null` when it waits on the human. */
+  /** The team working on it now; `null` when it waits on the human. */
   held_by: DirectorNodeId | null;
-  /** The nodes that passed it up, nearest to the one that raised it first. */
+  /** The teams that passed it up, nearest to the one that raised it first. */
   handoffs: DirectorEscalationHandoff[];
 }
 
@@ -109,7 +109,7 @@ export type DirectorSplitStatus = 'proposed' | 'approved';
 /** A sub-team an IC proposes to hand part of its boundary to. */
 export interface DirectorSplitChild {
   title: string;
-  /** Directory the sub-team owns, strictly inside the proposing node's boundary. */
+  /** Directory the sub-team owns, strictly inside the proposing team's boundary. */
   path: string;
   writable: string[];
   readonly: string[];
@@ -137,11 +137,11 @@ export interface DirectorSplitProposal {
   reason?: string;
   status: DirectorSplitStatus;
   /**
-   * The sub-teams the node has now that the proposed ones take the place of.
+   * The sub-teams the team has now that the proposed ones take the place of.
    * Their own sub-teams stay.
    */
   replaces?: DirectorNodeId[];
-  /** The sub-teams the node has now that the IC said are to stay as they are. */
+  /** The sub-teams the team has now that the IC said are to stay as they are. */
   keeps?: DirectorNodeId[];
   /** ISO 8601 timestamp. */
   proposed_at: string;
@@ -222,7 +222,7 @@ export interface DirectorOrgNode {
 
 export interface DirectorOrgNodeDetail {
   node: DirectorOrgNode;
-  /** Root first, excluding the node. */
+  /** Root first, excluding the team. */
   ancestors: DirectorOrgNode[];
   children: DirectorOrgNode[];
 }
@@ -275,7 +275,7 @@ export type DirectorRecoveryKind =
 
 /** One thing a paused org takes up again, or cannot. */
 export interface DirectorRecoveryItem {
-  /** The team it is about; `''` for the whole org. */
+  /** The place it is about (a team in a session); `''` for the whole org. */
   node_id: DirectorNodeId;
   title: string;
   kind: DirectorRecoveryKind;
@@ -353,7 +353,7 @@ export type DirectorBoundaryEnforcement = 'sandbox' | 'checks';
 
 /** Where a message to the org went. */
 export interface DirectorRoutedMessage {
-  /** The team that received it. */
+  /** The place that received it (a team in a session). */
   node_id: DirectorNodeId;
   /** The title of that team. */
   team: string;
@@ -378,7 +378,7 @@ export type DirectorChosenBy = 'path' | 'named' | 'model' | 'top';
 
 /**
  * What a session has at one team of the org: agents, a checkout, a review
- * and escalations of its own. It is no node of the org tree. `id` is its
+ * and escalations of its own. It is no team of the org tree. `id` is its
  * own (`<team id>@<session id>`), `parent_id` what the session has at the
  * team above, or for the team it was opened at its Division Lead place,
  * and `child_ids` what it has at the team's sub-teams.
@@ -585,7 +585,7 @@ export interface DirectorEscalationPathStep {
   title: string;
 }
 
-/** An escalation that waits on the human, with the nodes it came up through. */
+/** An escalation that waits on the human, with the teams it came up through. */
 export interface DirectorOpenEscalation {
   /** The team of the org that raised it. */
   node_id: DirectorNodeId;
@@ -658,7 +658,7 @@ export interface DirectorStopped {
 export interface DirectorInheritedSpec {
   path: string;
   spec: string;
-  /** False for the spec of the node's own boundary, which its IC writes. */
+  /** False for the spec of the team's own boundary, which its IC writes. */
   readonly: boolean;
   /**
    * True for a spec a team before this one left: it says how that team
@@ -683,8 +683,8 @@ export interface DirectorBoundaryContracts {
   path: string;
   contracts: string;
   /**
-   * True for the contracts between the node's own sub-teams; false for the
-   * ones the team above set, which the node keeps with the teams beside it.
+   * True for the contracts between the team's own sub-teams; false for the
+   * ones the team above set, which the team keeps with the teams beside it.
    */
   own: boolean;
 }
@@ -775,7 +775,7 @@ export interface DirectorFormerTeam {
 }
 
 export interface DirectorNodeMemory {
-  /** The spec of the node's own boundary, when it has one. */
+  /** The spec of the team's own boundary, when it has one. */
   specs: DirectorInheritedSpec[];
   contracts?: DirectorBoundaryContracts[];
   /** What the team's own two agents recorded, oldest first. */
@@ -799,14 +799,14 @@ export interface DirectorBoundaryOwner {
 export interface DirectorOwnedFile {
   /** Relative to the repository. */
   path: string;
-  /** The direct report that owns the file; null when the node kept it. */
+  /** The direct report that owns the file; null when the team kept it. */
   owner: DirectorNodeId | null;
 }
 
 /** A file the committed work of two teams changed in ways that do not merge. */
 export interface DirectorCollision {
   path: string;
-  /** The teams whose checkouts collide, the node itself included. */
+  /** The teams whose checkouts collide, the team itself included. */
   node_ids: DirectorNodeId[];
 }
 
@@ -849,12 +849,12 @@ export interface DirectorFileEdit {
   commit: string | null;
 }
 
-/** How a node's boundary is divided among its direct reports. */
+/** How a team's boundary is divided among its direct reports. */
 export interface DirectorNodeOwnership {
   node_id: DirectorNodeId;
   owners: DirectorBoundaryOwner[];
   /**
-   * The unignored files of the node's boundary in its own checkout, by path;
+   * The unignored files of the team's boundary in its own checkout, by path;
    * for a team of the org, in the repository's checkout.
    */
   files: DirectorOwnedFile[];
@@ -874,11 +874,11 @@ export interface DirectorNodeOwnership {
 /**
  * What `GET /api/director/org/tree-stream` sends.
  *
- * A `snapshot` holds the focused node, its ancestors, its direct reports and
- * the direct reports of every expanded node (or, for a full stream, every
- * node below the focused one), plus the open sessions and every escalation
+ * A `snapshot` holds the focused team, its ancestors, its direct reports and
+ * the direct reports of every expanded team (or, for a full stream, every
+ * team below the focused one), plus the open sessions and every escalation
  * that waits on the human, wherever the stream is focused. `node_upsert` and
- * `node_removed` are limited to those nodes. `sessions` and `escalations`
+ * `node_removed` are limited to those teams. `sessions` and `escalations`
  * carry the whole new list. The snapshot says
  * whether the org is paused and whether a pull waits for choices; `org_state`
  * follows whenever either changes.
@@ -889,7 +889,7 @@ export type DirectorOrgEvent =
       focus_id: DirectorNodeId;
       nodes: DirectorOrgNode[];
       escalations: DirectorOpenEscalation[];
-      /** The sessions that are open. They are no nodes of the tree. */
+      /** The sessions that are open. They are no teams of the tree. */
       sessions: DirectorSession[];
       paused?: DirectorPauseReason | null;
       merging?: boolean;

@@ -110,7 +110,7 @@ class SettleTeamsAction(Action):
     contracts: list[ContractsChoice] = Field(
         default_factory=list,
         description=(
-            "For contracts that wait: which holds for each directory. "
+            "For contracts that wait: which holds for each folder. "
             "Unnamed, the session's hold."
         ),
     )
@@ -197,7 +197,7 @@ class ReviewTeamAction(Action):
         default_factory=list,
         description=(
             "Only when you accept the work of a session: for the spec of a "
-            "directory in it, whether the org's stays, the session's holds, "
+            "folder in it, whether the org's stays, the session's holds, "
             "or a text you write from both does. Unnamed, the session's "
             "holds."
         ),
@@ -493,7 +493,7 @@ class DeclineTeamsTool(_DirectorTool[DeclineTeamsAction]):
     summary = (
         "Manager only. Decline the sub-teams your IC proposed, saying why. "
         "Nothing is set up, your IC is told the reason, and the reason is "
-        "kept in the record, where it is shown when the same directories "
+        "kept in the record, where it is shown when the same folders "
         "are proposed again. Also the way to ask for a different division: "
         "say what to change, and your IC proposes again."
     )
@@ -630,7 +630,7 @@ class PruneTeamTool(_DirectorTool[PruneTeamAction]):
         "inefficient, with every team below it. Rare, and never a "
         "precaution: wait until the team has had enough tasks to judge it "
         "by. Its agents are deleted and the uncommitted changes in its "
-        "directory are discarded (git keeps a copy). The directory goes back "
+        "folder are discarded (git keeps a copy). The folder goes back "
         "to your team's IC, who is told why."
     )
 

@@ -76,7 +76,7 @@ class Watch(Reviews):
         else:
             self.tell_ic(holder_id, text)
 
-    def stop_team(self, node_id: str, reason: str) -> None:
+    def stop_team(self, place_id: str, reason: str) -> None:
         """Stop a team for the IC of the team above: its agents and those
         of every team below it end the step they are in and are sent
         nothing until that IC writes to the team. Safe from any thread.
@@ -86,21 +86,21 @@ class Watch(Reviews):
             Conflict: It is stopped already.
         """
         store = self.store
-        team = store.place(node_id)
+        team = store.place(place_id)
         if team is None:
-            raise NotFound(f"Node {node_id} does not exist")
+            raise NotFound(f"Team {place_id} does not exist")
         if team.stopped is not None:
-            raise Conflict(f"Team {node_id} is stopped already")
+            raise Conflict(f"Team {place_id} is stopped already")
         running = [
             conversation_id
             for conversation_id in self._conversations_below(team)
             if conversation_id in self._running
         ]
         store.set_stopped(
-            node_id, Stopped(at=utc_now(), reason=reason, running=sorted(running))
+            place_id, Stopped(at=utc_now(), reason=reason, running=sorted(running))
         )
         if self._loop is not None:
-            self._enqueue(lambda: self._stop(node_id), node_id)
+            self._enqueue(lambda: self._stop(place_id), place_id)
         self._save_soon()
         self.record_event(team.parent_id, "stopped", team, reason)
         # A stopped team is waited for no longer by the reviews beside it.
@@ -207,9 +207,9 @@ class Watch(Reviews):
                 f"review:{team.id}",
             )
 
-    async def _tell_of_stall(self, node_id: str, minutes: int) -> None:
+    async def _tell_of_stall(self, place_id: str, minutes: int) -> None:
         store = self.store
-        team = store.place(node_id)
+        team = store.place(place_id)
         above = store.place(team.parent_id) if team and team.parent_id else None
         if team is None or above is None or self._paused is not None:
             return

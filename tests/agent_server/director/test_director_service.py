@@ -317,7 +317,7 @@ async def test_no_org_is_left_when_its_root_agent_cannot_start(
     assert service.summary().node_count == 0
 
 
-async def test_a_node_works_while_an_agent_runs_and_is_blocked_by_a_failed_one(
+async def test_a_team_works_while_an_agent_runs_and_is_blocked_by_a_failed_one(
     service: DirectorService, launcher: FakeLauncher, repo: Path
 ):
     opened = await service.create_org(org_request(repo))

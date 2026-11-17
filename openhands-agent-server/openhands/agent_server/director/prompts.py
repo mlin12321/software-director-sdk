@@ -79,8 +79,8 @@ WITH_SUB_TEAMS = (
     "- To change the teams, propose again. The block must say what becomes "
     "of each team you have: list under `keep`, by name, every one that is "
     "to stay as it is; every other one must be replaced by a proposed team "
-    "that covers its directory or takes part of it. A team is cleared by "
-    "proposing a different team for the same directory. When two teams keep "
+    "that covers its folder or takes part of it. A team is cleared by "
+    "proposing a different team for the same folder. When two teams keep "
     "being held up by each other, or a team has nothing left to do, propose "
     "teams that merge or replace them.",
     "- The runtime keeps what became of your teams and of what you "
@@ -190,14 +190,14 @@ def _now_with(team: FormerTeam, children: list[SplitChild]) -> str:
     over = [c for c in children if c.path == team.path or is_inside(team.path, c.path)]
     if over:
         [child] = over[:1]
-        return f"Its directory is now in the folder of {child.title} ({child.path})."
+        return f"Its folder is now in the folder of {child.title} ({child.path})."
     if inside:
         names = ", ".join(f"{child.title} ({child.path})" for child in inside)
         return (
-            f"Its directory is now divided: {names}. What of {where} is in "
+            f"Its folder is now divided: {names}. What of {where} is in "
             "none of those is yours again."
         )
-    return f"No new team has its directory: {where} is yours again."
+    return f"No new team has its folder: {where} is yours again."
 
 
 def left_behind(
@@ -239,7 +239,7 @@ def _approved(children: list[SplitChild]) -> str:
     teams = ", ".join(f"{child.title} ({child.path})" for child in children)
     return (
         "Your team was split: your Manager approved your sub-teams and they "
-        f"now own their directories: {teams}. None of them has started: a "
+        f"now own their folders: {teams}. None of them has started: a "
         "team starts when you give it its task with msg_team."
     )
 
@@ -258,8 +258,8 @@ def _split_effects(children: list[SplitChild], unfinished: dict[str, list[str]])
     """
     lines = [
         "How the split changes your own work:",
-        "- What remains in your folder outside those directories is yours as before.",
-        "- What you committed in those directories is where each team "
+        "- What remains in your folder outside those folders is yours as before.",
+        "- What you committed in those folders is where each team "
         "starts. Your `git` no longer shows or commits anything there.",
     ]
     left = [child for child in children if unfinished.get(child.path)]
@@ -270,8 +270,8 @@ def _split_effects(children: list[SplitChild], unfinished: dict[str, list[str]])
             for child in left
         ]
         lines.append(
-            "  They passed to those teams with the directories. You may finish "
-            "them: you can write in a team's directory until you give the team "
+            "  They passed to those teams with the folders. You may finish "
+            "them: you can write in a team's folder until you give the team "
             "its task. The team then finds them as uncommitted work of its "
             "own, so say in its task what they are for. It checks them, "
             "commits them and submits them, and you review that. You cannot "
@@ -280,12 +280,12 @@ def _split_effects(children: list[SplitChild], unfinished: dict[str, list[str]])
     else:
         lines.append(
             "- You left nothing uncommitted there. Until you give a team its "
-            "task you can still write in its directory, but what you write "
+            "task you can still write in its folder, but what you write "
             "there is the team's: it commits it and submits it, and you "
             "review that."
         )
     lines.append(
-        "- Once a team has its task, a write of yours in its directory is "
+        "- Once a team has its task, a write of yours in its folder is "
         "refused. Tell the team what you need with msg_team."
     )
     return "\n".join(lines)
@@ -296,7 +296,7 @@ def put_aside_notice(team: SessionTeam, files: list[str], ref: str) -> str:
     directory were taken out of its checkout."""
     return (
         f"Your checkout held uncommitted changes in {team.boundary.path}, "
-        f"which is the directory of your sub-team {team.title!r}: "
+        f"which is the folder of your sub-team {team.title!r}: "
         f"{_named(files)}. They were in the way of the work you accepted "
         f"and were taken out; they are kept at {ref}. If they are still "
         "needed, tell the team with msg_team."
@@ -307,7 +307,7 @@ def left_for_team(files: list[str]) -> str:
     """What a team is told, with its task, of the changes the IC above left
     uncommitted in its directory."""
     return (
-        "The IC of the team above changed these files in your directory "
+        "The IC of the team above changed these files in your folder "
         f"before your team started and did not commit them: {_named(files)}. "
         "They are yours now. Check them, change what is wrong, and commit "
         "them with your work before you submit it."
@@ -339,21 +339,20 @@ _ASIDE = (
 _HAND_OVER = (
     "- Give each new team what it should know of this with `hand_over`: "
     "notes in your own words or quoted, and, for a team that took over "
-    "sub-teams, the contracts those must keep. Where one team's directory "
+    "sub-teams, the contracts those must keep. Where one team's folder "
     "is now divided among several, give each the part that concerns its "
-    "directory. It starts nothing and can be done again later; "
+    "folder. It starts nothing and can be done again later; "
     "`read_team_context` returns what the removed teams left "
     "(`former_teams`)."
 )
 
 _SPEC_STAYS = (
-    "- A spec a removed team wrote stays in its directory. The team that has "
-    "the directory now is told it is old."
+    "- A spec a removed team wrote stays in its folder. The team that has "
+    "the folder now is told it is old."
 )
 
 _REWRITE_SPEC = (
-    "- Rewrite your own spec with `write_spec` to say how your directory is "
-    "divided now."
+    "- Rewrite your own spec with `write_spec` to say how your folder is divided now."
 )
 
 
@@ -372,7 +371,7 @@ def approved_notice(
         former: The teams they replaced. What those left is passed on in
             hand-over mode and is not given here.
         contracts_replaced: Whether the proposal's contracts took the place
-            of the ones the node had.
+            of the ones the team had.
     """
     lines = [_approved(children), "", _split_effects(children, unfinished)]
     todo = []
@@ -418,7 +417,7 @@ def replaced_job(
     """
     lines = [
         "What changed: your Manager approved the sub-teams you proposed, and "
-        "they now own their directories. None of them has started; each "
+        "they now own their folders. None of them has started; each "
         "starts when your main conversation gives it its task.",
         *(
             f"- {team.title} (id {team.id}, {team.boundary.path}): "
@@ -453,7 +452,7 @@ def pruned_job(
         "",
         "What is yours to do here:",
         _REWRITE_SPEC + " The spec the pruned team wrote stays in its "
-        "directory and is old.",
+        "folder and is old.",
         "- If a team you still have should know of what the pruned team "
         "left, give it to that team with `hand_over`.",
     ]
@@ -544,7 +543,7 @@ def _of_the_team(
 
 
 def hand_over_brief(
-    node: SessionTeam,
+    place: SessionTeam,
     job: str,
     specs: list[InheritedSpec],
     contracts: list[BoundaryContracts],
@@ -559,14 +558,14 @@ def hand_over_brief(
         context: The rest of the team's context, as the agent is to read it.
     """
     lines = [
-        f"{DIRECTOR_PREFIX} You are the IC of the team {node.title!r} (id "
-        f"{node.id}), in hand-over mode.",
+        f"{DIRECTOR_PREFIX} You are the IC of the team {place.title!r} (id "
+        f"{place.id}), in hand-over mode.",
         "Your team was changed, and this side conversation was started for "
         "one job: to pass on what the removed teams left. It has a context of "
         "its own. Your main conversation carries on with the team's work and "
         "sees nothing of this one, and you see nothing of it: what follows "
         "is everything you are given.",
-        f"Folder of your team: {node.boundary.path or 'the repository'}",
+        f"Folder of your team: {place.boundary.path or 'the repository'}",
         "",
         job,
         "",
@@ -580,7 +579,7 @@ def hand_over_brief(
 
 
 def brief(
-    node: SessionTeam,
+    place: SessionTeam,
     role: AgentRole,
     task: str,
     specs: list[InheritedSpec],
@@ -593,16 +592,16 @@ def brief(
     Args:
         context: The rest of the team's context, as the agent is to read it.
     """
-    boundary = node.boundary.path or "the repository"
+    boundary = place.boundary.path or "the repository"
     lines = [
-        f"{DIRECTOR_PREFIX} You are the {'Division Lead ' * node.division_lead}"
-        f"{'IC' if role == 'ic' else 'Manager'} of the team {node.title!r} "
-        f"(id {node.id}).",
+        f"{DIRECTOR_PREFIX} You are the {'Division Lead ' * place.division_lead}"
+        f"{'IC' if role == 'ic' else 'Manager'} of the team {place.title!r} "
+        f"(id {place.id}).",
         f"Folder: {boundary}",
-        f"Writable: {', '.join(node.boundary.writable) or 'nothing'}",
+        f"Writable: {', '.join(place.boundary.writable) or 'nothing'}",
     ]
-    if node.boundary.readonly:
-        lines.append(f"Read-only: {', '.join(node.boundary.readonly)}")
+    if place.boundary.readonly:
+        lines.append(f"Read-only: {', '.join(place.boundary.readonly)}")
     lines += ["", "Task of the team:", task]
     lines += _of_the_team(specs, contracts, reports, context)
     lines.append("")
@@ -739,7 +738,7 @@ def reconcile_request(
         lines += [
             "",
             f"It wrote a spec for {lost!r}, a team the org no longer has. "
-            f"The team that holds its directory now is the one in "
+            f"The team that holds its folder now is the one in "
             f"{home or 'the repository'}, which is left that spec as an old "
             "one. If something in it has to hold on, write the spec of "
             f"{home or 'the repository'} from both in `specs`; otherwise "
@@ -822,7 +821,7 @@ def merge_request(
                 lines.append(
                     "  the team it was set up under is not in the org any more: "
                     f"taken, it goes under team {item.moved_to}, and that "
-                    "team's sub-teams inside its directory go under it. The "
+                    "team's sub-teams inside its folder go under it. The "
                     "team that is gone is not put back."
                 )
         else:
@@ -868,7 +867,7 @@ def merge_request(
         "code is accepted and what sessions that submitted earlier made of "
         "the org is in. What the session wrote for a team the org does not "
         "take is kept as that team's record with the nearest team that "
-        "holds its directory.",
+        "holds its folder.",
     ]
     return "\n".join(lines)
 
@@ -949,9 +948,9 @@ def handed_up(sent: SessionTeam, text: str, why: str) -> str:
 def session_brief(team: SessionTeam, title: str, others: list[str]) -> str:
     """What the IC a session starts with is told after the human's request."""
     beside = (
-        f" Other sessions at work on this team's directory: {', '.join(others)}."
+        f" Other sessions at work on this team's folder: {', '.join(others)}."
         if others
-        else " No other session works on the team's directory just now."
+        else " No other session works on the team's folder just now."
     )
     return (
         f"\n\n[director] You are the IC of {team.title!r} in the session "
@@ -1017,7 +1016,7 @@ def review_request(
         "Its changes: run these in " + team.worktree_path,
         f"  git diff --stat {team.base_commit} HEAD -- {directory}",
         f"  git diff {team.base_commit} HEAD -- {directory}",
-        "Name a file in place of the directory to read that file alone.",
+        "Name a file in place of the folder to read that file alone.",
         "",
     ]
     if not review.automated_ran:
@@ -1060,7 +1059,7 @@ def misrouted_notice(team: SessionTeam, text: str, why: str) -> str:
 
 STALL_QUESTION = (
     "The IC of the team above is about to be told that your team has shown "
-    "no progress for some time: nothing committed in your directory, "
+    "no progress for some time: nothing committed in your folder, "
     "nothing submitted, no escalation. In a few sentences, for that IC: "
     "what are you working on, what has kept you from committing or "
     "submitting, and what do you need to go on? Answer in plain text and "
@@ -1081,7 +1080,7 @@ def unstarted_notice(team: SessionTeam, minutes: int) -> str:
         f"Team {team.title!r} (id {team.id}, "
         f"{team.boundary.path or 'the repository'}) "
         f"was set up {_span(minutes)} ago and has been given no task. Nobody "
-        "works in its directory, and nothing there is committed. Give it its "
+        "works in its folder, and nothing there is committed. Give it its "
         "task with `msg_team`. If it is not needed, write to your Manager to "
         "have it pruned, or propose your teams again without it. If it waits "
         "on purpose, do nothing: you are not told of it again."
@@ -1149,7 +1148,7 @@ _EVENT_WORDS: dict[TeamEventKind, str] = {
     "proposed": "sub-teams proposed",
     "approved": "sub-teams approved",
     "declined": "sub-teams declined",
-    "needed": "needed another team's directory",
+    "needed": "needed another team's folder",
     "asked": "asked directly by the human",
     "misrouted": "said a request was not its own",
     "session_opened": "session opened",
@@ -1296,7 +1295,7 @@ def need_words(pair: dict[str, Any], seen_from: str = "") -> str:
     """One pair of `needs_between`, in words.
 
     Args:
-        seen_from: The node id of the team of the pair the words are said
+        seen_from: The team id of the team of the pair the words are said
             about, when they are; the other is then named alone.
     """
     writes, findings = pair["writes_refused"], pair["review_findings"]
@@ -1316,7 +1315,7 @@ def need_words(pair: dict[str, Any], seen_from: str = "") -> str:
     else:
         who = f"{one!r} and {other!r} needed"
     return (
-        f"{who} each other's directory {times} time{'s' if times != 1 else ''} "
+        f"{who} each other's folder {times} time{'s' if times != 1 else ''} "
         f"({', '.join(parts)}): weigh whether the two are one concern"
     )
 
@@ -1346,11 +1345,11 @@ def manager_check(
     Args:
         reason: What was counted, as the Manager is to read it.
         quiet: For how many minutes each team has shown no progress, by
-            node id, where that is known.
+            team id, where that is known.
         blocked: For how many minutes each blocked team's IC has waited on
-            an escalation it raised, by node id.
+            an escalation it raised, by team id.
         escalations: How many escalations each team's IC has raised on the
-            work it has in hand, by node id.
+            work it has in hand, by team id.
         events: What became of the teams below so far, also of the ones
             that are gone.
         after_successes: The look comes after work that was accepted, not

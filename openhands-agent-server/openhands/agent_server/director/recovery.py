@@ -100,7 +100,7 @@ def put_aside_stale(
                     nodes.get(intent.node_id),
                     "dropped",
                     f"{_WHAT.get(intent.kind, intent.kind)}: not done, {why}.",
-                    node_id=intent.node_id,
+                    place_id=intent.node_id,
                 )
             )
     for message in run.held():
@@ -116,16 +116,16 @@ def put_aside_stale(
                     nodes.get(message.node_id),
                     "dropped",
                     f"A message was not delivered, {why}: {message.text.strip()[:120]}",
-                    node_id=message.node_id,
+                    place_id=message.node_id,
                 )
             )
-    for conversation_id, node_id in run.marked(RUNNING).items():
+    for conversation_id, place_id in run.marked(RUNNING).items():
         if conversation_id not in agents:
             run.unmark(RUNNING, conversation_id)
     for kind in (WAITING, HELD):
-        for node_id in run.marked(kind):
-            if node_id not in nodes:
-                run.unmark(kind, node_id)
+        for place_id in run.marked(kind):
+            if place_id not in nodes:
+                run.unmark(kind, place_id)
     return dropped
 
 
@@ -138,8 +138,8 @@ def describe(
     """What resuming the org does, and what it cannot do."""
     nodes = {node.id: node for node in store.places()}
     items: list[RecoveryItem] = []
-    for conversation_id, node_id in run.marked(RUNNING).items():
-        node = nodes.get(node_id)
+    for conversation_id, place_id in run.marked(RUNNING).items():
+        node = nodes.get(place_id)
         roles: list[AgentRole] = [
             agent.role
             for agent in (node.agents if node else [])
@@ -190,21 +190,21 @@ def describe(
                 node,
                 "start" if intent.kind in _STARTS else "continue",
                 f"{what}.",
-                node_id=intent.node_id,
+                place_id=intent.node_id,
             )
         )
     waiting: dict[str, int] = {}
     for message in run.held():
         waiting[message.node_id] = waiting.get(message.node_id, 0) + 1
-    for node_id, count in waiting.items():
+    for place_id, count in waiting.items():
         items.append(
             _item(
-                nodes.get(node_id),
+                nodes.get(place_id),
                 "message",
                 "1 message is delivered."
                 if count == 1
                 else f"{count} messages are delivered.",
-                node_id=node_id,
+                place_id=place_id,
             )
         )
     for node in missing_worktrees(nodes.values()):
@@ -316,11 +316,11 @@ def _unfit(intent: Intent, nodes: Mapping[str, SessionTeam]) -> str | None:
 
 
 def _item(
-    node: SessionTeam | None, kind: RecoveryKind, detail: str, *, node_id: str = ""
+    place: SessionTeam | None, kind: RecoveryKind, detail: str, *, place_id: str = ""
 ) -> RecoveryItem:
     return RecoveryItem(
-        node_id=node.id if node else node_id,
-        title=node.title if node else "",
+        node_id=place.id if place else place_id,
+        title=place.title if place else "",
         kind=kind,
         detail=detail,
     )

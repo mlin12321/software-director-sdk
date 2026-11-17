@@ -42,13 +42,13 @@ def reference(node: OrgNodeInput) -> dict[str, Any]:
 
 
 def org_file(nodes: list[dict[str, Any]]) -> StoreChange:
-    """The file that holds a tree of saved nodes."""
+    """The file that holds a tree of saved teams."""
     content = json.dumps({"version": _VERSION, "nodes": nodes}, indent=2) + "\n"
     return StoreChange(_ORG_FILE, content)
 
 
 def saved_nodes(board: GitStore, commit: str | None) -> list[dict[str, Any]]:
-    """The nodes of the tree saved at ``commit``, as they are stored.
+    """The teams of the tree saved at ``commit``, as they are stored.
 
     Raises:
         ValueError: The saved tree has a format this version does not read.
@@ -65,7 +65,7 @@ def saved_nodes(board: GitStore, commit: str | None) -> list[dict[str, Any]]:
 
 
 def stored_nodes(store: OrgStore) -> list[dict[str, Any]]:
-    """The nodes of ``store`` as they are saved."""
+    """The teams of ``store`` as they are saved."""
     return [reference(node) for node in store.teams()]
 
 

@@ -430,7 +430,7 @@ class DirectorService(Sync):
         return None
 
     def answer_escalation(
-        self, node_id: str, escalation_id: str, answer: str
+        self, place_id: str, escalation_id: str, answer: str
     ) -> SessionTeam:
         """Settle an escalation that waits on the human with their answer.
 
@@ -439,54 +439,54 @@ class DirectorService(Sync):
         nobody to send it to: answering only lets the work go on.
 
         Raises:
-            NotFound: The node or the escalation does not exist.
+            NotFound: The team or the escalation does not exist.
             Conflict: The escalation is still held by a team.
             Unavailable: The director is not running.
         """
         self._require_launcher()
         store = self.store
-        node = store.place(node_id)
+        place = store.place(place_id)
         escalation = next(
-            (e for e in node.escalations if e.id == escalation_id)
-            if node
+            (e for e in place.escalations if e.id == escalation_id)
+            if place
             else iter(()),
             None,
         )
-        if node is None or escalation is None:
-            raise NotFound(f"Node {node_id} has no escalation {escalation_id}")
+        if place is None or escalation is None:
+            raise NotFound(f"Team {place_id} has no escalation {escalation_id}")
         if escalation.held_by is not None:
             raise Conflict(
                 f"Escalation {escalation_id} is still with team "
                 f"{escalation.held_by}; it does not wait on the human"
             )
-        store.settle_escalation(node_id, escalation_id)
+        store.settle_escalation(place_id, escalation_id)
         if escalation_id == MERGE_WAITS:
             # The way into the checkout was cleared: the accepted work is
             # merged now, with nobody asked again.
-            self.accept_review(node_id, "")
-            return store.place(node_id) or node
+            self.accept_review(place_id, "")
+            return store.place(place_id) or place
         if escalation_id == ORG_WAITS:
             # The human goes on without the Manager.
-            self._begin("land_org", node_id, org_holds=True)
-            return store.place(node_id) or node
+            self._begin("land_org", place_id, org_holds=True)
+            return store.place(place_id) or place
         self.notify(
-            agent_conversation(node, escalation.raised_by),
+            agent_conversation(place, escalation.raised_by),
             f"The human answered your escalation {escalation.title!r}:\n{answer}",
             at_once=True,
         )
-        return store.place(node_id) or node
+        return store.place(place_id) or place
 
     def _steps(self) -> dict[str, Callable[[Intent], Awaitable[None]]]:
         return {
             "brief": self._do_brief,
             "launch_manager": self._do_launch_manager,
-            "split": self._carry_out_split,
+            "split": self._do_split,
             "start_team": self._do_start_team,
             "finish_split": self._do_finish_split,
             "hand_over": self._do_hand_over,
             "request_review": self._do_request_review,
             "accept": self._do_accept,
             "land_org": self._do_land_org,
-            "prune": self._prune,
-            "close_session": self._close_session,
+            "prune": self._do_prune,
+            "close_session": self._do_close_session,
         }

@@ -19,7 +19,7 @@ from openhands.agent_server.director.split import (
     proposed_teams,
 )
 from tests.agent_server.director.conftest import (
-    make_node,
+    make_team,
     open_session_in,
     small_tree,
 )
@@ -159,7 +159,7 @@ def test_refuses_a_split_that_cannot_be_told_apart(store: OrgStore, children):
 
 
 def test_a_team_proposes_only_inside_what_it_may_write(store: OrgStore):
-    b = make_node("b", "root", path="svc/b")
+    b = make_team("b", "root", path="svc/b")
     narrow = b.boundary.model_copy(update={"writable": ["svc/b/src/**"]})
     store.update_place(at("b"), boundary=narrow)
 
@@ -168,7 +168,7 @@ def test_a_team_proposes_only_inside_what_it_may_write(store: OrgStore):
         check(store, "b", [child("docs", "svc/b/docs")])
 
 
-def test_a_new_team_beside_the_ones_a_node_has_replaces_none(store: OrgStore):
+def test_a_new_team_beside_the_ones_a_team_has_replaces_none(store: OrgStore):
     result = check(store, "a", [child("three", "svc/a/three")])
 
     assert result.children[0].path == "svc/a/three" and result.replaces == []

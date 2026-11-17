@@ -239,11 +239,11 @@ async def test_the_ic_is_told_who_has_each_replaced_teams_directory_now(
 
     told = given_aside(service, launcher)
     assert (
-        "Its directory is now divided: HTTP (services/api/http), Store "
+        "Its folder is now divided: HTTP (services/api/http), Store "
         "(services/api/db). What of services/api is in none of those is yours again."
     ) in told
     assert "Its reports, as one:\nFlask, SQLite" in told
-    assert "give each the part that concerns its directory" in told
+    assert "give each the part that concerns its folder" in told
     # Like a merged team, each is set up and not started, and is shown the
     # spec of the team it was cut from as old.
     for team_id in ("services.api.http", "services.api.db"):
@@ -253,8 +253,8 @@ async def test_the_ic_is_told_who_has_each_replaced_teams_directory_now(
     below = service.context_of(node(service, "root"), "ic")["sub_teams"]
     assert {team["team"]: team["status"] for team in below} == {
         "Web": "idle",
-        "HTTP": "not started",
-        "Store": "not started",
+        "HTTP": "not_started",
+        "Store": "not_started",
     }
 
     # A merge: one team over the directories of all three.
@@ -263,12 +263,12 @@ async def test_the_ic_is_told_who_has_each_replaced_teams_directory_now(
     )
 
     told = given_aside(service, launcher)
-    assert told.count("Its directory is now in the folder of Services (services).") == 3
+    assert told.count("Its folder is now in the folder of Services (services).") == 3
 
     # Teams that take none of a removed team's directory.
     [api] = former_of(service, API)[-1:]
     elsewhere = left_behind([api], [SplitChild(title="Apps", path="apps", task="Apps")])
-    assert "No new team has its directory: services/api is yours again." in elsewhere
+    assert "No new team has its folder: services/api is yours again." in elsewhere
 
 
 async def test_reports_that_no_model_shortens_are_kept_in_full(
@@ -522,7 +522,7 @@ async def test_a_hand_over_is_a_side_conversation_of_the_ic_with_its_own_briefin
     assert [agent.role for agent in node(service, "root").agents] == ["ic", "manager"]
     orders = node(service, API).id
     assert f"- Orders (id {orders}, services/api): Keep the orders" in told
-    assert "Its directory is now in the folder of Orders (services/api)." in told
+    assert "Its folder is now in the folder of Orders (services/api)." in told
     assert "Its reports, as one:\nSQLite, no cache." in told
     assert "The spec it wrote (old; it stays in services/api):\n# API by hand" in told
     assert "Your team's spec:\n# Shop" in told

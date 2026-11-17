@@ -1095,7 +1095,7 @@ async def test_a_reviewer_writes_the_spec_that_holds(service: DirectorService):
         ReviewTeamTool,
         decided("services/api", "text"),
     )
-    assert elsewhere.is_error and "not a directory of this work" in elsewhere.text
+    assert elsewhere.is_error and "not a folder of this work" in elsewhere.text
     assert empty.is_error and "in `text`" in empty.text
 
     written = await use(

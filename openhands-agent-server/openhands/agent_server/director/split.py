@@ -38,7 +38,7 @@ def _size(store: OrgStore, team_id: str) -> int:
 
 
 def check_limits(
-    store: OrgStore, node: SessionTeam, added: int, settings: DirectorSettings
+    store: OrgStore, place: SessionTeam, added: int, settings: DirectorSettings
 ) -> None:
     """Refuse ``added`` new sub-teams of ``node`` that the org has no room for.
 
@@ -49,19 +49,19 @@ def check_limits(
         OrgStoreError: They would be too deep, or make ``node`` or a team
             above it more teams than a team may be with those below it.
     """
-    above = store.above(node.id)
-    top = above[0] if above else node
+    above = store.above(place.id)
+    top = above[0] if above else place
     higher = store.teams_above(top.team_id)
     level = len(higher) + len(above) + 2
     if level > settings.max_depth:
         raise OrgStoreError(
             f"An org may have at most {settings.max_depth} levels of teams, "
-            f"and sub-teams of {node.title!r} would be level {level}. Do the "
+            f"and sub-teams of {place.title!r} would be level {level}. Do the "
             "work in your own team."
         )
     sizes = [
         (team.title, 1 + store.teams_below(team.id))
-        for team in (node, *reversed(above))
+        for team in (place, *reversed(above))
     ]
     # What the session has at the team it was opened at stands in for what
     # the org has there.
@@ -114,7 +114,7 @@ class Proposed(NamedTuple):
     contracts: str
     keep: list[str]
     """The sub-teams the proposer has now that it says are to stay, by name
-    or node id."""
+    or team id."""
     reason: str = ""
     """Why the proposer wants this make-up of teams, when it says."""
 
@@ -191,10 +191,10 @@ class Split(NamedTuple):
 
     children: list[SplitChild]
     replaces: list[SessionTeam]
-    """The sub-teams the node has now that the proposed ones take the place
+    """The sub-teams the team has now that the proposed ones take the place
     of."""
     keeps: list[SessionTeam]
-    """The sub-teams the node has now that stay as they are."""
+    """The sub-teams the team has now that stay as they are."""
 
 
 def _overlap(path: str, other: str) -> bool:
@@ -219,7 +219,7 @@ def _kept(
     """The sub-teams a proposal says are to stay.
 
     Raises:
-        OrgStoreError: It names a team the node does not have or one it
+        OrgStoreError: It names a team the team does not have or one it
             also replaces, or leaves out a team it does not replace.
     """
     named = {name.strip() for name in keep}
@@ -245,7 +245,7 @@ def _kept(
     if both:
         raise OrgStoreError(
             f"{', '.join(map(repr, both))} cannot be kept and replaced: a "
-            "proposed team takes all or part of its directory. Leave it out of "
+            "proposed team takes all or part of its folder. Leave it out of "
             "`keep`, or move the proposed team."
         )
     left_out = [
@@ -273,14 +273,14 @@ def normalize_split(
     sub-teams they replace.
 
     Args:
-        keep: The sub-teams the proposer says are to stay, by name or node
+        keep: The sub-teams the proposer says are to stay, by name or team
             id. None when a proposal that was checked before is checked
             again: what it keeps is then not asked for.
 
-    A proposed team that covers sub-teams the node already has takes their
+    A proposed team that covers sub-teams the team already has takes their
     place (a merge), and so does one that takes part of an existing
     sub-team's directory (a split of it): what the new teams leave of that
-    directory is the node's own again.
+    directory is the team's own again.
 
     Raises:
         OrgStoreError: A sub-team is not a directory strictly inside the
@@ -301,7 +301,7 @@ def normalize_split(
         path = clean_path(child.path)
         if not is_inside(path, parent.boundary.path) or not _may_write(parent, path):
             raise OrgStoreError(
-                f"Sub-team {child.title!r} must own a directory inside what "
+                f"Sub-team {child.title!r} must own a folder inside what "
                 f"your team may write ({parent.boundary.path or 'the repository'!r}), "
                 f"not {child.path!r}"
             )
@@ -361,11 +361,11 @@ def home_of(below: SessionTeam, parent_id: str, teams: dict[str, str]) -> str:
     """The team a sub-team of a replaced team reports to afterwards.
 
     Args:
-        parent_id: The node that proposed the split.
+        parent_id: The team that proposed the split.
         teams: The id of each new team by the directory it owns.
 
     Returns:
-        The new team whose directory holds it, else the proposing node.
+        The new team whose directory holds it, else the proposing team.
     """
     for path, team_id in teams.items():
         if below.boundary.path == path or is_inside(below.boundary.path, path):

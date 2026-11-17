@@ -314,7 +314,7 @@ describe('DirectorClient', () => {
       'POST http://example.com/api/director/org/merge/resolve {"choices":{"field:api:headline":"theirs"},"rest":"mine"}',
       'POST http://example.com/api/director/org/merge/abort ',
       'POST http://example.com/api/director/org/push {"remote":"upstream"}',
-      'POST http://example.com/api/director/org/sessions/s1a2b3c/teams/services.api/start_again {}',
+      'POST http://example.com/api/director/org/sessions/s1a2b3c/teams/services.api/start-again {}',
     ]);
     expect(pulled).toEqual(sync);
   });

@@ -432,7 +432,7 @@ export class DirectorClient {
     const response = await this.client.post<DirectorSessionTeam>(
       `${DIRECTOR_PATH}/org/sessions/${encodeURIComponent(sessionId)}/teams/${encodeURIComponent(
         nodeId
-      )}/start_again`,
+      )}/start-again`,
       {}
     );
     return response.data;

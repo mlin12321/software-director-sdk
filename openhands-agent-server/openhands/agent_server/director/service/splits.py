@@ -73,39 +73,39 @@ logger = logging.getLogger(__name__)
 class Splits(Watch):
     """Carries out what was approved or decided about teams."""
 
-    def carry_out_split(self, node_id: str) -> None:
-        """Start the sub-teams of a node's approved split. Safe from any thread."""
-        self._begin("split", node_id)
+    def carry_out_split(self, place_id: str) -> None:
+        """Start the sub-teams of a team's approved split. Safe from any thread."""
+        self._begin("split", place_id)
 
-    def prune(self, node_id: str, reason: str) -> None:
+    def prune(self, place_id: str, reason: str) -> None:
         """Remove a team and what is below it; its boundary goes back to
         the team above. Safe from any thread."""
-        self._begin("prune", node_id, reason=reason)
+        self._begin("prune", place_id, reason=reason)
 
     async def _do_finish_split(self, intent: Intent) -> None:
         await self._finish_split(intent.node_id)
 
-    def _decline(self, node: SessionTeam, reason: str) -> None:
+    def _decline(self, place: SessionTeam, reason: str) -> None:
         """Put approved sub-teams aside, tell the IC that proposed them and
         keep it in the record, where its Manager reads it."""
-        proposal = node.pending_split
-        self.store.update_place(node.id, pending_split=None)
+        proposal = place.pending_split
+        self.store.update_place(place.id, pending_split=None)
         self.record_event(
-            node.id,
+            place.id,
             "declined",
             None,
             f"approved, and the runtime could not set them up: {reason}",
             [child.path for child in proposal.children] if proposal else [],
         )
         self.notify(
-            agent_conversation(node, "ic"),
+            agent_conversation(place, "ic"),
             f"The sub-teams your Manager approved could not be set up: {reason} "
             "Nothing was changed. Tell your Manager with msg_manager, with a "
             "new proposal if you have one.",
         )
 
     def _take_in(
-        self, node: SessionTeam, teams: list[SessionTeam], stamp: str
+        self, place: SessionTeam, teams: list[SessionTeam], stamp: str
     ) -> str | None:
         """Bring what the teams committed in checkouts of their own into
         the checkout of ``node``, and put their uncommitted work aside.
@@ -115,11 +115,11 @@ class Splits(Watch):
         Returns:
             Why a team's work could not be brought in; None when all was.
         """
-        # A team in the node's own checkout has its files there already.
-        apart = [team for team in teams if team.worktree_path != node.worktree_path]
+        # A team in the team's own checkout has its files there already.
+        apart = [team for team in teams if team.worktree_path != place.worktree_path]
         for team in apart:
             merged = merge_back(
-                Path(node.worktree_path),
+                Path(place.worktree_path),
                 Path(team.worktree_path),
                 team.boundary.path,
                 team.title,
@@ -136,26 +136,26 @@ class Splits(Watch):
             self._discard_work([team], stamp)
         return None
 
-    async def _carry_out_split(self, intent: Intent) -> None:
+    async def _do_split(self, intent: Intent) -> None:
         store = self.store
         run = self._runs()
-        node_id = intent.node_id
-        node = store.place(node_id)
-        proposal = node.pending_split if node else None
-        if node is None or proposal is None or proposal.status != "approved":
+        place_id = intent.node_id
+        place = store.place(place_id)
+        proposal = place.pending_split if place else None
+        if place is None or proposal is None or proposal.status != "approved":
             return
         if "planned" not in intent.steps:
             try:
                 # The org may have changed since the sub-teams were approved.
-                split = normalize_split(store, node, proposal.children)
+                split = normalize_split(store, place, proposal.children)
                 check_limits(
                     store,
-                    node,
+                    place,
                     len(split.children) - len(split.replaces),
                     self.settings,
                 )
             except OrgStoreError as error:
-                self._decline(node, str(error))
+                self._decline(place, str(error))
                 return
             gone = {team.id for team in split.replaces}
             # A new team's id is no team's of the org and none of the
@@ -164,15 +164,15 @@ class Splits(Watch):
             taken = {team.id for team in store.teams()} | {
                 team.team_id
                 for team in store.places()
-                if team.id not in gone and team.session == node.session
+                if team.id not in gone and team.session == place.session
             }
-            teams = [_child_node(taken, node, child) for child in split.children]
+            teams = [_child_node(taken, place, child) for child in split.children]
             teams = [
                 team.model_copy(
                     update={
                         "old_specs": await asyncio.to_thread(
                             self._specs_left_in,
-                            node,
+                            place,
                             team.boundary.path,
                             split.replaces,
                         )
@@ -189,7 +189,7 @@ class Splits(Watch):
                 teams=[team.model_dump(mode="json") for team in teams],
                 replaces=sorted(gone),
                 moves={
-                    below.id: home_of(below, node_id, by_path)
+                    below.id: home_of(below, place_id, by_path)
                     for team in split.replaces
                     for below in store.below(team.id)
                 },
@@ -221,11 +221,11 @@ class Splits(Watch):
                 watched.extend(below.id for below in store.below(team_id))
             self._wait_until_quiet(intent, watched)
             refusal = await asyncio.to_thread(
-                self._take_in, node, replaced, plan["stamp"]
+                self._take_in, place, replaced, plan["stamp"]
             )
             if refusal is not None:
                 self._let_go(intent)
-                self._decline(node, refusal)
+                self._decline(place, refusal)
                 return
             launcher = self._require_launcher()
             for conversation_id in map(UUID, plan["conversations"]):
@@ -237,21 +237,21 @@ class Splits(Watch):
         # Done whenever a replaced team is still in the tree: the tree may
         # have been saved before the step that removed it.
         if replaced:
-            # Their sub-teams stay: under the node for now, then under the
+            # Their sub-teams stay: under the team for now, then under the
             # new team that holds them.
             for below_id in moves:
                 if store.place(below_id) is not None:
-                    store.move_place(below_id, node_id)
+                    store.move_place(below_id, place_id)
             for team in replaced:
                 await self._archive(team, "replaced", plan["stamp"])
-                self.record_event(node_id, "replaced", team)
+                self.record_event(place_id, "replaced", team)
                 store.remove(team.id)
         if proposal.contracts.strip():
             # Contracts that named teams which are gone do not stay beside
             # the new ones.
             await asyncio.to_thread(
                 self._record_contracts,
-                node,
+                place,
                 proposal.contracts,
                 bool(plan["replaces"]),
             )
@@ -273,7 +273,7 @@ class Splits(Watch):
                 made = store.place(team.id)
                 if made is not None:
                     self._work_accepted(made)
-                    self.record_event(node_id, "set_up", made, child.task[:200])
+                    self.record_event(place_id, "set_up", made, child.task[:200])
             # What a sub-team that stayed had waiting for review is now for
             # the IC of the team it reports to, which this starts if it is
             # a new team.
@@ -301,20 +301,20 @@ class Splits(Watch):
                         below_id,
                     )
             intent = run.step_done(intent, "handed_over")
-            self._begin("finish_split", node_id)
+            self._begin("finish_split", place_id)
 
-    async def _finish_split(self, node_id: str) -> None:
+    async def _finish_split(self, place_id: str) -> None:
         store = self.store
-        node = store.place(node_id)
-        proposal = node.pending_split if node else None
-        if node is None or proposal is None or proposal.status != "approved":
+        place = store.place(place_id)
+        proposal = place.pending_split if place else None
+        if place is None or proposal is None or proposal.status != "approved":
             return
-        store.update_place(node_id, pending_split=None)
+        store.update_place(place_id, pending_split=None)
         # The shell the IC starts next can no longer write what it gave away.
         with suppress(GitError, OSError):
-            await asyncio.to_thread(self._confine, node_id, "ic")
+            await asyncio.to_thread(self._confine, place_id, "ic")
         # The record each replaced team left last: the one just made.
-        kept = self.former_drafts(node.session)
+        kept = self.former_drafts(place.session)
         former = [
             records[-1]
             for team_id in proposal.replaces
@@ -325,10 +325,10 @@ class Splits(Watch):
         for child in proposal.children:
             with suppress(GitError, OSError):
                 unfinished[child.path] = await asyncio.to_thread(
-                    uncommitted, Path(node.worktree_path), child.path
+                    uncommitted, Path(place.worktree_path), child.path
                 )
         self.notify(
-            agent_conversation(node, "ic"),
+            agent_conversation(place, "ic"),
             approved_notice(
                 proposal.children,
                 former,
@@ -339,7 +339,7 @@ class Splits(Watch):
         if former:
             self._begin(
                 "hand_over",
-                node_id,
+                place_id,
                 conversation=str(uuid4()),
                 ended="replaced",
                 former=[[team.id, team.at] for team in former],
@@ -347,18 +347,18 @@ class Splits(Watch):
                 contracts_replaced=replaced,
             )
 
-    async def _prune(self, intent: Intent) -> None:
+    async def _do_prune(self, intent: Intent) -> None:
         store = self.store
         run = self._runs()
-        node_id = intent.node_id
+        place_id = intent.node_id
         launcher = self._require_launcher()
         if "planned" not in intent.steps:
-            node = store.place(node_id)
-            above = store.place(node.parent_id) if node and node.parent_id else None
-            if node is None or above is None:
+            place = store.place(place_id)
+            above = store.place(place.parent_id) if place and place.parent_id else None
+            if place is None or above is None:
                 return
             # The team first, then everything below it.
-            teams = [node]
+            teams = [place]
             for team in teams:
                 teams.extend(store.below(team.id))
             # Fixed before anything is removed, so that pruning again after
@@ -366,8 +366,8 @@ class Splits(Watch):
             intent = run.step_done(
                 intent,
                 "planned",
-                title=node.title,
-                path=node.boundary.path,
+                title=place.title,
+                path=place.boundary.path,
                 parent=above.id,
                 teams=[team.id for team in teams],
                 conversations=[
@@ -403,12 +403,12 @@ class Splits(Watch):
         above = store.place(plan["parent"])
         parent_ic = agent_conversation(above, "ic") if above else None
         if "removed" not in intent.steps:
-            pruned = store.place(node_id)
+            pruned = store.place(place_id)
             for team in map(store.place, plan["teams"]):
                 if team is not None:
                     await self._archive(team, "pruned", plan["stamp"])
             self.record_event(
-                plan["parent"], "pruned", store.place(node_id), plan["reason"]
+                plan["parent"], "pruned", store.place(place_id), plan["reason"]
             )
             if pruned is not None and above is not None:
                 # The directory is the team above's again, with a spec that
@@ -424,7 +424,7 @@ class Splits(Watch):
                         *(old for old in left if old.path not in known),
                     ],
                 )
-            store.remove(node_id)
+            store.remove(place_id)
             # The shell the IC above starts next can write there again.
             with suppress(GitError, OSError):
                 await asyncio.to_thread(self._confine, plan["parent"], "ic")
@@ -434,7 +434,7 @@ class Splits(Watch):
         former = [
             record
             for record in self.former_drafts(above.session if above else "")
-            if record.id == team_key(node_id) and record.at == plan["stamp"]
+            if record.id == team_key(place_id) and record.at == plan["stamp"]
         ]
         self.notify(
             parent_ic,
@@ -456,20 +456,20 @@ class Splits(Watch):
         """Put a team's IC in hand-over mode: start the side conversation
         in which it passes on what removed teams left."""
         store, run, payload = self.store, self._runs(), intent.payload
-        node = store.place(intent.node_id)
-        if node is None:
+        place = store.place(intent.node_id)
+        if place is None:
             return
         conversation = payload["conversation"]
         wanted = {(team_id, at) for team_id, at in payload["former"]}
         # The records are the session's own until its work is accepted.
         former = [
             record
-            for record in self.former_drafts(node.session)
+            for record in self.former_drafts(place.session)
             if (record.id, record.at) in wanted
         ]
         specs = {
             team.path: await asyncio.to_thread(
-                self.read_file, node, _spec_file(normalize_store_path(team.path))
+                self.read_file, place, _spec_file(normalize_store_path(team.path))
             )
             or ""
             for team in former
@@ -478,7 +478,7 @@ class Splits(Watch):
         if payload["ended"] == "replaced":
             paths = {child.path for child in children}
             job = replaced_job(
-                [team for team in store.below(node.id) if team.boundary.path in paths],
+                [team for team in store.below(place.id) if team.boundary.path in paths],
                 children,
                 former,
                 specs,
@@ -488,46 +488,46 @@ class Splits(Watch):
             job = pruned_job(
                 payload["title"], payload["where"], payload["reason"], former, specs
             )
-        mode = hand_over_of(node)
+        mode = hand_over_of(place)
         before = mode.conversation_id if mode else None
         if before != conversation:
             store.set_hand_over(
-                node.id, HandOverMode(conversation_id=conversation, status="idle")
+                place.id, HandOverMode(conversation_id=conversation, status="idle")
             )
             run.mark(
                 HANDING,
-                node.id,
+                place.id,
                 json.dumps({"conversation": conversation, "given": [], "spec": False}),
             )
             if before is not None:
                 # One hand-over at a time: the one before it ends here.
                 with suppress(NotFound):
                     await self._require_launcher().pause(UUID(before))
-        if await self._start_hand_over(node, conversation, job):
+        if await self._start_hand_over(place, conversation, job):
             return
         # Once more, after what a full server is given to make room.
         await asyncio.sleep(self._run_limit_retry)
-        if await self._start_hand_over(node, conversation, job):
+        if await self._start_hand_over(place, conversation, job):
             return
-        run.unmark(HANDING, node.id)
+        run.unmark(HANDING, place.id)
         # The mode stays on the IC as lost, for whoever looks at the team.
         store.set_hand_over(
-            node.id, HandOverMode(conversation_id=conversation, status=AGENT_LOST)
+            place.id, HandOverMode(conversation_id=conversation, status=AGENT_LOST)
         )
-        self.notify(agent_conversation(node, "ic"), HAND_OVER_FAILED)
+        self.notify(agent_conversation(place, "ic"), HAND_OVER_FAILED)
 
-    def _hand_over_ended(self, node_id: str) -> None:
+    def _hand_over_ended(self, place_id: str) -> None:
         """Tell a team's IC, in its main conversation, what its hand-over
         conversation did. Safe from any thread."""
         run = self._runs()
-        kept = run.marked(HANDING).get(node_id)
-        node = self.store.place(node_id)
-        if kept is None or node is None or self._loop is None:
+        kept = run.marked(HANDING).get(place_id)
+        place = self.store.place(place_id)
+        if kept is None or place is None or self._loop is None:
             return
-        run.unmark(HANDING, node_id)
+        run.unmark(HANDING, place_id)
         done = json.loads(kept)
         self.notify(
-            agent_conversation(node, "ic"),
+            agent_conversation(place, "ic"),
             handed_over_notice(done["given"], done["spec"]),
         )
 
@@ -593,7 +593,7 @@ class Splits(Watch):
                     Path(team.worktree_path), team.boundary.path, ref
                 )
             except (GitError, OSError):
-                logger.exception("Could not discard the work of node %s", team.id)
+                logger.exception("Could not discard the work of team %s", team.id)
                 continue
             if index == 0 and saved is not None:
                 kept = ref
