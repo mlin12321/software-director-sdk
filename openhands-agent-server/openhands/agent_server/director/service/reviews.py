@@ -1000,6 +1000,17 @@ class Reviews(Requests):
                 and the records of the teams the org has land, and the
                 rest stays the session's.
         """
+        # No save of the tree comes between what this changes of the org
+        # and the one commit that takes it and team memory together.
+        with self._saving:
+            return self._land_all(top, seen, org)
+
+    def _land_all(
+        self,
+        top: SessionTeam,
+        seen: dict[str, str | None] | None,
+        org: tuple[dict[str, Side], list[MergeItem]] | None,
+    ) -> Landed:
         store = self.store
         session = store.session_of(top)
         shapes = self._shapes(top)
