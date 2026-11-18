@@ -2439,6 +2439,19 @@ class EventService:
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, self._conversation.ask_agent, question)
 
+    async def ask_aside(self, question: str) -> str | None:
+        """Ask the agent a question that needs nothing of the conversation,
+        in a context of the agent's own.
+
+        Returns:
+            The answer; None when the agent has no such context.
+        """
+        if not self._conversation:
+            raise ValueError("inactive_service")
+
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, self._conversation.ask_aside, question)
+
     async def condense(self) -> None:
         """Force condensation of the conversation history.
 
