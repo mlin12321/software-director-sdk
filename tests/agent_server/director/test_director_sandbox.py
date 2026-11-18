@@ -54,6 +54,25 @@ def confined(
     return run
 
 
+def test_a_shell_nothing_confines_still_starts_in_its_teams_directory(repo: Path):
+    script = repo / SHELLS / "unconfined.sh"
+    none = repo / SHELLS / "none.sh"
+    given = {"checkouts": [repo], "private": repo / SHELLS}
+    write_shell(script, shell_script(None, "/bin/sh", directory="svc/api", **given))
+    write_shell(none, shell_script(None, "/bin/sh", directory=None, **given))
+
+    def at(shell: Path) -> str:
+        ran = subprocess.run(
+            [str(shell), "-c", "pwd"], cwd=repo, capture_output=True, text=True
+        )
+        return ran.stdout.strip()
+
+    # The directory was not there: it is made, as under a sandbox.
+    assert at(script) == str(repo.resolve() / "svc" / "api")
+    # A shell that may write nothing stays where it was started.
+    assert at(none) == str(repo.resolve())
+
+
 def test_the_shell_writes_its_teams_directory_and_nothing_else_in_the_checkout(
     repo: Path,
 ):
