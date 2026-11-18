@@ -465,6 +465,14 @@ HAND_OVER_FAILED = (
 )
 
 
+CHANGED_SINCE_ACCEPT = (
+    "Your team's work was accepted, and your team has changed since: its "
+    "teams, its spec or its contracts. The org does not have these changes "
+    "yet. When your team is done, submit with `submit_review`: the org takes "
+    "them when that is accepted."
+)
+
+
 def handed_over_notice(given: list[str], spec: bool) -> str:
     """What an IC is told in its main conversation once its hand-over
     conversation has ended."""

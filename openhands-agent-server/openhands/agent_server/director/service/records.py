@@ -140,6 +140,12 @@ def _written_by(report: Report, session: str) -> str:
     return f"{report.role} in {report.session!r}"
 
 
+# The events of a session that change what the org has of its teams.
+_CHANGES_THE_ORG: frozenset[TeamEventKind] = frozenset(
+    {"set_up", "replaced", "pruned", "moved"}
+)
+
+
 class Records(ServiceState):
     """Reads and keeps what is known of the teams."""
 
@@ -189,6 +195,16 @@ class Records(ServiceState):
         with self._keeping:
             events = [*self.own_events(session, team_key(above_id)), event]
             self._runs().mark(EVENTS, key, _EVENTS.dump_json(events).decode())
+        if kind in _CHANGES_THE_ORG:
+            self._note_change(session)
+
+    def _note_change(self, session: str) -> None:
+        """Remember that a session whose work is accepted has changed
+        something since: the org takes it only when it is submitted again."""
+        top = next(iter(self.store.session(session)), None)
+        if top is not None and top.review is not None:
+            if top.review.state == "accepted" and self.store.opens_session(top):
+                self._changed_since_accept.setdefault(session, False)
 
     def _event(
         self,
@@ -884,6 +900,7 @@ class Records(ServiceState):
         self._runs().mark(
             FILES, f"{session}\n{file}", json.dumps({"text": text, "over": over})
         )
+        self._note_change(session)
 
     def _undraft(self, session: str, file: str) -> None:
         self._runs().unmark(FILES, f"{session}\n{file}")
