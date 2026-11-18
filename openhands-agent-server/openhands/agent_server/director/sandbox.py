@@ -131,7 +131,17 @@ def _confined(
     quote = shlex.quote
     run = f'{start} "$@"'.strip()
     if bwrap is None:
-        return f"#!/bin/sh\nexec {run}\n"
+        if directory is None:
+            return f"#!/bin/sh\nexec {run}\n"
+        # Nothing holds it there, but the team's directory is still made
+        # and is still where it starts.
+        own = [
+            "top=$(git rev-parse --show-toplevel 2>/dev/null) || top=$(pwd)",
+            f'own="$top"/{quote(directory)}' if directory else 'own="$top"',
+            'mkdir -p "$own"',
+            *([] if stay else ['cd "$own"']),
+        ]
+        return "\n".join(["#!/bin/sh", *own, f"exec {run}"]) + "\n"
 
     def read_only(path: Path) -> str:
         return f"--ro-bind-try {quote(str(path))} {quote(str(path))}"
