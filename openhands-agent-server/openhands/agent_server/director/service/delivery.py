@@ -25,6 +25,7 @@ from openhands.agent_server.director.models import (
 )
 from openhands.agent_server.director.org_store import (
     AGENT_LOST,
+    division_lead_id,
 )
 from openhands.agent_server.director.prompts import (
     from_director,
@@ -445,6 +446,18 @@ class Delivery(Records):
         shorter = compaction.compacted(answer or "", reports, _instant())
         return shorter[0].text if shorter else full
 
+    async def _name_org(self, top_id: str) -> None:
+        """Give the top team the name a model made of the first task. The
+        Division Lead of that session is called what its team is."""
+        store = self.store
+        top = store.place(top_id)
+        if top is None or store.root_id is None:
+            return
+        store.update_team(store.root_id, title=top.title, headline=top.headline)
+        lead = store.place(division_lead_id(store.root_id, top.session))
+        if lead is not None:
+            store.update_place(lead.id, title=top.title)
+
     async def _summarize(
         self,
         place_id: str,
@@ -452,7 +465,6 @@ class Delivery(Records):
         *,
         rename: bool = False,
         first: bool = False,
-        again: bool = False,
     ) -> None:
         """Have a model write a team's headline and, with ``rename``, its title.
 
@@ -460,7 +472,6 @@ class Delivery(Records):
             first: This is the summary of the task the team was made for. It
                 is dropped once the team has reported, which may happen
                 before the model was asked.
-            again: It is asked for a second time, and not a third.
         """
         store = self.store
 
@@ -487,11 +498,6 @@ class Delivery(Records):
                 )
         except (NotFound, TimeoutError):
             return
-        if summary is None and first and not again and not reported():
-            asked = next((a for a in place.agents if a.role == "ic"), None)
-            if asked is not None and asked.kind == "acp":
-                # It is asked again when its first turn is over.
-                self._summary_owed[place_id] = (task, rename)
         if summary is None or reported():
             return
         changes: dict[str, object] = {"headline": summary.headline}

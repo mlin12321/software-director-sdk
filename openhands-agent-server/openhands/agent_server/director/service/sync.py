@@ -486,7 +486,13 @@ class Sync(Sessions):
         except BaseException:
             store.update_place(node_id, agents=place.agents, status=place.status)
             raise
-        store.set_agent(node_id, "ic", kind=started.kind, acp_server=started.acp_server)
+        store.set_agent(
+            node_id,
+            "ic",
+            kind=started.kind,
+            acp_server=started.acp_server,
+            model=started.model,
+        )
         self._begin("brief", node_id, role="ic", task=task)
         return store.place(node_id) or place
 
@@ -754,22 +760,6 @@ class Sync(Sessions):
                 self.release_reviews(node.parent_id)
             if role == "ic" and status == ConversationExecutionStatus.RUNNING:
                 self.release_reviews(node.id, now=True)
-            if role == "ic" and status != ConversationExecutionStatus.RUNNING:
-                self._summarize_owed(node.id)
-
-    def _summarize_owed(self, place_id: str) -> None:
-        """Ask again for the summary a team's IC could not give before its
-        first turn."""
-        owed = self._summary_owed.pop(place_id, None)
-        if owed is None:
-            return
-        task, rename = owed
-        self._enqueue(
-            lambda: self._summarize(
-                place_id, task, rename=rename, first=True, again=True
-            ),
-            f"headline:{place_id}",
-        )
 
     async def _failed(
         self,

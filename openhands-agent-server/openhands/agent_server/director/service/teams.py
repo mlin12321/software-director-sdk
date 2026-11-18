@@ -654,7 +654,11 @@ class Teams(Delivery):
             )
             return False
         store.set_agent(
-            place_id, role, kind=started.kind, acp_server=started.acp_server
+            place_id,
+            role,
+            kind=started.kind,
+            acp_server=started.acp_server,
+            model=started.model,
         )
         if role == "ic":
             store.update_place(

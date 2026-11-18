@@ -4955,6 +4955,83 @@ class TestACPAgentAskAgent:
 
 
 # ---------------------------------------------------------------------------
+# ask_aside
+# ---------------------------------------------------------------------------
+
+
+def _asked_aside(
+    agent: ACPAgent,
+    question: str,
+    *,
+    text: str = "An answer.",
+    closes: Exception | None = None,
+) -> Any:
+    """Ask ``agent`` aside against a fake connection; returns the connection."""
+    client = _OpenHandsACPBridge()
+    agent._client = client
+    agent._conn = MagicMock()
+    agent._working_dir = "/workspace"
+    conn = _agent_conn(agent)
+    conn.new_session = AsyncMock(return_value=MagicMock(session_id="side-1"))
+    conn.fork_session = AsyncMock()
+    conn.close_session = AsyncMock(side_effect=closes)
+    response = MagicMock()
+    response.usage = None
+
+    async def prompt(*, session_id: str, prompt: list[Any]) -> Any:
+        assert client._fork_session_id == session_id
+        client._fork_accumulated_text.append(text)
+        return response
+
+    conn.prompt = AsyncMock(side_effect=prompt)
+
+    def run_async(coro_fn, **_kwargs):
+        loop = asyncio.new_event_loop()
+        try:
+            return loop.run_until_complete(coro_fn())
+        finally:
+            loop.close()
+
+    executor = MagicMock()
+    executor.run_async = run_async
+    agent._executor = executor
+    conn.answer = agent.ask_aside(question)
+    return conn
+
+
+def test_a_side_question_is_asked_in_a_new_session_without_the_conversation():
+    agent = _make_agent()
+    # No turn was taken: there is no session of the conversation's to fork.
+    agent._session_id = None
+
+    conn = _asked_aside(agent, "Name this team.", text="Title: Checkout")
+
+    assert conn.answer == "Title: Checkout"
+    conn.fork_session.assert_not_awaited()
+    opened = conn.new_session.await_args.kwargs
+    assert (opened["cwd"], opened["mcp_servers"]) == ("/workspace", [])
+    assert conn.prompt.await_args.kwargs["session_id"] == "side-1"
+    conn.close_session.assert_awaited_once_with(session_id="side-1")
+    assert agent._client._fork_session_id is None
+    assert agent._client._fork_accumulated_text == []
+
+
+def test_a_side_question_answers_where_a_session_cannot_be_closed():
+    conn = _asked_aside(
+        _make_agent(), "Anything.", closes=RuntimeError("Method not found")
+    )
+
+    assert conn.answer == "An answer."
+    conn.close_session.assert_awaited_once()
+
+
+def test_a_side_question_needs_a_connection():
+    agent = _make_agent()
+    with pytest.raises(RuntimeError, match="no ACP connection"):
+        agent.ask_aside("Anything.")
+
+
+# ---------------------------------------------------------------------------
 # Client fork text routing
 # ---------------------------------------------------------------------------
 
