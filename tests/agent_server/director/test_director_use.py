@@ -214,11 +214,9 @@ async def test_a_team_started_from_a_profile_spends_under_its_parents_caps(
         get_event_service=get_event_service,
         start_conversation=start_conversation,
         update_conversation=update_conversation,
-    )
-    monkeypatch.setattr(
-        launch,
-        "get_agent_profile_store",
-        lambda: SimpleNamespace(load=lambda _: SimpleNamespace(id=uuid4())),
+        stores=SimpleNamespace(
+            agent_profiles=SimpleNamespace(load=lambda _: SimpleNamespace(id=uuid4()))
+        ),
     )
 
     launcher = ConversationTeamLauncher(cast(ConversationService, conversations))

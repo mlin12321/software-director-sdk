@@ -192,7 +192,9 @@ class DirectorService(Sync):
         self._require_launcher()
         store = await asyncio.to_thread(lambda: self.store)
         conversation = request.conversation
-        workspace = Path(conversation.workspace.working_dir).resolve()
+        workspace = await asyncio.to_thread(
+            Path(conversation.workspace.working_dir).resolve
+        )
         if not await asyncio.to_thread(is_git_repository, workspace):
             raise Unavailable(f"An org needs a git repository; {workspace} is not one")
         repository = await asyncio.to_thread(_checkout_root, str(workspace))
