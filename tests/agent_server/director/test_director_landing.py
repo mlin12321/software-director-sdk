@@ -1,6 +1,7 @@
 """Tests for what a session's accepted work makes the org's: its
 sub-teams, its specs and what its agents recorded."""
 
+import threading
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -1069,6 +1070,46 @@ async def test_settled_before_the_code_is_accepted_it_all_lands_in_one_step(
     assert f"session {top.split('@')[1]}" in run_git(
         repo, "log", "-1", "--format=%s", "refs/agents/org"
     )
+
+
+async def test_a_save_that_comes_in_the_middle_of_a_landing_waits_for_it(
+    service: DirectorService, repo: Path, monkeypatch: pytest.MonkeyPatch
+):
+    top, conversation = await at_api(service)
+    sets_up_jobs(service, top)
+    org_gains(service, JOBS, "services/api/workers")
+    await use(service, conversation, SubmitReviewTool, DONE)
+    asked = division_lead_manager(service, top)
+    await use(service, asked, SettleTeamsTool, SettleTeamsAction())
+    before = refs(repo)
+    store = service.store
+    set_shape = store.set_shape
+    saves: list[threading.Thread] = []
+
+    def a_save_begins(session_id: str, shape: list[tuple[str, str, str, str]]) -> None:
+        # The org is half changed here: a save of the tree is due now.
+        save = threading.Thread(target=service._save_tree, args=(store,))
+        save.start()
+        save.join(0.3)
+        saves.append(save)
+        set_shape(session_id, shape)
+
+    monkeypatch.setattr(store, "set_shape", a_save_begins)
+
+    await use(service, division_lead_ic(service, top), ReviewTeamTool, accept(top))
+    await service.settled()
+    for save in saves:
+        save.join()
+
+    assert saves
+    after = refs(repo)
+    landing = f"session {top.split('@')[1]}"
+    for ref in before:
+        # The landing is the first commit after what was there, on both.
+        first = run_git(
+            repo, "rev-list", "--reverse", f"{before[ref]}..{after[ref]}"
+        ).split()[0]
+        assert landing in run_git(repo, "log", "-1", "--format=%s", first)
 
 
 async def test_work_that_is_sent_back_waits_for_no_manager(

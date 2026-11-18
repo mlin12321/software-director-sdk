@@ -429,7 +429,9 @@ class ServiceState:
         self._keeping_needs = threading.Lock()
         # Held while one of a session's own records is read and added to.
         self._keeping = threading.Lock()
-        self._saving = threading.Lock()
+        # Held while the tree is saved, and all through a landing, which
+        # changes the tree and saves it with team memory in one step.
+        self._saving = threading.RLock()
         # Held while what waits of a session's work is read and changed.
         self._weighing = threading.RLock()
         self._adding_manager = threading.Lock()
