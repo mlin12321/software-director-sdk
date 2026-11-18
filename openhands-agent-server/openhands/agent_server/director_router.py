@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Annotated, Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, Header, Query, Request, status
 from fastapi.responses import Response, StreamingResponse
 
 # The org's agents get their tools from this server, so it registers them.
@@ -70,6 +70,7 @@ from openhands.sdk.errors import (
     NotFound,
     NotSupported,
     RateLimited,
+    Unauthenticated,
     Unavailable,
     UpstreamFailed,
 )
@@ -114,7 +115,7 @@ def _calling_agent(
     try:
         return service.agent_of(token or "")
     except NotFound as error:
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, str(error)) from error
+        raise Unauthenticated(str(error)) from error
 
 
 def _require_node(service: DirectorService, node_id: str) -> OrgNode:
@@ -919,10 +920,7 @@ def list_agent_tools(
     """The director's tools the calling agent is offered: its role's, or
     the few of a session's Division Lead."""
     service: DirectorService = request.app.state.director_service
-    try:
-        return list_tools(service, conversation_id)
-    except NotFound as error:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, str(error)) from error
+    return list_tools(service, conversation_id)
 
 
 @director_tools_router.post(

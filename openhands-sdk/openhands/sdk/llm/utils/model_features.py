@@ -231,7 +231,7 @@ def _supports_prompt_cache_key_param(
 # Substring patterns, so they cover every host. Each value is a host LiteLLM
 # does not yet know about; the redundancy test checks it.
 REASONING_EFFORT_MODEL_OVERRIDES = {
-    "kimi-k3": "deepinfra/moonshotai/Kimi-K3",
+    "kimi-k3": "perplexity/perplexity/kimi-k3",
 }
 
 
