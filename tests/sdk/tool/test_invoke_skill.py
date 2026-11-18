@@ -69,6 +69,12 @@ def _tool() -> InvokeSkillTool:
     return t
 
 
+class OtherAction(Action):
+    """An action that is not the tool's own. It is defined here, not in a
+    test: a class local to a test stays a subclass of Action until it is
+    collected, and tools cannot be serialized while one is."""
+
+
 def _run(name: str, conv: Any) -> InvokeSkillObservation:
     """Invoke the executor, silencing pyright's Optional complaint on .executor."""
     executor = _tool().executor
@@ -404,9 +410,6 @@ def test_invoke_skill_declared_resources_typed():
     action = InvokeSkillAction(name="test-skill")
     res = tool.declared_resources(action)
     assert res.keys == ("skill:test-skill",)
-
-    class OtherAction(Action):
-        pass
 
     other_action = OtherAction()
     res_other = tool.declared_resources(other_action)
