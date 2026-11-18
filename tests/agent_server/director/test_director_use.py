@@ -21,6 +21,7 @@ from openhands.agent_server.director.pricing import priced
 from openhands.agent_server.director.run_state import USE
 from openhands.agent_server.director.service import DirectorService
 from openhands.agent_server.director.service.state import LIMIT_WAITS
+from openhands.sdk import LLM, Agent
 from openhands.sdk.agent import ACPAgent
 from openhands.sdk.conversation.state import ConversationExecutionStatus
 from openhands.sdk.errors import Conflict
@@ -202,7 +203,7 @@ async def test_a_team_started_from_a_profile_spends_under_its_parents_caps(
         info = SimpleNamespace(
             id=child_id,
             workspace=SimpleNamespace(working_dir=str(tmp_path)),
-            agent=object(),
+            agent=Agent(llm=LLM(model="gpt-4o", usage_id="test-llm"), tools=[]),
         )
         return info, True
 
@@ -233,6 +234,30 @@ async def test_a_team_started_from_a_profile_spends_under_its_parents_caps(
 
     [request] = started_with
     assert (request.max_iterations, request.max_budget_per_run) == (40, 2.5)
+
+
+def test_an_agent_is_known_by_the_model_it_is_configured_with():
+    own = Agent(llm=LLM(model="openai/gpt-5.2", usage_id="test-llm"), tools=[])
+    claude = ACPAgent(acp_command=["claude-agent-acp"], acp_model="claude-opus-5")
+    default = ACPAgent(acp_command=["claude-agent-acp"])
+
+    assert launch._kind_of(own)["model"] == "openai/gpt-5.2"
+    assert launch._kind_of(claude)["model"] == "claude-opus-5"
+    # Left on its own default, which the server cannot tell.
+    assert launch._kind_of(default)["model"] is None
+
+
+async def test_the_org_says_which_model_each_started_agent_runs_on(
+    repo: Path, launcher: FakeLauncher
+):
+    launcher.model = "openai/gpt-5.2"
+    service = await started(repo, launcher)
+
+    top = node(service, "root")
+    assert [agent.model for agent in top.agents if agent.role == "ic"] == [
+        "openai/gpt-5.2"
+    ]
+    await service.aclose()
 
 
 def counted_as(
