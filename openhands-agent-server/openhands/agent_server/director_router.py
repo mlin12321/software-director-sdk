@@ -11,7 +11,7 @@ from typing import Annotated, Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 
 # The org's agents get their tools from this server, so it registers them.
 import openhands.agent_server.director.tools  # noqa: F401
@@ -615,6 +615,8 @@ async def open_session(
 @director_router.delete(
     "/org/sessions/{session_id}",
     status_code=status.HTTP_202_ACCEPTED,
+    # It answers with no body.
+    response_class=Response,
     responses=error_responses({NotFound: "No such session is open"}),
 )
 def close_session(
