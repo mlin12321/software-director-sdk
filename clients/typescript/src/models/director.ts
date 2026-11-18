@@ -562,7 +562,11 @@ export interface DirectorSession {
    * human is asked; 0 while nothing limits it.
    */
   cost_allowance: number;
-  /** Of the team it was opened at. */
+  /**
+   * Of the whole session: blocked while the team it was opened at is; else
+   * working while any of its teams or its reviewer is; else blocked while
+   * any of them is; else what the team it was opened at is.
+   */
   status: DirectorNodeStatus;
   /** Where the review of its work stands. */
   review: DirectorReviewState | null;
