@@ -1069,6 +1069,18 @@ class AgentBase(DiscriminatedUnionMixin, ABC):
         """
         return None
 
+    def ask_aside(self, question: str) -> str | None:  # noqa: ARG002
+        """Answer a question that needs nothing of the conversation, in a
+        context of the agent's own.
+
+        Subclasses that have no model the caller can use (e.g. ACPAgent)
+        override this.
+
+        Returns:
+            Response string, or ``None`` when the agent has no such context.
+        """
+        return None
+
     def close(self) -> None:
         """Clean up agent resources.
 

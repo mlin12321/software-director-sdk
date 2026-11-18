@@ -4761,58 +4761,95 @@ class ACPAgent(AgentBase):
 
         conn = self._conn
         session_id = self._session_id
-        client = self._client
 
         async def _fork_and_prompt() -> str:
             fork_response = await conn.fork_session(
                 cwd=self._working_dir,
                 session_id=session_id,
             )
-            fork_session_id = fork_response.session_id
+            return await self._prompt_side_session(fork_response.session_id, question)
 
-            client._fork_session_id = fork_session_id
-            client._fork_accumulated_text.clear()
-            try:
-                fork_t0 = time.monotonic()
-                usage_sync = client.prepare_usage_sync(fork_session_id)
-                response = await conn.prompt(
-                    session_id=fork_session_id,
-                    prompt=[text_block(question)],
-                )
-                if client.get_turn_usage_update(fork_session_id) is None:
-                    try:
-                        await asyncio.wait_for(
-                            usage_sync.wait(), timeout=_USAGE_UPDATE_TIMEOUT
-                        )
-                    except TimeoutError:
-                        logger.warning(
-                            "UsageUpdate not received within %.1fs for fork session %s",
-                            _USAGE_UPDATE_TIMEOUT,
-                            _fingerprint_session_id(fork_session_id),
-                        )
-                fork_elapsed = time.monotonic() - fork_t0
-
-                # Re-mask the joined fork text at this return boundary — mirrors
-                # _finalize_successful_turn, catching a secret split across fork
-                # chunks that per-chunk masking can't match.
-                result = client._mask_value("".join(client._fork_accumulated_text))
-                usage_update = client.pop_turn_usage_update(fork_session_id)
-                self._record_usage(
-                    response,
-                    fork_session_id,
-                    elapsed=fork_elapsed,
-                    usage_update=usage_update,
-                )
-                return result
-            finally:
-                try:
-                    await self._flush_file_credentials()
-                finally:
-                    client._fork_session_id = None
-                    client._fork_accumulated_text.clear()
-
-        with client._fork_lock:
+        with self._client._fork_lock:
             return self._executor.run_async(_fork_and_prompt)
+
+    def ask_aside(self, question: str) -> str | None:
+        """Ask in a new, empty session of the same ACP server.
+
+        The session has nothing of the conversation and no MCP servers, so it
+        can be asked before the agent's first turn, and it is closed once it
+        has answered. What it used is recorded like a turn's.
+        """
+        if self._conn is None:
+            msg = "ACPAgent has no ACP connection; call init_state() first"
+            raise RuntimeError(msg)
+
+        conn = self._conn
+
+        async def _open_and_prompt() -> str:
+            opened = await conn.new_session(
+                cwd=self._working_dir,
+                mcp_servers=[],
+                **build_session_model_meta(
+                    self._agent_name, self.acp_model, self.acp_effort
+                ),
+            )
+            try:
+                return await self._prompt_side_session(opened.session_id, question)
+            finally:
+                # Not every server can close a session; it is then left.
+                with contextlib.suppress(Exception):
+                    await conn.close_session(session_id=opened.session_id)
+
+        with self._client._fork_lock:
+            return self._executor.run_async(_open_and_prompt)
+
+    async def _prompt_side_session(self, side_session_id: str, question: str) -> str:
+        """Prompt a session beside the conversation's own and return its text."""
+        if self._conn is None:
+            msg = "ACPAgent has no ACP connection; call init_state() first"
+            raise RuntimeError(msg)
+        conn = self._conn
+        client = self._client
+        client._fork_session_id = side_session_id
+        client._fork_accumulated_text.clear()
+        try:
+            fork_t0 = time.monotonic()
+            usage_sync = client.prepare_usage_sync(side_session_id)
+            response = await conn.prompt(
+                session_id=side_session_id,
+                prompt=[text_block(question)],
+            )
+            if client.get_turn_usage_update(side_session_id) is None:
+                try:
+                    await asyncio.wait_for(
+                        usage_sync.wait(), timeout=_USAGE_UPDATE_TIMEOUT
+                    )
+                except TimeoutError:
+                    logger.warning(
+                        "UsageUpdate not received within %.1fs for fork session %s",
+                        _USAGE_UPDATE_TIMEOUT,
+                        _fingerprint_session_id(side_session_id),
+                    )
+            fork_elapsed = time.monotonic() - fork_t0
+
+            # Re-mask the joined fork text at this return boundary — mirrors
+            # _finalize_successful_turn, catching a secret split across fork
+            # chunks that per-chunk masking can't match.
+            result = client._mask_value("".join(client._fork_accumulated_text))
+            usage_update = client.pop_turn_usage_update(side_session_id)
+            self._record_usage(
+                response,
+                side_session_id,
+                elapsed=fork_elapsed,
+                usage_update=usage_update,
+            )
+            return result
+        finally:
+            try:
+                await self._flush_file_credentials()
+            finally:
+                client._fork_session_id = None
+                client._fork_accumulated_text.clear()
 
     def set_acp_model(self, model: str) -> None:
         """Switch the model on the running ACP session (mid-conversation).

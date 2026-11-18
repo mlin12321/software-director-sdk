@@ -9,12 +9,15 @@ import threading
 from collections.abc import AsyncIterator, Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from types import SimpleNamespace
+from typing import cast
 from uuid import UUID, uuid4
 
 import httpx
 import pytest
 
 from openhands.agent_server.api import create_app
+from openhands.agent_server.conversation_service import ConversationService
 from openhands.agent_server.director import mcp_shim
 from openhands.agent_server.director.acp import (
     MCP_SERVER_NAME,
@@ -24,6 +27,7 @@ from openhands.agent_server.director.acp import (
     tools_server,
 )
 from openhands.agent_server.director.headline import TeamSummary
+from openhands.agent_server.director.launch import ConversationTeamLauncher
 from openhands.agent_server.director.models import (
     CreateOrgRequest,
     DirectorSettingsUpdate,
@@ -713,39 +717,43 @@ async def test_an_acp_ic_that_carries_on_after_submitting_is_cut_short(
     await service.aclose()
 
 
-async def test_an_agent_that_could_not_be_asked_yet_names_its_team_after_its_turn(
-    repo: Path,
-):
-    # Claude Code cannot be asked anything before its first turn.
+async def test_an_agent_with_its_own_tools_is_asked_aside_what_needs_no_context():
+    conversation = uuid4()
+    aside: list[str] = []
+    forked: list[str] = []
+
+    async def ask_aside(question: str) -> str:
+        aside.append(question)
+        return "Title: Checkout\nHeadline: Builds the checkout."
+
+    async def ask_agent(question: str) -> str:
+        forked.append(question)
+        return "It changed the cart."
+
+    claude = SimpleNamespace(agent=ACPAgent(acp_command=["claude-agent-acp"]))
+
+    async def get_event_service(_: UUID):
+        return SimpleNamespace(
+            get_conversation=lambda: claude, ask_aside=ask_aside, ask_agent=ask_agent
+        )
+
+    launcher = ConversationTeamLauncher(
+        cast(ConversationService, SimpleNamespace(get_event_service=get_event_service))
+    )
+
+    summary = await launcher.summarize(conversation, "Build the checkout.")
+    routed = await launcher.ask(conversation, "Choose a team.", "Fix it.", usage_id="x")
+    written = await launcher.ask_agent(conversation, "What changed?")
+
+    assert summary == TeamSummary(title="Checkout", headline="Builds the checkout.")
+    assert routed is not None and len(aside) == 2
+    assert "Choose a team." in aside[1] and "Fix it." in aside[1]
+    assert (written, forked) == ("It changed the cart.", ["What changed?"])
+
+
+async def test_an_org_without_a_name_is_named_with_its_division_lead(repo: Path):
     launcher = FakeLauncher(root_kind="acp")
-    service = await started(repo, launcher)
-    agent = ic(service)
-    assert agent is not None
-    asked = len(launcher.summarized)
     launcher.summary = TeamSummary(title="Checkout", headline="Builds the checkout.")
-
-    launcher.report(agent, ConversationExecutionStatus.RUNNING)
-    await service.settled()
-    assert len(launcher.summarized) == asked
-
-    launcher.report(agent, ConversationExecutionStatus.FINISHED)
-    await service.settled()
-
-    assert len(launcher.summarized) == asked + 1
-    assert node(service, "root").headline == "Builds the checkout."
-
-    # It is asked once more, not with every turn.
-    launcher.report(agent, ConversationExecutionStatus.RUNNING)
-    launcher.report(agent, ConversationExecutionStatus.FINISHED)
-    await service.settled()
-    assert len(launcher.summarized) == asked + 1
-    await service.aclose()
-
-
-async def test_an_org_without_a_name_takes_the_one_its_agent_gives_after_its_turn(
-    repo: Path,
-):
-    launcher = FakeLauncher(root_kind="acp")
     service = DirectorService(
         repo,
         save_delay=0,
@@ -761,35 +769,20 @@ async def test_an_org_without_a_name_takes_the_one_its_agent_gives_after_its_tur
         )
     )
     await service.settled()
-    agent = ic(service)
-    assert agent is not None
-    top = service.store.team("root")
-    assert top is not None and top.title != "Checkout"
-    launcher.summary = TeamSummary(title="Checkout", headline="Builds the checkout.")
 
-    launcher.report(agent, ConversationExecutionStatus.RUNNING)
-    launcher.report(agent, ConversationExecutionStatus.FINISHED)
-    await service.settled()
-
+    # Nothing waits for the agent's first turn.
     top = service.store.team("root")
     assert top is not None
     assert (top.title, top.headline) == ("Checkout", "Builds the checkout.")
     assert [session.title for session in service.store.sessions()] == ["Checkout"]
     leads = [place for place in service.store.places() if place.division_lead]
     assert [lead.title for lead in leads] == ["Checkout"]
-    await service.aclose()
 
-
-async def test_an_agent_with_a_model_of_the_servers_is_not_asked_again(repo: Path):
-    launcher = FakeLauncher()
-    service = await started(repo, launcher)
     agent = ic(service)
     assert agent is not None
     asked = len(launcher.summarized)
-
     launcher.report(agent, ConversationExecutionStatus.RUNNING)
     launcher.report(agent, ConversationExecutionStatus.FINISHED)
     await service.settled()
-
     assert len(launcher.summarized) == asked
     await service.aclose()

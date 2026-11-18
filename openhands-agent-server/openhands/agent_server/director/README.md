@@ -82,6 +82,3 @@ you set them.
   held by its limit has passed it by what its running turns cost: $0.21 and
   $0.66 on a $2.00 limit in the second real run. Set the limit below what
   you are willing to pay.
-- **A team run by Claude Code is named a little late.** It cannot be asked
-  for a headline before its first turn, so it is asked when that turn is
-  over. Until then the team shows the start of its task.

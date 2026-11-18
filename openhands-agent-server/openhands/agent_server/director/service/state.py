@@ -401,12 +401,6 @@ class ServiceState:
         self._at_once: set[int] = set()
         # The conversations last recorded as running.
         self._running: set[str] = set()
-        # The first summaries that could not be had yet, by place: the task
-        # and whether the title is set too. An agent that runs its own
-        # tools cannot be asked before its first turn.
-        self._summary_owed: dict[str, tuple[str, bool]] = {}
-        # The org has no name yet: it takes that of its first session.
-        self._org_unnamed = False
         # The teams each step waits for the agents of to stop, by the id of
         # its intent, and the lane the step is carried out in.
         self._settling: dict[int, tuple[set[str], str]] = {}

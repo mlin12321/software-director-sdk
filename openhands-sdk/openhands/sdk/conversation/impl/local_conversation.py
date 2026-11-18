@@ -3286,6 +3286,19 @@ class LocalConversation(BaseConversation):
         self._cleanup_complete = True
         atexit.unregister(self.close)
 
+    def ask_aside(self, question: str) -> str | None:
+        """Ask the agent a question that needs nothing of this conversation.
+
+        It is answered in a context of the agent's own (for an ACPAgent, a
+        new and empty session of its server), so it works before the first
+        turn and leaves the conversation as it is.
+
+        Returns:
+            The answer; None when the agent has no such context.
+        """
+        self._ensure_agent_ready()
+        return self.agent.ask_aside(question)
+
     @observe(
         name="conversation.ask_agent",
         metadata={OPERATION_METADATA_KEY: "ask_agent"},

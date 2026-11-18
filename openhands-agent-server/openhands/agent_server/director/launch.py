@@ -239,6 +239,9 @@ class TeamLauncher(Protocol):
     async def summarize(self, conversation_id: UUID, task: str) -> TeamSummary | None:
         """Summarize ``task`` with the model of an agent, apart from its work.
 
+        An agent that runs its own tools is asked in a new, empty session
+        of its own.
+
         Returns:
             None when the model gave nothing usable.
 
@@ -251,6 +254,9 @@ class TeamLauncher(Protocol):
         self, conversation_id: UUID, system: str, user: str, *, usage_id: str
     ) -> str | None:
         """Ask the model of an agent one question, apart from its work.
+
+        An agent that runs its own tools is asked in a new, empty session
+        of its own.
 
         Args:
             usage_id: What the call's cost is counted under.
@@ -541,8 +547,7 @@ class ConversationTeamLauncher:
     async def summarize(self, conversation_id: UUID, task: str) -> TeamSummary | None:
         agent = await self._agent(conversation_id)
         if isinstance(agent, ACPAgent):
-            # It has no model the server can call; it is asked itself.
-            answer = await self.ask_agent(conversation_id, summary_question(task))
+            answer = await self._ask_aside(conversation_id, summary_question(task))
             return parse_summary(answer) if answer else None
         return await asyncio.to_thread(summarize_team, agent.llm, task)
 
@@ -551,7 +556,7 @@ class ConversationTeamLauncher:
     ) -> str | None:
         agent = await self._agent(conversation_id)
         if isinstance(agent, ACPAgent):
-            return await self.ask_agent(conversation_id, f"{system}\n\n{user}")
+            return await self._ask_aside(conversation_id, f"{system}\n\n{user}")
         # A copy counts for itself, so what it uses is added here.
         llm = agent.llm.model_copy(update={"usage_id": usage_id})
         answer, used = await asyncio.to_thread(_ask, llm, system, user)
@@ -570,6 +575,20 @@ class ConversationTeamLauncher:
             logger.warning("An agent did not answer the director", exc_info=True)
             return None
         return strip_reasoning_blocks(answer).strip() or None
+
+    async def _ask_aside(self, conversation_id: UUID, question: str) -> str | None:
+        """Ask an agent that has no model the server can call, in a new and
+        empty session of its own: nothing of its conversation is needed, and
+        it can be asked before its first turn."""
+        event_service = await self._conversations.get_event_service(conversation_id)
+        if event_service is None:
+            raise NotFound(f"Conversation {conversation_id} does not exist")
+        try:
+            answer = await event_service.ask_aside(question)
+        except Exception:
+            logger.warning("An agent did not answer the director", exc_info=True)
+            return None
+        return strip_reasoning_blocks(answer or "").strip() or None
 
     async def rename(self, conversation_id: UUID, title: str) -> None:
         updated = await self._conversations.update_conversation(
