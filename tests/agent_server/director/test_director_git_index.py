@@ -142,10 +142,29 @@ def test_the_checkouts_own_index_follows_an_agents_commit(
     assert "index was not updated" not in committed.stderr, committed.stderr
     # What the human had staged is still staged; the commit is not shown
     # as something to undo.
+    seen = {
+        "err": committed.stderr,
+        "out": committed.stdout,
+        "log": run_git(shared, "log", "--oneline", "--name-only"),
+        "index": run_git(shared, "ls-files", "-s"),
+        "head": run_git(shared, "ls-tree", "-r", "HEAD"),
+        "git_dir": sorted(p.name for p in (shared / ".git").iterdir()),
+        "trace": subprocess.run(
+            [
+                "sh",
+                "-x",
+                shutil.which("git", path=str(shared.parent / "agents" / "api")) or "",
+                "status",
+            ],
+            cwd=shared,
+            capture_output=True,
+            text=True,
+        ).stderr[-1500:],
+    }
     assert run_git(shared, "status", "--porcelain").split() == [
         "M",
         "svc/web/main.py",
-    ]
+    ], seen
 
 
 def test_a_team_does_not_stage_what_it_handed_to_a_sub_team(
