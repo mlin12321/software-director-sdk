@@ -132,47 +132,23 @@ def test_the_checkouts_own_index_follows_an_agents_commit(
     shared: Path, agent: Callable[..., Git]
 ):
     api = agent("api", "svc/api")
+    # As on a machine set up to print paths from where git is run; the
+    # commit below is made two directories down.
+    run_git(shared, "config", "diff.relative", "true")
     (shared / "svc" / "api" / "main.py").write_text("api v2\n")
     (shared / "svc" / "web" / "main.py").write_text("web v2\n")
     run_git(shared, "add", "svc/web/main.py")
 
-    wrapper = shared.parent / "agents" / "api" / "git"
-    committed = subprocess.run(
-        ["sh", "-x", str(wrapper), "commit", "-am", "api work"],
-        cwd=shared / "svc" / "api",
-        env={
-            **os.environ,
-            "PATH": f"{wrapper.parent}{os.pathsep}{os.environ['PATH']}",
-            "GIT_AUTHOR_NAME": "a",
-            "GIT_AUTHOR_EMAIL": "a@example.invalid",
-            "GIT_COMMITTER_NAME": "a",
-            "GIT_COMMITTER_EMAIL": "a@example.invalid",
-        },
-        capture_output=True,
-        text=True,
-    )
+    committed = api("commit", "-am", "api work", cwd=shared / "svc" / "api")
 
     assert committed.returncode == 0
-    probe = subprocess.run(
-        [
-            "sh",
-            "-c",
-            "git ls-files -s; env | grep -i '^git' ; git config --list --show-origin;"
-            " echo RESET; printf 'svc/api/main.py\\0' |"
-            " GIT_TRACE=1 git reset -q HEAD --pathspec-from-file=-"
-            " --pathspec-file-nul; echo code=$?; git ls-files -s; git status --porcelain",
-        ],
-        cwd=shared,
-        capture_output=True,
-        text=True,
-    )
-    assert False, "TRACE " + (probe.stdout + " ERR " + probe.stderr).replace(
-        "\n", " ## "
-    )
+    assert "index was not updated" not in committed.stderr, committed.stderr
+    # What the human had staged is still staged; the commit is not shown
+    # as something to undo.
     assert run_git(shared, "status", "--porcelain").split() == [
         "M",
         "svc/web/main.py",
-    ], "TRACE " + committed.stderr[-2500:].replace("\n", " ## ")
+    ]
 
 
 def test_a_team_does_not_stage_what_it_handed_to_a_sub_team(

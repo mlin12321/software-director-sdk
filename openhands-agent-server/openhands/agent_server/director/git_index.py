@@ -147,7 +147,7 @@ def git_script(
         '    && ! "$real" diff --quiet "$before" "$after" 2>/dev/null; then',
         # The names are relative to the top of the checkout.
         '  top=$("$real" rev-parse --show-toplevel)',
-        '  refused=$("$real" diff --name-only -z "$before" "$after" |',
+        '  refused=$("$real" diff --no-relative --name-only -z "$before" "$after" |',
         '    GIT_INDEX_FILE="$git_dir/index" "$real" -C "$top" reset -q "$after" \\',
         "      --pathspec-from-file=- --pathspec-file-nul 2>&1 >/dev/null) ||",
         # The commit stands; whoever uses the checkout should know why

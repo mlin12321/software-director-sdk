@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from openhands.agent_server.director.git import bring_over, save_and_discard
+from openhands.agent_server.director.git import bring_over, git, save_and_discard
 from tests.agent_server.director.conftest import run_git
 
 
@@ -109,3 +109,17 @@ def test_nothing_is_brought_over_to_a_checkout_on_another_commit(
 
     assert bring_over(repo, other, "svc", REF) == []
     assert (repo / "svc" / "kept.py").read_text() == "changed\n"
+
+
+def test_changed_files_are_named_from_the_top_whatever_git_is_set_to_print(
+    repo: Path,
+):
+    (repo / "svc" / "api").mkdir(parents=True)
+    (repo / "svc" / "api" / "main.py").write_text("v1\n")
+    run_git(repo, "add", ".")
+    run_git(repo, "commit", "--quiet", "-m", "api")
+    run_git(repo, "config", "diff.relative", "true")
+
+    named = git(repo / "svc" / "api", ["diff", "--name-only", "HEAD~1", "HEAD"])
+
+    assert named.split() == ["svc/api/main.py"]
