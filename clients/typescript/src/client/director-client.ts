@@ -1,6 +1,7 @@
 import { HttpClient, HttpError } from './http-client';
 import type { CreateConversationPayload } from './conversation-client';
 import type {
+  DirectorAcceptedChanges,
   DirectorFileEdit,
   DirectorFileSides,
   DirectorNodeMemory,
@@ -186,10 +187,7 @@ export class DirectorClient {
    *   git repository.
    */
   async createOrg(request: CreateOrgRequest): Promise<DirectorOpenedSession> {
-    const response = await this.client.post<DirectorOpenedSession>(
-      `${DIRECTOR_PATH}/org`,
-      request
-    );
+    const response = await this.client.post<DirectorOpenedSession>(`${DIRECTOR_PATH}/org`, request);
     return response.data;
   }
 
@@ -367,6 +365,39 @@ export class DirectorClient {
     const response = await this.client.get<DirectorFileSides>(nodePath(nodeId, 'changes/file'), {
       params: { path },
     });
+    return response.data;
+  }
+
+  /**
+   * The files an accept took: what differs under `path` between the `base`
+   * and the `head` of an `accepted` event in the history. It can be read
+   * after the team's session is closed.
+   *
+   * @param path The team's directory; `''` is the whole repository.
+   * @throws HttpError 404 when the repository no longer has a commit.
+   */
+  async getAcceptedChanges(
+    base: string,
+    head: string,
+    path: string
+  ): Promise<DirectorAcceptedChanges> {
+    const response = await this.client.get<DirectorAcceptedChanges>(
+      `${DIRECTOR_PATH}/org/accepted/changes`,
+      { params: { base, head, path } }
+    );
+    return response.data;
+  }
+
+  /**
+   * One file as it was before an accept and as it was accepted.
+   *
+   * @param path Relative to the top of the repository.
+   */
+  async getAcceptedFile(base: string, head: string, path: string): Promise<DirectorFileSides> {
+    const response = await this.client.get<DirectorFileSides>(
+      `${DIRECTOR_PATH}/org/accepted/changes/file`,
+      { params: { base, head, path } }
+    );
     return response.data;
   }
 

@@ -2,6 +2,7 @@
 to its files by hand."""
 
 import os
+import re
 from pathlib import Path
 
 from openhands.agent_server.director.boundary import glob_matches, owns
@@ -13,6 +14,7 @@ from openhands.agent_server.director.git import (
     top_of,
 )
 from openhands.agent_server.director.models import (
+    AcceptedChanges,
     ChangedFile,
     ChangeKind,
     FileEdit,
@@ -26,6 +28,7 @@ from openhands.sdk.errors import Forbidden, Invalid, NotFound
 MAX_CHANGED_FILES = 2000
 MAX_FILE_BYTES = 1_000_000
 _KINDS: dict[str, ChangeKind] = {"A": "added", "D": "deleted"}
+_COMMIT = re.compile(r"[0-9a-f]{7,64}")
 
 
 def checkout_top(place: SessionTeam) -> Path:
@@ -51,12 +54,7 @@ def team_changes(place: SessionTeam) -> TeamChanges:
         return TeamChanges(node_id=place.id, base="", files=[], truncated=False)
     spec = pathspec(place.boundary.path)
     try:
-        kinds = _fields(
-            git(top, ["diff", "--name-status", "--no-renames", "-z", base, "--", spec])
-        )
-        counts = _fields(
-            git(top, ["diff", "--numstat", "--no-renames", "-z", base, "--", spec])
-        )
+        files = _differing(top, [base], spec)
         new = _fields(
             git(top, ["ls-files", "--others", "--exclude-standard", "-z", "--", spec])
         )
@@ -64,23 +62,6 @@ def team_changes(place: SessionTeam) -> TeamChanges:
         raise NotFound(
             f"Team {place.id}'s changes since {base[:12]} cannot be read"
         ) from error
-    lines: dict[str, tuple[int | None, int | None]] = {}
-    for entry in counts:
-        added, removed, path = entry.split("\t", 2)
-        lines[path] = (
-            None if added == "-" else int(added),
-            None if removed == "-" else int(removed),
-        )
-    files: dict[str, ChangedFile] = {}
-    for letter, path in zip(kinds[::2], kinds[1::2]):
-        added, removed = lines.get(path, (None, None))
-        files[path] = ChangedFile(
-            path=path,
-            kind=_KINDS.get(letter[:1], "modified"),
-            added=added,
-            removed=removed,
-            committed=True,
-        )
     uncommitted = set(new)
     try:
         uncommitted.update(
@@ -104,6 +85,55 @@ def team_changes(place: SessionTeam) -> TeamChanges:
         base=base,
         files=listed[:MAX_CHANGED_FILES],
         truncated=len(listed) > MAX_CHANGED_FILES,
+    )
+
+
+def accepted_changes(repo: Path, base: str, head: str, path: str) -> AcceptedChanges:
+    """The files under ``path`` that differ between two commits of the
+    repository, as an accept in the org's history names them.
+
+    Raises:
+        Invalid: ``base`` or ``head`` is not a commit id, or ``path`` leads
+            out of the repository.
+        NotFound: The repository no longer has one of the commits.
+    """
+    folder = _clean(path) if path else ""
+    try:
+        files = _differing(repo, _commits(base, head), pathspec(folder))
+    except (GitError, OSError) as error:
+        raise NotFound(
+            f"The changes from {base[:12]} to {head[:12]} cannot be read"
+        ) from error
+    listed = sorted(files.values(), key=lambda file: file.path)
+    return AcceptedChanges(
+        base=base,
+        head=head,
+        files=listed[:MAX_CHANGED_FILES],
+        truncated=len(listed) > MAX_CHANGED_FILES,
+    )
+
+
+def accepted_file(repo: Path, base: str, head: str, path: str) -> FileSides:
+    """One file as it was at each of two commits of the repository.
+
+    Raises:
+        Invalid: ``base`` or ``head`` is not a commit id, or ``path`` does
+            not name a file of the repository.
+        NotFound: The repository no longer has one of the commits.
+    """
+    path = _clean(path)
+    for commit in _commits(base, head):
+        try:
+            git(repo, ["cat-file", "-e", f"{commit}^{{commit}}"])
+        except (GitError, OSError) as error:
+            raise NotFound(f"The repository has no commit {commit[:12]}") from error
+    before, before_unread = _committed(repo, base, path)
+    after, after_unread = _committed(repo, head, path)
+    return FileSides(
+        path=path,
+        before=before,
+        after=after,
+        unreadable=before_unread or after_unread,
     )
 
 
@@ -214,6 +244,38 @@ def write_by_hand(
         env=DIRECTOR_IDENTITY,
     )
     return FileEdit(path=path, commit=git(top, ["rev-parse", "HEAD"]).strip())
+
+
+def _commits(base: str, head: str) -> list[str]:
+    for commit in (base, head):
+        if not _COMMIT.fullmatch(commit):
+            raise Invalid(f"{commit!r} is not a commit id")
+    return [base, head]
+
+
+def _differing(top: Path, commits: list[str], spec: str) -> dict[str, ChangedFile]:
+    """The committed files that differ between two commits, or between one
+    commit and the checkout, by path."""
+    ask = ["--no-renames", "-z", *commits, "--", spec]
+    kinds = _fields(git(top, ["diff", "--name-status", *ask]))
+    lines: dict[str, tuple[int | None, int | None]] = {}
+    for entry in _fields(git(top, ["diff", "--numstat", *ask])):
+        added, removed, path = entry.split("\t", 2)
+        lines[path] = (
+            None if added == "-" else int(added),
+            None if removed == "-" else int(removed),
+        )
+    files: dict[str, ChangedFile] = {}
+    for letter, path in zip(kinds[::2], kinds[1::2]):
+        added, removed = lines.get(path, (None, None))
+        files[path] = ChangedFile(
+            path=path,
+            kind=_KINDS.get(letter[:1], "modified"),
+            added=added,
+            removed=removed,
+            committed=True,
+        )
+    return files
 
 
 def _fields(output: str) -> list[str]:

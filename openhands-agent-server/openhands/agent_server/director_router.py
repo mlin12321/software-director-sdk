@@ -16,9 +16,15 @@ from fastapi.responses import StreamingResponse
 # The org's agents get their tools from this server, so it registers them.
 import openhands.agent_server.director.tools  # noqa: F401
 from openhands.agent_server.director.acp import TOOLS_PATH
-from openhands.agent_server.director.changes import file_sides, team_changes
+from openhands.agent_server.director.changes import (
+    accepted_changes,
+    accepted_file,
+    file_sides,
+    team_changes,
+)
 from openhands.agent_server.director.mcp_shim import TOKEN_HEADER
 from openhands.agent_server.director.models import (
+    AcceptedChanges,
     AnswerEscalationRequest,
     ConversationPlace,
     CreateOrgRequest,
@@ -754,6 +760,47 @@ def get_node_changed_file(
     """Get one file as it was at the team's base commit and as it is in the
     team's checkout now. `node_id` is a place of a session."""
     return file_sides(_require_place(service, node_id), path)
+
+
+_NO_COMMIT: dict[type[DomainError], str] = {
+    Invalid: "Not a commit id, or the path leads out of the repository",
+    NotFound: "The repository no longer has one of the commits",
+}
+_COMMIT = Query(description="A commit id, as an accept in the history has it.")
+
+
+@director_router.get(
+    "/org/accepted/changes",
+    response_model=AcceptedChanges,
+    responses=error_responses(_NO_COMMIT),
+)
+def get_accepted_changes(
+    base: Annotated[str, _COMMIT],
+    head: Annotated[str, _COMMIT],
+    path: Annotated[
+        str, Query(description="The team's directory; '' is the whole repository.")
+    ] = "",
+    service: DirectorService = Depends(get_director_service),
+) -> AcceptedChanges:
+    """List the files an accept took: what differs under `path` between the
+    `base` and the `head` of an `accepted` event in the history. It can be
+    read after the team's session is closed."""
+    return accepted_changes(service.repo_dir, base, head, path)
+
+
+@director_router.get(
+    "/org/accepted/changes/file",
+    response_model=FileSides,
+    responses=error_responses(_NO_COMMIT),
+)
+def get_accepted_file(
+    base: Annotated[str, _COMMIT],
+    head: Annotated[str, _COMMIT],
+    path: Annotated[str, Query(description="Relative to the top of the repository.")],
+    service: DirectorService = Depends(get_director_service),
+) -> FileSides:
+    """Get one file as it was before an accept and as it was accepted."""
+    return accepted_file(service.repo_dir, base, head, path)
 
 
 @director_router.put(

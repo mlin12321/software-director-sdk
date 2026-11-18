@@ -1739,6 +1739,8 @@ class Reviews(Requests):
             "at the first review"
             if place.review.round <= 1
             else f"at review {place.review.round}",
+            [place.boundary.path],
+            between=(place.base_commit, tip) if place.base_commit and tip else ("", ""),
         )
         if opens:
             self._take_spec_choices(place, specs or [])

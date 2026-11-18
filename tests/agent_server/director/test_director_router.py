@@ -784,6 +784,14 @@ async def test_a_teams_changes_are_listed_shown_and_edited_by_hand(running, repo
         f"{url}/files", params={"path": "../x"}, json={"content": "no\n"}
     )
     unknown = await client.get("/api/director/org/nodes/nobody/changes")
+    between = {"base": saved.json()["commit"] + "^", "head": saved.json()["commit"]}
+    not_ids = await client.get("/api/director/org/accepted/changes", params=between)
+    between["base"] = run_git(repo, "rev-parse", between["base"]).strip()
+    taken = await client.get("/api/director/org/accepted/changes", params=between)
+    taken_file = await client.get(
+        "/api/director/org/accepted/changes/file",
+        params={**between, "path": "README.md"},
+    )
 
     assert [(f["path"], f["committed"]) for f in listed.json()["files"]] == [
         ("README.md", False)
@@ -798,3 +806,6 @@ async def test_a_teams_changes_are_listed_shown_and_edited_by_hand(running, repo
     assert "README.md" in told and saved.json()["commit"][:12] in told
     assert (outside.status_code, unknown.status_code) == (400, 404)
     assert outside_while_busy.status_code == 403
+    assert not_ids.status_code == 400
+    assert [f["path"] for f in taken.json()["files"]] == ["README.md"]
+    assert taken_file.json()["after"] == "mine\n"

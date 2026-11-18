@@ -5,6 +5,8 @@ from pathlib import Path
 import pytest
 
 from openhands.agent_server.director.changes import (
+    accepted_changes,
+    accepted_file,
     file_sides,
     team_changes,
     write_by_hand,
@@ -51,6 +53,50 @@ def test_lists_what_a_team_committed_left_uncommitted_and_added(repo: Path):
         ("api/new.py", "added", 2, 0, False),
         ("api/old.py", "modified", 2, 1, True),
     ]
+
+
+def test_what_an_accept_took_is_read_from_its_two_commits(repo: Path):
+    commit(repo, "api/old.py", "a\nb\n")
+    base = run_git(repo, "rev-parse", "HEAD").strip()
+    commit(repo, "api/old.py", "a\nc\n")
+    commit(repo, "api/new.py", "one\n")
+    commit(repo, "web/page.tsx", "not the team's\n")
+    head = run_git(repo, "rev-parse", "HEAD").strip()
+    # What came after the accept, committed or not, is no part of it.
+    commit(repo, "api/later.py", "later\n")
+    (repo / "api" / "old.py").write_text("by hand\n")
+
+    changes = accepted_changes(repo, base, head, "api")
+    everywhere = accepted_changes(repo, base, head, "")
+    sides = accepted_file(repo, base, head, "api/old.py")
+    added = accepted_file(repo, base, head, "api/new.py")
+
+    assert (changes.base, changes.head, changes.truncated) == (base, head, False)
+    assert [(f.path, f.kind, f.added, f.removed) for f in changes.files] == [
+        ("api/new.py", "added", 1, 0),
+        ("api/old.py", "modified", 1, 1),
+    ]
+    assert [f.path for f in everywhere.files][-1] == "web/page.tsx"
+    assert (sides.before, sides.after) == ("a\nb\n", "a\nc\n")
+    assert (added.before, added.after) == (None, "one\n")
+
+
+def test_commits_that_are_no_commits_are_refused(repo: Path):
+    head = run_git(repo, "rev-parse", "HEAD").strip()
+    gone = "0123456789abcdef0123456789abcdef01234567"
+
+    # Nothing but a commit id reaches git.
+    for not_an_id in ("HEAD", "--output=x", "main..other", ""):
+        with pytest.raises(Invalid, match="is not a commit id"):
+            accepted_changes(repo, not_an_id, head, "")
+        with pytest.raises(Invalid, match="is not a commit id"):
+            accepted_file(repo, head, not_an_id, "README.md")
+    with pytest.raises(Invalid):
+        accepted_changes(repo, head, head, "../elsewhere")
+    with pytest.raises(NotFound, match="cannot be read"):
+        accepted_changes(repo, gone, head, "")
+    with pytest.raises(NotFound, match="has no commit 0123456789ab"):
+        accepted_file(repo, gone, head, "README.md")
 
 
 def test_a_committed_file_changed_again_is_marked_uncommitted(repo: Path):

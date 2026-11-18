@@ -446,7 +446,8 @@ class TeamEvent(BaseModel):
         description=(
             "The directories of the sub-teams a proposal was for, on "
             "`proposed`, `approved` and `declined`; on `needed`, the file "
-            "in the other team's directory."
+            "in the other team's directory; on `accepted`, the team's "
+            "directory ('' is the whole repository)."
         ),
     )
     other_id: str = Field(
@@ -456,6 +457,20 @@ class TeamEvent(BaseModel):
         ),
     )
     other: str = Field(default="", description="The title of that team.")
+    base: str = Field(
+        default="",
+        description=(
+            "On `accepted`, the commit the team's work was last accepted at "
+            "or started from; '' when it is not known."
+        ),
+    )
+    head: str = Field(
+        default="",
+        description=(
+            "On `accepted`, the commit that was accepted. What was accepted "
+            "is what `paths` holds of the changes from `base` to it."
+        ),
+    )
     id: str = Field(
         default="",
         description="Names the event, so that it is added to a record once.",
@@ -708,8 +723,18 @@ class TeamChanges(BaseModel):
     truncated: bool = Field(description="There were more files than are listed.")
 
 
+class AcceptedChanges(BaseModel):
+    """What changed in a directory from one commit to another."""
+
+    base: str
+    head: str
+    files: list[ChangedFile] = Field(description="Sorted by path.")
+    truncated: bool = Field(description="There were more files than are listed.")
+
+
 class FileSides(BaseModel):
-    """A file at a team's base commit and in its checkout now."""
+    """A file before and after: at a team's base commit and in its checkout
+    now, or at the two commits of an accept."""
 
     path: str
     before: str | None = Field(description="None when the file was not there.")
