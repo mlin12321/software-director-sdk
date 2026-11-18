@@ -44,7 +44,9 @@ def git(
     """
     # Bytes in and out: text mode would rewrite line endings in file content.
     result = subprocess.run(
-        ["git", *args],
+        # Paths are read as relative to the top of the checkout, whatever
+        # the machine's git is configured to print.
+        ["git", "-c", "diff.relative=false", *args],
         cwd=repo_dir,
         env={**os.environ, **(env or {})},
         input=None if stdin is None else stdin.encode(),

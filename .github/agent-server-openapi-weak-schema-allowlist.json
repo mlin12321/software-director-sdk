@@ -352,5 +352,17 @@
     "kind": "unrestricted-additional-properties",
     "reason": "Per-action analyzer detail (probabilities, confidence, rationale) is analyzer-specific by design; the shape belongs to each SecurityAnalyzer implementation.",
     "owner": "OpenHands OSS"
+  },
+  {
+    "pointer": "/components/schemas/RemoteTool/properties/inputSchema/additionalProperties",
+    "kind": "unrestricted-additional-properties",
+    "reason": "A director tool's input is described to an MCP client as a JSON Schema document, which is open by definition.",
+    "owner": "Agent Director fork"
+  },
+  {
+    "pointer": "/paths/~1api~1director~1tools~1{name}/post/requestBody/content/application~1json/schema/additionalProperties",
+    "kind": "unrestricted-additional-properties",
+    "reason": "The arguments of a director tool call; each tool validates them against its own action schema, which GET /api/director/tools lists.",
+    "owner": "Agent Director fork"
   }
 ]
