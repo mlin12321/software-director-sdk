@@ -136,6 +136,36 @@ def test_a_session_has_a_place_at_its_team_and_at_every_team_below(store: OrgSto
     assert store.place(at("b")) is None
 
 
+def test_a_sessions_status_is_of_all_its_teams(working: OrgStore):
+    def status() -> str:
+        [session] = working.sessions()
+        return session.status
+
+    assert status() == "idle"
+
+    # Only a team below works, or only the reviewer.
+    working.set_agent(at("a1"), "ic", status="working")
+    assert status() == "working"
+    working.set_agent(at("a1"), "ic", status="idle")
+    lead = division_lead_id("root", SESSION)
+    working.update_place(
+        lead, agents=[AgentRef(role="ic", conversation_id="lead", status="idle")]
+    )
+    working.set_agent(lead, "ic", status="working")
+    assert status() == "working"
+
+    # A team that waits on an answer shows once nothing else is at work,
+    working.raise_escalation(at("b"), "ask", kind="design_decision", title="t")
+    assert status() == "working"
+    working.set_agent(lead, "ic", status="idle")
+    assert status() == "blocked"
+
+    # and the team it was opened at shows whatever else is at work.
+    working.set_agent(lead, "ic", status="working")
+    working.raise_escalation(at("root"), "top", kind="design_decision", title="t")
+    assert status() == "blocked"
+
+
 def test_a_place_is_no_team_of_the_tree(working: OrgStore):
     snapshot = working.snapshot("root", full=True)
     root = working.team("root")
