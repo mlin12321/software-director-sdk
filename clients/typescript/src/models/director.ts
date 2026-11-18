@@ -60,6 +60,11 @@ export interface DirectorAgentRef {
    * `codex`; `null` when the server could not tell.
    */
   acp_server: string | null;
+  /**
+   * The model the agent runs on, as it is configured; `null` for an `acp`
+   * agent left on its own default, and until the agent started.
+   */
+  model: string | null;
 }
 
 /**

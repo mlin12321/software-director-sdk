@@ -71,6 +71,7 @@ class StartedAgent:
     isolation: IsolationMode
     kind: AgentKind = "openhands"
     acp_server: str | None = None
+    model: str | None = None
 
 
 class TeamLauncher(Protocol):
@@ -592,8 +593,8 @@ class ConversationTeamLauncher:
 
 def _kind_of(agent: AgentBase) -> dict[str, Any]:
     if isinstance(agent, ACPAgent):
-        return {"kind": "acp", "acp_server": agent.acp_server}
-    return {"kind": "openhands"}
+        return {"kind": "acp", "acp_server": agent.acp_server, "model": agent.acp_model}
+    return {"kind": "openhands", "model": agent.llm.model}
 
 
 def _ask(llm: LLM, system: str, user: str) -> tuple[str | None, Usage]:

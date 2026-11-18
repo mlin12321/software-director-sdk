@@ -107,6 +107,13 @@ class AgentRef(BaseModel):
             "`codex`; None when the server could not tell."
         ),
     )
+    model: str | None = Field(
+        default=None,
+        description=(
+            "The model the agent runs on, as it is configured; None for an "
+            "`acp` agent left on its own default, and until the agent started."
+        ),
+    )
 
 
 class EscalationHandoff(BaseModel):

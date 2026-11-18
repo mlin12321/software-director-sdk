@@ -486,7 +486,13 @@ class Sync(Sessions):
         except BaseException:
             store.update_place(node_id, agents=place.agents, status=place.status)
             raise
-        store.set_agent(node_id, "ic", kind=started.kind, acp_server=started.acp_server)
+        store.set_agent(
+            node_id,
+            "ic",
+            kind=started.kind,
+            acp_server=started.acp_server,
+            model=started.model,
+        )
         self._begin("brief", node_id, role="ic", task=task)
         return store.place(node_id) or place
 
