@@ -67,7 +67,7 @@ jobs:
                   echo "✓ All test directories are in the allowlist"
 
     sdk-tests:
-        runs-on: blacksmith-2vcpu-ubuntu-2404
+        runs-on: ubuntu-24.04
         steps:
             - name: Checkout
               uses: actions/checkout@v7.0.1
@@ -143,7 +143,7 @@ jobs:
     # when ACP registry/catalog files actually change (OpenHands/
     # software-agent-sdk#4830 P0-1/2/3).
     acp-live-tests:
-        runs-on: blacksmith-2vcpu-ubuntu-2404
+        runs-on: ubuntu-24.04
         timeout-minutes: 15
         steps:
             - name: Checkout
@@ -193,7 +193,7 @@ jobs:
                     tests/sdk/settings/test_acp_install_catalog_pins_live.py
 
     tools-tests:
-        runs-on: blacksmith-2vcpu-ubuntu-2404
+        runs-on: ubuntu-24.04
         timeout-minutes: 15
         steps:
             - name: Checkout
@@ -328,7 +328,7 @@ jobs:
 
 
     agent-server-tests:
-        runs-on: blacksmith-2vcpu-ubuntu-2404
+        runs-on: ubuntu-24.04
         steps:
             - name: Checkout
               uses: actions/checkout@v7.0.1
@@ -388,7 +388,7 @@ jobs:
                   if-no-files-found: warn
 
     agent-server-stress-tests:
-        runs-on: blacksmith-2vcpu-ubuntu-2404
+        runs-on: ubuntu-24.04
         timeout-minutes: 10
         steps:
             - name: Checkout
@@ -430,7 +430,7 @@ jobs:
                     tests/agent_server/stress
 
     workspace-tests:
-        runs-on: blacksmith-2vcpu-ubuntu-2404
+        runs-on: ubuntu-24.04
         steps:
             - name: Checkout
               uses: actions/checkout@v7.0.1
@@ -489,7 +489,7 @@ jobs:
                   if-no-files-found: warn
 
     cross-tests:
-        runs-on: blacksmith-2vcpu-ubuntu-2404
+        runs-on: ubuntu-24.04
         steps:
             - name: Checkout
               uses: actions/checkout@v7.0.1
@@ -549,7 +549,7 @@ jobs:
                   if-no-files-found: warn
 
     coverage-report:
-        runs-on: blacksmith-2vcpu-ubuntu-2404
+        runs-on: ubuntu-24.04
         needs: [sdk-tests, tools-tests, agent-server-tests, workspace-tests, cross-tests]
         if: always() && github.event_name == 'pull_request'
         steps:

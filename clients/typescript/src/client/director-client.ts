@@ -186,10 +186,7 @@ export class DirectorClient {
    *   git repository.
    */
   async createOrg(request: CreateOrgRequest): Promise<DirectorOpenedSession> {
-    const response = await this.client.post<DirectorOpenedSession>(
-      `${DIRECTOR_PATH}/org`,
-      request
-    );
+    const response = await this.client.post<DirectorOpenedSession>(`${DIRECTOR_PATH}/org`, request);
     return response.data;
   }
 
