@@ -9,6 +9,7 @@ from uuid import UUID, uuid4
 import pytest
 
 from openhands.agent_server.director.git import git
+from openhands.agent_server.director.headline import TeamSummary
 from openhands.agent_server.director.merge_back import merge_back
 from openhands.agent_server.director.models import (
     OpenedSession,
@@ -189,6 +190,23 @@ async def test_a_conversation_the_human_writes_in_is_marked_and_named(
     assert not service.place_of(ic(service, API) or "").human_joined
     with pytest.raises(NotFound):
         service.joined(str(uuid4()))
+
+
+async def test_a_session_the_human_gave_no_name_is_called_what_it_is_for(
+    service: DirectorService, launcher: FakeLauncher
+):
+    launcher.summary = TeamSummary("Order Refunds", "Adds refunds to the API.")
+
+    unnamed = await opened(service, title="")
+    named = await opened(service, title="Refunds")
+
+    titles = {s.id: s.title for s in service.store.sessions()}
+    assert titles[unnamed.session.id] == "Order Refunds"
+    assert titles[named.session.id] == "Refunds"
+    # The team keeps its own name; its IC is called by both.
+    found = service.store.find_by_conversation(unnamed.conversation_id)
+    assert found is not None and found[0].title == "API"
+    assert launcher.titles[UUID(unnamed.conversation_id)] == "API · Order Refunds (IC)"
 
 
 async def test_a_conversation_links_to_the_ones_a_level_from_it(

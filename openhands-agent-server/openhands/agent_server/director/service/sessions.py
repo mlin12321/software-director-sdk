@@ -235,6 +235,8 @@ class Sessions(Splits):
             except BaseException:
                 store.close_session(session_id)
                 raise
+        if not rename and not request.title.strip():
+            self._enqueue(lambda: self._name_session(top.id, text), top.id)
         self._save_soon()
         return OpenedSession(
             session=next(found for found in store.sessions() if found.id == session_id),
