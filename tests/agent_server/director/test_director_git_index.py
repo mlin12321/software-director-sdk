@@ -136,8 +136,10 @@ def test_the_checkouts_own_index_follows_an_agents_commit(
     (shared / "svc" / "web" / "main.py").write_text("web v2\n")
     run_git(shared, "add", "svc/web/main.py")
 
-    assert api("commit", "-am", "api work", cwd=shared / "svc" / "api").returncode == 0
+    committed = api("commit", "-am", "api work", cwd=shared / "svc" / "api")
 
+    assert committed.returncode == 0
+    assert "index was not updated" not in committed.stderr, committed.stderr
     # What the human had staged is still staged; the commit is not shown
     # as something to undo.
     assert run_git(shared, "status", "--porcelain").split() == [

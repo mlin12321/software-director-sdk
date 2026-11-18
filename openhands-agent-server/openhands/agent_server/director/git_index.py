@@ -147,9 +147,13 @@ def git_script(
         '    && ! "$real" diff --quiet "$before" "$after" 2>/dev/null; then',
         # The names are relative to the top of the checkout.
         '  top=$("$real" rev-parse --show-toplevel)',
-        '  "$real" diff --name-only -z "$before" "$after" |',
+        '  refused=$("$real" diff --name-only -z "$before" "$after" |',
         '    GIT_INDEX_FILE="$git_dir/index" "$real" -C "$top" reset -q "$after" \\',
-        "      --pathspec-from-file=- --pathspec-file-nul >/dev/null 2>&1",
+        "      --pathspec-from-file=- --pathspec-file-nul 2>&1 >/dev/null) ||",
+        # The commit stands; whoever uses the checkout should know why
+        # its files look staged.
+        '    printf "warning: the checkout\'s own index was not updated: %s\\n" \\',
+        '      "$refused" >&2',
         "fi",
         "exit $code",
     ]
