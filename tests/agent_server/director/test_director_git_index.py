@@ -153,6 +153,22 @@ def test_the_checkouts_own_index_follows_an_agents_commit(
     )
 
     assert committed.returncode == 0
+    probe = subprocess.run(
+        [
+            "sh",
+            "-c",
+            "git ls-files -s; env | grep -i '^git' ; git config --list --show-origin;"
+            " echo RESET; printf 'svc/api/main.py\\0' |"
+            " GIT_TRACE=1 git reset -q HEAD --pathspec-from-file=-"
+            " --pathspec-file-nul; echo code=$?; git ls-files -s; git status --porcelain",
+        ],
+        cwd=shared,
+        capture_output=True,
+        text=True,
+    )
+    assert False, "TRACE " + (probe.stdout + " ERR " + probe.stderr).replace(
+        "\n", " ## "
+    )
     assert run_git(shared, "status", "--porcelain").split() == [
         "M",
         "svc/web/main.py",
