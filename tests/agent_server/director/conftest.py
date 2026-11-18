@@ -308,6 +308,8 @@ class FakeLauncher:
     agents_silent: asyncio.Event | None = None
     # What the root's request resolves to.
     root_kind: AgentKind = "openhands"
+    # The model every agent it starts is said to run on.
+    model: str | None = None
     root_adapt: AgentAdapter | None = None
     kinds: dict[UUID, AgentKind] = field(default_factory=dict)
     # The stored agent profiles, by name.
@@ -338,6 +340,7 @@ class FakeLauncher:
             isolation="shared",
             kind=self.root_kind,
             acp_server="claude-code" if self.root_kind == "acp" else None,
+            model=self.model,
         )
 
     async def start_derived(
@@ -388,6 +391,7 @@ class FakeLauncher:
             isolation=isolation,
             kind=kind,
             acp_server="claude-code" if kind == "acp" else None,
+            model=self.model,
         )
 
     async def start_from_profile(

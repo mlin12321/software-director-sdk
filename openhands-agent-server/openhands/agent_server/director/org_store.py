@@ -504,6 +504,7 @@ class OrgStore:
         status: str | None = None,
         kind: AgentKind | None = None,
         acp_server: str | None = None,
+        model: str | None = None,
         reason: str | None = None,
     ) -> SessionTeam:
         """Change the conversation, the status or the kind of one agent of a
@@ -532,6 +533,7 @@ class OrgStore:
                         else None,
                         "kind": kind or agent.kind,
                         "acp_server": acp_server or agent.acp_server,
+                        "model": model or agent.model,
                     }
                 )
                 for agent in node.agents

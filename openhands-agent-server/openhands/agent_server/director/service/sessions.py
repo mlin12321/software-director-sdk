@@ -298,7 +298,13 @@ class Sessions(Splits):
                 self._adapter, str(ic_id), TOOLS_OF["ic"]
             ),
         )
-        store.set_agent(top.id, "ic", kind=started.kind, acp_server=started.acp_server)
+        store.set_agent(
+            top.id,
+            "ic",
+            kind=started.kind,
+            acp_server=started.acp_server,
+            model=started.model,
+        )
         store.update_place(
             top.id,
             worktree_path=started.workspace,
