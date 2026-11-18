@@ -18,6 +18,7 @@ from openhands.agent_server.director.git import (
     GitError,
 )
 from openhands.agent_server.director.headline import provisional_summary
+from openhands.agent_server.director.launch import TeamLauncher
 from openhands.agent_server.director.models import (
     AgentRole,
     Report,
@@ -512,12 +513,39 @@ class Delivery(Records):
         if store.opens_session(place):
             # A session the human gave no name is called what it is for.
             store.rename_session(place.session, summary.title)
+        await self._rename_agents(place, launcher)
+
+    async def _name_session(self, place_id: str, request: str) -> None:
+        """Call a session the human gave no name by what a model makes of
+        its request. The team it was opened at keeps its own name."""
+        store = self.store
+        place = store.place(place_id)
+        conversation_id = agent_conversation(place, "ic") if place else None
+        if place is None or conversation_id is None or self._paused is not None:
+            return
+        launcher = self._require_launcher()
+        try:
+            async with self._model_calls:
+                summary = await asyncio.wait_for(
+                    launcher.summarize(UUID(conversation_id), request),
+                    timeout=self._summary_timeout,
+                )
+        except (NotFound, TimeoutError):
+            return
+        place = store.place(place_id)
+        if summary is None or place is None:
+            return
+        store.rename_session(place.session, summary.title)
+        await self._rename_agents(place, launcher)
+
+    async def _rename_agents(self, place: SessionTeam, launcher: TeamLauncher) -> None:
+        store = self.store
         for agent in place.agents:
             if agent.conversation_id is not None:
                 with suppress(NotFound):
                     await launcher.rename(
                         UUID(agent.conversation_id),
                         _agent_title(
-                            summary.title, agent.role, store.session_title(place)
+                            place.title, agent.role, store.session_title(place)
                         ),
                     )
