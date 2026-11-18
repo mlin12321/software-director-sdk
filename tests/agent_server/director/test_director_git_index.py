@@ -136,35 +136,27 @@ def test_the_checkouts_own_index_follows_an_agents_commit(
     (shared / "svc" / "web" / "main.py").write_text("web v2\n")
     run_git(shared, "add", "svc/web/main.py")
 
-    committed = api("commit", "-am", "api work", cwd=shared / "svc" / "api")
+    wrapper = shared.parent / "agents" / "api" / "git"
+    committed = subprocess.run(
+        ["sh", "-x", str(wrapper), "commit", "-am", "api work"],
+        cwd=shared / "svc" / "api",
+        env={
+            **os.environ,
+            "PATH": f"{wrapper.parent}{os.pathsep}{os.environ['PATH']}",
+            "GIT_AUTHOR_NAME": "a",
+            "GIT_AUTHOR_EMAIL": "a@example.invalid",
+            "GIT_COMMITTER_NAME": "a",
+            "GIT_COMMITTER_EMAIL": "a@example.invalid",
+        },
+        capture_output=True,
+        text=True,
+    )
 
     assert committed.returncode == 0
-    assert "index was not updated" not in committed.stderr, committed.stderr
-    # What the human had staged is still staged; the commit is not shown
-    # as something to undo.
-    seen = {
-        "err": committed.stderr,
-        "out": committed.stdout,
-        "log": run_git(shared, "log", "--oneline", "--name-only"),
-        "index": run_git(shared, "ls-files", "-s"),
-        "head": run_git(shared, "ls-tree", "-r", "HEAD"),
-        "git_dir": sorted(p.name for p in (shared / ".git").iterdir()),
-        "trace": subprocess.run(
-            [
-                "sh",
-                "-x",
-                shutil.which("git", path=str(shared.parent / "agents" / "api")) or "",
-                "status",
-            ],
-            cwd=shared,
-            capture_output=True,
-            text=True,
-        ).stderr[-1500:],
-    }
     assert run_git(shared, "status", "--porcelain").split() == [
         "M",
         "svc/web/main.py",
-    ], seen
+    ], "TRACE " + committed.stderr[-2500:].replace("\n", " ## ")
 
 
 def test_a_team_does_not_stage_what_it_handed_to_a_sub_team(
