@@ -49,6 +49,7 @@ from openhands.agent_server.director.org_store import (
     is_division_lead,
 )
 from openhands.agent_server.director.prompts import (
+    CHANGED_SINCE_ACCEPT,
     ORG_PROTOCOL,
 )
 from openhands.agent_server.director.recovery import (
@@ -760,6 +761,8 @@ class Sync(Sessions):
                 self.release_reviews(node.parent_id)
             if role == "ic" and status == ConversationExecutionStatus.RUNNING:
                 self.release_reviews(node.id, now=True)
+            if status != ConversationExecutionStatus.RUNNING:
+                self._remind_to_submit(node.session)
 
     async def _failed(
         self,
@@ -813,6 +816,27 @@ class Sync(Sessions):
         at_work = ("working", AGENT_PAUSED)
         if mode.status in at_work and shown not in at_work:
             self._hand_over_ended(node.id)
+            self._remind_to_submit(node.session)
+
+    def _remind_to_submit(self, session: str) -> None:
+        """Tell the IC of a session at rest that what it changed since its
+        work was accepted is not the org's until it submits again. Once for
+        each accept. Safe from any thread."""
+        if self._changed_since_accept.get(session, True) or self._paused is not None:
+            return
+        places = self.store.session(session)
+        at_work = ("working", AGENT_PAUSED)
+        if any(
+            place.status == "working"
+            or ((mode := hand_over_of(place)) is not None and mode.status in at_work)
+            for place in places
+        ):
+            return
+        self._changed_since_accept[session] = True
+        top = places[0] if places else None
+        if top is None or top.review is None or top.review.state != "accepted":
+            return
+        self.notify(agent_conversation(top, "ic"), CHANGED_SINCE_ACCEPT)
 
     async def _resync(self) -> None:
         """Read every agent's status back from its conversation."""

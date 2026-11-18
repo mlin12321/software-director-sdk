@@ -44,6 +44,7 @@ from openhands.agent_server.director.tools.definition import (
     SettleTeamsAction,
     WriteSpecAction,
 )
+from openhands.sdk.conversation.state import ConversationExecutionStatus
 from openhands.sdk.errors import NotFound
 from tests.agent_server.director.conftest import (
     FakeLauncher,
@@ -888,6 +889,49 @@ async def test_a_team_a_session_prunes_is_the_orgs_until_its_work_is_accepted(
     [record] = service.team_memory.former("services.api")
     assert (record.ended, record.reports) == ("pruned", [kept])
     assert service.team_memory.reports("services.api", "ic") == []
+
+
+async def test_an_ic_is_told_once_that_the_org_lacks_what_changed_after_an_accept(
+    service: DirectorService, launcher: FakeLauncher
+):
+    await split_root(service)
+    await landed(service)
+    await service.settled()
+    root_ic, root_manager = ic(service), manager(service)
+    assert root_ic is not None and root_manager is not None
+
+    def reminders() -> list[str]:
+        return [
+            text
+            for text in launcher.messages_to(root_ic)
+            if "The org does not have these changes" in text
+        ]
+
+    # A turn that ends with nothing changed since the accept says nothing.
+    launcher.report(root_manager, ConversationExecutionStatus.FINISHED)
+    await service.settled()
+    assert reminders() == []
+
+    await use(service, root_manager, PruneTeamTool, PRUNE_API)
+    await service.settled()
+    for conversation, status in list(launcher.known.items()):
+        if status == ConversationExecutionStatus.RUNNING:
+            launcher.report(str(conversation), ConversationExecutionStatus.FINISHED)
+    launcher.report(root_manager, ConversationExecutionStatus.FINISHED)
+    await service.settled()
+    assert len(reminders()) == 1
+
+    # Not with every turn that ends.
+    launcher.report(root_ic, ConversationExecutionStatus.FINISHED)
+    await service.settled()
+    assert len(reminders()) == 1
+
+    # Accepted again, the org has it, and a later change is said again.
+    await landed(service)
+    await service.settled()
+    launcher.report(root_ic, ConversationExecutionStatus.FINISHED)
+    await service.settled()
+    assert len(reminders()) == 1
 
 
 def merge_of(service: DirectorService, top: str):

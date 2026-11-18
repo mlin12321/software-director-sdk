@@ -1745,6 +1745,7 @@ class Reviews(Requests):
             await asyncio.to_thread(
                 self._land_accepted, place, meets.seen if meets else None
             )
+            self._changed_since_accept.pop(place.session, None)
         self._runs().unmark(SHOWN, place_id)
         self._tell_turns()
         if not is_division_lead(above):

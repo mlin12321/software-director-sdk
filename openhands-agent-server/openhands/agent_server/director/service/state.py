@@ -401,6 +401,9 @@ class ServiceState:
         self._at_once: set[int] = set()
         # The conversations last recorded as running.
         self._running: set[str] = set()
+        # The sessions that changed something of the org's after their
+        # work was accepted, and whether their IC was told to submit it.
+        self._changed_since_accept: dict[str, bool] = {}
         # The teams each step waits for the agents of to stop, by the id of
         # its intent, and the lane the step is carried out in.
         self._settling: dict[int, tuple[set[str], str]] = {}
