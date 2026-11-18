@@ -405,6 +405,8 @@ class ServiceState:
         # and whether the title is set too. An agent that runs its own
         # tools cannot be asked before its first turn.
         self._summary_owed: dict[str, tuple[str, bool]] = {}
+        # The org has no name yet: it takes that of its first session.
+        self._org_unnamed = False
         # The teams each step waits for the agents of to stop, by the id of
         # its intent, and the lane the step is carried out in.
         self._settling: dict[int, tuple[set[str], str]] = {}

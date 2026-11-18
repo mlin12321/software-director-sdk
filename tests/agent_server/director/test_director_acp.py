@@ -742,6 +742,44 @@ async def test_an_agent_that_could_not_be_asked_yet_names_its_team_after_its_tur
     await service.aclose()
 
 
+async def test_an_org_without_a_name_takes_the_one_its_agent_gives_after_its_turn(
+    repo: Path,
+):
+    launcher = FakeLauncher(root_kind="acp")
+    service = DirectorService(
+        repo,
+        save_delay=0,
+        run_limit_retry=0,
+        remembered=repo.parent / "state" / "director.json",
+        server_url="http://127.0.0.1:8000",
+    )
+    await service.start(launcher)
+    await service.create_org(
+        CreateOrgRequest(
+            task="Build the checkout of the shop, with a cart and a way to pay.",
+            conversation=root_conversation(repo),
+        )
+    )
+    await service.settled()
+    agent = ic(service)
+    assert agent is not None
+    top = service.store.team("root")
+    assert top is not None and top.title != "Checkout"
+    launcher.summary = TeamSummary(title="Checkout", headline="Builds the checkout.")
+
+    launcher.report(agent, ConversationExecutionStatus.RUNNING)
+    launcher.report(agent, ConversationExecutionStatus.FINISHED)
+    await service.settled()
+
+    top = service.store.team("root")
+    assert top is not None
+    assert (top.title, top.headline) == ("Checkout", "Builds the checkout.")
+    assert [session.title for session in service.store.sessions()] == ["Checkout"]
+    leads = [place for place in service.store.places() if place.division_lead]
+    assert [lead.title for lead in leads] == ["Checkout"]
+    await service.aclose()
+
+
 async def test_an_agent_with_a_model_of_the_servers_is_not_asked_again(repo: Path):
     launcher = FakeLauncher()
     service = await started(repo, launcher)

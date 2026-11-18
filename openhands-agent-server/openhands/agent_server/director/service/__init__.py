@@ -220,6 +220,9 @@ class DirectorService(Sync):
                     since=_instant(),
                 )
             )
+            if request.title is None:
+                # The org is named after what its first session is for.
+                self._org_unnamed = True
             try:
                 opened = await self.open_session(
                     OpenSessionRequest(
@@ -230,25 +233,13 @@ class DirectorService(Sync):
                     rename=request.title is None,
                 )
             except BaseException:
+                self._org_unnamed = False
                 store.remove(ROOT_ID)
                 self._repo_dir = configured
                 raise
             await asyncio.to_thread(self._remember, repo_path=str(self._repo_dir))
             await asyncio.to_thread(self._working)
-        if request.title is None:
-            # The org is named after what its first session is for.
-            top = opened.session.teams[0].id
-            # In the lane of that team, after the model that names it.
-            self._enqueue(lambda: self._in_base(lambda: self._name_org(top)), top)
         return opened
-
-    async def _name_org(self, top_id: str) -> None:
-        """Give the top team the name a model made of the first task."""
-        top = self.store.place(top_id)
-        if top is not None and self.store.root_id is not None:
-            self.store.update_team(
-                self.store.root_id, title=top.title, headline=top.headline
-            )
 
     async def _say_in_session(self, session_id: str, text: str) -> RoutedMessage:
         """Give what the human says in a session's conversation to the IC

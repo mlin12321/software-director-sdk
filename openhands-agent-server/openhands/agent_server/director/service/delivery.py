@@ -25,6 +25,7 @@ from openhands.agent_server.director.models import (
 )
 from openhands.agent_server.director.org_store import (
     AGENT_LOST,
+    division_lead_id,
 )
 from openhands.agent_server.director.prompts import (
     from_director,
@@ -445,6 +446,18 @@ class Delivery(Records):
         shorter = compaction.compacted(answer or "", reports, _instant())
         return shorter[0].text if shorter else full
 
+    async def _name_org(self, top_id: str) -> None:
+        """Give the top team the name a model made of the first task. The
+        Division Lead of that session is called what its team is."""
+        store = self.store
+        top = store.place(top_id)
+        if top is None or store.root_id is None:
+            return
+        store.update_team(store.root_id, title=top.title, headline=top.headline)
+        lead = store.place(division_lead_id(store.root_id, top.session))
+        if lead is not None:
+            store.update_place(lead.id, title=top.title)
+
     async def _summarize(
         self,
         place_id: str,
@@ -503,6 +516,9 @@ class Delivery(Records):
             return
         if not rename:
             return
+        if self._org_unnamed and store.opens_session(place):
+            self._org_unnamed = False
+            await self._in_base(lambda: self._name_org(place_id))
         if store.opens_session(place):
             # A session the human gave no name is called what it is for.
             store.rename_session(place.session, summary.title)
