@@ -72,6 +72,14 @@ type OrgListener = Callable[[OrgChange], None]
 _DERIVED_FIELDS = {"child_ids"}
 
 
+def _of_all(top: NodeStatus, places: list[NodeStatus]) -> NodeStatus:
+    """What a session is, from what the team it was opened at is and what
+    every place of it is, its reviewer's included."""
+    if top != "blocked" and "working" in places:
+        return "working"
+    return "blocked" if "blocked" in places else top
+
+
 def session_team_id(team_id: str, session_id: str) -> str:
     """The id of what a session has at the team ``team_id``."""
     return f"{team_id}@{session_id}"
@@ -1156,7 +1164,7 @@ class OrgStore:
         return Session(
             **session.model_dump(),
             team=top.title,
-            status=top.status,
+            status=_of_all(top.status, [team.status for team in teams]),
             review=top.review.state if top.review else None,
             conversation_id=next(
                 (agent.conversation_id for agent in top.agents if agent.role == "ic"),

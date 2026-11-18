@@ -1576,7 +1576,14 @@ class Session(SessionInput):
     """
 
     team: str = Field(description="The title of the team it was opened at.")
-    status: NodeStatus = Field(description="Of the team it was opened at.")
+    status: NodeStatus = Field(
+        description=(
+            "Of the whole session: `blocked` while the team it was opened at "
+            "is; else `working` while any of its teams or its reviewer is; "
+            "else `blocked` while any of them is; else what the team it was "
+            "opened at is."
+        )
+    )
     review: ReviewState | None = Field(
         default=None, description="Where the review of its work stands."
     )
