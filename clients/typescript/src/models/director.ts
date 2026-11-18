@@ -776,9 +776,17 @@ export interface DirectorTeamEvent {
   detail?: string;
   /**
    * The directories a proposal was for, on `proposed`, `approved` and
-   * `declined`; on `needed`, the file in the other team's directory.
+   * `declined`; on `needed`, the file in the other team's directory; on
+   * `accepted`, the team's directory (`''` is the whole repository).
    */
   paths?: string[];
+  /**
+   * On `accepted`, the commit the team's work was last accepted at or
+   * started from; `''` when it is not known.
+   */
+  base?: string;
+  /** On `accepted`, the commit that was accepted. */
+  head?: string;
   /** On `needed`, the team beside this one whose directory it needed. */
   other_id?: string;
   other?: string;
@@ -875,7 +883,18 @@ export interface DirectorTeamChanges {
   truncated: boolean;
 }
 
-/** A file at a team's base commit and in its checkout now. */
+/** What changed in a directory from one commit to another. */
+export interface DirectorAcceptedChanges {
+  base: string;
+  head: string;
+  files: DirectorChangedFile[];
+  truncated: boolean;
+}
+
+/**
+ * A file before and after: at a team's base commit and in its checkout now,
+ * or at the two commits of an accept.
+ */
 export interface DirectorFileSides {
   path: string;
   /** `null` when the file was not there. */

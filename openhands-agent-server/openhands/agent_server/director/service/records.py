@@ -173,6 +173,7 @@ class Records(ServiceState):
         other: SessionTeam | None = None,
         *,
         other_gone: tuple[str, str] | None = None,
+        between: tuple[str, str] = ("", ""),
     ) -> None:
         """Keep, for the IC and the Manager of a team, what became of a team
         directly below it. It is its session's alone until the session's
@@ -186,11 +187,13 @@ class Records(ServiceState):
                 team it asked directly.
             other_gone: The id and the title of that team when it is no
                 longer in the org.
+            between: The two commits an accept took the team's work between.
         """
         session = session_in(above_id or "") or (team.session if team else "")
         if above_id is None or not session:
             return
         event = self._event(kind, team, detail, paths, other, other_gone)
+        event = event.model_copy(update={"base": between[0], "head": between[1]})
         key = f"{session}\n{team_key(above_id)}"
         with self._keeping:
             events = [*self.own_events(session, team_key(above_id)), event]

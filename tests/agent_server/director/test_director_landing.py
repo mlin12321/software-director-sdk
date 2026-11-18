@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from openhands.agent_server.director.changes import accepted_changes
 from openhands.agent_server.director.models import (
     ContractsChoice,
     CreateOrgRequest,
@@ -225,6 +226,29 @@ async def test_accepted_work_is_merged_into_the_repositorys_checkout(
     assert (repo / "app.py").read_text() == "refunds = True\n"
     review = node(service, "root").review
     assert review is not None and review.state == "accepted"
+
+
+async def test_an_accept_on_record_says_which_commits_it_took_the_work_between(
+    service: DirectorService, repo: Path, tmp_path: Path
+):
+    started_at = run_git(repo, "rev-parse", "HEAD").strip()
+    worktree = own_worktree(service, repo, tmp_path)
+    commit(worktree, "app.py", "refunds = True\n")
+    accepted_at = run_git(worktree, "rev-parse", "HEAD").strip()
+
+    await landed(service)
+
+    [accepted] = [
+        event
+        for event in service.team_memory.history("root")
+        if event.kind == "accepted"
+    ]
+    assert (accepted.base, accepted.head) == (started_at, accepted_at)
+    # The top team's folder is the whole repository.
+    assert accepted.paths == [""]
+    # The session can be closed: the repository has both commits.
+    changes = accepted_changes(repo, accepted.base, accepted.head, accepted.paths[0])
+    assert [(file.path, file.kind) for file in changes.files] == [("app.py", "added")]
 
 
 async def test_the_human_is_asked_when_their_uncommitted_work_is_in_the_way(

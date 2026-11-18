@@ -227,6 +227,8 @@ describe('DirectorClient', () => {
 
     await client.getNodeChanges('services.api');
     await client.getNodeChangedFile('services.api', 'api/a b.py');
+    await client.getAcceptedChanges('abc1234', 'def5678', 'api');
+    await client.getAcceptedFile('abc1234', 'def5678', 'api/a.py');
     const edit = await client.editNodeFile('services.api', 'api/a.py', 'x\n');
 
     const calls = fetchMock.mock.calls.map(
@@ -235,6 +237,8 @@ describe('DirectorClient', () => {
     expect(calls).toEqual([
       'GET http://example.com/api/director/org/nodes/services.api/changes ',
       'GET http://example.com/api/director/org/nodes/services.api/changes/file?path=api%2Fa+b.py ',
+      'GET http://example.com/api/director/org/accepted/changes?base=abc1234&head=def5678&path=api ',
+      'GET http://example.com/api/director/org/accepted/changes/file?base=abc1234&head=def5678&path=api%2Fa.py ',
       'PUT http://example.com/api/director/org/nodes/services.api/files?path=api%2Fa.py {"content":"x\\n"}',
     ]);
     expect(edit).toEqual({ path: 'api/a.py', commit: 'abc' });
