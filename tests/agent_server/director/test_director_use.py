@@ -17,12 +17,14 @@ from openhands.agent_server.director.models import (
     Session,
     Usage,
 )
+from openhands.agent_server.director.pricing import priced
 from openhands.agent_server.director.run_state import USE
 from openhands.agent_server.director.service import DirectorService
 from openhands.agent_server.director.service.state import LIMIT_WAITS
 from openhands.sdk.agent import ACPAgent
 from openhands.sdk.conversation.state import ConversationExecutionStatus
 from openhands.sdk.errors import Conflict
+from openhands.sdk.llm.utils.metrics import Metrics, TokenUsage
 from openhands.sdk.workspace import LocalWorkspace
 from tests.agent_server.director.conftest import FakeLauncher
 from tests.agent_server.director.test_director_limits import started
@@ -70,7 +72,6 @@ async def test_what_the_agents_of_a_session_used_is_added_up(
     session = await counted(service)
 
     assert session.usage == Usage(input_tokens=1300, output_tokens=250, cost=0.75)
-    assert session.usage.tokens == 1550
 
     # Only what was used since is added.
     uses(launcher, ic(service, API), 400, 80, 0.3)
@@ -98,16 +99,16 @@ async def test_a_count_that_begins_again_takes_nothing_away(
 async def test_a_session_at_its_limit_rests_until_the_human_lets_it_go_on(
     service: DirectorService, launcher: FakeLauncher
 ):
-    service.update_settings(DirectorSettingsUpdate(session_token_limit=1000))
+    service.update_settings(DirectorSettingsUpdate(session_cost_limit=2.0))
     api = ic(service, API)
     assert api is not None
     launcher.report(api, ConversationExecutionStatus.RUNNING)
-    uses(launcher, ic(service), 700, 100, 0)
+    uses(launcher, ic(service), 700, 100, 1.5)
     session = await counted(service)
-    assert session.token_allowance == 1000
+    assert session.cost_allowance == 2.0
     assert node(service, "root").stopped is None
 
-    uses(launcher, api, 250, 50, 0)
+    uses(launcher, api, 250, 50, 0.75)
     session = await counted(service)
 
     top = node(service, "root")
@@ -115,7 +116,8 @@ async def test_a_session_at_its_limit_rests_until_the_human_lets_it_go_on(
     assert UUID(api) in launcher.paused
     [asked] = top.escalations
     assert (asked.id, asked.held_by) == (LIMIT_WAITS, None)
-    assert "1,100 tokens (950 in, 150 out)" in asked.detail
+    assert asked.title == "'Checkout' reached its limit of $2.00"
+    assert "used $2.25 (950 tokens in, 150 out)" in asked.detail
 
     # Counting again asks nothing more.
     await counted(service)
@@ -127,7 +129,7 @@ async def test_a_session_at_its_limit_rests_until_the_human_lets_it_go_on(
     top = node(service, "root")
     assert top.stopped is None and top.escalations == []
     [session] = service.store.sessions()
-    assert session.token_allowance == 2100
+    assert session.cost_allowance == 4.25
     assert (UUID(api), None) in launcher.resumed
     assert (
         "The human lets it go on, and says:\nGo on, but finish the API."
@@ -142,7 +144,7 @@ async def test_nothing_rests_while_the_org_has_no_limit(
 
     session = await counted(service)
 
-    assert session.token_allowance == 0
+    assert session.cost_allowance == 0
     assert node(service, "root").stopped is None
     assert node(service, "root").escalations == []
 
@@ -177,7 +179,7 @@ async def test_no_more_sessions_are_opened_than_the_settings_allow(
     await service.settled()
 
     assert len(service.store.sessions()) == 2
-    assert opened.session.token_allowance == 0
+    assert opened.session.cost_allowance == 0
 
 
 async def test_a_team_started_from_a_profile_spends_under_its_parents_caps(
@@ -233,32 +235,104 @@ async def test_a_team_started_from_a_profile_spends_under_its_parents_caps(
     assert (request.max_iterations, request.max_budget_per_run) == (40, 2.5)
 
 
-async def test_what_an_agent_read_from_its_cache_counts_where_it_reports_it_apart():
-    acp, plain = uuid4(), uuid4()
-    used = SimpleNamespace(
-        accumulated_cost=0.97,
-        accumulated_token_usage=SimpleNamespace(
-            prompt_tokens=298,
-            completion_tokens=10_744,
-            cache_read_tokens=463_280,
-            cache_write_tokens=32_563,
-        ),
+def counted_as(
+    prompt_tokens: int = 0,
+    completion_tokens: int = 0,
+    cache_read_tokens: int = 0,
+    cache_write_tokens: int = 0,
+) -> TokenUsage:
+    return TokenUsage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        cache_read_tokens=cache_read_tokens,
+        cache_write_tokens=cache_write_tokens,
     )
-    agents = {acp: ACPAgent(acp_command=["claude-agent-acp"]), plain: object()}
 
-    async def get_event_service(conversation_id: UUID):
+
+def metered(model: str, cost: float, **tokens: int) -> Metrics:
+    return Metrics(
+        model_name=model,
+        accumulated_cost=cost,
+        accumulated_token_usage=counted_as(**tokens),
+    )
+
+
+async def used_by(agent: object, *metrics: Metrics) -> Usage:
+    """What the launcher reads of a conversation whose agent ran on these."""
+    conversation = uuid4()
+
+    async def get_event_service(_: UUID):
         async def get_state():
             return SimpleNamespace(
-                agent=agents[conversation_id],
-                stats=SimpleNamespace(get_combined_metrics=lambda: used),
+                agent=agent,
+                stats=SimpleNamespace(
+                    usage_to_metrics={str(at): m for at, m in enumerate(metrics)}
+                ),
             )
 
         return SimpleNamespace(get_state=get_state)
 
     conversations = SimpleNamespace(get_event_service=get_event_service)
     launcher = ConversationTeamLauncher(cast(ConversationService, conversations))
+    return (await launcher.usage([conversation]))[conversation]
 
-    found = await launcher.usage([acp, plain])
 
-    assert found[acp] == Usage(input_tokens=496_141, output_tokens=10_744, cost=0.97)
-    assert found[plain] == Usage(input_tokens=298, output_tokens=10_744, cost=0.97)
+RUN = {
+    "prompt_tokens": 298,
+    "completion_tokens": 10_744,
+    "cache_read_tokens": 463_280,
+    "cache_write_tokens": 32_563,
+}
+
+
+async def test_an_agent_with_its_own_model_says_its_cost_and_its_cache_counts():
+    claude = ACPAgent(acp_command=["claude-agent-acp"])
+
+    used = await used_by(claude, metered("acp-managed", 0.97, **RUN))
+
+    assert used == Usage(input_tokens=496_141, output_tokens=10_744, cost=0.97)
+
+
+async def test_a_cost_the_model_reported_is_taken_as_it_is():
+    used = await used_by(object(), metered("claude-sonnet-4-5", 0.97, **RUN))
+
+    assert used == Usage(input_tokens=298, output_tokens=10_744, cost=0.97)
+
+
+async def test_a_model_that_reported_no_cost_is_priced_as_the_model_its_name_ends_in():
+    # Behind a gateway the input it reports has the cached tokens in it.
+    tokens = {**RUN, "prompt_tokens": 500_000}
+    gateway = "litellm_proxy/anthropic/claude-sonnet-4-5"
+
+    used = await used_by(object(), metered(gateway, 0, **tokens))
+    uncached = await used_by(
+        object(),
+        metered(gateway, 0, prompt_tokens=500_000, completion_tokens=10_744),
+    )
+
+    assert used.unpriced_tokens == 0
+    assert used.cost == priced("claude-sonnet-4-5", counted_as(**tokens))
+    # What was read from the cache is cheaper than what was not.
+    assert 0 < used.cost < uncached.cost
+
+
+async def test_tokens_of_a_model_with_no_price_are_counted_apart():
+    claude = ACPAgent(acp_command=["claude-agent-acp"])
+    local = metered("openai/a-model-of-our-own", 0, **RUN)
+
+    used = await used_by(object(), local, metered("gpt-4o", 0.5, prompt_tokens=10))
+    silent = await used_by(claude, metered("acp-managed", 0, **RUN))
+
+    assert used == Usage(
+        input_tokens=308, output_tokens=10_744, cost=0.5, unpriced_tokens=11_042
+    )
+    assert (silent.cost, silent.unpriced_tokens) == (0, 506_885)
+
+
+def test_a_model_is_looked_up_under_each_of_its_names():
+    tokens = counted_as(prompt_tokens=1000, completion_tokens=100)
+
+    assert priced("openai/claude-sonnet-4-5", tokens) == priced(
+        "claude-sonnet-4-5", tokens
+    )
+    assert priced("a-model-of-our-own", tokens) is None

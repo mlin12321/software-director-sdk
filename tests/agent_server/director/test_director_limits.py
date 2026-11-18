@@ -199,7 +199,7 @@ async def test_settings_are_kept_for_the_next_start_beside_the_repository(
         "manager_check_accepted_reviews": 5,
         "manager_check_ic_setbacks": 3,
         "route_requests": True,
-        "session_token_limit": 0,
+        "session_cost_limit": 0.0,
         "max_open_sessions": 0,
     }
     assert kept["repo_path"] == str(repo)

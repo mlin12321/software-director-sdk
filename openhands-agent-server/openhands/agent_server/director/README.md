@@ -54,11 +54,16 @@ unavailable.
 All are in the settings of the org page. The two on use are off (0) until
 you set them.
 
-- **Tokens a session may use.** A session that reaches it rests, and you are
-  asked; your answer lets it go on for as many again. For Claude Code the
-  count includes what it reads from and writes to its cache, which is
-  nearly all of it: the first real run (five agents, two small teams, one
-  review sent back) used 2.8 million tokens and $4.84 in nine minutes.
+- **What a session may cost,** in US dollars. A session that reaches it
+  rests, and you are asked; your answer lets it go on for as much again.
+  The first real run with Claude Code (five agents, two small teams, one
+  review sent back) cost $4.84 in nine minutes, for 2.8 million tokens,
+  nearly all of them read from its cache.
+- **Where the cost comes from.** Claude Code reports its own. For an agent
+  on a model of the server's, the cost is LiteLLM's price for the model,
+  cached tokens at their own price; a model behind a gateway is priced as
+  the model its name ends in. Tokens of a model with no price anywhere are
+  shown as "without a price" and no limit holds them.
 - **Sessions open at once.**
 - **Teams and depth** of the org.
 - **`OH_MAX_CONCURRENT_RUNS`** (server): how many agents run at once.

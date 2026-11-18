@@ -860,13 +860,13 @@ class DirectorSettings(BaseModel):
             "directory gives."
         ),
     )
-    session_token_limit: int = Field(
-        default=0,
+    session_cost_limit: float = Field(
+        default=0.0,
         ge=0,
         description=(
-            "How many tokens, input and output together, the agents of one "
-            "session may use before they are put to rest and the human is "
-            "asked whether it goes on for as many again. 0: no limit."
+            "What the agents of one session may cost in US dollars before "
+            "they are put to rest and the human is asked whether it goes on "
+            "for as much again. 0: no limit."
         ),
     )
     max_open_sessions: int = Field(
@@ -888,7 +888,7 @@ class DirectorSettingsUpdate(BaseModel):
     manager_check_accepted_reviews: int | None = Field(default=None, ge=0)
     manager_check_ic_setbacks: int | None = Field(default=None, ge=0)
     route_requests: bool | None = None
-    session_token_limit: int | None = Field(default=None, ge=0)
+    session_cost_limit: float | None = Field(default=None, ge=0)
     max_open_sessions: int | None = Field(default=None, ge=0)
 
 
@@ -1425,18 +1425,26 @@ class Usage(BaseModel):
     output_tokens: int = 0
     cost: float = Field(
         default=0.0,
-        description="In US dollars, as far as the agents' models report it.",
+        description=(
+            "In US dollars: what the agents' models reported and, where one "
+            "reported none, what its tokens cost by the public price list."
+        ),
     )
-
-    @property
-    def tokens(self) -> int:
-        return self.input_tokens + self.output_tokens
+    unpriced_tokens: int = Field(
+        default=0,
+        description=(
+            "How many of the tokens are of models that reported no cost and "
+            "have no price in the list. They are not in `cost`, so a limit "
+            "on cost does not hold them."
+        ),
+    )
 
     def plus(self, other: "Usage") -> "Usage":
         return Usage(
             input_tokens=self.input_tokens + other.input_tokens,
             output_tokens=self.output_tokens + other.output_tokens,
             cost=self.cost + other.cost,
+            unpriced_tokens=self.unpriced_tokens + other.unpriced_tokens,
         )
 
 
@@ -1465,12 +1473,11 @@ class SessionInput(BaseModel):
             "model calls for them."
         ),
     )
-    token_allowance: int = Field(
-        default=0,
+    cost_allowance: float = Field(
+        default=0.0,
         description=(
-            "How many tokens, input and output together, it may use before "
-            "its agents are put to rest and the human is asked; 0 while "
-            "nothing limits it."
+            "What it may cost in US dollars before its agents are put to "
+            "rest and the human is asked; 0 while nothing limits it."
         ),
     )
     shape: list[tuple[str, str, str, str]] = Field(

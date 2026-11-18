@@ -507,8 +507,17 @@ export interface DirectorMerge {
 export interface DirectorUsage {
   input_tokens: number;
   output_tokens: number;
-  /** In US dollars, as far as the agents' models report it. */
+  /**
+   * In US dollars: what the agents' models reported and, where one reported
+   * none, what its tokens cost by the public price list.
+   */
   cost: number;
+  /**
+   * How many of the tokens are of models that reported no cost and have no
+   * price in the list. They are not in `cost`, so a limit on cost does not
+   * hold them.
+   */
+  unpriced_tokens: number;
 }
 
 /**
@@ -544,11 +553,10 @@ export interface DirectorSession {
    */
   usage: DirectorUsage;
   /**
-   * How many tokens, input and output together, it may use before its
-   * agents are put to rest and the human is asked; 0 while nothing limits
-   * it.
+   * What it may cost in US dollars before its agents are put to rest and the
+   * human is asked; 0 while nothing limits it.
    */
-  token_allowance: number;
+  cost_allowance: number;
   /** Of the team it was opened at. */
   status: DirectorNodeStatus;
   /** Where the review of its work stands. */
@@ -982,11 +990,11 @@ export interface DirectorSettings {
    */
   route_requests: boolean;
   /**
-   * How many tokens, input and output together, the agents of one session
-   * may use before they are put to rest and the human is asked whether it
-   * goes on for as many again. 0: no limit.
+   * What the agents of one session may cost in US dollars before they are
+   * put to rest and the human is asked whether it goes on for as much again.
+   * 0: no limit.
    */
-  session_token_limit: number;
+  session_cost_limit: number;
   /** How many sessions may be open at once. 0: no limit. */
   max_open_sessions: number;
 }

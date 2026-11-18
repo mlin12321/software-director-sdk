@@ -346,7 +346,7 @@ class OrgStore:
                 self._announce_escalations()
 
     def set_session_use(
-        self, session_id: str, usage: Usage, token_allowance: int
+        self, session_id: str, usage: Usage, cost_allowance: float
     ) -> Session | None:
         """Keep what a session has used and how much it may use.
 
@@ -358,7 +358,7 @@ class OrgStore:
             if session is None:
                 return None
             changed = session.model_copy(
-                update={"usage": usage, "token_allowance": token_allowance}
+                update={"usage": usage, "cost_allowance": cost_allowance}
             )
             if changed != session:
                 self._sessions[session_id] = changed
