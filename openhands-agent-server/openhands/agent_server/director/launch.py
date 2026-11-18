@@ -33,7 +33,7 @@ from openhands.agent_server.models import (
     StartConversationRequest,
     UpdateConversationRequest,
 )
-from openhands.agent_server.persistence import get_agent_profile_store
+from openhands.agent_server.persistence.async_store import run_store
 from openhands.sdk import Message, TextContent
 from openhands.sdk.agent import ACPAgent
 from openhands.sdk.agent.base import AgentBase
@@ -48,7 +48,10 @@ from openhands.sdk.errors import Conflict, Invalid, NotFound
 from openhands.sdk.event.conversation_error import ConversationErrorEvent
 from openhands.sdk.llm import LLM
 from openhands.sdk.llm.utils.metrics import MetricsSnapshot
-from openhands.sdk.profiles.agent_profile import ACPAgentProfile
+from openhands.sdk.profiles.agent_profile import (
+    ACPAgentProfile,
+    OpenHandsAgentProfile,
+)
 from openhands.sdk.tool.spec import Tool
 
 
@@ -393,7 +396,7 @@ class ConversationTeamLauncher:
         if parent is None:
             raise NotFound(f"Conversation {parent_id} does not exist")
         try:
-            stored = await asyncio.to_thread(get_agent_profile_store().load, profile)
+            stored = await run_store(self._profile, profile)
         except (FileNotFoundError, Invalid) as error:
             raise NotFound(f"There is no agent profile named {profile!r}") from error
         workspace = parent.stored.workspace
@@ -442,9 +445,20 @@ class ConversationTeamLauncher:
             return None
         return "acp" if isinstance(agent, ACPAgent) else "openhands"
 
+    def _profile(self, name: str) -> OpenHandsAgentProfile | ACPAgentProfile:
+        """An agent profile of the server the conversations belong to.
+
+        Raises:
+            FileNotFoundError: There is none of that name.
+        """
+        stores = self._conversations.stores
+        if stores is None:
+            raise FileNotFoundError(name)
+        return stores.agent_profiles.load(name)
+
     async def profile_kind(self, profile: str) -> AgentKind | None:
         try:
-            stored = await asyncio.to_thread(get_agent_profile_store().load, profile)
+            stored = await run_store(self._profile, profile)
         except (FileNotFoundError, Invalid):
             return None
         return "acp" if isinstance(stored, ACPAgentProfile) else "openhands"

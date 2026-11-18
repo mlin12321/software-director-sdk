@@ -16,11 +16,11 @@ from openhands.sdk.skills import Skill
 from openhands.sdk.tool.builtins import (
     BUILT_IN_TOOL_CLASSES,
     BUILT_IN_TOOLS,
+    FinishAction,
     InvokeSkillAction,
     InvokeSkillObservation,
     InvokeSkillTool,
 )
-from openhands.sdk.tool.schema import Action
 from openhands.sdk.workspace.local import LocalWorkspace
 
 
@@ -67,12 +67,6 @@ def _make_conv(
 def _tool() -> InvokeSkillTool:
     (t,) = InvokeSkillTool.create()
     return t
-
-
-class OtherAction(Action):
-    """An action that is not the tool's own. It is defined here, not in a
-    test: a class local to a test stays a subclass of Action until it is
-    collected, and tools cannot be serialized while one is."""
 
 
 def _run(name: str, conv: Any) -> InvokeSkillObservation:
@@ -411,6 +405,5 @@ def test_invoke_skill_declared_resources_typed():
     res = tool.declared_resources(action)
     assert res.keys == ("skill:test-skill",)
 
-    other_action = OtherAction()
-    res_other = tool.declared_resources(other_action)
+    res_other = tool.declared_resources(FinishAction(message="done"))
     assert res_other.keys == ("skill:",)
