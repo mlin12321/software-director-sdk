@@ -40,6 +40,7 @@ from tests.agent_server.director.conftest import (
     make_team,
     memory_of,
     open_session_in,
+    record_of,
     run_git,
     tasked,
 )
@@ -489,6 +490,39 @@ async def test_an_agent_cut_off_in_a_step_shows_paused_is_told_and_runs_again(
     await second.settled()
 
     assert launcher.resumed == [(UUID(root_ic), RESTART_NOTE)]
+    await second.aclose()
+
+
+async def test_an_agent_cut_off_in_a_step_is_not_a_failure_when_it_is_run_again(
+    repo: Path, launcher: FakeLauncher, monkeypatch: pytest.MonkeyPatch
+):
+    first = await started(repo, launcher)
+    root_ic = ic(first)
+    assert root_ic is not None
+    launcher.report(root_ic, ConversationExecutionStatus.RUNNING)
+    launcher.known[UUID(root_ic)] = ConversationExecutionStatus.ERROR
+    second = await again(repo, launcher)
+
+    async def told_before_it_runs(conversation_id: UUID, note: str | None) -> None:
+        # The conversation is loaded and told; its run starts a moment later.
+        launcher.resumed.append((conversation_id, note))
+        launcher.report(str(conversation_id), ConversationExecutionStatus.ERROR)
+
+    monkeypatch.setattr(launcher, "resume", told_before_it_runs)
+
+    await second.resume()
+    await second.settled()
+
+    root = node(second, "root")
+    assert root.agents[0].status == AGENT_PAUSED and root.escalations == []
+    assert [e for e in record_of(second, "root") if e.kind == "failed"] == []
+
+    launcher.report(root_ic, ConversationExecutionStatus.RUNNING)
+    assert node(second, "root").agents[0].status == "working"
+    # From here on an error is its own.
+    launcher.report(root_ic, ConversationExecutionStatus.ERROR)
+    await second.settled()
+    assert node(second, "root").agents[0].status == "blocked"
     await second.aclose()
 
 

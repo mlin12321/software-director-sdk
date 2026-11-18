@@ -738,6 +738,8 @@ class Sync(Sessions):
             self._on_hand_over_status(store, agent, status)
             return
         node, role = found
+        if status == ConversationExecutionStatus.RUNNING:
+            self._resuming.discard(agent)
         if self._paused is None:
             self._note_running(
                 agent, node.id, status == ConversationExecutionStatus.RUNNING
@@ -806,6 +808,8 @@ class Sync(Sessions):
         mode = hand_over_of(node) if node else None
         if node is None or mode is None:
             return
+        if status == ConversationExecutionStatus.RUNNING:
+            self._resuming.discard(conversation_id)
         if self._paused is None:
             self._note_running(
                 conversation_id, node.id, status == ConversationExecutionStatus.RUNNING

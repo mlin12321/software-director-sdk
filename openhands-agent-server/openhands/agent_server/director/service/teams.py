@@ -73,6 +73,7 @@ from openhands.agent_server.director.service.state import (
     failure_waits,
     tools_of,
 )
+from openhands.sdk.conversation.state import ConversationExecutionStatus
 from openhands.sdk.errors import (
     NotFound,
 )
@@ -518,12 +519,25 @@ class Teams(Delivery):
         )
 
     async def _run_again(self, conversation_id: str, note: str | None) -> None:
-        self._resuming.discard(conversation_id)
+        """Have an agent that a restart cut off carry on. It stays one that
+        is being taken up, and so shows paused, until it is seen running: its
+        run starts a moment after it is told, and what it says until then is
+        the error the restart left."""
         if self._is_stopped(conversation_id):
             # Its team was stopped meanwhile and goes on when it is told to.
+            self._resuming.discard(conversation_id)
             return
-        with suppress(NotFound):
-            await self._require_launcher().resume(UUID(conversation_id), note)
+        launcher = self._require_launcher()
+        agent = UUID(conversation_id)
+        try:
+            await launcher.resume(agent, note)
+        except NotFound:
+            self._resuming.discard(conversation_id)
+            return
+        # One that ran already says nothing new of it.
+        running = (await launcher.statuses([agent])).get(agent)
+        if running == ConversationExecutionStatus.RUNNING:
+            self._resuming.discard(conversation_id)
 
     def _briefing(
         self, place: SessionTeam, role: AgentRole, task: str
