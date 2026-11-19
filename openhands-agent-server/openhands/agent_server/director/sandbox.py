@@ -170,16 +170,39 @@ def _confined(
             '[ "$(cd "$own" && pwd -P)" = "$own" ] ||',
             '  { echo "The team\'s folder is reached through a link" >&2; exit 1; }',
             "git_dir=$(git rev-parse --path-format=absolute --git-common-dir)",
+            # What git keeps for this checkout alone, where it is a worktree.
+            "own_git=$(git rev-parse --absolute-git-dir)",
+            '[ "$own_git" = "$git_dir" ] && own_git="$git_dir"/objects',
+            # The file that says where a worktree's git directory is.
+            'dot="$top"/.git; [ -f "$dot" ] || dot="$git_dir"/config',
         ]
         mounts.append('--bind "$own" "$own"')
         mounts += [
             f'--ro-bind-try "$top"/{quote(sub)} "$top"/{quote(sub)}'
             for sub in sub_team_directories
         ]
-        # Committing writes the repository's git directory.
-        mounts += ['--bind "$git_dir" "$git_dir"', *map(read_only, private)]
+        # Committing writes the repository's git directory, but not what
+        # decides which commands git runs and which checkout it works in:
+        # the director's own git reads those too, outside any sandbox.
+        mounts += [
+            '--bind "$git_dir" "$git_dir"',
+            '--ro-bind-try "$git_dir"/worktrees "$git_dir"/worktrees',
+            '--bind "$own_git" "$own_git"',
+            *(
+                f'--ro-bind-try "${where}"/{name} "${where}"/{name}'
+                for where, name in (
+                    ("git_dir", "config"),
+                    ("git_dir", "config.worktree"),
+                    ("own_git", "config.worktree"),
+                    ("own_git", "commondir"),
+                    ("own_git", "gitdir"),
+                )
+            ),
+            '--ro-bind "$dot" "$dot"',
+        ]
         if not stay:
             mounts.append('--chdir "$own"')
+    mounts += map(read_only, private)
     command = [
         f"exec {quote(bwrap)} --dev-bind / /",
         *(["--die-with-parent"] if die_with_parent else []),
