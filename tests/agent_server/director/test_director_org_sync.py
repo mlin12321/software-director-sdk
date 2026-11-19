@@ -109,6 +109,36 @@ def test_a_team_removed_on_one_side_and_untouched_on_the_other_is_removed():
     assert set(by_id(theirs_removed.nodes)) == {"root", "b"}
 
 
+def test_a_team_moved_from_under_a_team_the_other_side_removed_is_a_conflict():
+    below = make_team("a.x", "a").model_dump()
+    base = {**tree(), "a.x": below}
+    moved = {**base, "a.x": {**below, "parent_id": "b"}}
+    removed = without(base, "a", "a.x")
+
+    mine_moved = merge_orgs(base, moved, removed, {})
+    theirs_moved = merge_orgs(base, removed, moved, {})
+    taken = merge_orgs(base, removed, moved, {"team:a.x": "theirs"})
+
+    for merged in (mine_moved, theirs_moved):
+        assert [c.id for c in merged.conflicts] == ["team:a.x"]
+    # The removal of the team it was under stands; it is kept where it went.
+    assert by_id(mine_moved.nodes).keys() == {"root", "b", "a.x"}
+    assert by_id(theirs_moved.nodes).keys() == {"root", "b"}
+    assert by_id(taken.nodes)["a.x"]["parent_id"] == "b"
+
+
+def test_a_team_moved_under_a_team_the_other_side_removed_stays_where_it_was():
+    below = make_team("a.x", "a").model_dump()
+    base = {**tree(), "a.x": below}
+    mine = {**base, "a.x": {**below, "parent_id": "b"}}
+    theirs = without(base, "b")
+
+    removed = merge_orgs(base, mine, theirs, {"team:b": "theirs"})
+
+    assert by_id(removed.nodes).keys() == {"root", "a", "a.x"}
+    assert by_id(removed.nodes)["a.x"]["parent_id"] == "a"
+
+
 def test_a_team_removed_on_one_side_and_changed_below_on_the_other_is_a_conflict():
     below = make_team("a.x", "a").model_dump()
     base = {**tree(), "a.x": below}
