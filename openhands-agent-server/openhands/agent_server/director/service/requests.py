@@ -95,7 +95,21 @@ class Requests(Teams):
             nodes = list[OrgNode](rebased)
             start = nodes[0] if nodes else start
             started = {place.id for place in rebased if place.agents}
-            able = {place.id for place in rebased if takes_requests(place)}
+            by_id = {place.id: place for place in rebased}
+
+            def at_work(place: SessionTeam | None) -> bool:
+                # A team under a stopped one is stopped with it.
+                while place is not None:
+                    if place.stopped is not None:
+                        return False
+                    place = by_id.get(place.parent_id or "")
+                return True
+
+            able = {
+                place.id
+                for place in rebased
+                if takes_requests(place) and at_work(place)
+            }
             # A session's own checkout has the directories of the teams it
             # set up.
             if places:

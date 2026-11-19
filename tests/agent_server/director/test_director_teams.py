@@ -6,8 +6,13 @@ from uuid import UUID
 
 import pytest
 
-from openhands.agent_server.director.models import RouteMessageRequest, SplitChild
+from openhands.agent_server.director.models import (
+    RouteMessageRequest,
+    SplitChild,
+    Stopped,
+)
 from openhands.agent_server.director.org_store import team_id_of
+from openhands.agent_server.director.routing import USAGE_ID
 from openhands.agent_server.director.run_state import SESSION, RunState
 from openhands.agent_server.director.service import DirectorService
 from openhands.agent_server.director.session_state import kept_sessions
@@ -56,6 +61,7 @@ from tests.agent_server.director.test_director_tools import (
     split_root,
     sub_teams,
     use,
+    woken,
 )
 
 
@@ -633,3 +639,22 @@ async def test_a_team_made_in_place_of_one_is_not_taken_for_it(
     gone = [event for event in record_of(second, "root") if event.kind == "replaced"]
     assert len(gone) == 1
     await second.aclose()
+
+
+async def test_nothing_is_sent_straight_to_a_team_under_a_stopped_one(
+    service: DirectorService, launcher: FakeLauncher
+):
+    await woken(service, DB)
+    launcher.answers[USAGE_ID] = "Teams: services.api.db\nReason: The schema is DB's."
+    [session] = service.store.sessions()
+    service.store.update_place(
+        node(service, API).id,
+        stopped=Stopped(at="2026-01-01T00:00:00+00:00", reason="Waits", running=[]),
+    )
+
+    said = await service.route_message(
+        RouteMessageRequest(text="Add an index on orders.", session_id=session.id)
+    )
+
+    # DB is stopped with API: it would only be held there.
+    assert said.node_id == node(service, "root").id
