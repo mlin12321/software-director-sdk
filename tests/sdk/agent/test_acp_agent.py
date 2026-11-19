@@ -5035,6 +5035,41 @@ class TestACPAgentAskAgent:
 
         assert applied == [("fork-session", "haiku")]
 
+    def test_ask_aside_asks_the_new_session_on_the_conversations_model(self):
+        """A session beside the conversation is put on the agent's model too."""
+        agent = _make_agent(acp_model="haiku")
+        agent._client = _OpenHandsACPBridge()
+        agent._conn = MagicMock()
+        agent._working_dir = "/workspace"
+        applied: list[tuple[str, str]] = []
+
+        async def _apply(conn, session_id, model, **kwargs):
+            applied.append((session_id, model))
+            return model
+
+        async def _fake_prompt(*args, **kwargs):
+            assert applied == [("side-session", "haiku")]
+            return PromptResponse(stop_reason="end_turn")
+
+        def _fake_run_async(coro_fn, **_kwargs):
+            conn = _agent_conn(agent)
+            conn.new_session = AsyncMock(
+                return_value=MagicMock(session_id="side-session")
+            )
+            conn.close_session = AsyncMock()
+            conn.prompt = _fake_prompt
+            return asyncio.run(coro_fn())
+
+        agent._executor = MagicMock(run_async=_fake_run_async)
+
+        with (
+            patch.object(acp_agent_module, "_apply_acp_model", _apply),
+            patch.object(acp_agent_module, "_USAGE_UPDATE_TIMEOUT", 0.01),
+        ):
+            agent.ask_aside("What is this team for?")
+
+        assert applied == [("side-session", "haiku")]
+
     def test_ask_agent_cleans_up_fork_state(self):
         """ask_agent() cleans up fork state even on success."""
         agent = _make_agent()
