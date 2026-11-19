@@ -340,7 +340,6 @@ class Reviews(Requests):
         # In the order the work was submitted, which is the order it is
         # accepted in.
         for team in sorted(waiting, key=_submitted):
-            run.unmark(HELD, team.id)
             if team.review is not None:
                 requests.append(
                     (
@@ -358,6 +357,9 @@ class Reviews(Requests):
                     )
                 )
         self.tell_ic(node.id, "\n\n---\n\n".join(requests), division_lead=True)
+        # Only now: a server that ends before the request is kept asks again.
+        for team in waiting:
+            run.unmark(HELD, team.id)
 
     def _asked_for(self, team: SessionTeam) -> str:
         """What the session ``team`` belongs to was opened for."""
@@ -1628,6 +1630,8 @@ class Reviews(Requests):
                 self._take_spec_choices(place, specs or [])
                 await asyncio.to_thread(self._land_accepted, place, None)
             await self._pass_up(above.id, acted=True)
+            # Whoever waited behind this work is still to hear it is their turn.
+            self._tell_turns()
         if place.review.state != "pending":
             return
         reviewer = agent_conversation(above, "ic")

@@ -373,8 +373,8 @@ class MsgIcTool(_DirectorTool[MsgIcAction]):
     summary = (
         "Manager only. Write to your team's IC, or to the IC of a team "
         "directly below: feedback, a decision, what you are about to "
-        "change. Answering your IC while its proposed sub-teams wait puts "
-        "that proposal aside."
+        "change. A message decides nothing: sub-teams your IC proposed "
+        "still wait for approve_teams or decline_teams."
     )
 
     @classmethod
