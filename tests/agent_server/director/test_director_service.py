@@ -670,9 +670,13 @@ async def test_a_file_tool_neither_reads_nor_writes_what_the_director_keeps(
     # It stays the same file when it is written again: the one a shell that
     # is already running is kept from.
     before = kept.stat().st_ino
-    service._remember(server_url="http://elsewhere")
+    service._remember(note="elsewhere")
     assert kept.stat().st_ino == before
     assert "elsewhere" in kept.read_text()
+    # One that cannot be read is not written over: it holds the tokens' key.
+    kept.write_text("{cut off")
+    service._remember(note="again")
+    assert kept.read_text() == "{cut off"
 
 
 async def test_a_git_directory_outside_its_checkout_is_not_a_file_tools_to_write(

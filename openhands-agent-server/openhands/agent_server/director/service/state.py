@@ -242,6 +242,8 @@ _MERGING_DIR = "director-merging"
 # After a conversation id: the script an ACP agent's process is started by.
 _ACP_LAUNCHER = ".acp.sh"
 _REMEMBERED_FILE = "director.json"
+# Set by the server's entry point to the address it is bound to.
+_INTERNAL_SERVER_URL_ENV = "OH_INTERNAL_SERVER_URL"
 # The lane of what concerns the org as a whole, such as saving its tree.
 ORG_LANE = "org"
 # The lane of everything that changes what the org shares: the repository's
@@ -390,8 +392,8 @@ class ServiceState:
             stall_poll: How many seconds lie between two looks for teams
                 that show no progress.
             server_url: Where this server answers, for agents that reach the
-                director's tools from a process of their own; None to take
-                it from the requests the director gets.
+                director's tools from a process of their own; None for the
+                address the server is bound to.
             max_concurrent_runs: How many conversations the server runs at
                 once, to tell the human; None when not known.
             find_review_instructions: Returns what a model is told when it
@@ -472,7 +474,6 @@ class ServiceState:
         self._launcher: TeamLauncher | None = None
         self._max_concurrent_runs = max_concurrent_runs
         self._settings: DirectorSettings | None = None
-        self._configured_url = server_url
         self._server_url = server_url
         self._tool_key: bytes | None = None
         # What each lane still has to carry out; a lane exists while it works.
@@ -494,6 +495,7 @@ class ServiceState:
         self._first_message_lock = asyncio.Lock()
         # Held by a pull, a push or a step of a merge, one at a time.
         self._sync_lock = asyncio.Lock()
+        self._resume_lock = asyncio.Lock()
 
     @classmethod
     def from_config(cls, config: Config) -> Self:
@@ -634,17 +636,6 @@ class ServiceState:
         self._remember(settings=changed.model_dump())
         return self.settings_state()
 
-    def reached_at(self, url: str) -> None:
-        """Note the address a request reached this server at.
-
-        An agent that runs its own tools calls the director's from its own
-        process and is given this address to do so.
-        """
-        if self._configured_url is not None or url == self._url():
-            return
-        self._server_url = url
-        self._remember(server_url=url)
-
     def agent_of(self, token: str) -> UUID:
         """The conversation of the agent a tool call comes from.
 
@@ -657,10 +648,9 @@ class ServiceState:
         return UUID(conversation_id)
 
     def _url(self) -> str | None:
-        if self._server_url is None:
-            kept = self._read_remembered().get("server_url")
-            self._server_url = kept if isinstance(kept, str) else None
-        return self._server_url
+        """Where an agent that runs its own tools reaches this server: the
+        address it was configured with, or the one it is bound to."""
+        return self._server_url or os.environ.get(_INTERNAL_SERVER_URL_ENV)
 
     def _key(self) -> bytes:
         """What the tokens of the org's agents are signed with. It is kept
@@ -931,8 +921,9 @@ class ServiceState:
         )
         if place is None or conversation_id is None:
             return None
-        # An IC writes in its boundary from its main conversation alone.
-        writes = role == "ic" and hand_over is None
+        # An IC writes in its boundary from its main conversation alone; a
+        # Division Lead IC only reviews, in the human's own checkout.
+        writes = role == "ic" and hand_over is None and not is_division_lead(place)
         bash, real_git = shutil.which("bash"), shutil.which("git")
         own_git = writes and os.name != "nt" and bash and real_git
         if self._bwrap is None and not own_git:
@@ -1084,10 +1075,17 @@ class ServiceState:
                 self._remembered.parent.mkdir(parents=True, exist_ok=True)
                 # Written in place: a file put in its place by a rename
                 # would no longer be the one an agent's shell is kept from.
-                kept = json.dumps({**self._read_remembered(), **changes}) + "\n"
+                # One that cannot be read is left as it is: writing over it
+                # would lose the key of the tool tokens.
+                before = (
+                    json.loads(self._remembered.read_text())
+                    if self._remembered.exists()
+                    else {}
+                )
+                kept = json.dumps({**before, **changes}) + "\n"
                 self._remembered.touch(mode=0o600)
                 self._remembered.write_text(kept)
-            except OSError:
+            except (OSError, ValueError, TypeError):
                 logger.exception("Could not write %s", self._remembered)
 
     def _enqueue(self, effect: Effect, lane: str = ORG_LANE) -> None:
