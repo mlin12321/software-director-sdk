@@ -1649,3 +1649,21 @@ async def test_a_team_beside_one_inside_its_directory_waits_for_the_manager_abov
     # Side by side, one would hold the other's directory: not the org's yet.
     assert service.store.team(JOBS) is None
     assert waiting(service, top) == [JOBS]
+
+
+async def test_work_that_went_up_without_a_review_counts_as_an_accept_for_reminders(
+    service: DirectorService,
+):
+    await split_root(service)
+    session = node(service, "root").session
+    # The IC was reminded once of what changed since an earlier accept.
+    service._changed_since_accept[session] = True
+
+    for team in ("services.api", "apps.web"):
+        await use(service, ic(service, team), SubmitReviewTool, DONE)
+        await use(service, ic(service), ReviewTeamTool, accept(node(service, team).id))
+    await service.settled()
+
+    review = node(service, "root").review
+    assert review is not None and review.passed_up
+    assert session not in service._changed_since_accept

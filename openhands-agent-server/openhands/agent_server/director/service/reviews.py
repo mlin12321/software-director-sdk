@@ -1623,6 +1623,9 @@ class Reviews(Requests):
             # still owed.
             merge = self._merge_of(place) if store.opens_session(place) else None
             if merge is not None and not merge.code_landed:
+                # What its reviewer made of its specs lands with it, as the
+                # first time.
+                self._take_spec_choices(place, specs or [])
                 await asyncio.to_thread(self._land_accepted, place, None)
             await self._pass_up(above.id, acted=True)
         if place.review.state != "pending":
@@ -2031,6 +2034,8 @@ class Reviews(Requests):
             await asyncio.to_thread(
                 self._land_accepted, store.place(place_id) or place, None
             )
+            # As after any accept: what changes from now is said once more.
+            self._changed_since_accept.pop(place.session, None)
         self._tell_turns()
         if acted:
             self.notify(

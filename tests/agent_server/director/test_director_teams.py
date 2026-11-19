@@ -658,3 +658,27 @@ async def test_nothing_is_sent_straight_to_a_team_under_a_stopped_one(
 
     # DB is stopped with API: it would only be held there.
     assert said.node_id == node(service, "root").id
+
+
+async def test_sub_teams_that_fail_to_be_set_up_are_put_aside_and_told(
+    service: DirectorService, launcher: FakeLauncher, monkeypatch: pytest.MonkeyPatch
+):
+    def fails(*_: object) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(service, "_record_contracts", fails)
+    await use(
+        service,
+        ic(service, "apps.web"),
+        ProposeTeamsTool,
+        proposing(
+            [SplitChild(title="Cart", path="apps/web/cart", task="The cart")],
+            contracts="Cart owns the cart page.",
+        ),
+    )
+    await use(service, manager(service, "apps.web"), ApproveTeamsTool, APPROVE)
+    await service.settled()
+
+    # Another proposal is not refused for one that is "still being set up".
+    assert node(service, "apps.web").pending_split is None
+    assert "disk full" in launcher.messages_to(ic(service, "apps.web"))[-1]

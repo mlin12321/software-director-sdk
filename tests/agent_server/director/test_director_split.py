@@ -274,6 +274,23 @@ def test_teams_are_counted_for_the_teams_of_the_org_above_the_session_too():
         check_limits(store, place, 1, DirectorSettings(max_teams=3))
 
 
+def test_a_sub_team_may_only_read_what_its_parent_may_only_read_in_its_folder(
+    store: OrgStore,
+):
+    place = store.place(at("b"))
+    assert place is not None
+    store.update_place(
+        place.id,
+        boundary=place.boundary.model_copy(
+            update={"readonly": ["svc/b/api/gen/**", "svc/b/lock.json"]}
+        ),
+    )
+
+    [api] = check(store, "b", [child("api", "svc/b/api")]).children
+
+    assert api.readonly == ["svc/b/api/gen/**"]
+
+
 def test_a_sub_team_cannot_own_what_its_parent_may_only_read(store: OrgStore):
     place = store.place(at("b"))
     assert place is not None

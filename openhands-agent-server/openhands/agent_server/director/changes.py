@@ -232,9 +232,11 @@ def write_by_hand(
         pass
     else:
         raise Invalid(f"git ignores {path!r}, so a change to it cannot be committed")
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_bytes(content.encode())
     with one_at_a_time(top):
+        # Written under the lock too, or an agent's commit in between takes
+        # the edit as its own.
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(content.encode())
         before = git(top, ["rev-parse", "HEAD"]).strip()
         git(top, ["add", "--", spec])
         if not git(top, ["status", "--porcelain", "--", spec]).strip():

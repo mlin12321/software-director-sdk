@@ -512,6 +512,18 @@ async def test_a_report_of_another_session_with_the_same_title_is_not_ones_own(
     ]
 
 
+async def test_a_session_opened_below_the_top_has_its_teams_contracts(
+    service: DirectorService,
+):
+    # What the top team agreed between API and Web, as the org has it.
+    service.team_memory.write("", "contracts.md", "API serves JSON to Web.")
+
+    top = (await opened(service)).session.teams[0].id
+
+    context = service.context_of(node(service, top), "ic")
+    assert context["contracts_with_the_teams_beside_you"] == ["API serves JSON to Web."]
+
+
 async def test_a_request_to_the_org_opens_a_session_and_reaches_no_other(
     service: DirectorService, launcher: FakeLauncher
 ):

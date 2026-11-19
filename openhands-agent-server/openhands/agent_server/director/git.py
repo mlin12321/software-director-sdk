@@ -55,6 +55,16 @@ def git(
     return stdout
 
 
+_OWN_CONFIG = [
+    "-c",
+    "diff.relative=false",
+    "-c",
+    "core.hooksPath=/dev/null",
+    "-c",
+    "core.fsmonitor=false",
+]
+
+
 def _run(
     repo_dir: Path,
     args: list[str],
@@ -65,8 +75,10 @@ def _run(
     # Bytes in and out: text mode would rewrite line endings in file content.
     return subprocess.run(
         # Paths are read as relative to the top of the checkout, whatever
-        # the machine's git is configured to print.
-        ["git", "-c", "diff.relative=false", *args],
+        # the machine's git is configured to print. No command the
+        # repository's config names is run: an agent may write that config,
+        # and this git runs outside its sandbox.
+        ["git", *_OWN_CONFIG, *args],
         cwd=repo_dir,
         env={**os.environ, **(env or {})},
         input=None if stdin is None else stdin.encode(),

@@ -51,9 +51,11 @@ from openhands.agent_server.director.run_state import (
     Intent,
 )
 from openhands.agent_server.director.service.state import (
+    _REASON_KEPT,
     PRUNED_REFS,
     _child_node,
     _contracts_file,
+    _Held,
     _spec_file,
     agent_conversation,
     conversations_of,
@@ -88,7 +90,9 @@ class Splits(Watch):
     async def _do_finish_split(self, intent: Intent) -> None:
         await self._finish_split(intent.node_id)
 
-    def _decline(self, place: SessionTeam, reason: str) -> None:
+    def _decline(
+        self, place: SessionTeam, reason: str, left: str = "Nothing was changed."
+    ) -> None:
         """Put approved sub-teams aside, tell the IC that proposed them and
         keep it in the record, where its Manager reads it."""
         proposal = place.pending_split
@@ -103,8 +107,8 @@ class Splits(Watch):
         self.notify(
             agent_conversation(place, "ic"),
             f"The sub-teams your Manager approved could not be set up: {reason} "
-            "Nothing was changed. Tell your Manager with msg_manager, with a "
-            "new proposal if you have one.",
+            f"{left} Tell your Manager with msg_manager, with a new proposal if "
+            "you have one.",
         )
 
     def _take_in(
@@ -150,6 +154,23 @@ class Splits(Watch):
         return None
 
     async def _do_split(self, intent: Intent) -> None:
+        try:
+            await self._split(intent)
+        except _Held:
+            raise
+        except Exception as error:
+            # Or the proposal stays approved for good: the IC is refused
+            # every other one and never told of this.
+            place = self.store.place(intent.node_id)
+            if place is not None and place.pending_split is not None:
+                self._decline(
+                    place,
+                    f"{type(error).__name__}: {error}."[:_REASON_KEPT],
+                    "Some of it may be done: read your team's context.",
+                )
+            raise
+
+    async def _split(self, intent: Intent) -> None:
         store = self.store
         run = self._runs()
         place_id = intent.node_id

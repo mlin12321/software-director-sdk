@@ -1,5 +1,6 @@
 """An agent's shell, confined to the directory its team owns."""
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -217,6 +218,16 @@ def test_the_shell_cannot_change_what_git_runs_or_what_the_director_keeps(
     assert run(f"echo x > {git_dir}/director/state.db").returncode != 0
     assert run(f"cat {secret}").stdout == ""
     assert secret.read_text() == '{"tool_key": "k"}'
+
+
+def test_a_shell_sees_no_process_of_another_agent(repo: Path):
+    (repo / "svc" / "api").mkdir(parents=True)
+    run = confined(repo, "svc/api")
+
+    # This process stands for another agent's, with a token in its
+    # environment. The sandbox's user namespace is what keeps it out.
+    assert run(f"cat /proc/{os.getpid()}/environ").returncode != 0
+    assert run("cat /proc/self/environ").returncode == 0
 
 
 def test_a_teams_folder_that_is_a_link_opens_nothing(repo: Path):
