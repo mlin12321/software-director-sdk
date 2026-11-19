@@ -608,11 +608,22 @@ class ServiceState:
         )
 
     def update_settings(self, update: DirectorSettingsUpdate) -> DirectorSettingsState:
-        """Change the limits on new teams. Existing teams are left alone."""
+        """Change the limits on new teams. Existing teams are left alone.
+
+        An open session follows a new cost limit, unless the human let it
+        go on past the one it had.
+        """
         values = update.model_dump(exclude_none=True)
+        before = self.settings.session_cost_limit
         changed = self.settings.model_copy(update=values)
         with self._lock:
             self._settings = changed
+        if changed.session_cost_limit != before and self._store is not None:
+            for session in self._store.sessions():
+                if session.cost_allowance == before:
+                    self._store.set_session_use(
+                        session.id, session.usage, changed.session_cost_limit
+                    )
         self._remember(settings=changed.model_dump())
         return self.settings_state()
 
