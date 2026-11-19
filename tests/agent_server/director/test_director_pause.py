@@ -22,6 +22,7 @@ from openhands.agent_server.director.org_store import OrgStore, team_id_of
 from openhands.agent_server.director.recovery import describe, restore_worktrees
 from openhands.agent_server.director.run_state import (
     RUNNING,
+    SESSION,
     RunState,
     RunStateError,
 )
@@ -30,6 +31,8 @@ from openhands.agent_server.director.service import (
     RESTART_NOTE,
     DirectorService,
 )
+from openhands.agent_server.director.service.state import _Held
+from openhands.agent_server.director.session_state import kept_sessions
 from openhands.agent_server.director.tools import (
     ApproveTeamsTool,
     ProposeTeamsTool,
@@ -392,6 +395,53 @@ async def test_the_end_of_a_split_cut_off_by_a_crash_is_told_once(
     told = [text for text in launcher.messages_to(ic(second)) if "approved" in text]
     assert len(told) == 1
     await second.aclose()
+
+
+async def test_the_end_of_a_split_cut_off_before_it_is_told_is_told(
+    repo: Path, launcher: FakeLauncher, monkeypatch: pytest.MonkeyPatch
+):
+    first = await started(repo, launcher)
+    await use(first, ic(first), ProposeTeamsTool, SPLIT)
+    ended = asyncio.Event()
+
+    def server_ends(*_: object) -> None:
+        # The session is kept as it is now, before the IC is told.
+        first._runs().replace_marks(SESSION, kept_sessions(first.store))
+        ended.set()
+        raise ServerEnded
+
+    monkeypatch.setattr(first, "_confine", server_ends)
+    await cut_off(
+        launcher, ended, use(first, manager(first), ApproveTeamsTool, APPROVE)
+    )
+
+    second = await again(repo, launcher)
+    await second.resume()
+    await second.settled()
+
+    assert node(second, "root").pending_split is None
+    told = [text for text in launcher.messages_to(ic(second)) if "approved" in text]
+    assert len(told) == 1
+    await second.aclose()
+
+
+async def test_a_team_in_line_to_start_is_held_when_the_org_is_paused(
+    repo: Path, launcher: FakeLauncher
+):
+    service = await started(repo, launcher)
+    service._line.extend(["ahead", "behind"])
+
+    async def start() -> None:
+        raise AssertionError("it is not its turn")
+
+    waits = asyncio.create_task(service._when_there_is_room("behind", start))
+    await asyncio.sleep(0)
+    await service.pause()
+
+    # The one ahead of it may never start now.
+    with pytest.raises(_Held):
+        await asyncio.wait_for(waits, 1)
+    await service.aclose()
 
 
 async def test_a_review_request_cut_off_by_a_crash_reaches_the_reviewer_once(

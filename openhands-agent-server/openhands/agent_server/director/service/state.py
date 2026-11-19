@@ -826,6 +826,10 @@ class ServiceState:
     def _hold(self, reason: PauseReason) -> None:
         self._runs().put("paused", reason)
         self._paused = reason
+        # Those that wait for room to start see it at once.
+        self._room.set()
+        self._line_moved.set()
+        self._line_moved = asyncio.Event()
         self._announce_state()
 
     def _release(self) -> None:

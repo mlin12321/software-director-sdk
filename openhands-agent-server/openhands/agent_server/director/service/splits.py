@@ -10,6 +10,8 @@ from uuid import UUID, uuid4
 
 from openhands.agent_server.director.git import (
     GitError,
+    git,
+    head_of,
     ref_stamp,
     save_and_discard,
     uncommitted,
@@ -118,22 +120,29 @@ class Splits(Watch):
         """
         # A team in the team's own checkout has its files there already.
         apart = [team for team in teams if team.worktree_path != place.worktree_path]
+        checkout = Path(place.worktree_path)
+        before = head_of(checkout)
         for team in apart:
+            refusal = None
             try:
                 merged = merge_back(
-                    Path(place.worktree_path),
-                    Path(team.worktree_path),
-                    team.boundary.path,
-                    team.title,
+                    checkout, Path(team.worktree_path), team.boundary.path, team.title
                 )
             except (GitError, OSError) as error:
-                return f"the work {team.title!r} committed could not be read ({error})."
-            if merged.outcome in ("conflicts", "outside", "refused"):
-                detail = ", ".join(merged.files) or merged.detail
-                return (
-                    f"the work {team.title!r} committed does not merge into "
-                    f"your checkout ({merged.outcome}: {detail})."
-                )
+                refusal = f"could not be read ({error})."
+            else:
+                if merged.outcome in ("conflicts", "outside", "refused"):
+                    detail = ", ".join(merged.files) or merged.detail
+                    refusal = (
+                        f"does not merge into your checkout ({merged.outcome}: "
+                        f"{detail})."
+                    )
+            if refusal:
+                if before and head_of(checkout) != before:
+                    # The teams merged before it are taken out again, and
+                    # what is uncommitted stays.
+                    git(checkout, ["reset", "--merge", "--quiet", before])
+                return f"the work {team.title!r} committed {refusal}"
         for team in teams:
             self._forget_shells(team)
         for team in apart:
@@ -213,7 +222,13 @@ class Splits(Watch):
             )
         plan = intent.payload
         moves: dict[str, str] = plan["moves"]
-        replaced = [team for team in map(store.place, plan["replaces"]) if team]
+        # A new team may have the id of one it replaces, and is not that one.
+        made = {team["id"]: team["since"] for team in plan["teams"]}
+        replaced = [
+            team
+            for team in map(store.place, plan["replaces"])
+            if team and team.since != made.get(team.id)
+        ]
         if replaced and "replaced" not in intent.steps:
             watched = [team.id for team in replaced]
             for team_id in list(watched):
@@ -299,8 +314,10 @@ class Splits(Watch):
                         ),
                         below_id,
                     )
-            intent = run.step_done(intent, "handed_over")
+            # Begun first: a server that ends between the two tells the IC
+            # twice rather than never.
             self._begin("finish_split", place_id)
+            intent = run.step_done(intent, "handed_over")
 
     async def _finish_split(self, place_id: str) -> None:
         store = self.store
@@ -308,7 +325,6 @@ class Splits(Watch):
         proposal = place.pending_split if place else None
         if place is None or proposal is None or proposal.status != "approved":
             return
-        store.update_place(place_id, pending_split=None)
         # The shell the IC starts next can no longer write what it gave away.
         with suppress(GitError, OSError):
             await asyncio.to_thread(self._confine, place_id, "ic")
@@ -345,6 +361,8 @@ class Splits(Watch):
                 children=[child.model_dump(mode="json") for child in proposal.children],
                 contracts_replaced=replaced,
             )
+        # Last: until the IC is told, a server that ends has this to do again.
+        store.update_place(place_id, pending_split=None)
 
     async def _do_prune(self, intent: Intent) -> None:
         store = self.store
