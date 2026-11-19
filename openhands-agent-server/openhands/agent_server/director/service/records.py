@@ -892,11 +892,12 @@ class Records(ServiceState):
         memory. The text it is written over is the one the session first
         wrote over, so that what the org made of it since is not lost
         sight of."""
-        earlier = self.drafts(session).get(file)
-        over = earlier[1] if earlier else self.team_memory.read(file)
-        self._runs().mark(
-            FILES, f"{session}\n{file}", json.dumps({"text": text, "over": over})
-        )
+        with self._keeping:
+            earlier = self.drafts(session).get(file)
+            over = earlier[1] if earlier else self.team_memory.read(file)
+            self._runs().mark(
+                FILES, f"{session}\n{file}", json.dumps({"text": text, "over": over})
+            )
         self._note_change(session)
 
     def _undraft(self, session: str, file: str) -> None:
@@ -1051,7 +1052,13 @@ class Records(ServiceState):
             FORMER, f"{session}\n{record.id}\n{record.at}", record.model_dump_json()
         )
 
-    def _land_records(
+    def _land_records(self, top: SessionTeam, *args: Any, **kwargs: Any) -> Taken:
+        """:meth:`_land_kept`, with nothing written to the session's records
+        between reading them and clearing them: it would be lost."""
+        with self._keeping:
+            return self._land_kept(top, *args, **kwargs)
+
+    def _land_kept(
         self,
         top: SessionTeam,
         seen: dict[str, str | None] | None = None,

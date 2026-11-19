@@ -5,6 +5,7 @@ import threading
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -139,6 +140,35 @@ async def test_what_a_session_records_is_the_teams_once_its_work_is_accepted(
         "Chose REST."
     ]
     assert service.own_reports(node(service, "root")) == []
+
+
+async def test_what_is_recorded_while_work_lands_is_not_lost(
+    service: DirectorService, monkeypatch: pytest.MonkeyPatch
+):
+    await use(service, ic(service), ReportTool, ReportAction(text="Chose REST."))
+    root, commit = node(service, "root"), service._commit_landing
+    late: list[threading.Thread] = []
+
+    def a_report_comes(*args: Any, **kwargs: Any):
+        # The session's records are read by now and not yet cleared.
+        writer = threading.Thread(
+            target=service.report, args=(root, "ic", "Chose JSON.")
+        )
+        writer.start()
+        writer.join(0.3)
+        late.append(writer)
+        return commit(*args, **kwargs)
+
+    monkeypatch.setattr(service, "_commit_landing", a_report_comes)
+
+    await landed(service)
+    await service.settled()
+    for writer in late:
+        writer.join()
+
+    assert late
+    kept = service.team_memory.reports("root", "ic") + service.own_reports(root)
+    assert sorted(report.text for report in kept) == ["Chose JSON.", "Chose REST."]
 
 
 async def test_what_became_of_a_sessions_teams_is_on_record_once_it_is_accepted(

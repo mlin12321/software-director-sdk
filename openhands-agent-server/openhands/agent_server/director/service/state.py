@@ -448,7 +448,7 @@ class ServiceState:
         # an agent that tries the same file again is counted once.
         self._keeping_needs = threading.Lock()
         # Held while one of a session's own records is read and added to.
-        self._keeping = threading.Lock()
+        self._keeping = threading.RLock()
         # Held while the tree is saved, and all through a landing, which
         # changes the tree and saves it with team memory in one step.
         self._saving = threading.RLock()
