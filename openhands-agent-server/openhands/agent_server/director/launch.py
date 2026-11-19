@@ -12,7 +12,9 @@ from openhands.agent_server.conversation_service import (
     AgentAdapter,
     ConversationService,
     ExecutionStatusListener,
+    InvalidParentConversation,
     ToolParams,
+    UnavailableAgentTool,
 )
 from openhands.agent_server.director.headline import (
     TeamSummary,
@@ -26,8 +28,10 @@ from openhands.agent_server.event_service import (
     ActionGuard,
     ConversationRunLimitExceeded,
 )
+from openhands.agent_server.launch import launch_error
 from openhands.agent_server.local_storage import conversation_worktree_dir
 from openhands.agent_server.models import (
+    ConversationInfo,
     EventSortOrder,
     StartChildConversationRequest,
     StartConversationRequest,
@@ -44,15 +48,18 @@ from openhands.sdk.conversation.request import (
 )
 from openhands.sdk.conversation.state import ConversationExecutionStatus
 from openhands.sdk.conversation.title_utils import strip_reasoning_blocks
-from openhands.sdk.errors import Conflict, Invalid, NotFound
+from openhands.sdk.errors import Conflict, Invalid, NotFound, Unprocessable
 from openhands.sdk.event.conversation_error import ConversationErrorEvent
+from openhands.sdk.launch import AgentLaunchError, LaunchStoreError
 from openhands.sdk.llm import LLM
 from openhands.sdk.llm.utils.metrics import MetricsSnapshot
 from openhands.sdk.profiles.agent_profile import (
     ACPAgentProfile,
     OpenHandsAgentProfile,
 )
+from openhands.sdk.profiles.resolver import ProfileNotFound
 from openhands.sdk.security.confirmation_policy import NeverConfirm
+from openhands.sdk.tool.client_tool import ClientToolRegistrationError
 from openhands.sdk.tool.spec import Tool
 
 
@@ -317,6 +324,22 @@ class ConversationTeamLauncher:
         self._counted: dict[UUID, Usage] = {}
         self._conversations = conversations
 
+    async def _start(
+        self, request: StartConversationRequest, **options: Any
+    ) -> tuple[ConversationInfo, bool]:
+        """Start a conversation, refused as the route that starts any
+        conversation refuses it."""
+        try:
+            return await self._conversations.start_conversation(request, **options)
+        except (ProfileNotFound, AgentLaunchError, LaunchStoreError) as error:
+            raise launch_error(error) from error
+        except (
+            ClientToolRegistrationError,
+            InvalidParentConversation,
+            UnavailableAgentTool,
+        ) as error:
+            raise Unprocessable(str(error)) from error
+
     async def start_root(
         self,
         request: StartConversationRequest,
@@ -326,7 +349,7 @@ class ConversationTeamLauncher:
         tool_params: ToolParams | None = None,
         adapt_agent: AgentAdapter | None = None,
     ) -> StartedAgent:
-        info, is_new = await self._conversations.start_conversation(
+        info, is_new = await self._start(
             request,
             server_tools=tools,
             tool_params=tool_params,
@@ -432,7 +455,7 @@ class ConversationTeamLauncher:
             max_iterations=parent.stored.max_iterations,
             max_budget_per_run=parent.get_conversation().max_budget_per_run,
         )
-        info, is_new = await self._conversations.start_conversation(
+        info, is_new = await self._start(
             request,
             server_tools=tools,
             tool_params=tool_params,
