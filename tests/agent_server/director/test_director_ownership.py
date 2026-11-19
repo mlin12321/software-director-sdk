@@ -180,3 +180,13 @@ def test_a_checkout_that_is_gone_gives_an_empty_map(tmp_path: Path):
 
     assert (found.files, found.collisions, found.collisions_checked) == ([], [], False)
     assert [owner.node_id for owner in found.owners] == ["api"]
+
+
+def test_the_top_team_owns_every_file_where_it_is_the_one_below(org: Path):
+    # The place a session opens at holds the top team itself.
+    lead = team("root@lead", "", org, parent=None)
+    top = team("root", "", org, parent="root@lead")
+
+    found = node_ownership(lead, [top], org)
+
+    assert {file.owner for file in found.files} == {"root"}
