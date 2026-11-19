@@ -422,3 +422,25 @@ def test_a_model_is_looked_up_under_each_of_its_names():
         "claude-sonnet-4-5", tokens
     )
     assert priced("a-model-of-our-own", tokens) is None
+
+
+async def test_a_session_set_going_while_the_org_is_paused_goes_on_when_it_resumes(
+    service: DirectorService, launcher: FakeLauncher
+):
+    service.update_settings(DirectorSettingsUpdate(session_cost_limit=2.0))
+    api = ic(service, API)
+    launcher.report(api, ConversationExecutionStatus.RUNNING)
+    uses(launcher, api, 250, 50, 2.75)
+    await counted(service)
+    top = node(service, "root")
+    assert top.stopped is not None and top.stopped.running == [api]
+    await service.pause()
+    await service.settled()
+
+    service.answer_escalation(top.id, LIMIT_WAITS, "Go on.")
+    await service.settled()
+    await service.resume()
+    await service.settled()
+
+    # The agent that was cut off in its turn runs again.
+    assert (UUID(api), None) in launcher.resumed
