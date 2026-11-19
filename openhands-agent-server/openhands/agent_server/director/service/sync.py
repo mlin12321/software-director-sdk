@@ -67,6 +67,7 @@ from openhands.agent_server.director.run_state import (
 from openhands.agent_server.director.service.sessions import Sessions
 from openhands.agent_server.director.service.state import (
     _MERGE_ATTEMPTS,
+    _STARTED_WITH,
     AGENT_PAUSED,
     ORG_LANE,
     PAUSE_LANE,
@@ -133,29 +134,31 @@ class Sync(Sessions):
         """
         launcher = self._require_launcher()
         store = await asyncio.to_thread(lambda: self.store)
-        if self._paused is None:
-            return await self.recovery()
-        # A pause that is still stopping agents would stop them after this
-        # has set them going again.
-        await self._after(PAUSE_LANE)
-        run = self._runs()
-        await asyncio.to_thread(self._put_aside_stale)
-        await asyncio.to_thread(
-            restore_worktrees, self._repo_dir, store.places(), self._home()
-        )
-        dropped = self._dropped()
-        was_running = run.marked(RUNNING)
-        waited = list(run.marked(WAITING))
-        statuses = await launcher.statuses([UUID(agent) for agent in was_running])
-        again: dict[str, str | None] = {}
-        for conversation_id in was_running:
-            status = statuses.get(UUID(conversation_id))
-            if status == ConversationExecutionStatus.ERROR:
-                again[conversation_id] = RESTART_NOTE
-            elif status == ConversationExecutionStatus.PAUSED:
-                again[conversation_id] = None
-        self._resuming = set(again)
-        self._release()
+        # One resume at a time: a second would run the same agents again.
+        async with self._resume_lock:
+            if self._paused is None:
+                return await self.recovery()
+            # A pause that is still stopping agents would stop them after this
+            # has set them going again.
+            await self._after(PAUSE_LANE)
+            run = self._runs()
+            await asyncio.to_thread(self._put_aside_stale)
+            await asyncio.to_thread(
+                restore_worktrees, self._repo_dir, store.places(), self._home()
+            )
+            dropped = self._dropped()
+            was_running = run.marked(RUNNING)
+            waited = list(run.marked(WAITING))
+            statuses = await launcher.statuses([UUID(agent) for agent in was_running])
+            again: dict[str, str | None] = {}
+            for conversation_id in was_running:
+                status = statuses.get(UUID(conversation_id))
+                if status == ConversationExecutionStatus.ERROR:
+                    again[conversation_id] = RESTART_NOTE
+                elif status == ConversationExecutionStatus.PAUSED:
+                    again[conversation_id] = None
+            self._resuming = set(again)
+            self._release()
         await self._resync()
         for conversation_id in again:
             # Seen stopped, they were just taken for agents that do not run:
@@ -390,7 +393,7 @@ class Sync(Sessions):
         return edit
 
     async def start_again(
-        self, node_id: str, request: StartAgainRequest
+        self, node_id: str, request: StartAgainRequest, said: str | None = None
     ) -> SessionTeam:
         """Start afresh a team whose agents have no conversation on this
         server, on the work its branch has.
@@ -399,6 +402,7 @@ class Sync(Sessions):
         the team's spec and last headline; its Manager is derived from it.
         The IC starts as the given conversation, or without one like the IC
         of the team above (from the team's own agent profile if it has one).
+        What the human ``said`` when asked about the lost IC ends its briefing.
 
         Raises:
             NotFound: There is no such team.
@@ -455,8 +459,15 @@ class Sync(Sessions):
         task = await asyncio.to_thread(
             lambda: self._purpose(place) if leads else self._task_of(place)
         )
+        if said:
+            task = (
+                f"{task}{_STARTED_WITH}The human was told that the IC before "
+                f"you was lost, and says:\n{said}"
+            )
+        # The team's other agents stay its own: only the IC is new.
+        agents = [*_new_agents(ic_id), *(a for a in place.agents if a.role != "ic")]
         if conversation is None:
-            store.update_place(node_id, agents=_new_agents(ic_id), status="idle")
+            store.update_place(node_id, agents=agents, status="idle")
             self._begin(
                 "start_team",
                 node_id,
@@ -473,7 +484,7 @@ class Sync(Sessions):
             for part in (additions.system_message_suffix_append, ORG_PROTOCOL)
             if part
         )
-        store.update_place(node_id, agents=_new_agents(ic_id), status="idle")
+        store.update_place(node_id, agents=agents, status="idle")
         try:
             started = await launcher.start_root(
                 conversation.model_copy(

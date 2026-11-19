@@ -395,8 +395,28 @@ async def interrupt_conversation(
     return Success()
 
 
+def _not_an_agent_of_the_org(conversation_id: UUID, request: Request) -> None:
+    """Refuse to copy, extend or delete an org agent's conversation: a copy
+    or a child would act as that agent, in no team, and a session whose
+    agent is deleted is left without it."""
+    director = getattr(request.app.state, "director_service", None)
+    if director is not None and director.is_agent(conversation_id):
+        raise Conflict(
+            "This conversation is an agent of the org: it cannot be forked "
+            "or deleted, and starts no conversation of its own. Close its "
+            "session to end it, or open one to give the org more work."
+        )
+
+
 @conversation_router.delete(
-    "/{conversation_id}", responses=error_responses({NotFound: "Item not found"})
+    "/{conversation_id}",
+    responses=error_responses(
+        {
+            NotFound: "Item not found",
+            Conflict: "The conversation is an agent of the org",
+        }
+    ),
+    dependencies=[Depends(_not_an_agent_of_the_org)],
 )
 async def delete_conversation(
     conversation_id: UUID,
@@ -847,18 +867,6 @@ async def condense_conversation(
     if not success:
         raise NotFound("Conversation not found")
     return Success()
-
-
-def _not_an_agent_of_the_org(conversation_id: UUID, request: Request) -> None:
-    """Refuse a copy or a child of an org agent's conversation: it would
-    act as the agent it came from, in no team."""
-    director = getattr(request.app.state, "director_service", None)
-    if director is not None and director.is_agent(conversation_id):
-        raise Conflict(
-            "This conversation is an agent of the org: it cannot be forked "
-            "and starts no conversation of its own. Open a session to give "
-            "the org more work."
-        )
 
 
 @conversation_router.post(

@@ -297,7 +297,7 @@ class Config(BaseModel):
             "Where this server answers, such as `http://127.0.0.1:8000`, for "
             "agents of an org that run their own tools and call the "
             "director's from their own process. By default the director "
-            "uses the address its own requests arrive at."
+            "uses the address the server is bound to."
         ),
     )
     conversation_worktree_root: Path = Field(

@@ -838,3 +838,47 @@ def test_the_shim_answers_a_request_whose_params_are_no_object():
     )
 
     assert reply is not None and "result" in reply
+
+
+async def test_a_division_lead_ic_has_no_folder_to_write_from_its_shell(repo: Path):
+    launcher = FakeLauncher()
+    service = await started(repo, launcher, find_sandbox=lambda: "/usr/bin/bwrap")
+    done = SubmitReviewAction(summary="Shipped.")
+
+    await use(service, ic(service), SubmitReviewTool, done)
+    await service.settled()
+
+    lead = division_lead_ic(service)
+    assert lead is not None
+    shells = repo / ".git" / "director-shells"
+    # It reviews in the human's own checkout.
+    assert "own=" not in (shells / f"{lead}.sh").read_text()
+    assert "own=" in (shells / f"{ic(service)}.sh").read_text()
+    await service.aclose()
+
+
+async def test_the_tools_are_reached_where_the_server_is_bound(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setenv("OH_INTERNAL_SERVER_URL", "http://127.0.0.1:4321")
+    launcher = FakeLauncher(root_kind="acp")
+    service = DirectorService(repo, save_delay=0, run_limit_retry=0)
+    await service.start(launcher)
+    await service.create_org(
+        CreateOrgRequest(
+            title="Checkout", task="Build", conversation=root_conversation(repo)
+        )
+    )
+    await service.settled()
+    assert launcher.root_adapt is not None
+
+    adapted = launcher.root_adapt(ACPAgent(acp_command=CLAUDE))
+
+    assert isinstance(adapted, ACPAgent)
+    server = adapted.mcp_config[MCP_SERVER_NAME]
+    assert server.env is not None
+    assert (
+        server.env["DIRECTOR_TOOLS_URL"].get_secret_value()
+        == "http://127.0.0.1:4321/api/director/tools"
+    )
+    await service.aclose()

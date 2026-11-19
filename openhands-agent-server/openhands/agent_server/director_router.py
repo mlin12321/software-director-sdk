@@ -107,9 +107,7 @@ _NO_REMOTE: dict[type[DomainError], str] = {
 
 
 def get_director_service(request: Request) -> DirectorService:
-    service: DirectorService = request.app.state.director_service
-    service.reached_at(str(request.base_url).rstrip("/"))
-    return service
+    return request.app.state.director_service
 
 
 def _calling_agent(

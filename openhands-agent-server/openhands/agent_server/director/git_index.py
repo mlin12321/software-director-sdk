@@ -88,10 +88,10 @@ def git_script(
     ]
     # What the boundary's globs keep from the team counts as outside too.
     held = [
-        *([[f":(glob){glob}" for glob in readonly]] if readonly else []),
+        *([[f":(top,glob){glob}" for glob in readonly]] if readonly else []),
         [
-            f":(glob){directory}/**" if directory else ":(glob)**",
-            *(f":(exclude,glob){glob}" for glob in writable),
+            f":(top,glob){directory}/**" if directory else ":(top,glob)**",
+            *(f":(top,exclude,glob){glob}" for glob in writable),
         ],
     ]
     outside = [

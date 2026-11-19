@@ -945,3 +945,20 @@ def test_a_failed_change_of_several_marks_leaves_the_run_state_usable(
     run.replace_marks("kind", {"c": "3"})
     assert run.marked("kind") == {"c": "3"}
     run.close()
+
+
+async def test_two_resumes_at_once_run_an_agent_again_once(
+    repo: Path, launcher: FakeLauncher
+):
+    service = await started(repo, launcher)
+    root_ic = ic(service)
+    assert root_ic is not None
+    launcher.report(root_ic, ConversationExecutionStatus.RUNNING)
+    await service.pause()
+    await service.settled()
+
+    await asyncio.gather(service.resume(), service.resume())
+    await service.settled()
+
+    assert launcher.resumed == [(UUID(root_ic), None)]
+    await service.aclose()

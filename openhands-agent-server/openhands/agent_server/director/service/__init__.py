@@ -510,6 +510,20 @@ class DirectorService(Sync):
                 f"Escalation {escalation_id} is still with team "
                 f"{escalation.held_by}; it does not wait on the human"
             )
+        role = escalation.raised_by
+        lost = escalation_id == failure_waits(role) and any(
+            a.role == role and a.status == AGENT_LOST for a in place.agents
+        )
+        if lost and role == "ic":
+            # It has no conversation to answer in: the team starts again
+            # with the answer, and is asked of no longer once it has.
+            async def again() -> None:
+                await self.start_again(place_id, StartAgainRequest(), said=answer)
+                with suppress(NotFound):
+                    store.settle_escalation(place_id, escalation_id)
+
+            self._enqueue(again, place_id)
+            return place
         store.settle_escalation(place_id, escalation_id)
         if escalation_id == MERGE_WAITS:
             # The way into the checkout was cleared: the accepted work is
@@ -521,14 +535,9 @@ class DirectorService(Sync):
             # The human goes on without the Manager.
             self._begin("land_org", place_id, org_holds=True)
             return store.place(place_id) or place
-        role = escalation.raised_by
         if escalation_id == LIMIT_WAITS:
             self.go_on_past_limit(place_id)
-        if (
-            escalation_id == failure_waits(role)
-            and role == "manager"
-            and any(a.role == role and a.status == AGENT_LOST for a in place.agents)
-        ):
+        if lost:
             # A new Manager starts with the answer; the IC goes on as it was.
             self.tell_manager(
                 place_id,
@@ -536,15 +545,6 @@ class DirectorService(Sync):
                 f"told, and says:\n{answer}",
                 division_lead=is_division_lead(place),
             )
-            return store.place(place_id) or place
-        if escalation_id == failure_waits(role) and any(
-            a.role == role and a.status == AGENT_LOST for a in place.agents
-        ):
-            # It has no conversation to answer in: the team starts again.
-            async def again() -> None:
-                await self.start_again(place_id, StartAgainRequest())
-
-            self._enqueue(again, place_id)
             return store.place(place_id) or place
         told = (
             "The human was told that your conversation failed, and says"

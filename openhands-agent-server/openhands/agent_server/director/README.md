@@ -15,7 +15,7 @@ part, is in [OVERVIEW.md](OVERVIEW.md); the rules its code keeps to are in
 - **`OH_DIRECTOR_SERVER_URL`** (optional): where the server answers, such as
   `http://127.0.0.1:8000`. An agent that runs its own tools (Claude Code)
   calls the director from its own process and needs this address. Left out,
-  the director uses the address its own requests arrive at.
+  the director uses the address the server is bound to.
 - **`OH_CONVERSATION_WORKTREE_ROOT`:** where each session's worktree is put.
   The default is under `/tmp`, which a reboot clears. Set a folder that
   stays.
