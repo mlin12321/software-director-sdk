@@ -1,7 +1,7 @@
 <a name="readme-top"></a>
 
 <div align="center">
-  <img src="./scripts/agent_server_ui/static/favicon.svg" alt="Agent Director" width="160">
+  <img src="https://raw.githubusercontent.com/mlin12321/Agent-Director-Canvas/main/public/favicon.svg" alt="Agent Director" width="160">
   <h1 align="center">Agent Director</h1>
 </div>
 
