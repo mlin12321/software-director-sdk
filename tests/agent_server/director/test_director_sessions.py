@@ -24,6 +24,7 @@ from openhands.agent_server.director.org_store import (
     session_id_of,
 )
 from openhands.agent_server.director.routing import USAGE_ID
+from openhands.agent_server.director.run_state import TASK
 from openhands.agent_server.director.service import DirectorService
 from openhands.agent_server.director.tools import (
     MsgTeamTool,
@@ -42,8 +43,13 @@ from openhands.agent_server.director.tools.definition import (
     ReviewTeamAction,
     WriteSpecAction,
 )
-from openhands.sdk.errors import Conflict, NotFound
-from tests.agent_server.director.conftest import FakeLauncher, record_of, run_git
+from openhands.sdk.errors import Conflict, NotFound, Unprocessable
+from tests.agent_server.director.conftest import (
+    FakeLauncher,
+    record_of,
+    root_conversation,
+    run_git,
+)
 from tests.agent_server.director.test_director_landing import landed
 from tests.agent_server.director.test_director_limits import started
 from tests.agent_server.director.test_director_pause import again
@@ -926,3 +932,26 @@ async def test_work_is_not_accepted_past_earlier_work_that_still_waits(
 
     states = [node(service, team).review for team in (first, second)]
     assert [review.state for review in states if review] == ["pending", "pending"]
+
+
+async def test_a_session_whose_ic_could_not_be_started_leaves_nothing_in_the_history(
+    repo: Path, launcher: FakeLauncher
+):
+    service = await started(repo, launcher)
+    before = {event.id for event in service.org_history(100).events}
+    tasks = service._runs().marked(TASK)
+    launcher.root_error = Unprocessable("cannot start")
+
+    with pytest.raises(Unprocessable):
+        await service.open_session(
+            OpenSessionRequest(text="Add refunds", node_id="root"),
+            root_conversation(repo),
+        )
+    await service.settled()
+    launcher.root_error = None
+
+    assert [
+        event for event in service.org_history(100).events if event.id not in before
+    ] == []
+    assert service._runs().marked(TASK) == tasks
+    await service.aclose()

@@ -234,6 +234,10 @@ class Sessions(Splits):
                     top, conversation, text, brief, launcher, rename
                 )
             except BaseException:
+                # Nothing of a session that never began stays in the record.
+                self._leave(top)
+                for place in store.session(session_id):
+                    run.unmark(TASK, place.id)
                 store.close_session(session_id)
                 raise
         if not rename and not request.title.strip():
