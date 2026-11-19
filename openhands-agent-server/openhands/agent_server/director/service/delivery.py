@@ -351,6 +351,11 @@ class Delivery(Records):
         """Run ``start`` for a team; while the server is full, wait in line
         for a conversation to stop running and try again."""
         while place_id in self._line and self._line[0] != place_id:
+            if self._paused is not None:
+                # The one ahead of it may never start now: it is in line
+                # again when the org resumes.
+                self._runs().mark(WAITING, place_id)
+                raise _Held
             await self._line_moved.wait()
         try:
             return await start()

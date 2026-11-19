@@ -54,8 +54,10 @@ def merge_orgs(
         for team_id in base:
             if team_id in gone_from or team_id in settled or team_id not in kept_in:
                 continue
-            parent = base[team_id]["parent_id"]
-            if parent is not None and parent not in gone_from:
+            # Where the side that kept it has it: it may have moved it out
+            # from under a team the other side removed.
+            parent = kept_in[team_id]["parent_id"]
+            if parent in base and parent not in gone_from:
                 continue  # settled with the removed team above it
             below = _subtree(kept_in, team_id)
             settled.update(below)
@@ -75,6 +77,12 @@ def merge_orgs(
             keeper: Side = "theirs" if remover == "mine" else "mine"
             if (conflict.choice or "mine") == keeper:
                 merged.update({each: kept_in[each] for each in below})
+            else:
+                # A team moved under the removed one stays where the side
+                # that removed it has it.
+                merged.update(
+                    {each: gone_from[each] for each in below if each in gone_from}
+                )
 
     for team_id in [*mine, *(each for each in theirs if each not in mine)]:
         if team_id in settled:

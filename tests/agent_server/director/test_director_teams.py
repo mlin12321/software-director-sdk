@@ -1,5 +1,6 @@
 """Sub-teams that take the place of ones a team already has."""
 
+import asyncio
 from pathlib import Path
 from uuid import UUID
 
@@ -32,6 +33,7 @@ from tests.agent_server.director.conftest import (
 from tests.agent_server.director.test_director_landing import landed
 from tests.agent_server.director.test_director_limits import started
 from tests.agent_server.director.test_director_pause import (
+    ServerEnded,
     again,
     cut_off,
     end_server_at,
@@ -565,3 +567,69 @@ async def test_a_team_given_no_task_owes_nothing(
     # never started.
     assert any("Review request" in text for text in launcher.messages_to(ic(service)))
     assert node(service, "apps.web").agents == []
+
+
+async def test_work_that_does_not_merge_takes_out_the_teams_merged_before_it(
+    service: DirectorService, launcher: FakeLauncher, repo: Path, tmp_path: Path
+):
+    web = in_own_worktree(service, tmp_path, repo)
+    api = in_own_worktree(service, tmp_path, repo, API)
+    commit(web, "apps/web/page.tsx", "merges\n")
+    commit(api, "services/api/main.py", "theirs\n")
+    commit(repo, "services/api/main.py", "ours\n")
+    before = run_git(repo, "rev-parse", "HEAD")
+    (repo / "notes.txt").write_text("uncommitted\n")
+
+    await propose_and_approve(
+        service,
+        "root",
+        SplitChild(title="Apps", path="apps", task="All the apps"),
+        SplitChild(title="Services", path="services", task="Serve"),
+    )
+
+    assert "Nothing was changed" in launcher.messages_to(ic(service))[-1]
+    assert run_git(repo, "rev-parse", "HEAD") == before
+    assert (repo / "notes.txt").read_text() == "uncommitted\n"
+
+
+async def test_a_team_made_in_place_of_one_is_not_taken_for_it(
+    repo: Path, launcher: FakeLauncher, monkeypatch: pytest.MonkeyPatch
+):
+    first = await started(repo, launcher)
+    await split_root(first)
+    api = node(first, API).id
+    await use(
+        first,
+        ic(first),
+        ProposeTeamsTool,
+        proposing(
+            [SplitChild(title="Orders", path="services/api", task="Take orders")],
+            keep=["Web"],
+        ),
+    )
+    ended = asyncio.Event()
+    save = first._save
+
+    async def server_ends() -> None:
+        made = first.store.place(api)
+        if made is None or made.title != "Orders":
+            return await save()
+        # The session is kept with the new team in it, and the split is
+        # not on record as done.
+        first._runs().replace_marks(SESSION, kept_sessions(first.store))
+        ended.set()
+        raise ServerEnded
+
+    monkeypatch.setattr(first, "_save", server_ends)
+    await cut_off(
+        launcher, ended, use(first, manager(first), ApproveTeamsTool, APPROVE)
+    )
+
+    second = await again(repo, launcher)
+    await second.resume()
+    await second.settled()
+
+    assert node(second, API).title == "Orders"
+    gone = [event for event in record_of(second, "root") if event.kind == "replaced"]
+    assert len(gone) == 1
+    await second.aclose()
