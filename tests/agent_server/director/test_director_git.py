@@ -156,6 +156,23 @@ def test_what_was_kept_already_is_found_again(repo: Path):
     assert save_and_discard(repo, "svc", "refs/agents/pruned/team/2") is None
 
 
+def test_git_is_not_sent_to_another_repository_by_a_planted_commondir(
+    repo: Path, tmp_path: Path
+):
+    run_git(repo, "worktree", "add", "-q", "-b", "wt", str(tmp_path / "wt"))
+    assert git(tmp_path / "wt", ["rev-parse", "HEAD"])  # A worktree's own is git's.
+    elsewhere = tmp_path / "elsewhere.git"
+    run_git(tmp_path, "init", "-q", "--bare", str(elsewhere))
+
+    # What an agent can write from its sandbox.
+    (repo / ".git" / "commondir").write_text(f"{elsewhere}\n")
+
+    for where in (repo, repo / "sub", tmp_path / "wt"):
+        where.mkdir(exist_ok=True)
+        with pytest.raises(GitError, match="commondir"):
+            git(where, ["status"])
+
+
 def test_no_command_the_repositorys_config_names_is_run(repo: Path, tmp_path: Path):
     ran = tmp_path / "ran"
     hooks = tmp_path / "hooks"
