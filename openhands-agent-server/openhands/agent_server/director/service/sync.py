@@ -545,7 +545,13 @@ class Sync(Sessions):
 
     async def _merge(self, state: dict[str, Any]) -> OrgSync:
         """Carry a merge as far as its choices allow."""
-        outcome = await asyncio.to_thread(self._weigh, state, True)
+        try:
+            outcome = await asyncio.to_thread(self._weigh, state, True)
+        except Exception:
+            # Nothing waits to be resolved: the org the pull paused goes on.
+            if state["resume"] and self._merging() is None:
+                await self.resume()
+            raise
         if outcome.result == "conflicts":
             self._set_merge(state)
             return outcome

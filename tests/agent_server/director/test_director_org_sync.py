@@ -365,6 +365,28 @@ async def test_a_pull_stops_on_a_conflict_and_writes_nothing(
     await there.aclose()
 
 
+async def test_a_pull_that_fails_while_it_merges_leaves_the_org_running(
+    repo: Path,
+    launcher: FakeLauncher,
+    remote: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    here, there = await conflicting(repo, launcher, remote, tmp_path)
+
+    def fails(*_):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(here, "_weigh", fails)
+    with pytest.raises(OSError, match="disk full"):
+        await here.pull_org("origin")
+
+    # Nothing waits to be resolved, so nothing holds the org.
+    assert not here.summary().merging and here.summary().paused is None
+    await here.aclose()
+    await there.aclose()
+
+
 @pytest.mark.parametrize(("side", "headline"), [("mine", "Mine"), ("theirs", "Theirs")])
 async def test_a_conflict_is_resolved_either_way_and_the_merge_is_finished(
     repo: Path,
