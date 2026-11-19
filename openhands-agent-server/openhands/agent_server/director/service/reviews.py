@@ -1619,6 +1619,15 @@ class Reviews(Requests):
         if place.review.state != "pending":
             return
         reviewer = agent_conversation(above, "ic")
+        first = self._before(place)
+        if first is not None:
+            # The acceptance of work submitted earlier was carried out
+            # since this one was checked, and left that work waiting.
+            self._runs().mark(TURN, place.id)
+            self.notify(
+                reviewer, accept_in_order(place, first, store.session_title(first))
+            )
+            return
         where = place.boundary.path or "the repository"
         team, checkout = Path(place.worktree_path), Path(above.worktree_path)
         merged = False
@@ -2003,12 +2012,16 @@ class Reviews(Requests):
                 "its own.",
                 passed_up=True,
                 at=utc_now(),
+                # It goes into the org after what was submitted before now.
+                seq=self.next_submission() if opens else 0,
             ),
             base_commit=tip or place.base_commit,
         )
         self._work_accepted(place)
         if opens:
-            await asyncio.to_thread(self._land_accepted, place, None)
+            await asyncio.to_thread(
+                self._land_accepted, store.place(place_id) or place, None
+            )
         self._tell_turns()
         if acted:
             self.notify(

@@ -835,3 +835,50 @@ async def test_a_spec_of_a_closed_session_is_dropped(service: DirectorService):
 
     assert service.team_memory.read("services/api/spec.md") == before
     assert service.spec_draft(session.teams[0]) is None
+
+
+async def test_work_that_goes_up_by_itself_takes_its_place_after_what_waits(
+    service: DirectorService, repo: Path, tmp_path: Path
+):
+    # Another session submitted since the first one's work was accepted.
+    other = (await opened(service, title="Refunds")).session.teams[0].id
+    commit(own_checkout(service, repo, tmp_path, other), "services/api/a.txt", "a\n")
+    await use(service, ic(service, other), SubmitReviewTool, DONE)
+    waits = node(service, other).review
+    assert waits is not None
+
+    # The first session's sub-teams do more; it changes nothing itself.
+    commit(repo, "services/api/db/x.sql", "x\n")
+    await use(service, ic(service, "services.api.db"), SubmitReviewTool, DONE)
+    await use(service, ic(service, API), ReviewTeamTool, accept("services.api.db"))
+    commit(repo, "apps/web/x.txt", "x\n")
+    await use(service, ic(service, "apps.web"), SubmitReviewTool, DONE)
+    await use(service, ic(service), ReviewTeamTool, accept("apps.web"))
+    await service.settled()
+
+    went_up = node(service, "root").review
+    assert went_up is not None and went_up.passed_up
+    assert went_up.seq > waits.seq
+
+
+async def test_work_is_not_accepted_past_earlier_work_that_still_waits(
+    service: DirectorService, repo: Path, tmp_path: Path
+):
+    commit(repo, "services/api/a.txt", "a\n")
+    commit(repo, "services/api/b.txt", "b\n")
+    first = (await opened(service, title="Refunds")).session.teams[0].id
+    second = (await opened(service, title="Vouchers")).session.teams[0].id
+    for team, file in ((first, "services/api/a.txt"), (second, "services/api/b.txt")):
+        commit(own_checkout(service, repo, tmp_path, team), file, "changed\n")
+        await use(service, ic(service, team), SubmitReviewTool, DONE)
+    # The first cannot be merged yet: the human is asked, and it waits.
+    (repo / "services" / "api" / "a.txt").write_text("in the way\n")
+
+    # Both were checked before either was carried out.
+    for team in (first, second):
+        service.check_accept(team, "")
+        service.accept_review(team, "")
+    await service.settled()
+
+    states = [node(service, team).review for team in (first, second)]
+    assert [review.state for review in states if review] == ["pending", "pending"]
