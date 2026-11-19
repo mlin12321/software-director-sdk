@@ -494,6 +494,24 @@ async def test_the_sessions_of_a_team_know_of_each_other_and_share_accepted_repo
     ]
 
 
+async def test_a_report_of_another_session_with_the_same_title_is_not_ones_own(
+    service: DirectorService,
+):
+    first = (await opened(service)).session.teams[0].id
+    await use(
+        service, ic(service, first), ReportTool, ReportAction(text="Refunds are async.")
+    )
+    await use(service, ic(service, first), SubmitReviewTool, DONE)
+    await use(service, division_lead_ic(service, first), ReviewTeamTool, accept(first))
+
+    second = (await opened(service)).session.teams[0].id
+
+    context = service.context_of(node(service, second), "ic")
+    assert [report["by"] for report in context["reports_of_your_team"]] == [
+        "ic in 'Refunds'"
+    ]
+
+
 async def test_a_request_to_the_org_opens_a_session_and_reaches_no_other(
     service: DirectorService, launcher: FakeLauncher
 ):

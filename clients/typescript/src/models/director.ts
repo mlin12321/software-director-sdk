@@ -657,6 +657,8 @@ export interface DirectorReport {
    * report a model rewrote or the IC above handed over.
    */
   session?: string;
+  /** That session's id: two sessions may have one title. */
+  session_id?: string;
   /** True for the one report a model wrote in place of earlier ones. */
   compacted?: boolean;
   /**
