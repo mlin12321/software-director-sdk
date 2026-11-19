@@ -6,6 +6,7 @@ from uuid import UUID, uuid4
 
 import pytest
 
+from openhands.agent_server.director.org_store import AGENT_LOST
 from openhands.agent_server.director.service import DirectorService
 from openhands.agent_server.director.service.state import (
     STALL_WAITS,
@@ -293,3 +294,29 @@ async def test_no_agent_is_started_in_a_team_that_is_being_removed(
         await service._start_new(api, "ic", str(uuid4()), ic(service), "Build it.")
 
     assert len(launcher.derived) == starts
+
+
+async def test_an_answer_about_a_lost_ic_waits_until_the_team_has_started_again(
+    service: DirectorService, launcher: FakeLauncher, monkeypatch: pytest.MonkeyPatch
+):
+    await fails(service, launcher, ic(service))
+    top = node(service, "root").id
+    service.store.set_agent(top, "ic", status=AGENT_LOST)
+    heard: list[str | None] = []
+
+    async def start_again(_place: str, _request: object, said: str | None = None):
+        heard.append(said)
+        if len(heard) == 1:
+            raise Conflict("No conversation of the org runs on this server")
+
+    monkeypatch.setattr(service, "start_again", start_again)
+
+    service.answer_escalation(top, failure_waits("ic"), "The key is set.")
+    await service.settled()
+    # It could not be started: the human is still asked.
+    assert [e.id for e in node(service, "root").escalations] == [failure_waits("ic")]
+
+    service.answer_escalation(top, failure_waits("ic"), "The key is set.")
+    await service.settled()
+    assert node(service, "root").escalations == []
+    assert heard == ["The key is set.", "The key is set."]

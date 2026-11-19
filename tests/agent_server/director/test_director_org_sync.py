@@ -36,6 +36,7 @@ from tests.agent_server.director.test_director_tools import (
     division_lead_ic,
     division_lead_of,
     ic,
+    manager,
     node,
     split_root,
     use,
@@ -648,4 +649,26 @@ async def test_a_sessions_reviewer_that_is_lost_is_started_again(
     [again] = launcher.derived[before:]
     assert str(again.parent_id) == ic(here)
     assert str(again.conversation_id) == division_lead_ic(here) != lost
+    await here.aclose()
+
+
+async def test_a_team_started_again_keeps_its_manager_and_hears_the_human(
+    repo: Path, launcher: FakeLauncher
+):
+    here = await started(repo, launcher)
+    await split_root(here)
+    api = node(here, API).id
+    here.tell_manager(api, "Look in on your team.")
+    await here.settled()
+    kept, lost = manager(here, API), ic(here, API)
+    assert kept is not None and lost is not None
+    del launcher.known[UUID(lost)]
+
+    before = len(launcher.derived)
+    await here.start_again(api, StartAgainRequest(), said="Use the smaller migration.")
+    await here.settled()
+
+    assert manager(here, API) == kept and ic(here, API) != lost
+    [again] = launcher.derived[before:]
+    assert "Use the smaller migration." in again.task
     await here.aclose()
