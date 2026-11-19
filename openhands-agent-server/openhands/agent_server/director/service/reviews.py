@@ -492,7 +492,16 @@ class Reviews(Requests):
             above_id = self._home_of(places[session.team_id], path)
         home = store.team(above_id)
         if home is None or any(
-            other.id != team_id and normalize_store_path(other.boundary.path) == path
+            other.id != team_id
+            and (
+                (held := normalize_store_path(other.boundary.path)) == path
+                # Beside a team one of whose directories holds the other's.
+                # Where its Manager put it, or its place is new, that is
+                # settled: what it holds goes under it.
+                or not moved
+                and other.parent_id == above_id
+                and (is_inside(path, held) or is_inside(held, path))
+            )
             for other in store.teams()
         ):
             return False

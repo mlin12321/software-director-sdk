@@ -159,6 +159,7 @@ def git_script(
         '  fail "your index could not be brought up to date; try again"',
         'before=$("$real" rev-parse -q --verify HEAD)',
         'on=$("$real" symbolic-ref -q HEAD)',
+        'had=$("$real" for-each-ref --format="%(refname)" refs/heads)',
         # The lock is not for what git leaves running behind it.
         f'"$real" -c core.excludesFile={quote(str(excludes))} "$@" 9>&-',
         "code=$?",
@@ -166,9 +167,14 @@ def git_script(
         "  checkout|switch)",
         # What is accepted is what the checkout's branch holds, and in a
         # shared checkout the branch is every team's.
-        '    if [ -n "$on" ] && [ "$("$real" symbolic-ref -q HEAD)" != "$on" ]; then',
-        '      "$real" checkout -q "${on#refs/heads/}" &&',
-        '        fail "the checkout stays on ${on#refs/heads/}, where your work'
+        '    now=$("$real" symbolic-ref -q HEAD)',
+        '    if [ -n "$on" ] && [ "$now" != "$on" ]; then',
+        '      "$real" checkout -q "${on#refs/heads/}" || exit 1',
+        # A branch the command made is of no use to anyone; one that was
+        # there stays.
+        '      printf "%s\n" "$had" | grep -qxF -- "$now" ||',
+        '        "$real" branch -q -D "${now#refs/heads/}" 2>/dev/null',
+        '      fail "the checkout stays on ${on#refs/heads/}, where your work'
         ' is taken from; commit there"',
         "    fi",
         "  ;;",

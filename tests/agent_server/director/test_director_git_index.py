@@ -290,6 +290,10 @@ def test_a_checkout_stays_on_the_branch_its_work_is_taken_from(
 
     assert switched.returncode != 0 and f"stays on {branch}" in switched.stderr
     assert run_git(shared, "symbolic-ref", "--short", "HEAD").strip() == branch
+    # A branch it made on the way is gone; one that was there stays.
+    assert run_git(shared, "branch", "--format=%(refname:short)").split() == sorted(
+        [branch, "other"]
+    )
     # Both teams' commits are then on the one branch that is accepted.
     for git, folder in ((api, "api"), (web, "web")):
         (shared / "svc" / folder / "main.py").write_text(f"{folder} v2\n")

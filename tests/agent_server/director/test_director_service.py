@@ -272,6 +272,32 @@ async def test_a_first_message_takes_up_the_org_saved_where_it_is_sent_from(
     assert launcher.root.conversation_id == UUID(routed.conversation_id)
 
 
+async def test_an_org_started_where_one_is_saved_takes_that_org_up(
+    repo: Path, tmp_path: Path, launcher: FakeLauncher
+):
+    other = other_repository(tmp_path)
+    there = DirectorService(other, save_delay=0)
+    await there.start(launcher)
+    first = await there.create_org(org_request(other))
+    there.store.update_team("root", title="Shop")
+    await there.settled()
+    await there.aclose()
+
+    service = DirectorService(repo, save_delay=0)
+    await service.start(launcher)
+    try:
+        opened = await service.create_org(org_request(other))
+        await service.settled()
+        root = service.store.team("root")
+        sessions = [session.id for session in service.store.sessions()]
+    finally:
+        await service.aclose()
+
+    # The org that was there is as it was, with one more session in it.
+    assert root is not None and root.title == "Shop"
+    assert opened.session.id != first.session.id and opened.session.id in sessions
+
+
 async def test_an_org_is_not_started_outside_a_git_repository(
     service: DirectorService, repo: Path, tmp_path: Path
 ):

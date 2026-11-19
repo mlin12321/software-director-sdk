@@ -210,6 +210,14 @@ class DirectorService(Sync):
         async with self._create_lock:
             if store.root_id is not None:
                 raise Conflict("The director already has an org")
+            if await asyncio.to_thread(self._join, workspace):
+                # The repository holds an org already, which this server
+                # was not pointed at: it is taken up, never written over.
+                await self._came_back()
+                return await self.open_session(
+                    OpenSessionRequest(text=request.task, title=request.title or ""),
+                    conversation,
+                )
             configured, self._repo_dir = self._repo_dir, repository
             # The top team as the org keeps it: what it is for and where.
             # Nobody works at it but in a session.
