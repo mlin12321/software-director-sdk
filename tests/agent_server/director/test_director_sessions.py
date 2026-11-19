@@ -1,6 +1,7 @@
 """Tests for sessions: lines of work the human opens at a team beside the
 org's own, each with agents and a checkout of its own."""
 
+import asyncio
 import json
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -55,7 +56,7 @@ from tests.agent_server.director.conftest import (
 )
 from tests.agent_server.director.test_director_landing import landed
 from tests.agent_server.director.test_director_limits import started
-from tests.agent_server.director.test_director_pause import again
+from tests.agent_server.director.test_director_pause import ServerEnded, again, cut_off
 from tests.agent_server.director.test_director_review import DONE, accept, commit
 from tests.agent_server.director.test_director_teams import (
     API,
@@ -989,3 +990,37 @@ async def test_no_team_is_set_up_in_a_session_that_is_being_closed(
     await service.settled()
     assert service.sessions() == []
     await service.aclose()
+
+
+async def test_a_close_cut_off_records_no_end_of_a_session_the_org_never_knew(
+    repo: Path, launcher: FakeLauncher
+):
+    first = await started(repo, launcher)
+    opened = await first.open_session(
+        OpenSessionRequest(text="Add refunds", node_id="root")
+    )
+    await first.settled()
+    ended = asyncio.Event()
+    real = first.store.close_session
+
+    def server_ends(session_id: str) -> bool:
+        ended.set()
+        raise ServerEnded
+
+    first.store.close_session = server_ends  # type: ignore[method-assign]
+
+    async def closing() -> None:
+        first.close_session(opened.session.id)
+        await first.settled()
+
+    await cut_off(launcher, ended, closing())
+    first.store.close_session = real  # type: ignore[method-assign]
+
+    second = await again(repo, launcher)
+    await second.resume()
+    await second.settled()
+
+    assert all(session.id != opened.session.id for session in second.sessions())
+    kinds = [event.kind for event in second.team_memory.history("root")]
+    assert "session_closed" not in kinds
+    await second.aclose()

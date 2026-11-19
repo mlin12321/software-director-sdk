@@ -513,6 +513,14 @@ class Sessions(Splits):
                 teams=[team.id for team in teams],
                 conversations=conversations_of(teams),
                 stamp=ref_stamp(),
+                # A session none of whose work was accepted is not on the
+                # org's record, and so neither is its end. Decided now:
+                # what the session kept to itself goes before its end is
+                # recorded.
+                known=all(
+                    event.kind != "session_opened" or event.team_id != top.team_id
+                    for event in self.own_events(session.id, session.above_id)
+                ),
             )
         plan = intent.payload
         conversations = [UUID(agent) for agent in plan["conversations"]]
@@ -555,17 +563,12 @@ class Sessions(Splits):
                         run.unmark(kind, team.id)
                     self._work_accepted(team)
             if top is not None:
-                # A session none of whose work was accepted is not on the
-                # org's record, and so neither is its end.
-                known = all(
-                    event.kind != "session_opened" or event.team_id != top.team_id
-                    for event in self.own_events(plan["session"], plan["parent"])
-                )
                 await self._in_base(
                     lambda: asyncio.to_thread(self._settle_on_close, top)
                 )
                 gone = await asyncio.to_thread(self._leave, top)
-                if known:
+                # Once: a step cut off after it would record it again.
+                if plan["known"] and "told" not in intent.steps:
                     await asyncio.to_thread(
                         self._land_event,
                         plan["parent"],
@@ -587,6 +590,7 @@ class Sessions(Splits):
                             ),
                         ),
                     )
+                    intent = run.step_done(intent, "told")
             store.close_session(plan["session"])
             await asyncio.to_thread(self._org_turn)
             self._tell_turns()
