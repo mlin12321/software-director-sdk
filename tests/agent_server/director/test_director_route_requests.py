@@ -315,3 +315,28 @@ async def test_a_teams_card_holds_nothing_the_team_wrote_itself(
     shown = launcher.asked[-1][3]
     assert "zebras" not in shown
     assert "for: Own the schema" in shown
+
+
+async def test_the_places_a_lifted_session_gains_stand_for_the_orgs_teams(
+    service: DirectorService, launcher: FakeLauncher
+):
+    launcher.answers[USAGE_ID] = "Teams: services.api\nReason: It is about the API."
+    sent = await ask(service, "Make the cart page faster.")
+    session = node(service, sent.node_id).session
+
+    await use(service, sent.conversation_id, RaiseEscalationTool, NOT_MINE)
+    await service.settled()
+
+    # The team beside the one the session was opened at is the org's own.
+    web, team = service.store.place(f"{WEB}@{session}"), service.store.team(WEB)
+    assert web is not None and team is not None
+    assert web.since == team.since != ""
+
+
+async def test_a_review_request_says_what_the_human_asked_the_team_directly(
+    service: DirectorService, launcher: FakeLauncher
+):
+    launcher.answers[USAGE_ID] = TO_DB
+    sent = await ask(service, "Add an index on orders.")
+
+    assert service.asked_of(node(service, sent.node_id)) == ["Add an index on orders."]

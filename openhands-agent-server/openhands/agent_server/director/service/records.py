@@ -381,7 +381,7 @@ class Records(ServiceState):
             return []
         asked: list[str] = []
         for event in self.history_of(team.parent_id):
-            if event.team_id != team.id:
+            if event.team_id != team.team_id:
                 continue
             if event.kind in ("accepted", "set_up"):
                 asked = []
@@ -869,12 +869,6 @@ class Records(ServiceState):
             reports = [*self.own_reports(place), named]
             self._runs().mark(REPORTS, place.id, _REPORTS.dump_json(reports).decode())
 
-    def _works_above(self, node: OrgNode) -> OrgNode | None:
-        """What is above ``node``, a team of the org or a place: nobody
-        stands at a session's Division Lead place."""
-        above = self.store.get(node.parent_id) if node.parent_id else None
-        return None if above is None or is_division_lead(above) else above
-
     def drafts(self, session: str) -> dict[str, tuple[str | None, str | None]]:
         """The files of team memory a session wrote, which are its own
         until its work is accepted.
@@ -918,12 +912,17 @@ class Records(ServiceState):
         """The contracts a team works to: the ones between it and the teams
         beside it, set by the team above, and the ones between its own
         sub-teams."""
-        above = self._works_above(node)
+        above = self.store.get(node.parent_id) if node.parent_id else None
         own = normalize_store_path(node.boundary.path)
-        paths = [] if above is None else [normalize_store_path(above.boundary.path)]
+        paths = [
+            normalize_store_path(place.boundary.path)
+            for place in (above, node)
+            if place
+        ]
         return [
             BoundaryContracts(path=path, contracts=text, own=path == own)
-            for path in [*paths, own]
+            # A session opened at the top team has that team's own place above.
+            for path in dict.fromkeys(paths)
             if (text := self.read_file(node, _contracts_file(path)))
         ]
 

@@ -764,9 +764,10 @@ async def test_contracts_both_changed_wait_for_the_manager_above(
     place = service.store.place(division_lead_of(service, top))
     assert place is not None and place.merge is None
     # The session reads what holds now, not what it wrote.
-    assert [c.contracts for c in service.contracts_of(api_place(service, top))] == [
-        holds
-    ]
+    contracts = service.contracts_of(api_place(service, top))
+    assert [c.contracts for c in contracts if c.own] == [holds]
+    # Its opening place also works to the contracts of the team above.
+    assert [c.path for c in contracts] == ["", "services/api"]
     # Where its own do not hold, its IC is told the ones that do, to follow
     # up on the code it delivered, and it is on the team's record.
     last = launcher.messages_to(conversation)[-1]
@@ -1432,3 +1433,24 @@ async def test_what_a_session_has_is_kept_at_once(repo: Path, launcher: FakeLaun
     assert opened.session.id in kept
     assert "Add refunds." in kept[opened.session.id]
     await service.aclose()
+
+
+async def test_closing_a_session_leaves_the_humans_own_checkout_as_it_is(
+    service: DirectorService, repo: Path, tmp_path: Path
+):
+    await landed(service)
+    await service.settled()
+    top = node(service, "root")
+    # The session works apart; its Division Lead place is in the repository.
+    worktree = tmp_path / "apart"
+    run_git(repo, "worktree", "add", "--quiet", "-b", "apart", str(worktree))
+    service.store.update_place(
+        top.id, worktree_path=str(worktree), isolation="worktree"
+    )
+    assert node(service, division_lead_of(service)).agents
+    (repo / "notes.txt").write_text("the human's, not committed\n")
+
+    service.close_session(top.session)
+    await service.settled()
+
+    assert (repo / "notes.txt").read_text() == "the human's, not committed\n"

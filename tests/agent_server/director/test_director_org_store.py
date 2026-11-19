@@ -975,3 +975,15 @@ def test_saving_does_not_record_the_sessions_or_their_agents(
     assert load_org(board, loaded)
     assert loaded.find_by_conversation("conv-ic") is None
     assert loaded.sessions() == []
+
+
+def test_sessions_come_back_whatever_order_their_places_were_kept_in():
+    session, places = session_places(small_tree(), "root", "s")
+    store = OrgStore()
+    store.replace_all(small_tree())
+
+    # A place that was made before the one it now hangs under.
+    store.restore_sessions([(session, list(reversed(places)))])
+
+    assert [kept.id for kept in store.sessions()] == ["s"]
+    assert {place.id for place in store.session("s")} == {p.id for p in places}

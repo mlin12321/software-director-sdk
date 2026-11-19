@@ -908,9 +908,20 @@ class OrgStore:
                     continue
                 self._sessions[session.id] = session
                 try:
-                    # A session's Division Lead place is above the rest.
-                    for team in sorted(teams, key=lambda team: not team.division_lead):
-                        self._restore_place(team)
+                    # Each place after the one above it, in whatever order
+                    # they were kept.
+                    waiting = list(teams)
+                    while waiting:
+                        ready = [
+                            team
+                            for team in waiting
+                            if team.division_lead or team.parent_id in self._places
+                        ]
+                        if not ready:
+                            raise OrgStoreError(f"Nothing is above {waiting[0].id}")
+                        for team in ready:
+                            self._restore_place(team)
+                            waiting.remove(team)
                     _ = self._places[session_team_id(session.team_id, session.id)]
                 except (OrgStoreError, KeyError):
                     for place in self.session(session.id):
