@@ -177,6 +177,46 @@ def test_a_directory_that_comes_back_to_the_team_is_staged_again(
     assert files_of(shared, "HEAD") == ["svc/web/main.py"]
 
 
+def test_a_directory_that_comes_back_keeps_what_was_committed_in_it_meanwhile(
+    shared: Path, agent: Callable[..., Git]
+):
+    assert agent("root", "", "svc/web")("status").returncode == 0
+    (shared / "svc" / "web" / "main.py").write_text("web v2\n")
+    assert agent("web", "svc/web")("commit", "-qam", "web work").returncode == 0
+
+    # The sub-team is gone, and its folder is the team's again.
+    root = agent("root", "")
+    (shared / "README.md").write_text("more\n")
+    assert root("add", "README.md").returncode == 0
+    assert root("commit", "-qm", "my own change").returncode == 0
+
+    assert files_of(shared, "HEAD") == ["README.md"]
+    assert run_git(shared, "show", "HEAD:svc/web/main.py") == "web v2\n"
+
+
+def test_a_reset_that_would_take_away_another_teams_commit_is_put_back(
+    shared: Path, agent: Callable[..., Git]
+):
+    api, web = agent("api", "svc/api"), agent("web", "svc/web")
+    (shared / "svc" / "api" / "main.py").write_text("api v2\n")
+    assert api("commit", "-qam", "api work").returncode == 0
+    (shared / "svc" / "web" / "main.py").write_text("web v2\n")
+    assert web("commit", "-qam", "web work").returncode == 0
+    head = run_git(shared, "rev-parse", "HEAD")
+
+    for how in ("--hard", "--mixed"):
+        refused = api("reset", how, "HEAD~1")
+
+        assert refused.returncode != 0 and "other teams" in refused.stderr
+        assert run_git(shared, "rev-parse", "HEAD") == head
+        assert (shared / "svc" / "web" / "main.py").read_text() == "web v2\n"
+        assert web("status", "--porcelain").stdout == ""
+    # Its own last commit is its own to take back.
+    (shared / "svc" / "api" / "main.py").write_text("api v3\n")
+    assert api("commit", "-qam", "api again").returncode == 0
+    assert api("reset", "--hard", "HEAD~1").returncode == 0
+
+
 def test_git_in_another_repository_is_the_real_git(
     shared: Path, agent: Callable[..., Git], tmp_path: Path
 ):

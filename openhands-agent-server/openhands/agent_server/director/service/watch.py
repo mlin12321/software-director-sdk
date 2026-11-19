@@ -165,6 +165,12 @@ class Watch(Reviews):
                     used.unpriced_tokens,
                 ]
             run.mark(USE, session.id, json.dumps(last))
+            # As it is now: the human may have let it go on while this waited.
+            session = next(
+                (each for each in store.sessions() if each.id == session.id), None
+            )
+            if session is None:
+                continue
             limit = session.cost_allowance or self.settings.session_cost_limit
             kept = store.set_session_use(session.id, session.usage.plus(added), limit)
             if kept is not None:

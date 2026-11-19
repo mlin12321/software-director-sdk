@@ -50,6 +50,7 @@ from openhands.agent_server.director.run_state import (
     CHECKS,
     HANDING,
     PROGRESS,
+    RUNNING,
     TASK,
     TOLD,
     Intent,
@@ -334,6 +335,10 @@ class Teams(Delivery):
             ThreadMessage(at=_instant(), sender="ic", text=text),
             ic_to_ic=True,
         )
+        if team.review is not None and team.review.state == "accepted":
+            # What it does with this is new work, which it submits again:
+            # left accepted, it would go up with a sibling's, unreviewed.
+            store.set_review(below_id, None)
         stopped = team.stopped
         if stopped is not None:
             store.set_stopped(below_id, None)
@@ -465,9 +470,18 @@ class Teams(Delivery):
                 to it does.
         """
         team = self.store.place(place_id)
-        if team is None or team.stopped is not None or self._paused is not None:
+        if team is None or team.stopped is not None:
             return
         own = None if own_too else agent_conversation(team, "ic")
+        if self._paused is not None:
+            # The org goes on later: those cut off are run again then, like
+            # any agent that was in a turn when the org was paused.
+            for conversation_id in running:
+                found = self.store.find_by_conversation(conversation_id)
+                if found is not None and conversation_id != own:
+                    self._running.add(conversation_id)
+                    self._runs().mark(RUNNING, conversation_id, found[0].id)
+            return
         conversations = self._conversations_below(team)
         # The time it was stopped is not time it showed no progress.
         for found in map(self.store.find_by_conversation, conversations):

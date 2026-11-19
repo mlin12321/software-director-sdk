@@ -4786,6 +4786,18 @@ class ACPAgent(AgentBase):
                 ),
             )
             try:
+                if self.acp_model:
+                    # Not every server takes the model from the session's
+                    # metadata, and its default may cost many times more.
+                    with contextlib.suppress(ACPRequestError):
+                        await _apply_acp_model(
+                            conn,
+                            opened.session_id,
+                            self.acp_model,
+                            agent_name=self._agent_name,
+                            via_config_option=self._model_via_config_option,
+                            effort=self.acp_effort,
+                        )
                 return await self._prompt_side_session(opened.session_id, question)
             finally:
                 # Not every server can close a session; it is then left.

@@ -214,7 +214,10 @@ def test_the_shell_cannot_change_what_git_runs_or_what_the_director_keeps(
         )
 
     assert run(f"echo x > {git_dir}/hooks/post-commit").returncode != 0
-    assert run("git config user.name other").returncode == 0
+    # Nor what says which commands git runs and where it works: the
+    # director's own git reads it outside the sandbox.
+    assert run("git config core.worktree /elsewhere").returncode != 0
+    assert run("git commit -q --allow-empty -m still").returncode == 0
     assert run(f"echo x > {git_dir}/director/state.db").returncode != 0
     assert run(f"cat {secret}").stdout == ""
     assert secret.read_text() == '{"tool_key": "k"}'
@@ -228,6 +231,27 @@ def test_a_shell_sees_no_process_of_another_agent(repo: Path):
     # environment. The sandbox's user namespace is what keeps it out.
     assert run(f"cat /proc/{os.getpid()}/environ").returncode != 0
     assert run("cat /proc/self/environ").returncode == 0
+
+
+def test_a_worktrees_shell_cannot_point_it_or_another_at_another_repository(
+    repo: Path, tmp_path: Path
+):
+    for name in ("mine", "other"):
+        subprocess.run(
+            ["git", "worktree", "add", "-q", "-b", name, str(tmp_path / name)],
+            cwd=repo,
+            check=True,
+        )
+    mine = tmp_path / "mine"
+    run = confined(repo, "", cwd=mine, checkouts=(mine, tmp_path / "other"))
+    kept = repo / ".git" / "worktrees"
+
+    assert run("echo 'gitdir: /elsewhere' > .git").returncode != 0
+    assert run(f"echo /elsewhere > {kept}/mine/commondir").returncode != 0
+    assert run(f"echo /elsewhere > {kept}/other/commondir").returncode != 0
+    assert run("git config core.worktree /elsewhere").returncode != 0
+    (mine / "new.py").write_text("x")
+    assert run("git add new.py && git commit -q -m mine").returncode == 0
 
 
 def test_a_teams_folder_that_is_a_link_opens_nothing(repo: Path):

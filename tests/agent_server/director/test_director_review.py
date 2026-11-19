@@ -17,12 +17,14 @@ from openhands.agent_server.director.models import (
 from openhands.agent_server.director.service import DirectorService
 from openhands.agent_server.director.tools import (
     ApproveTeamsTool,
+    MsgTeamTool,
     ProposeTeamsTool,
     RaiseEscalationTool,
     ReviewTeamTool,
     SubmitReviewTool,
 )
 from openhands.agent_server.director.tools.definition import (
+    MsgTeamAction,
     RaiseEscalationAction,
     ReviewTeamAction,
     SubmitReviewAction,
@@ -775,3 +777,34 @@ async def test_work_that_does_not_merge_on_the_way_up_stops_with_that_teams_ic(
     assert "does not merge" in told and "services/api/schema/order.py" in told
     assert "submit_review" in told
     assert requests(service, launcher) == []
+
+
+async def test_a_team_given_more_work_after_an_accept_owes_it_a_review(
+    service: DirectorService,
+):
+    await split_root(service)
+    checkout = Path(node(service, "root").worktree_path)
+    for team, file in (
+        ("services.api", "services/api/app.py"),
+        ("apps.web", "apps/web/page.tsx"),
+    ):
+        commit(checkout, file, "a = 1\n")
+        await use(service, ic(service, team), SubmitReviewTool, DONE)
+        await use(service, ic(service), ReviewTeamTool, accept(team))
+    first = node(service, "root").review
+    assert first is not None and first.passed_up
+
+    for team in ("services.api", "apps.web"):
+        await use(
+            service, ic(service), MsgTeamTool, MsgTeamAction(team=team, text="Refunds.")
+        )
+    # API commits what it has so far and does not submit.
+    commit(checkout, "services/api/refunds.py", "WIP = True\n")
+    api = node(service, "services.api")
+    assert api.review is None and service._may_stall(api)
+    commit(checkout, "apps/web/refunds.tsx", "export {}\n")
+    await use(service, ic(service, "apps.web"), SubmitReviewTool, DONE)
+    await use(service, ic(service), ReviewTeamTool, accept("apps.web"))
+
+    # Nothing went up: API's work is reviewed by nobody yet.
+    assert node(service, "root").review == first

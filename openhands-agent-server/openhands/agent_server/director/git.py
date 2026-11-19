@@ -62,6 +62,8 @@ _OWN_CONFIG = [
     "core.hooksPath=/dev/null",
     "-c",
     "core.fsmonitor=false",
+    "-c",
+    "commit.gpgSign=false",
 ]
 
 

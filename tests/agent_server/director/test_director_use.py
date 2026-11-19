@@ -21,11 +21,14 @@ from openhands.agent_server.director.pricing import priced
 from openhands.agent_server.director.run_state import USE
 from openhands.agent_server.director.service import DirectorService
 from openhands.agent_server.director.service.state import LIMIT_WAITS
+from openhands.agent_server.models import StartConversationRequest
 from openhands.sdk import LLM, Agent
 from openhands.sdk.agent import ACPAgent
 from openhands.sdk.conversation.state import ConversationExecutionStatus
-from openhands.sdk.errors import Conflict
+from openhands.sdk.errors import Conflict, NotFound
 from openhands.sdk.llm.utils.metrics import Metrics, TokenUsage
+from openhands.sdk.profiles.resolver import ProfileNotFound
+from openhands.sdk.security.confirmation_policy import NeverConfirm
 from openhands.sdk.workspace import LocalWorkspace
 from tests.agent_server.director.conftest import FakeLauncher
 from tests.agent_server.director.test_director_limits import started
@@ -335,6 +338,49 @@ async def used_by(agent: object, *metrics: Metrics) -> Usage:
     return (await launcher.usage([conversation]))[conversation]
 
 
+async def test_an_agent_derived_from_another_is_its_own_in_what_the_human_did_there():
+    asked: dict = {}
+
+    async def start_child_conversation(*_, **options):
+        asked.update(options)
+        return SimpleNamespace(workspace="/repo", isolation="shared")
+
+    async def get_event_service(_: UUID):
+        return SimpleNamespace(
+            get_conversation=lambda: SimpleNamespace(agent=ACPAgent(acp_command=["x"]))
+        )
+
+    conversations = SimpleNamespace(
+        start_child_conversation=start_child_conversation,
+        get_event_service=get_event_service,
+    )
+    launcher = ConversationTeamLauncher(cast(ConversationService, conversations))
+
+    await launcher.start_derived(
+        uuid4(), uuid4(), title="API (IC)", task="Serve orders.", isolation="shared"
+    )
+
+    # The human wrote in the conversation it comes from, not in it, and is
+    # not there to confirm what it does.
+    assert asked["extra_tags"] == {"startedby": "director", "humanjoined": None}
+    assert asked["confirmation_policy"] == NeverConfirm()
+
+
+async def test_a_conversation_that_cannot_be_started_is_refused_as_any_other_is():
+    async def start_conversation(*_, **__):
+        raise ProfileNotFound("No profile 'gone'")
+
+    conversations = SimpleNamespace(start_conversation=start_conversation)
+    launcher = ConversationTeamLauncher(cast(ConversationService, conversations))
+    request = StartConversationRequest(
+        agent=ACPAgent(acp_command=["x"]), workspace=LocalWorkspace(working_dir="/r")
+    )
+
+    # Not a failure of the server: the request names what is not there.
+    with pytest.raises(NotFound, match="gone"):
+        await launcher.start_root(request, [], title="Shop (IC)")
+
+
 async def test_counting_use_does_not_keep_an_idle_conversation_loaded():
     conversation, loads = uuid4(), 0
 
@@ -422,3 +468,26 @@ def test_a_model_is_looked_up_under_each_of_its_names():
         "claude-sonnet-4-5", tokens
     )
     assert priced("a-model-of-our-own", tokens) is None
+
+
+async def test_a_session_set_going_while_the_org_is_paused_goes_on_when_it_resumes(
+    service: DirectorService, launcher: FakeLauncher
+):
+    service.update_settings(DirectorSettingsUpdate(session_cost_limit=2.0))
+    api = ic(service, API)
+    assert api is not None
+    launcher.report(api, ConversationExecutionStatus.RUNNING)
+    uses(launcher, api, 250, 50, 2.75)
+    await counted(service)
+    top = node(service, "root")
+    assert top.stopped is not None and top.stopped.running == [api]
+    await service.pause()
+    await service.settled()
+
+    service.answer_escalation(top.id, LIMIT_WAITS, "Go on.")
+    await service.settled()
+    await service.resume()
+    await service.settled()
+
+    # The agent that was cut off in its turn runs again.
+    assert (UUID(api), None) in launcher.resumed

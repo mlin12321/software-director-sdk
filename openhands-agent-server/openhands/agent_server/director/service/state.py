@@ -175,7 +175,13 @@ DIRECTOR_TOOL_NAMES = tuple(
 )
 # Tools that start agents nothing holds to the team's folder. An org's
 # agent hands work on by proposing sub-teams.
-_SUB_AGENT_TOOLS = ("task_tool_set", "task", "delegate")
+_SUB_AGENT_TOOLS = (
+    "task_tool_set",
+    "task",
+    "delegate",
+    "workflow_tool_set",
+    "workflow",
+)
 # How a team that was set up and given no task reads to the IC above.
 NOT_STARTED = "not_started"
 # What follows a team's purpose in its task once something started it.
@@ -1069,10 +1075,11 @@ class ServiceState:
         with self._remember_lock:
             try:
                 self._remembered.parent.mkdir(parents=True, exist_ok=True)
-                atomic_write_text(
-                    self._remembered,
-                    json.dumps({**self._read_remembered(), **changes}) + "\n",
-                )
+                # Written in place: a file put in its place by a rename
+                # would no longer be the one an agent's shell is kept from.
+                kept = json.dumps({**self._read_remembered(), **changes}) + "\n"
+                self._remembered.touch(mode=0o600)
+                self._remembered.write_text(kept)
             except OSError:
                 logger.exception("Could not write %s", self._remembered)
 
