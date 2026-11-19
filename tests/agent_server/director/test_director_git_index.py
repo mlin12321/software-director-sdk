@@ -256,6 +256,24 @@ def test_a_team_that_hands_a_folder_on_keeps_what_it_staged_in_its_own(
     assert root("status", "--porcelain").stdout == "M  svc/api/main.py\nA  top.txt\n"
 
 
+def test_a_merge_that_brings_in_other_teams_changes_is_undone(
+    shared: Path, agent: Callable[..., Git]
+):
+    api, web = agent("api", "svc/api"), agent("web", "svc/web")
+    run_git(shared, "checkout", "-q", "-b", "other")
+    (shared / "svc" / "web" / "main.py").write_text("web elsewhere\n")
+    run_git(shared, "commit", "-qam", "elsewhere")
+    run_git(shared, "checkout", "-q", "-")
+    head = run_git(shared, "rev-parse", "HEAD")
+
+    merged = api("merge", "-q", "--no-edit", "other")
+
+    assert merged.returncode != 0 and "outside your team" in merged.stderr
+    assert run_git(shared, "rev-parse", "HEAD") == head
+    assert (shared / "svc" / "web" / "main.py").read_text() == "web v1\n"
+    assert web("status", "--porcelain").stdout == ""
+
+
 def test_git_in_another_repository_is_the_real_git(
     shared: Path, agent: Callable[..., Git], tmp_path: Path
 ):

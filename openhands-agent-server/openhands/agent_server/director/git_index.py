@@ -227,6 +227,17 @@ def git_script(
         ' so it was undone"',
         "    fi",
         "  ;;",
+        # Without a sandbox nothing else keeps them from bringing in other
+        # teams' changes, which the team's next commits would undo again.
+        "  merge|pull|rebase)",
+        '    if [ -n "$before" ] && [ "$before" != "$after" ] \\',
+        '        && outside "$before" "$after"; then',
+        '      "$real" reset -q --keep "$before"',
+        '      rm -f "$GIT_INDEX_FILE.synced"',
+        "      fail \"that brought changes to files outside your team's folder,"
+        ' so it was undone; the director brings in what other teams did"',
+        "    fi",
+        "  ;;",
         "esac",
         # The checkout's own index has not seen the commit; without this,
         # whoever uses it sees the committed files as staged to be undone.
