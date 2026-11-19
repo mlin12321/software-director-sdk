@@ -276,8 +276,9 @@ def test_a_merge_that_brings_in_other_teams_changes_is_undone(
     assert web("status", "--porcelain").stdout == ""
 
 
+@pytest.mark.parametrize("where", [".", "svc/api"])
 def test_a_commit_of_what_the_team_may_only_read_is_undone(
-    shared: Path, tmp_path: Path
+    shared: Path, tmp_path: Path, where: str
 ):
     real = shutil.which("git")
     assert real is not None
@@ -307,7 +308,7 @@ def test_a_commit_of_what_the_team_may_only_read_is_undone(
 
     committed = subprocess.run(
         [str(home / "git"), "commit", "-qam", "contract"],
-        cwd=shared,
+        cwd=shared / where,
         capture_output=True,
         text=True,
     )
