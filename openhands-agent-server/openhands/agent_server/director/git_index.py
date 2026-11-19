@@ -25,8 +25,6 @@ _UNWRAPPED = "clone|init|worktree|submodule"
 _MOVES_HEAD = "commit|merge|pull|cherry-pick|revert|rebase|am|reset|checkout|switch"
 # Commands that make commits out of what the agent gives them.
 _COMMITS = "commit|cherry-pick|revert|am"
-# Commands that take commits away, which may be other teams'.
-_DROPS = "reset"
 _IN_PROGRESS = (
     "MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD BISECT_LOG rebase-merge rebase-apply"
 )
@@ -84,11 +82,6 @@ def git_script(
             ' "$real" update-index -z --skip-worktree --stdin || return 1',
         )
     ]
-    put_back = [
-        f'      "$real" restore -q --source="$before" --worktree'
-        f" --ignore-skip-worktree-bits -- {' '.join(map(quote, specs))} 2>/dev/null"
-        for specs in hidden
-    ]
     outside = [
         f'  "$real" diff --quiet "$1" "$2" -- {" ".join(map(quote, specs))} || return 0'
         for specs in hidden
@@ -141,10 +134,14 @@ def git_script(
         f'  stamp="$head "{revision}',
         '  was=$(cat "$GIT_INDEX_FILE.synced" 2>/dev/null)',
         '  [ "$was" = "$stamp" ] && return 0',
-        # A folder that came back to the team is in the index as it was
+        # A folder that comes back to the team is in the index as it was
         # when it was hidden: a commit would undo what was committed since.
-        f'  [ -z "$was" ] || [ "${{was#* }}" = {revision} ] ||'
-        ' "$real" read-tree HEAD || return 1',
+        # What was hidden is taken as HEAD has it; nothing else is touched.
+        '  top=$("$real" rev-parse --show-toplevel) || return 1',
+        '  was_hidden=$("$real" -C "$top" ls-files -t | sed -n "s/^S //p")',
+        '  [ -z "$was_hidden" ] || printf "%s\\n" "$was_hidden" |',
+        '    "$real" --literal-pathspecs -C "$top" reset -q HEAD'
+        " --pathspec-from-file=- || return 1",
         '  "$real" ls-files -z |'
         ' "$real" update-index -z --no-skip-worktree --stdin || return 1',
         *hide,
@@ -172,6 +169,28 @@ def git_script(
         'before=$("$real" rev-parse -q --verify HEAD)',
         'on=$("$real" symbolic-ref -q HEAD)',
         'had=$("$real" for-each-ref --format="%(refname)" refs/heads)',
+        # A reset that would take away other teams' commits is refused
+        # before it runs: run, it would change their files and the index.
+        '[ "$command" = reset ] && [ -n "$before" ] && {',
+        "  to=; named=; dashes=",
+        '  for arg in "$@"; do',
+        '    if [ -z "$named" ]; then [ "$arg" = reset ] && named=1; continue; fi',
+        # A name after --, a second name, or a first that is no commit is a
+        # path: the branch does not move.
+        '    [ -n "$dashes" ] && { to=; break; }',
+        '    case "$arg" in',
+        "      --) dashes=1 ;;",
+        "      -*) ;;",
+        '      *) [ -z "$to" ] && to=$("$real" rev-parse -q --verify "$arg^{commit}")'
+        " && continue; to=; break ;;",
+        "    esac",
+        "  done",
+        '  if [ -n "$to" ] && ! "$real" merge-base --is-ancestor "$before" "$to" \\',
+        '      && outside "$to" "$before"; then',
+        '    fail "that would take away commits of other teams, so it was not'
+        ' done; undo your own commit with git revert"',
+        "  fi",
+        "}",
         # The lock is not for what git leaves running behind it.
         f'"$real" -c core.excludesFile={quote(str(excludes))} "$@" 9>&-',
         "code=$?",
@@ -201,16 +220,6 @@ def git_script(
         '      rm -f "$GIT_INDEX_FILE.synced"',
         "      fail \"the commit changed files outside your team's folder,"
         ' so it was undone"',
-        "    fi",
-        "  ;;",
-        f"  {_DROPS})",
-        '    if [ -n "$before" ] && [ "$before" != "$after" ] \\',
-        '        && outside "$before" "$after"; then',
-        '      "$real" reset -q --soft "$before"',
-        *put_back,
-        '      rm -f "$GIT_INDEX_FILE.synced"',
-        '      fail "that would take away commits of other teams, so the'
-        ' branch was put back; undo your own commit with git revert"',
         "    fi",
         "  ;;",
         "esac",
