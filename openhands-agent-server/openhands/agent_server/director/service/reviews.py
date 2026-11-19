@@ -2031,6 +2031,8 @@ class Reviews(Requests):
             await asyncio.to_thread(
                 self._land_accepted, store.place(place_id) or place, None
             )
+            # As after any accept: what changes from now is said once more.
+            self._changed_since_accept.pop(place.session, None)
         self._tell_turns()
         if acted:
             self.notify(
