@@ -465,7 +465,8 @@ class ServiceState:
         self._clock = clock
         self._stall_poll = stall_poll
         self._stall_watch: asyncio.Task[None] | None = None
-        self._remember_lock = threading.Lock()
+        # Held to read it too: it is written in place.
+        self._remember_lock = threading.RLock()
         self._store: OrgStore | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._launcher: TeamLauncher | None = None
@@ -960,6 +961,8 @@ class ServiceState:
                     sub_team_directories=sub_teams,
                     excludes=excludes,
                     flock=shutil.which("flock"),
+                    readonly=place.boundary.readonly,
+                    writable=place.boundary.writable,
                 ),
             )
             atomic_write_text(
@@ -969,6 +972,9 @@ class ServiceState:
         # An agent's commits need the git directory, but not what the director
         # keeps there, nor the hooks git runs for everyone.
         private = [shells, *(shells.parent / name for name in _PRIVATE)]
+        # Made now: one missing would be left for an agent to make.
+        for path in private:
+            path.mkdir(exist_ok=True)
         script = shells / f"{conversation_id}.sh"
         write_shell(
             script,
@@ -1059,7 +1065,8 @@ class ServiceState:
         if self._remembered is None:
             return {}
         try:
-            kept = json.loads(self._remembered.read_text())
+            with self._remember_lock:
+                kept = json.loads(self._remembered.read_text())
         except (OSError, ValueError):
             return {}
         return kept if isinstance(kept, dict) else {}

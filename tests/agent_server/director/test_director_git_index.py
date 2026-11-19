@@ -151,6 +151,24 @@ def test_the_checkouts_own_index_follows_an_agents_commit(
     ]
 
 
+def test_a_committed_name_that_reads_as_a_pattern_leaves_the_rest_staged(
+    shared: Path, agent: Callable[..., Git]
+):
+    api = agent("api", "svc/api")
+    (shared / "svc" / "api" / "f2").write_text("staged by the human\n")
+    run_git(shared, "add", "svc/api/f2")
+    (shared / "svc" / "api" / "f?").write_text("x\n")
+
+    assert api("--literal-pathspecs", "add", "svc/api/f?").returncode == 0
+    assert api("commit", "-qm", "odd name").returncode == 0
+    assert (
+        run_git(shared, "show", "--name-only", "--format=", "HEAD").strip()
+        == "svc/api/f?"
+    )
+
+    assert "A  svc/api/f2" in run_git(shared, "status", "--porcelain").splitlines()
+
+
 def test_a_team_does_not_stage_what_it_handed_to_a_sub_team(
     shared: Path, agent: Callable[..., Git]
 ):
@@ -194,7 +212,7 @@ def test_a_directory_that_comes_back_keeps_what_was_committed_in_it_meanwhile(
     assert run_git(shared, "show", "HEAD:svc/web/main.py") == "web v2\n"
 
 
-def test_a_reset_that_would_take_away_another_teams_commit_is_put_back(
+def test_a_reset_that_would_take_away_another_teams_commit_is_not_done(
     shared: Path, agent: Callable[..., Git]
 ):
     api, web = agent("api", "svc/api"), agent("web", "svc/web")
@@ -203,18 +221,97 @@ def test_a_reset_that_would_take_away_another_teams_commit_is_put_back(
     (shared / "svc" / "web" / "main.py").write_text("web v2\n")
     assert web("commit", "-qam", "web work").returncode == 0
     head = run_git(shared, "rev-parse", "HEAD")
+    # What the other team has not committed yet, and what this one staged.
+    (shared / "svc" / "web" / "main.py").write_text("web v3, not committed\n")
+    (shared / "svc" / "api" / "new.py").write_text("x\n")
+    assert api("add", "svc/api/new.py").returncode == 0
 
-    for how in ("--hard", "--mixed"):
-        refused = api("reset", how, "HEAD~1")
+    for how in ("--soft", "--mixed", "--hard"):
+        refused = api("reset", how, "HEAD~2")
 
         assert refused.returncode != 0 and "other teams" in refused.stderr
         assert run_git(shared, "rev-parse", "HEAD") == head
-        assert (shared / "svc" / "web" / "main.py").read_text() == "web v2\n"
-        assert web("status", "--porcelain").stdout == ""
-    # Its own last commit is its own to take back.
-    (shared / "svc" / "api" / "main.py").write_text("api v3\n")
-    assert api("commit", "-qam", "api again").returncode == 0
-    assert api("reset", "--hard", "HEAD~1").returncode == 0
+        assert (shared / "svc" / "web" / "main.py").read_text() == (
+            "web v3, not committed\n"
+        )
+        assert api("status", "--porcelain").stdout == "A  svc/api/new.py\n"
+    # Naming files moves no branch, and its own last commit is its own.
+    assert api("reset", "-q", "HEAD~2", "--", "svc/api/new.py").returncode == 0
+    assert api("add", "svc/api/new.py").returncode == 0
+    assert api("commit", "-qm", "api again").returncode == 0
+    assert api("reset", "--soft", "HEAD~1").returncode == 0
+
+
+def test_a_team_that_hands_a_folder_on_keeps_what_it_staged_in_its_own(
+    shared: Path, agent: Callable[..., Git]
+):
+    root = agent("root", "")
+    (shared / "svc" / "api" / "main.py").write_text("api v2\n")
+    (shared / "top.txt").write_text("x\n")
+    assert root("add", "svc/api/main.py", "top.txt").returncode == 0
+
+    # A sub-team now owns web.
+    root = agent("root", "", "svc/web")
+
+    assert root("status", "--porcelain").stdout == "M  svc/api/main.py\nA  top.txt\n"
+
+
+def test_a_merge_that_brings_in_other_teams_changes_is_undone(
+    shared: Path, agent: Callable[..., Git]
+):
+    api, web = agent("api", "svc/api"), agent("web", "svc/web")
+    run_git(shared, "checkout", "-q", "-b", "other")
+    (shared / "svc" / "web" / "main.py").write_text("web elsewhere\n")
+    run_git(shared, "commit", "-qam", "elsewhere")
+    run_git(shared, "checkout", "-q", "-")
+    head = run_git(shared, "rev-parse", "HEAD")
+
+    merged = api("merge", "-q", "--no-edit", "other")
+
+    assert merged.returncode != 0 and "outside your team" in merged.stderr
+    assert run_git(shared, "rev-parse", "HEAD") == head
+    assert (shared / "svc" / "web" / "main.py").read_text() == "web v1\n"
+    assert web("status", "--porcelain").stdout == ""
+
+
+def test_a_commit_of_what_the_team_may_only_read_is_undone(
+    shared: Path, tmp_path: Path
+):
+    real = shutil.which("git")
+    assert real is not None
+    home = tmp_path / "held"
+    home.mkdir()
+    excludes = home / "exclude"
+    excludes.write_text(excludes_file(shared, "svc/api", ()))
+    common = run_git(
+        shared, "rev-parse", "--path-format=absolute", "--git-common-dir"
+    ).strip()
+    write_shell(
+        home / "git",
+        git_script(
+            real,
+            common_dir=common,
+            conversation_id="held",
+            directory="svc/api",
+            sub_team_directories=(),
+            excludes=excludes,
+            flock=shutil.which("flock"),
+            readonly=["svc/api/main.py"],
+            writable=["svc/api/**"],
+        ),
+    )
+    head = run_git(shared, "rev-parse", "HEAD")
+    (shared / "svc" / "api" / "main.py").write_text("api v2\n")
+
+    committed = subprocess.run(
+        [str(home / "git"), "commit", "-qam", "contract"],
+        cwd=shared,
+        capture_output=True,
+        text=True,
+    )
+
+    assert committed.returncode != 0 and "outside your team" in committed.stderr
+    assert run_git(shared, "rev-parse", "HEAD") == head
 
 
 def test_git_in_another_repository_is_the_real_git(

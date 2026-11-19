@@ -25,8 +25,6 @@ _UNWRAPPED = "clone|init|worktree|submodule"
 _MOVES_HEAD = "commit|merge|pull|cherry-pick|revert|rebase|am|reset|checkout|switch"
 # Commands that make commits out of what the agent gives them.
 _COMMITS = "commit|cherry-pick|revert|am"
-# Commands that take commits away, which may be other teams'.
-_DROPS = "reset"
 _IN_PROGRESS = (
     "MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD BISECT_LOG rebase-merge rebase-apply"
 )
@@ -57,6 +55,8 @@ def git_script(
     sub_team_directories: Sequence[str],
     excludes: Path,
     flock: str | None,
+    readonly: Sequence[str] = (),
+    writable: Sequence[str] = (),
 ) -> str:
     """A ``git`` that keeps one agent's index apart from everyone else's.
 
@@ -67,6 +67,8 @@ def git_script(
             the whole repository.
         sub_team_directories: Directories inside it that sub-teams own.
         excludes: The ignore file from :func:`excludes_file`.
+        readonly: Globs of the boundary the team may only read.
+        writable: Globs of the boundary the team may write; none is all.
         flock: The ``flock`` binary, or None where there is none; commands
             that move HEAD are then not kept apart.
     """
@@ -84,14 +86,24 @@ def git_script(
             ' "$real" update-index -z --skip-worktree --stdin || return 1',
         )
     ]
-    put_back = [
-        f'      "$real" restore -q --source="$before" --worktree'
-        f" --ignore-skip-worktree-bits -- {' '.join(map(quote, specs))} 2>/dev/null"
-        for specs in hidden
+    # What the boundary's globs keep from the team counts as outside too.
+    held = [
+        *([[f":(glob){glob}" for glob in readonly]] if readonly else []),
+        *(
+            [
+                [
+                    f":(glob){directory}/**" if directory else ":(glob)**",
+                    *(f":(exclude,glob){glob}" for glob in writable),
+                ]
+            ]
+            # None named is all of it.
+            if writable
+            else []
+        ),
     ]
     outside = [
         f'  "$real" diff --quiet "$1" "$2" -- {" ".join(map(quote, specs))} || return 0'
-        for specs in hidden
+        for specs in [*hidden, *held]
     ]
     lock = (
         [
@@ -141,10 +153,19 @@ def git_script(
         f'  stamp="$head "{revision}',
         '  was=$(cat "$GIT_INDEX_FILE.synced" 2>/dev/null)',
         '  [ "$was" = "$stamp" ] && return 0',
-        # A folder that came back to the team is in the index as it was
+        # A folder that comes back to the team is in the index as it was
         # when it was hidden: a commit would undo what was committed since.
-        f'  [ -z "$was" ] || [ "${{was#* }}" = {revision} ] ||'
-        ' "$real" read-tree HEAD || return 1',
+        # What was hidden is taken as HEAD has it; nothing else is touched.
+        '  top=$("$real" rev-parse --show-toplevel) || return 1',
+        '  was_hidden=$("$real" -C "$top" ls-files -t | sed -n "s/^S //p")',
+        # Taken out first: an entry kept would keep what git last saw of
+        # the file, and a change since might not be seen.
+        '  [ -z "$was_hidden" ] || {',
+        '    printf "%s\\n" "$was_hidden" |'
+        ' "$real" -C "$top" update-index --force-remove --stdin &&',
+        '    printf "%s\\n" "$was_hidden" |'
+        ' "$real" --literal-pathspecs -C "$top" reset -q HEAD --pathspec-from-file=-',
+        "  } || return 1",
         '  "$real" ls-files -z |'
         ' "$real" update-index -z --no-skip-worktree --stdin || return 1',
         *hide,
@@ -172,6 +193,28 @@ def git_script(
         'before=$("$real" rev-parse -q --verify HEAD)',
         'on=$("$real" symbolic-ref -q HEAD)',
         'had=$("$real" for-each-ref --format="%(refname)" refs/heads)',
+        # A reset that would take away other teams' commits is refused
+        # before it runs: run, it would change their files and the index.
+        '[ "$command" = reset ] && [ -n "$before" ] && {',
+        "  to=; named=; dashes=",
+        '  for arg in "$@"; do',
+        '    if [ -z "$named" ]; then [ "$arg" = reset ] && named=1; continue; fi',
+        # A name after --, a second name, or a first that is no commit is a
+        # path: the branch does not move.
+        '    [ -n "$dashes" ] && { to=; break; }',
+        '    case "$arg" in',
+        "      --) dashes=1 ;;",
+        "      -*) ;;",
+        '      *) [ -z "$to" ] && to=$("$real" rev-parse -q --verify "$arg^{commit}")'
+        " && continue; to=; break ;;",
+        "    esac",
+        "  done",
+        '  if [ -n "$to" ] && ! "$real" merge-base --is-ancestor "$before" "$to" \\',
+        '      && outside "$to" "$before"; then',
+        '    fail "that would take away commits of other teams, so it was not'
+        ' done; undo your own commit with git revert"',
+        "  fi",
+        "}",
         # The lock is not for what git leaves running behind it.
         f'"$real" -c core.excludesFile={quote(str(excludes))} "$@" 9>&-',
         "code=$?",
@@ -203,14 +246,15 @@ def git_script(
         ' so it was undone"',
         "    fi",
         "  ;;",
-        f"  {_DROPS})",
+        # Without a sandbox nothing else keeps them from bringing in other
+        # teams' changes, which the team's next commits would undo again.
+        "  merge|pull|rebase)",
         '    if [ -n "$before" ] && [ "$before" != "$after" ] \\',
         '        && outside "$before" "$after"; then',
-        '      "$real" reset -q --soft "$before"',
-        *put_back,
+        '      "$real" reset -q --keep "$before"',
         '      rm -f "$GIT_INDEX_FILE.synced"',
-        '      fail "that would take away commits of other teams, so the'
-        ' branch was put back; undo your own commit with git revert"',
+        "      fail \"that brought changes to files outside your team's folder,"
+        ' so it was undone; the director brings in what other teams did"',
         "    fi",
         "  ;;",
         "esac",
@@ -222,7 +266,8 @@ def git_script(
         # The names are relative to the top of the checkout.
         '  top=$("$real" rev-parse --show-toplevel)',
         '  refused=$("$real" diff --no-relative --name-only -z "$before" "$after" |',
-        '    GIT_INDEX_FILE="$git_dir/index" "$real" -C "$top" reset -q "$after" \\',
+        '    GIT_INDEX_FILE="$git_dir/index" "$real" --literal-pathspecs -C "$top" \\',
+        '      reset -q "$after" \\',
         "      --pathspec-from-file=- --pathspec-file-nul 2>&1 >/dev/null) ||",
         # The commit stands; whoever uses the checkout should know why
         # its files look staged.

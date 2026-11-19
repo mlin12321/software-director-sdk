@@ -1,5 +1,6 @@
 """How work a team submits is reviewed by the IC above and taken in."""
 
+import asyncio
 import json
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -30,7 +31,10 @@ from openhands.agent_server.director.tools.definition import (
     SubmitReviewAction,
 )
 from openhands.agent_server.director.tools.impl import DirectorObservation
-from openhands.sdk.conversation.state import ConversationExecutionStatus
+from openhands.sdk.conversation.state import (
+    ConversationExecutionStatus,
+    ConversationState,
+)
 from openhands.sdk.event import ActionEvent
 from openhands.tools.file_editor.definition import FileEditorAction
 from tests.agent_server.director.conftest import (
@@ -808,3 +812,28 @@ async def test_a_team_given_more_work_after_an_accept_owes_it_a_review(
 
     # Nothing went up: API's work is reviewed by nobody yet.
     assert node(service, "root").review == first
+
+
+async def test_work_accepted_twice_before_it_is_carried_out_goes_up_once(
+    service: DirectorService, launcher: FakeLauncher, repo: Path
+):
+    await split_root(service)
+    await split_api(service)
+    commit(repo, "services/api/schema/order.py", "id: int\n")
+    await use(service, ic(service, SCHEMA), SubmitReviewTool, DONE)
+    reviewer = ic(service, "services.api")
+    state = cast(ConversationState, SimpleNamespace(id=UUID(reviewer)))
+    executor = ReviewTeamTool.create(state)[0].executor
+    assert executor is not None
+
+    await asyncio.to_thread(executor, accept(SCHEMA))
+    again = await asyncio.to_thread(executor, accept(SCHEMA))
+    await service.settled()
+
+    assert again.is_error and "being accepted already" in again.text
+    went_up = [
+        text
+        for text in launcher.messages_to(reviewer)
+        if "changed nothing itself, so its work went up" in text
+    ]
+    assert len(went_up) == 1

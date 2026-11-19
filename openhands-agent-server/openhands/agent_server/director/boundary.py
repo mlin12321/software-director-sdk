@@ -17,6 +17,11 @@ _PATH_FIELDS: dict[str, str] = {
     "edit": "file_path",
 }
 _READ_COMMANDS = frozenset({"view"})
+# Tools that only read the file their action names, and the field that names it.
+_READ_FIELDS: dict[str, str] = {"read_file": "file_path"}
+# Tools that search a folder, and the field that names it; none is the
+# workspace.
+_SEARCH_FIELDS: dict[str, str] = {"grep": "path", "glob": "path"}
 _PATCH_TARGET = re.compile(
     r"^\*\*\* (?:Add File|Update File|Delete File|Move to): (.+?)\s*$", re.MULTILINE
 )
@@ -27,14 +32,23 @@ def named_paths(tool_name: str, action: Mapping[str, Any]) -> list[str]:
     named them. Empty for tools that do not name them, such as the terminal."""
     if tool_name == "apply_patch":
         return _PATCH_TARGET.findall(str(action.get("patch", "")))
-    path = action.get(_PATH_FIELDS.get(tool_name, ""))
+    path = action.get((_PATH_FIELDS | _READ_FIELDS).get(tool_name, ""))
     return [path] if isinstance(path, str) and path else []
+
+
+def searched_folder(tool_name: str, action: Mapping[str, Any]) -> str | None:
+    """The folder an action of a search tool looks through, as the agent
+    named it; ``""`` for the workspace, None for a tool that searches none."""
+    if tool_name not in _SEARCH_FIELDS:
+        return None
+    folder = action.get(_SEARCH_FIELDS[tool_name])
+    return folder if isinstance(folder, str) else ""
 
 
 def written_paths(tool_name: str, action: Mapping[str, Any]) -> list[str]:
     """The files an action of a file tool would change, as the agent named
     them. Empty for an action that only reads."""
-    if action.get("command") in _READ_COMMANDS:
+    if action.get("command") in _READ_COMMANDS or tool_name in _READ_FIELDS:
         return []
     return named_paths(tool_name, action)
 

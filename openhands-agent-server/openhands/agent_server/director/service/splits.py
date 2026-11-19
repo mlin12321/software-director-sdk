@@ -130,7 +130,7 @@ class Splits(Watch):
             refusal = None
             try:
                 merged = merge_back(
-                    checkout, Path(team.worktree_path), team.boundary.path, team.title
+                    checkout, Path(team.worktree_path), team.boundary, team.title
                 )
             except (GitError, OSError) as error:
                 refusal = f"could not be read ({error})."
@@ -179,6 +179,10 @@ class Splits(Watch):
         if place is None or proposal is None or proposal.status != "approved":
             return
         if "planned" not in intent.steps:
+            if any(place_id in teams for teams, _ in self._settling.values()):
+                # What is closing or pruning it fixed what it removes first.
+                self._decline(place, "The team is being closed or removed.")
+                return
             try:
                 # The org may have changed since the sub-teams were approved.
                 split = normalize_split(store, place, proposal.children)
@@ -267,6 +271,7 @@ class Splits(Watch):
                 await launcher.stop(conversation_id)
                 await launcher.delete(conversation_id)
                 run.unmark(TOLD, str(conversation_id))
+                run.drop_held(str(conversation_id))
         if "replaced" not in intent.steps:
             intent = run.step_done(intent, "replaced")
         # Done whenever a replaced team is still in the tree: the tree may
@@ -432,6 +437,7 @@ class Splits(Watch):
             for conversation_id in conversations:
                 await launcher.delete(conversation_id)
                 run.unmark(TOLD, str(conversation_id))
+                run.drop_held(str(conversation_id))
             intent = run.step_done(intent, "deleted")
         above = store.place(plan["parent"])
         parent_ic = agent_conversation(above, "ic") if above else None

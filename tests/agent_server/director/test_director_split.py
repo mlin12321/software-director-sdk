@@ -282,13 +282,15 @@ def test_a_sub_team_may_only_read_what_its_parent_may_only_read_in_its_folder(
     store.update_place(
         place.id,
         boundary=place.boundary.model_copy(
-            update={"readonly": ["svc/b/api/gen/**", "svc/b/lock.json"]}
+            update={
+                "readonly": ["svc/b/api/gen/**", "svc/b/lock.json", "**/generated/**"]
+            }
         ),
     )
 
     [api] = check(store, "b", [child("api", "svc/b/api")]).children
 
-    assert api.readonly == ["svc/b/api/gen/**"]
+    assert api.readonly == ["svc/b/api/gen/**", "**/generated/**"]
 
 
 def test_a_sub_team_cannot_own_what_its_parent_may_only_read(store: OrgStore):
@@ -302,3 +304,17 @@ def test_a_sub_team_cannot_own_what_its_parent_may_only_read(store: OrgStore):
     with pytest.raises(OrgStoreError, match="inside what your team may write"):
         check(store, "b", [child("gen", "svc/b/gen")])
     assert check(store, "b", [child("api", "svc/b/api")]).children
+
+
+def test_a_sub_team_cannot_write_more_of_its_folder_than_its_parent_may(
+    store: OrgStore,
+):
+    place = store.place(at("b"))
+    assert place is not None
+    store.update_place(
+        place.id,
+        boundary=place.boundary.model_copy(update={"writable": ["svc/b/*.py"]}),
+    )
+
+    with pytest.raises(OrgStoreError, match="inside what your team may write"):
+        check(store, "b", [child("api", "svc/b/api")])

@@ -989,6 +989,22 @@ class Reviews(Requests):
                 f"({home.boundary.path or 'the repository'}), so it cannot go "
                 "under it."
             )
+        # Beside a team that holds its folder, both would own it.
+        holder = next(
+            (
+                team
+                for team in store.sub_teams(home.id)
+                if team.id != choice.team
+                and is_inside(path, normalize_store_path(team.boundary.path))
+            ),
+            None,
+        )
+        if holder is not None:
+            raise Invalid(
+                f"The folder of team {choice.team} ({path}) is inside that of "
+                f"team {holder.id}, which is under team {choice.under}, so it "
+                f"goes under team {holder.id} or one below it."
+            )
         level = len(store.teams_above(home.id)) + 2
         if level > self.settings.max_depth:
             raise Invalid(
@@ -1048,63 +1064,76 @@ class Reviews(Requests):
             )
             records = self._land_records(top, seen, waits=waits, held=agreements)
             return Landed(records, [], [], [], [], [])
-        take, items = org
-        session_places, theirs, _ = shapes
-        places = {place.team_id: place for place in session_places}
-        decided = {item.key: item for item in items if item.kind == "team"}
-        taken: list[str] = []
-        kept = [team for team, item in decided.items() if item.take != "session"]
-        # Those above before those below, and what goes after what moved.
-        for team in places:
-            settled = team in decided and decided[team].take == "session"
-            if take.get(team) is not None or settled:
-                item = decided.get(team)
-                done = self._put_team(
-                    session,
-                    places,
-                    team,
-                    item.under if item and settled else None,
-                    item.named if item and settled else None,
-                )
-                if settled:
-                    (taken if done else kept).append(team)
-        for team in [
-            *(team for team, side in take.items() if side is None),
-            *(
-                team
-                for team, item in decided.items()
-                if item.take == "session" and team not in places
-            ),
-        ]:
-            store.remove(team)
-            if team in decided:
-                taken.append(team)
-        # What it has now is what it is next compared by: a team the org
-        # keeps otherwise is not brought up again unless the session changes
-        # it once more.
-        store.set_shape(session.id, theirs)
-        texts: dict[str, str | None] = {}
-        agreed: list[str] = []
-        held: list[str] = []
-        others: list[tuple[str, str]] = []
-        for item in items:
-            if item.kind != "contracts":
-                continue
-            file = _contracts_file(item.key)
-            if item.take == "org" or (
-                item.with_team is not None and item.with_team not in taken
-            ):
-                self._undraft(top.session, file)
-                held.append(item.key or "the repository")
-                others.append((item.key, item.org))
-                continue
-            text = item.text if item.take == "text" else item.session
-            texts[file] = f"{text.strip()}\n" if text.strip() else None
-            agreed.append(item.key or "the repository")
-            if item.take == "text":
-                others.append((item.key, text))
-        self._keep_merge(top, None)
-        records = self._land_records(top, seen, chosen=texts, tree=True)
+        # What the tree and the merge were, for a landing that fails: the
+        # tree never moves without the team memory that goes with it.
+        tree = [
+            OrgNodeInput.model_validate(team.model_dump(exclude={"child_ids"}))
+            for team in store.teams()
+        ]
+        shape = list(session.shape)
+        try:
+            take, items = org
+            session_places, theirs, _ = shapes
+            places = {place.team_id: place for place in session_places}
+            decided = {item.key: item for item in items if item.kind == "team"}
+            taken: list[str] = []
+            kept = [team for team, item in decided.items() if item.take != "session"]
+            # Those above before those below, and what goes after what moved.
+            for team in places:
+                settled = team in decided and decided[team].take == "session"
+                if take.get(team) is not None or settled:
+                    item = decided.get(team)
+                    done = self._put_team(
+                        session,
+                        places,
+                        team,
+                        item.under if item and settled else None,
+                        item.named if item and settled else None,
+                    )
+                    if settled:
+                        (taken if done else kept).append(team)
+            for team in [
+                *(team for team, side in take.items() if side is None),
+                *(
+                    team
+                    for team, item in decided.items()
+                    if item.take == "session" and team not in places
+                ),
+            ]:
+                store.remove(team)
+                if team in decided:
+                    taken.append(team)
+            # What it has now is what it is next compared by: a team the org
+            # keeps otherwise is not brought up again unless the session changes
+            # it once more.
+            store.set_shape(session.id, theirs)
+            texts: dict[str, str | None] = {}
+            agreed: list[str] = []
+            held: list[str] = []
+            others: list[tuple[str, str]] = []
+            for item in items:
+                if item.kind != "contracts":
+                    continue
+                file = _contracts_file(item.key)
+                if item.take == "org" or (
+                    item.with_team is not None and item.with_team not in taken
+                ):
+                    self._undraft(top.session, file)
+                    held.append(item.key or "the repository")
+                    others.append((item.key, item.org))
+                    continue
+                text = item.text if item.take == "text" else item.session
+                texts[file] = f"{text.strip()}\n" if text.strip() else None
+                agreed.append(item.key or "the repository")
+                if item.take == "text":
+                    others.append((item.key, text))
+            self._keep_merge(top, None)
+            records = self._land_records(top, seen, chosen=texts, tree=True)
+        except BaseException:
+            store.replace_all(tree)
+            store.set_shape(session.id, shape)
+            self._keep_merge(top, merge)
+            raise
         return Landed(records, taken, kept, agreed, held, others)
 
     def _land_accepted(
@@ -1437,6 +1466,11 @@ class Reviews(Requests):
         above = store.place(place.parent_id) if place and place.parent_id else None
         if place is None or above is None or place.review is None:
             return
+        if any(
+            intent.kind == "accept" and intent.node_id == place_id
+            for intent in self._runs().open_intents()
+        ):
+            raise Conflict(f"The work of {place.title!r} is being accepted already.")
         first = self._before(place)
         if first is not None:
             theirs = first.parent_id != place.parent_id
@@ -1689,7 +1723,7 @@ class Reviews(Requests):
                     merge_back,
                     checkout,
                     team,
-                    place.boundary.path,
+                    place.boundary,
                     self._merged_as(place),
                 )
             except (GitError, OSError) as error:
@@ -2000,7 +2034,7 @@ class Reviews(Requests):
         if _checkout_root(str(team)) != _checkout_root(str(checkout)):
             try:
                 result = await asyncio.to_thread(
-                    merge_back, checkout, team, place.boundary.path, place.title
+                    merge_back, checkout, team, place.boundary, place.title
                 )
                 problem = (
                     f"{result.outcome}: {', '.join(result.files) or result.detail}"
@@ -2014,9 +2048,9 @@ class Reviews(Requests):
                     ic,
                     "The work of all your sub-teams is accepted, but your "
                     "team's checkout does not merge into the checkout of "
-                    f"{above.title!r} ({problem}). Merge its branch into "
-                    "yours, resolve what is in the way, commit, and call "
-                    "`submit_review`.",
+                    f"{above.title!r} ({problem}). Call `submit_review`: "
+                    f"the IC of {above.title!r} is given the merge to finish "
+                    "when it accepts the work.",
                 )
                 return
         tip = await asyncio.to_thread(head_of, team)

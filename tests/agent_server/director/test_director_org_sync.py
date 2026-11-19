@@ -118,6 +118,19 @@ def test_a_team_removed_on_one_side_and_untouched_on_the_other_is_removed():
     assert set(by_id(theirs_removed.nodes)) == {"root", "b"}
 
 
+def test_a_team_the_removing_side_moved_out_from_under_it_is_kept_where_it_went():
+    below = make_team("a.x", "a").model_dump()
+    base = {**tree(), "a.x": below}
+    # A team replaced: what was below it is now below the team above.
+    replaced = {**without(base, "a"), "a.x": {**below, "parent_id": "root"}}
+
+    for merged in (
+        merge_orgs(base, base, replaced, {}),
+        merge_orgs(base, replaced, base, {}),
+    ):
+        assert merged.conflicts == [] and by_id(merged.nodes) == replaced
+
+
 def test_a_team_moved_from_under_a_team_the_other_side_removed_is_a_conflict():
     below = make_team("a.x", "a").model_dump()
     base = {**tree(), "a.x": below}

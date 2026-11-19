@@ -1,6 +1,7 @@
 """DirectorService running an org through a launcher."""
 
 import os
+import shutil
 import subprocess
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -40,6 +41,9 @@ from openhands.sdk.tool.spec import Tool
 from openhands.sdk.tool.tool import Action
 from openhands.tools.apply_patch.definition import ApplyPatchAction
 from openhands.tools.file_editor.definition import FileEditorAction
+from openhands.tools.gemini.read_file.definition import ReadFileAction
+from openhands.tools.glob.definition import GlobAction
+from openhands.tools.grep.definition import GrepAction
 from openhands.tools.terminal.definition import TerminalAction
 from tests.agent_server.director.conftest import (
     FakeLauncher,
@@ -644,6 +648,20 @@ async def test_a_file_tool_neither_reads_nor_writes_what_the_director_keeps(
 
     # The key in it would let the agent act as any other.
     assert "director's own" in (attempt(service, root_ic, "file_editor", view) or "")
+    read = ReadFileAction(file_path=str(kept))
+    assert "director's own" in (attempt(service, root_ic, "read_file", read) or "")
+    # Reading is otherwise never refused.
+    read_own = ReadFileAction(file_path=str(repo / "README.md"))
+    assert attempt(service, root_ic, "read_file", read_own) is None
+    # Nor is it searched, which tells of it a character at a time.
+    search = GrepAction(pattern="tool_key", path=str(tmp_path))
+    assert "director's own" in (attempt(service, root_ic, "grep", search) or "")
+    assert "director's own" in (
+        attempt(service, root_ic, "glob", GlobAction(pattern="*", path=str(tmp_path)))
+        or ""
+    )
+    search_own = GrepAction(pattern="x", path=str(repo))
+    assert attempt(service, root_ic, "grep", search_own) is None
     assert "director's own" in (
         attempt(service, root_ic, "file_editor", create(kept)) or ""
     )
@@ -996,6 +1014,8 @@ async def test_every_agent_starts_its_terminal_in_a_shell_held_to_its_boundary(
     confining: DirectorService, launcher: FakeLauncher, repo: Path
 ):
     assert confining.summary().boundary_enforcement == "sandbox"
+    # Missing, the hooks folder would be left for an agent to make.
+    shutil.rmtree(repo / ".git" / "hooks")
     await confining.create_org(org_request(repo))
     await confining.settled()
     await split_root(confining, API)
@@ -1012,6 +1032,7 @@ async def test_every_agent_starts_its_terminal_in_a_shell_held_to_its_boundary(
     script = Path(cast(dict, api_ic.tool_params)["terminal"]["shell_path"])
     assert script.parent == repo / ".git" / "director-shells"
     assert script.name == f"{api_ic.conversation_id}.sh"
+    assert (repo / ".git" / "hooks").is_dir()
 
 
 def run_in_shell(params: object, command: str, home: Path) -> str:

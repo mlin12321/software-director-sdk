@@ -1,6 +1,7 @@
 """Tests for sessions: lines of work the human opens at a team beside the
 org's own, each with agents and a checkout of its own."""
 
+import asyncio
 import json
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -12,6 +13,7 @@ from openhands.agent_server.director.git import git
 from openhands.agent_server.director.headline import TeamSummary
 from openhands.agent_server.director.merge_back import merge_back
 from openhands.agent_server.director.models import (
+    Boundary,
     OpenedSession,
     OpenSessionRequest,
     RouteMessageRequest,
@@ -23,9 +25,12 @@ from openhands.agent_server.director.org_store import (
     session_id_of,
 )
 from openhands.agent_server.director.routing import USAGE_ID
+from openhands.agent_server.director.run_state import TASK
 from openhands.agent_server.director.service import DirectorService
 from openhands.agent_server.director.tools import (
+    ApproveTeamsTool,
     MsgTeamTool,
+    ProposeTeamsTool,
     PruneTeamTool,
     ReadTeamContextTool,
     ReportTool,
@@ -41,11 +46,17 @@ from openhands.agent_server.director.tools.definition import (
     ReviewTeamAction,
     WriteSpecAction,
 )
-from openhands.sdk.errors import Conflict, NotFound
-from tests.agent_server.director.conftest import FakeLauncher, record_of, run_git
+from openhands.sdk.conversation.state import ConversationExecutionStatus
+from openhands.sdk.errors import Conflict, NotFound, Unprocessable
+from tests.agent_server.director.conftest import (
+    FakeLauncher,
+    record_of,
+    root_conversation,
+    run_git,
+)
 from tests.agent_server.director.test_director_landing import landed
 from tests.agent_server.director.test_director_limits import started
-from tests.agent_server.director.test_director_pause import again
+from tests.agent_server.director.test_director_pause import ServerEnded, again, cut_off
 from tests.agent_server.director.test_director_review import DONE, accept, commit
 from tests.agent_server.director.test_director_teams import (
     API,
@@ -53,9 +64,12 @@ from tests.agent_server.director.test_director_teams import (
     propose_and_approve,
 )
 from tests.agent_server.director.test_director_tools import (
+    APPROVE,
+    SPLIT,
     division_lead_ic,
     division_lead_of,
     ic,
+    manager,
     node,
     split_root,
     use,
@@ -687,6 +701,19 @@ async def test_closing_a_session_that_never_started_touches_no_checkout(
     assert run_git(repo, "for-each-ref", "refs/agents/pruned/") == ""
 
 
+def test_a_merge_takes_nothing_the_team_may_only_read(repo: Path, tmp_path: Path):
+    commit(repo, "api/contract.md", "v1\n")
+    worktree = tmp_path / "session"
+    run_git(repo, "worktree", "add", "--quiet", "-b", "session", str(worktree))
+    commit(worktree, "api/contract.md", "changed by the team\n")
+
+    held = Boundary(path="api", writable=["api/**"], readonly=["api/contract.md"])
+    result = merge_back(repo, worktree, held, "API")
+
+    assert (result.outcome, result.files) == ("outside", ("api/contract.md",))
+    assert (repo / "api" / "contract.md").read_text() == "v1\n"
+
+
 def test_a_merge_reaches_the_index_of_an_agent_that_owns_the_same_directory(
     repo: Path, tmp_path: Path
 ):
@@ -704,7 +731,7 @@ def test_a_merge_reaches_the_index_of_an_agent_that_owns_the_same_directory(
     (repo / "api/own.ts").write_text("staged by the agent\n")
     git(repo, ["add", "api/own.ts"], env=own)
 
-    result = merge_back(repo, worktree, "api", "API")
+    result = merge_back(repo, worktree, Boundary(path="api"), "API")
     git(repo, ["commit", "--quiet", "-m", "The agent's own"], env=own)
 
     assert result.outcome == "merged"
@@ -912,3 +939,89 @@ async def test_work_is_not_accepted_past_earlier_work_that_still_waits(
 
     states = [node(service, team).review for team in (first, second)]
     assert [review.state for review in states if review] == ["pending", "pending"]
+
+
+async def test_a_session_whose_ic_could_not_be_started_leaves_nothing_in_the_history(
+    repo: Path, launcher: FakeLauncher
+):
+    service = await started(repo, launcher)
+    before = {event.id for event in service.org_history(100).events}
+    tasks = service._runs().marked(TASK)
+    launcher.root_error = Unprocessable("cannot start")
+
+    with pytest.raises(Unprocessable):
+        await service.open_session(
+            OpenSessionRequest(text="Add refunds", node_id="root"),
+            root_conversation(repo),
+        )
+    await service.settled()
+    launcher.root_error = None
+
+    assert [
+        event for event in service.org_history(100).events if event.id not in before
+    ] == []
+    assert service._runs().marked(TASK) == tasks
+    await service.aclose()
+
+
+async def test_no_team_is_set_up_in_a_session_that_is_being_closed(
+    repo: Path, launcher: FakeLauncher
+):
+    service = await started(repo, launcher)
+    await woken(service, "root")
+    await use(service, ic(service), ProposeTeamsTool, SPLIT)
+    root_ic, root_manager = ic(service), manager(service)
+    assert root_ic is not None and root_manager is not None
+    # Both agents are in a turn as the human closes the session.
+    launcher.report(root_ic, ConversationExecutionStatus.RUNNING)
+    launcher.report(root_manager, ConversationExecutionStatus.RUNNING)
+    await service.settled()
+    [session] = service.store.sessions()
+    places = {place.id for place in service.store.session(session.id)}
+    service.close_session(session.id)
+    await service.settled()
+
+    # In the turn it is finishing, the Manager approves the sub-teams.
+    await use(service, root_manager, ApproveTeamsTool, APPROVE)
+    await service.settled()
+
+    assert {place.id for place in service.store.session(session.id)} == places
+    launcher.report(root_manager, ConversationExecutionStatus.FINISHED)
+    launcher.report(root_ic, ConversationExecutionStatus.FINISHED)
+    await service.settled()
+    assert service.sessions() == []
+    await service.aclose()
+
+
+async def test_a_close_cut_off_records_no_end_of_a_session_the_org_never_knew(
+    repo: Path, launcher: FakeLauncher
+):
+    first = await started(repo, launcher)
+    opened = await first.open_session(
+        OpenSessionRequest(text="Add refunds", node_id="root")
+    )
+    await first.settled()
+    ended = asyncio.Event()
+    real = first.store.close_session
+
+    def server_ends(session_id: str) -> bool:
+        ended.set()
+        raise ServerEnded
+
+    first.store.close_session = server_ends  # type: ignore[method-assign]
+
+    async def closing() -> None:
+        first.close_session(opened.session.id)
+        await first.settled()
+
+    await cut_off(launcher, ended, closing())
+    first.store.close_session = real  # type: ignore[method-assign]
+
+    second = await again(repo, launcher)
+    await second.resume()
+    await second.settled()
+
+    assert all(session.id != opened.session.id for session in second.sessions())
+    kinds = [event.kind for event in second.team_memory.history("root")]
+    assert "session_closed" not in kinds
+    await second.aclose()

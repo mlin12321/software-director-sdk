@@ -234,6 +234,10 @@ class Sessions(Splits):
                     top, conversation, text, brief, launcher, rename
                 )
             except BaseException:
+                # Nothing of a session that never began stays in the record.
+                self._leave(top)
+                for place in store.session(session_id):
+                    run.unmark(TASK, place.id)
                 store.close_session(session_id)
                 raise
         if not rename and not request.title.strip():
@@ -509,6 +513,14 @@ class Sessions(Splits):
                 teams=[team.id for team in teams],
                 conversations=conversations_of(teams),
                 stamp=ref_stamp(),
+                # A session none of whose work was accepted is not on the
+                # org's record, and so neither is its end. Decided now:
+                # what the session kept to itself goes before its end is
+                # recorded.
+                known=all(
+                    event.kind != "session_opened" or event.team_id != top.team_id
+                    for event in self.own_events(session.id, session.above_id)
+                ),
             )
         plan = intent.payload
         conversations = [UUID(agent) for agent in plan["conversations"]]
@@ -541,6 +553,7 @@ class Sessions(Splits):
             for conversation_id in conversations:
                 await launcher.delete(conversation_id)
                 run.unmark(TOLD, str(conversation_id))
+                run.drop_held(str(conversation_id))
             intent = run.step_done(intent, "deleted")
         if "removed" not in intent.steps:
             top = store.place(place_id)
@@ -550,17 +563,12 @@ class Sessions(Splits):
                         run.unmark(kind, team.id)
                     self._work_accepted(team)
             if top is not None:
-                # A session none of whose work was accepted is not on the
-                # org's record, and so neither is its end.
-                known = all(
-                    event.kind != "session_opened" or event.team_id != top.team_id
-                    for event in self.own_events(plan["session"], plan["parent"])
-                )
                 await self._in_base(
                     lambda: asyncio.to_thread(self._settle_on_close, top)
                 )
                 gone = await asyncio.to_thread(self._leave, top)
-                if known:
+                # Once: a step cut off after it would record it again.
+                if plan["known"] and "told" not in intent.steps:
                     await asyncio.to_thread(
                         self._land_event,
                         plan["parent"],
@@ -582,6 +590,7 @@ class Sessions(Splits):
                             ),
                         ),
                     )
+                    intent = run.step_done(intent, "told")
             store.close_session(plan["session"])
             await asyncio.to_thread(self._org_turn)
             self._tell_turns()

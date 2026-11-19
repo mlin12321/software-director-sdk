@@ -383,6 +383,22 @@ class TestMerge:
         assert merged.kept_local == ["svc/a/spec.md"]
         assert board.read("svc/a/spec.md") is None
 
+    def test_a_file_this_side_changed_and_the_other_removed_is_kept_and_named(
+        self, board: GitStore, theirs: GitStore, merge_supported: bool
+    ):
+        if not merge_supported:
+            pytest.skip("needs git 2.38")
+        board.write("svc/a", "spec.md", "base")
+        git(board.repo_dir, ["update-ref", theirs.ref, board.head() or ""])
+        board.write("svc/a", "spec.md", "ours")
+        theirs.commit(lambda _read: [StoreChange("svc/a/spec.md", None)], "remove")
+
+        assert [clash.path for clash in board.clashes(theirs.ref)] == ["svc/a/spec.md"]
+        merged = board.merge(theirs.ref)
+
+        assert merged.kept_local == ["svc/a/spec.md"]
+        assert board.read("svc/a/spec.md") == "ours"
+
     def test_of_a_spec_both_sides_changed_ours_is_kept_and_named(
         self, board: GitStore, theirs: GitStore, merge_supported: bool
     ):

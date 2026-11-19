@@ -43,6 +43,15 @@ def git(
         GitError: The command exited with a non-zero status, or did not
             finish in ``timeout`` seconds.
     """
+    planted = _planted_common_dir(repo_dir)
+    if planted is not None:
+        raise GitError(
+            args,
+            128,
+            f"{planted} sends git to another repository; it is not git's and "
+            "was not followed. Remove it.",
+            "",
+        )
     try:
         result = _run(repo_dir, args, env, stdin, timeout)
     except subprocess.TimeoutExpired as error:
@@ -65,6 +74,32 @@ _OWN_CONFIG = [
     "-c",
     "commit.gpgSign=false",
 ]
+
+
+def _planted_common_dir(directory: Path) -> Path | None:
+    """A ``commondir`` file git would follow that git did not write.
+
+    Git writes one only in a worktree's own git directory, pointing two
+    levels up. An agent's sandbox may write the repository's git directory,
+    and one written there would send every git, the director's included,
+    to a repository of the agent's making.
+    """
+    for top in (directory, *directory.parents):
+        dot = top / ".git"
+        if dot.is_dir():
+            return dot / "commondir" if (dot / "commondir").exists() else None
+        if not dot.is_file():
+            continue
+        first = dot.read_text(errors="replace").partition("\n")[0]
+        own = (top / first.removeprefix("gitdir:").strip()).resolve()
+        common = own
+        pointer = own / "commondir"
+        if pointer.exists():
+            common = (own / pointer.read_text().strip()).resolve()
+            if own.parent.parent != common:
+                return pointer
+        return common / "commondir" if (common / "commondir").exists() else None
+    return None
 
 
 def _run(
