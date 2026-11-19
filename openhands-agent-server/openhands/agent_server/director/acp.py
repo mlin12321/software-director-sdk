@@ -37,7 +37,9 @@ def conversation_of(key: bytes, token: str) -> str | None:
     if not conversation_id:
         return None
     expected = agent_token(key, conversation_id)
-    return conversation_id if hmac.compare_digest(expected, token) else None
+    # As bytes: text that is not ASCII cannot be compared.
+    same = hmac.compare_digest(expected.encode(), token.encode())
+    return conversation_id if same else None
 
 
 def tools_server(server_url: str, token: str) -> MCPServer:

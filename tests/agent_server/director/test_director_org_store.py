@@ -1003,3 +1003,12 @@ def test_a_tree_read_again_is_shown_to_those_who_follow_it(store: OrgStore):
     [shown] = events
     assert isinstance(shown, SnapshotEvent)
     assert [node.id for node in shown.nodes] == ["root", "b"]
+
+
+def test_a_renamed_session_is_saved(working: OrgStore):
+    saves: list[None] = []
+    working.on_change(lambda: saves.append(None))
+
+    working.rename_session(SESSION, "Refunds")
+
+    assert saves == [None]

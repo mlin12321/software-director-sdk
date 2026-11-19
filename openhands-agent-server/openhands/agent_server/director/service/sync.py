@@ -157,6 +157,10 @@ class Sync(Sessions):
         self._resuming = set(again)
         self._release()
         await self._resync()
+        for conversation_id in again:
+            # Seen stopped, they were just taken for agents that do not run:
+            # a server that ends before they are run again takes them up.
+            run.mark(RUNNING, conversation_id, was_running[conversation_id])
         for place_id in waited:
             run.unmark(WAITING, place_id)
         intents = run.open_intents()

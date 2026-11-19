@@ -358,6 +358,7 @@ class OrgStore:
                 self._sessions[session_id] = session.model_copy(update={"title": title})
                 self._announce_sessions()
                 self._announce_escalations()
+                self._changed()
 
     def set_session_use(
         self, session_id: str, usage: Usage, cost_allowance: float

@@ -1,7 +1,9 @@
 """Pausing an org, and taking up what a stopped server left unfinished."""
 
 import asyncio
+import sqlite3
 from pathlib import Path
+from typing import cast
 from uuid import UUID
 
 import pytest
@@ -18,7 +20,11 @@ from openhands.agent_server.director.org_persistence import (
 )
 from openhands.agent_server.director.org_store import OrgStore, team_id_of
 from openhands.agent_server.director.recovery import describe, restore_worktrees
-from openhands.agent_server.director.run_state import RunState, RunStateError
+from openhands.agent_server.director.run_state import (
+    RUNNING,
+    RunState,
+    RunStateError,
+)
 from openhands.agent_server.director.service import (
     AGENT_PAUSED,
     RESTART_NOTE,
@@ -792,3 +798,73 @@ def test_a_state_file_that_is_no_database_leaves_the_director_working(repo: Path
     service = DirectorService(repo, save_delay=0)
 
     assert service._runs().path is None
+
+
+async def test_resuming_waits_for_a_pause_that_is_still_stopping_agents(
+    repo: Path, launcher: FakeLauncher
+):
+    service = await started(repo, launcher)
+    root_ic = ic(service)
+    assert root_ic is not None
+    launcher.report(root_ic, ConversationExecutionStatus.RUNNING)
+    stopped, pause = asyncio.Event(), launcher.pause
+
+    async def slow_pause(conversation_id: UUID) -> None:
+        await stopped.wait()
+        await pause(conversation_id)
+
+    launcher.pause = slow_pause  # type: ignore[method-assign]
+
+    await service.pause()
+    resumed = asyncio.create_task(service.resume())
+    await asyncio.sleep(0.05)
+    waits = not resumed.done()
+    stopped.set()
+    await resumed
+    await service.settled()
+
+    # Or the pause would stop the agent after it was set going again.
+    assert waits
+    assert launcher.resumed == [(UUID(root_ic), None)]
+    await service.aclose()
+
+
+async def test_an_agent_not_yet_run_again_is_taken_up_by_the_next_start(
+    repo: Path, launcher: FakeLauncher
+):
+    first = await started(repo, launcher)
+    root_ic = ic(first)
+    assert root_ic is not None
+    launcher.report(root_ic, ConversationExecutionStatus.RUNNING)
+    launcher.known[UUID(root_ic)] = ConversationExecutionStatus.ERROR
+    second = await again(repo, launcher)
+    never = asyncio.Event()
+
+    async def cut_off(conversation_id: UUID, note: str | None) -> None:
+        await never.wait()
+
+    launcher.resume = cut_off  # type: ignore[method-assign]
+
+    await second.resume()
+    await asyncio.sleep(0.05)
+
+    # The server ends here a second time: the agent is still one to run again.
+    assert root_ic in second._runs().marked(RUNNING)
+    never.set()
+    await second.aclose()
+
+
+def test_a_failed_change_of_several_marks_leaves_the_run_state_usable(
+    tmp_path: Path,
+):
+    run = RunState(tmp_path / "state.db")
+    run.replace_marks("kind", {"a": "1"})
+
+    with pytest.raises(sqlite3.Error):
+        run.replace_marks("kind", {"b": cast(str, object())})
+
+    # Nothing of the failed change stays, and the next one is taken.
+    assert run.marked("kind") == {"a": "1"}
+    run.replace_marks("kind", {"c": "3"})
+    assert run.marked("kind") == {"c": "3"}
+    run.close()

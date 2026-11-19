@@ -167,6 +167,9 @@ if TYPE_CHECKING:
 # PromptResponse, so under normal conditions the notification handler
 # completes almost immediately. This timeout is a safety net for slow
 # or remote servers.
+# JSON-RPC: the server has no such method.
+_METHOD_NOT_FOUND = -32601
+
 _USAGE_UPDATE_TIMEOUT: float = float(os.environ.get("ACP_USAGE_UPDATE_TIMEOUT", "2.0"))
 
 # How long a question asked beside the conversation may take. It holds the
@@ -4731,10 +4734,31 @@ class ACPAgent(AgentBase):
         session_id = self._session_id
 
         async def _fork_and_prompt() -> str:
-            fork_response = await conn.fork_session(
-                cwd=self._working_dir,
-                session_id=session_id,
-            )
+            try:
+                fork_response = await conn.fork_session(
+                    cwd=self._working_dir,
+                    session_id=session_id,
+                )
+            except ACPRequestError as error:
+                if error.code != _METHOD_NOT_FOUND:
+                    raise
+                # Nothing else of the conversation's can be asked instead.
+                raise NotImplementedError(
+                    "This ACP server cannot fork a session, so its agent "
+                    "cannot be asked on top of its conversation"
+                ) from None
+            if self.acp_model:
+                # A fork starts on the server's default model, which may cost
+                # many times what the conversation's own does.
+                with contextlib.suppress(ACPRequestError):
+                    await _apply_acp_model(
+                        conn,
+                        fork_response.session_id,
+                        self.acp_model,
+                        agent_name=self._agent_name,
+                        via_config_option=self._model_via_config_option,
+                        effort=self.acp_effort,
+                    )
             return await self._prompt_side_session(fork_response.session_id, question)
 
         with self._client._fork_lock:

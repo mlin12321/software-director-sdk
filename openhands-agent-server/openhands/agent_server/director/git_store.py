@@ -624,7 +624,7 @@ class GitStore:
                 if change.content is None:
                     git(
                         self.repo_dir,
-                        ["update-index", "--force-remove", path],
+                        ["update-index", "--force-remove", "--", path],
                         env=env,
                     )
                     continue

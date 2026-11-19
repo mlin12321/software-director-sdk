@@ -272,3 +272,43 @@ def test_no_commit_is_made_on_an_index_that_could_not_be_brought_up_to_date(
     assert api("commit", "-am", "api").returncode == 0
     assert files_of(shared, "HEAD") == ["svc/api/main.py"]
     assert run_git(shared, "show", "HEAD:svc/web/main.py") == "web v2\n"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [("checkout", "-b", "mine"), ("switch", "-c", "mine"), ("checkout", "other")],
+    ids=["checkout -b", "switch -c", "checkout"],
+)
+def test_a_checkout_stays_on_the_branch_its_work_is_taken_from(
+    shared: Path, agent: Callable[..., Git], command: tuple[str, ...]
+):
+    api, web = agent("api", "svc/api"), agent("web", "svc/web")
+    branch = run_git(shared, "symbolic-ref", "--short", "HEAD").strip()
+    run_git(shared, "branch", "other")
+
+    switched = api(*command)
+
+    assert switched.returncode != 0 and f"stays on {branch}" in switched.stderr
+    assert run_git(shared, "symbolic-ref", "--short", "HEAD").strip() == branch
+    # Both teams' commits are then on the one branch that is accepted.
+    for git, folder in ((api, "api"), (web, "web")):
+        (shared / "svc" / folder / "main.py").write_text(f"{folder} v2\n")
+        git("add", "-A")
+        assert git("commit", "-m", folder).returncode == 0
+    assert files_of(shared, "HEAD~1") + files_of(shared, "HEAD") == [
+        "svc/api/main.py",
+        "svc/web/main.py",
+    ]
+
+
+def test_a_file_is_still_restored_with_checkout(
+    shared: Path, agent: Callable[..., Git]
+):
+    api = agent("api", "svc/api")
+    kept = (shared / "svc" / "api" / "main.py").read_text()
+    (shared / "svc" / "api" / "main.py").write_text("scratch\n")
+
+    restored = api("checkout", "--", "svc/api/main.py")
+
+    assert restored.returncode == 0, restored.stderr
+    assert (shared / "svc" / "api" / "main.py").read_text() == kept
