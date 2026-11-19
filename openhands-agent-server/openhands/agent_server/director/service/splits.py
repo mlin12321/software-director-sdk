@@ -327,6 +327,7 @@ class Splits(Watch):
                             below.review,
                             self._so_far(below),
                             self.asked_of(below),
+                            self.review_instructions(),
                         ),
                     )
                 # Under a new team it starts from now: its time without

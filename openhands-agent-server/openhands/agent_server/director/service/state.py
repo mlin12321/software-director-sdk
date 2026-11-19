@@ -396,9 +396,8 @@ class ServiceState:
                 address the server is bound to.
             max_concurrent_runs: How many conversations the server runs at
                 once, to tell the human; None when not known.
-            find_review_instructions: Returns what a model is told when it
-                reads a team's diff before the IC above reviews it, or None
-                to leave that pass out.
+            find_review_instructions: The code review skill given to the
+                IC above with a team's write-up, or None to leave it out.
             remembered: A file to keep the org's repository in, so that an
                 org started outside ``repo_dir`` is found again after a
                 restart.
@@ -415,6 +414,7 @@ class ServiceState:
         self._summary_timeout = summary_timeout
         self._remembered = remembered
         self._find_review_instructions = find_review_instructions
+        self._review_instructions: str | None = None
         self._model_call_timeout = model_call_timeout
         self._run: RunState | None = None
         self._run_of: Path | None = None
@@ -496,6 +496,17 @@ class ServiceState:
         # Held by a pull, a push or a step of a merge, one at a time.
         self._sync_lock = asyncio.Lock()
         self._resume_lock = asyncio.Lock()
+
+    def review_instructions(self) -> str:
+        """The code review skill for an IC reviewing a team below.
+
+        Loaded once. Empty when it cannot be loaded, in which case the
+        review request stands without it.
+        """
+        if self._review_instructions is None:
+            found = self._find_review_instructions()
+            self._review_instructions = found.strip() if found else ""
+        return self._review_instructions
 
     @classmethod
     def from_config(cls, config: Config) -> Self:

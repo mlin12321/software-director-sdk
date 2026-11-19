@@ -1,7 +1,6 @@
 """How work a team submits is reviewed by the IC above and taken in."""
 
 import asyncio
-import json
 from collections.abc import AsyncIterator
 from pathlib import Path
 from types import SimpleNamespace
@@ -119,10 +118,7 @@ async def test_submitted_work_goes_to_the_ic_above_with_the_teams_own_account(
     service: DirectorService, launcher: FakeLauncher, repo: Path
 ):
     await split_root(service)
-    launcher.agent_answers = {
-        WRITE_UP: ACCOUNT,
-        INSTRUCTIONS: json.dumps({"findings": [FINDING.model_dump()]}),
-    }
+    launcher.agent_answers = {WRITE_UP: ACCOUNT}
     base = node(service, "services.api").base_commit
     to_manager = len(launcher.messages_to(manager(service)))
 
@@ -133,18 +129,18 @@ async def test_submitted_work_goes_to_the_ic_above_with_the_teams_own_account(
     assert api.status == "done"
     assert api.review is not None
     assert (api.review.state, api.review.round) == ("pending", 1)
-    assert api.review.automated == [FINDING]
     request = launcher.messages_to(ic(service))[-1]
     assert api.review.description == ACCOUNT
     assert "Review request" in request and "Endpoint shipped." in request
     assert f"git diff {base} HEAD -- services/api" in request
-    assert ACCOUNT in request and "Returns a string." in request
+    assert ACCOUNT in request and INSTRUCTIONS in request
+    assert "Returns a string." not in request
     assert len(launcher.messages_to(manager(service))) == to_manager
-    (first, write_up), (second, review) = launcher.agents_asked
-    assert str(first) == str(second) == ic(service, "services.api")
+    [(asked_ic, write_up)] = launcher.agents_asked
+    assert str(asked_ic) == ic(service, "services.api")
     assert WRITE_UP in write_up and "services/api/app.py" in write_up
-    assert INSTRUCTIONS in review and "POST /checkout" in review
-    assert "order_id = '1'" not in write_up + review
+    assert INSTRUCTIONS not in write_up
+    assert "order_id = '1'" not in write_up
     assert launcher.asked == []
 
 
@@ -161,21 +157,18 @@ async def test_work_that_is_not_committed_cannot_be_submitted(
     assert node(service, "services.api").review is None
 
 
-@pytest.mark.parametrize("answer", [None, "I could not tell."])
-async def test_a_review_request_says_what_the_team_did_not_answer(
-    service: DirectorService, launcher: FakeLauncher, repo: Path, answer: str | None
+async def test_a_review_request_says_when_the_team_gave_no_account(
+    service: DirectorService, launcher: FakeLauncher, repo: Path
 ):
     await split_root(service)
-    launcher.agent_answers = {INSTRUCTIONS: answer}
 
     await api_submits(service, repo)
     await reviewer_wakes(service, launcher)
 
     review = node(service, "services.api").review
-    assert review is not None and not review.automated_ran
-    assert review.description == ""
+    assert review is not None and review.description == ""
     request = launcher.messages_to(ic(service))[-1]
-    assert "did not run" in request and "gave no account" in request
+    assert "gave no account" in request and INSTRUCTIONS in request
 
 
 async def test_without_review_instructions_the_team_is_only_asked_for_its_account(
@@ -197,7 +190,8 @@ async def test_without_review_instructions_the_team_is_only_asked_for_its_accoun
 
         asked = [WRITE_UP in question for _, question in launcher.agents_asked]
         assert asked == [True]
-        assert "Review request" in launcher.messages_to(ic(service))[-1]
+        request = launcher.messages_to(ic(service))[-1]
+        assert "Review request" in request and INSTRUCTIONS not in request
     finally:
         await service.aclose()
 
@@ -631,12 +625,9 @@ async def test_what_the_ic_above_wrote_in_a_started_teams_directory_is_put_aside
     assert run_git(repo, "show", f"{kept}:apps/web/page.tsx") == "in the way\n"
 
 
-async def test_the_top_team_is_done_once_it_submits_and_its_reviewer_gets_the_findings(
+async def test_the_top_team_is_done_once_it_submits_and_its_reviewer_is_instructed(
     service: DirectorService, launcher: FakeLauncher, repo: Path
 ):
-    launcher.agent_answers = {
-        INSTRUCTIONS: json.dumps({"findings": [FINDING.model_dump()]})
-    }
     commit(repo, "app.py", "x = 1\n")
 
     done = await use(service, ic(service), SubmitReviewTool, DONE)
@@ -646,7 +637,8 @@ async def test_the_top_team_is_done_once_it_submits_and_its_reviewer_gets_the_fi
     assert root.review is not None and root.review.state == "pending"
     start = launcher.derived[-1]
     assert str(start.conversation_id) == division_lead_ic(service)
-    assert "Returns a string." in start.task
+    assert INSTRUCTIONS in start.task
+    assert "Returns a string." not in start.task
 
 
 SCHEMA = "services.api.schema"

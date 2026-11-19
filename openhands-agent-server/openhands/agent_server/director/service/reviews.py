@@ -353,7 +353,11 @@ class Reviews(Requests):
                         else ""
                     )
                     + review_request(
-                        team, team.review, self._so_far(team), self.asked_of(team)
+                        team,
+                        team.review,
+                        self._so_far(team),
+                        self.asked_of(team),
+                        self.review_instructions(),
                     )
                 )
         self.tell_ic(node.id, "\n\n---\n\n".join(requests), division_lead=True)
@@ -1571,49 +1575,26 @@ class Reviews(Requests):
             intent.payload.get("specs", []),
         )
 
-    async def _own_account(
-        self, place: SessionTeam
-    ) -> tuple[str, list[ReviewFinding] | None]:
-        """What a team's IC says of the work its team reported done.
+    async def _own_account(self, place: SessionTeam) -> str:
+        """What a team's IC says changed, for the IC above.
 
         Returns:
-            Its description of the changes, '' when it gave none, and what
-            it found reviewing them, None when it gave no usable answer or
-            was not asked.
+            Its description of the changes, '' when it gave none or was
+            not asked.
         """
         ic = agent_conversation(place, "ic")
         if ic is None or not place.base_commit:
-            return "", None
+            return ""
         files = await asyncio.to_thread(
             bugbot.changed_files,
             Path(place.worktree_path),
             place.base_commit,
             place.boundary.path,
         )
-        if files is None:
-            return "", None
         if not files:
-            return "", []
+            return ""
         description = await self._ask_agent(ic, bugbot.write_up_question(files))
-        instructions = await asyncio.to_thread(self._find_review_instructions)
-        if instructions is None:
-            return description or "", None
-        contracts = await asyncio.to_thread(self.contracts_of, place)
-        specs = [
-            spec
-            for spec in await asyncio.to_thread(self.specs_of, place)
-            if not spec.old
-        ]
-        answer = await self._ask_agent(
-            ic,
-            bugbot.review_question(
-                instructions,
-                specs[0].spec if specs else None,
-                [agreed.contracts for agreed in contracts],
-                files,
-            ),
-        )
-        return description or "", bugbot.parse_findings(answer) if answer else None
+        return description or ""
 
     async def _request_review(self, place_id: str) -> None:
         store = self.store
@@ -1623,17 +1604,11 @@ class Reviews(Requests):
             return
         if asked.state != "pending":
             return
-        description, found = await self._own_account(place)
+        description = await self._own_account(place)
         place = store.place(place_id)
         if place is None or place.review != asked:
             return
-        review = asked.model_copy(
-            update={
-                "description": description,
-                "automated_ran": found is not None,
-                "automated": found or [],
-            }
-        )
+        review = asked.model_copy(update={"description": description})
         place = store.set_review(place_id, review)
         if store.opens_session(place):
             # Its Manager is asked what waits for it beside the review.

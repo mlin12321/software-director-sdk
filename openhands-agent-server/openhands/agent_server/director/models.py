@@ -265,8 +265,8 @@ class Review(BaseModel):
     """The review of the work a team submitted.
 
     The IC of the team above reviews it. Before that, the team's own IC is
-    asked to describe the changes and to review them, and both answers are
-    handed to that IC.
+    asked to describe the changes, and that account is handed to the
+    reviewing IC with the code review instructions.
     """
 
     state: ReviewState
@@ -284,14 +284,6 @@ class Review(BaseModel):
         default="",
         description="The team's own account of what it changed, written as "
         "a pull request description; '' when it gave none.",
-    )
-    automated_ran: bool = Field(
-        default=False,
-        description="Whether the team's IC, asked to review the changes by "
-        "the code review instructions, gave an answer.",
-    )
-    automated: list[ReviewFinding] = Field(
-        default_factory=list, description="What it found."
     )
     findings: list[ReviewFinding] = Field(
         default_factory=list,

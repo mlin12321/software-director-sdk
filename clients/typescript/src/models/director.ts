@@ -181,11 +181,6 @@ export interface DirectorReview {
   /** The team's own account of what it changed, written as a pull request
    * description; '' when it gave none. */
   description: string;
-  /** Whether the team's IC, asked to review the changes by the code review
-   * instructions, gave an answer. */
-  automated_ran: boolean;
-  /** What it found, for the reviewing IC to verify. */
-  automated: DirectorReviewFinding[];
   /** What the reviewing IC wants changed, when it asked. */
   findings: DirectorReviewFinding[];
   /** Whether the work went up without a review of its own: all of it was
