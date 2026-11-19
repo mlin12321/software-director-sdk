@@ -971,6 +971,7 @@ async def test_no_team_is_set_up_in_a_session_that_is_being_closed(
     await woken(service, "root")
     await use(service, ic(service), ProposeTeamsTool, SPLIT)
     root_ic, root_manager = ic(service), manager(service)
+    assert root_ic is not None and root_manager is not None
     # Both agents are in a turn as the human closes the session.
     launcher.report(root_ic, ConversationExecutionStatus.RUNNING)
     launcher.report(root_manager, ConversationExecutionStatus.RUNNING)

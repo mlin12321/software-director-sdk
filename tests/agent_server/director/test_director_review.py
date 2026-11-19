@@ -824,6 +824,7 @@ async def test_work_accepted_twice_before_it_is_carried_out_goes_up_once(
     reviewer = ic(service, "services.api")
     state = cast(ConversationState, SimpleNamespace(id=UUID(reviewer)))
     executor = ReviewTeamTool.create(state)[0].executor
+    assert executor is not None
 
     await asyncio.to_thread(executor, accept(SCHEMA))
     again = await asyncio.to_thread(executor, accept(SCHEMA))
