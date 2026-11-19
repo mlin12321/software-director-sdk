@@ -205,17 +205,19 @@ def _may_write(parent: SessionTeam, path: str) -> bool:
     """Whether a directory is part of what the parent's own agents may
     write, as far as that can be told from its globs' directories."""
 
-    def covers(glob: str, *, all_of_it: bool) -> bool:
-        directory = glob.split("*", 1)[0].rstrip("/")
-        if not directory:
-            return all_of_it
+    def covers(directory: str) -> bool:
         return path == directory or is_inside(path, directory)
 
     boundary = parent.boundary
-    if any(covers(glob, all_of_it=False) for glob in boundary.readonly):
+    if any(
+        (directory := glob.split("*", 1)[0].rstrip("/")) and covers(directory)
+        for glob in boundary.readonly
+    ):
         return False
+    # Only a glob of all that is below a folder holds all of the new team's.
     return not boundary.writable or any(
-        covers(glob, all_of_it=True) for glob in boundary.writable
+        glob == "**" or (glob.endswith("/**") and covers(glob[: -len("/**")]))
+        for glob in boundary.writable
     )
 
 
@@ -329,11 +331,12 @@ def normalize_split(
                 )
         readonly = [clean_path(glob) for glob in child.readonly]
         # What the team above may only read inside the folder, the new team
-        # may only read too.
+        # may only read too: a glob of a folder inside it, or of none.
         readonly += [
             glob
             for glob in parent.boundary.readonly
-            if glob.startswith(f"{path}/") and glob not in readonly
+            if (glob.startswith(f"{path}/") or glob.startswith("*"))
+            and glob not in readonly
         ]
         proposed[path] = child.title
         normalized.append(
