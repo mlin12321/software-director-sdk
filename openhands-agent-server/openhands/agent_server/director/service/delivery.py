@@ -318,17 +318,32 @@ class Delivery(Records):
                     self._deliver_what_waited(agent.conversation_id)
 
     def _deliver_what_waited(self, conversation_id: str) -> None:
-        """Deliver the messages that waited for an agent's turn to end."""
-        for held in self._runs().held():
-            if held.conversation_id != conversation_id:
-                continue
-            self._at_once.add(held.seq)
-            self._enqueue(
-                lambda held=held: self._deliver(
-                    held.seq, held.conversation_id, held.text
-                ),
-                held.node_id or ORG_LANE,
-            )
+        """Deliver what waited for an agent's turn to end, as one message:
+        each of several would end the turn the one before it began."""
+        if self._settles(conversation_id):
+            # A step is changing its team; the step delivers it when done.
+            return
+        run = self._runs()
+        waiting = [
+            held
+            for held in run.held()
+            if held.conversation_id == conversation_id
+            and held.seq not in self._delivering
+        ]
+        if not waiting:
+            return
+        seq, place_id, text = waiting[0].seq, waiting[0].node_id, waiting[0].text
+        if len(waiting) > 1:
+            text = "\n\n".join(held.text for held in waiting)
+            # Held as one before the others are forgotten: a server that ends
+            # in between says something twice, never loses it.
+            seq = run.hold(conversation_id, place_id, text)
+            for held in waiting:
+                run.delivered(held.seq)
+        self._at_once.add(seq)
+        self._enqueue(
+            lambda: self._deliver(seq, conversation_id, text), place_id or ORG_LANE
+        )
 
     async def _when_there_is_room[T](
         self, place_id: str, start: Callable[[], Awaitable[T]]

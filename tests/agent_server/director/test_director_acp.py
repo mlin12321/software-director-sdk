@@ -612,7 +612,9 @@ async def test_a_notice_waits_for_the_turn_of_an_agent_that_runs_its_own_tools(
     await service.settled()
 
     assert waiting == []
-    assert [text.split("'")[1] for text in said_to(launcher, agent)] == ["API", "Web"]
+    # As one message: a second would end the turn the first began.
+    [said] = said_to(launcher, agent)
+    assert said.index("'API' is merged") < said.index("'Web' is merged")
     await service.aclose()
 
 
