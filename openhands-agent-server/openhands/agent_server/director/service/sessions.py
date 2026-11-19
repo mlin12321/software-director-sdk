@@ -448,6 +448,7 @@ class Sessions(Splits):
                     headline=current.headline,
                     spec_summary=current.spec_summary,
                     old_specs=current.old_specs,
+                    since=current.since,
                 )
                 for current in added
             ],
@@ -525,7 +526,8 @@ class Sessions(Splits):
             started = [
                 team
                 for team in map(store.place, plan["teams"])
-                if team is not None and team.agents
+                # A Division Lead place is in the human's own checkout.
+                if team is not None and team.agents and not is_division_lead(team)
             ]
             top = store.place(place_id)
             # Its Division Lead place is in the repository's checkout.

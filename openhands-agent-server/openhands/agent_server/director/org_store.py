@@ -66,7 +66,13 @@ def status_of(node: SessionTeamInput) -> NodeStatus:
     return "blocked" if AGENT_LOST in agents else "idle"
 
 
-type OrgChange = NodeUpsertEvent | NodeRemovedEvent | EscalationsEvent | SessionsEvent
+type OrgChange = (
+    SnapshotEvent
+    | NodeUpsertEvent
+    | NodeRemovedEvent
+    | EscalationsEvent
+    | SessionsEvent
+)
 type OrgListener = Callable[[OrgChange], None]
 
 _DERIVED_FIELDS = {"child_ids"}
@@ -113,7 +119,7 @@ class _Subscription:
     expanded: frozenset[str]
     # Whether the subscriber follows every team below the focused one.
     full: bool
-    # The teams above the focused one. A team never changes parent.
+    # The teams above the focused one.
     above: frozenset[str]
     # What the subscriber was last told, to announce only real changes.
     escalations: list[OpenEscalation] = field(default_factory=list)
@@ -703,8 +709,7 @@ class OrgStore:
             )
             moved = node.model_copy(update={"parent_id": parent_id})
             self._nodes[team_id] = moved
-            for changed in (moved, self._nodes[former], self._nodes[parent_id]):
-                self._emit(NodeUpsertEvent(node=changed), changed.id, changed.parent_id)
+            self.show_again()
             self._changed()
             return moved
 
@@ -842,7 +847,7 @@ class OrgStore:
         return True
 
     def replace_all(self, inputs: Iterable[OrgNodeInput]) -> None:
-        """Replace the whole tree without emitting events.
+        """Replace the whole tree; subscribers are shown theirs again.
 
         Used when loading persisted state. The store is left
         untouched if the input is not one well-formed tree. The sessions
@@ -891,6 +896,7 @@ class OrgStore:
             self._agents = {}
             self._hand_overs = {}
             self.restore_sessions(kept)
+            self.show_again()
 
     def restore_sessions(
         self, sessions: Iterable[tuple[SessionInput, list[SessionTeamInput]]]
@@ -908,9 +914,20 @@ class OrgStore:
                     continue
                 self._sessions[session.id] = session
                 try:
-                    # A session's Division Lead place is above the rest.
-                    for team in sorted(teams, key=lambda team: not team.division_lead):
-                        self._restore_place(team)
+                    # Each place after the one above it, in whatever order
+                    # they were kept.
+                    waiting = list(teams)
+                    while waiting:
+                        ready = [
+                            team
+                            for team in waiting
+                            if team.division_lead or team.parent_id in self._places
+                        ]
+                        if not ready:
+                            raise OrgStoreError(f"Nothing is above {waiting[0].id}")
+                        for team in ready:
+                            self._restore_place(team)
+                            waiting.remove(team)
                     _ = self._places[session_team_id(session.team_id, session.id)]
                 except (OrgStoreError, KeyError):
                     for place in self.session(session.id):
@@ -1142,6 +1159,22 @@ class OrgStore:
             ordered.append(node)
             queue.extend(node.child_ids)
         return ordered
+
+    def show_again(self) -> None:
+        """Send every subscriber its snapshot anew: teams changed place, and
+        what each follows is no longer what it was told one team at a time."""
+        for listener, subscription in list(self._listeners.items()):
+            focus_id = subscription.focus_id
+            snapshot = self.snapshot(
+                focus_id, subscription.expanded, full=subscription.full
+            )
+            if snapshot is None:
+                continue
+            subscription.above = frozenset(
+                team.id for team in self.teams_above(focus_id)
+            )
+            subscription.escalations = snapshot.escalations
+            listener(snapshot)
 
     def _emit(self, event: OrgChange, team_id: str, parent_id: str | None) -> None:
         if not self._listeners:

@@ -169,8 +169,11 @@ def changed_together(checkout: Path, path: str, other: str, last: int = 200) -> 
 def uncommitted(checkout: Path, path: str) -> list[str]:
     """The files under ``path`` that differ from the last commit or are new,
     ignored files aside."""
-    listed = git(checkout, ["status", "--porcelain", "-uall", "--", pathspec(path)])
-    return [line[3:] for line in listed.splitlines() if line]
+    listed = git(
+        checkout,
+        ["status", "--porcelain", "--no-renames", "-uall", "-z", "--", pathspec(path)],
+    )
+    return [entry[3:] for entry in listed.split("\0") if entry]
 
 
 def bring_over(source: Path, target: Path, path: str, ref: str) -> list[str]:

@@ -13,6 +13,10 @@ from openhands.agent_server.director.git import (
     pathspec,
     top_of,
 )
+from openhands.agent_server.director.merge_back import (
+    bring_up_to_date,
+    one_at_a_time,
+)
 from openhands.agent_server.director.models import (
     AcceptedChanges,
     ChangedFile,
@@ -216,6 +220,9 @@ def write_by_hand(
     path = require_editable(place, sub_teams, path)
     top = checkout_top(place)
     target = _within(top, path)
+    if Path(os.path.realpath(target)) != target:
+        # What it leads to may be another team's.
+        raise Forbidden(f"{path!r} is reached through a link")
     if target.is_dir():
         raise Invalid(f"{path!r} is a folder")
     spec = pathspec(path)
@@ -227,22 +234,19 @@ def write_by_hand(
         raise Invalid(f"git ignores {path!r}, so a change to it cannot be committed")
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_bytes(content.encode())
-    git(top, ["add", "--", spec])
-    if not git(top, ["status", "--porcelain", "--", spec]).strip():
-        return FileEdit(path=path, commit=None)
-    git(
-        top,
-        [
-            "commit",
-            "--no-verify",
-            "--only",
-            "-m",
-            f"Edited by hand: {path}",
-            "--",
-            spec,
-        ],
-        env=DIRECTOR_IDENTITY,
-    )
+    with one_at_a_time(top):
+        before = git(top, ["rev-parse", "HEAD"]).strip()
+        git(top, ["add", "--", spec])
+        if not git(top, ["status", "--porcelain", "--", spec]).strip():
+            return FileEdit(path=path, commit=None)
+        git(
+            top,
+            ["commit", "--no-verify", "--only", "-m", f"Edited by hand: {path}"]
+            + ["--", spec],
+            env=DIRECTOR_IDENTITY,
+        )
+        # Or the next commit of an agent that works here takes the edit out.
+        bring_up_to_date(top, before)
     return FileEdit(path=path, commit=git(top, ["rev-parse", "HEAD"]).strip())
 
 

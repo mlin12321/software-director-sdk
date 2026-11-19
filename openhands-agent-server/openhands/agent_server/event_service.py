@@ -2496,8 +2496,10 @@ class EventService:
             try:
                 reason = guard(self.stored.id, event)
             except Exception:
-                logger.exception("Action guard failed; the action is not blocked")
-                continue
+                # A guard that cannot decide refuses: an action nobody
+                # checked must not run.
+                logger.exception("Action guard failed; the action is blocked")
+                reason = "This action could not be checked, so it was not run."
             if reason is not None:
                 conversation.state.block_action(event.id, reason)
                 return

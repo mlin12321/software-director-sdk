@@ -295,9 +295,39 @@ async def used_by(agent: object, *metrics: Metrics) -> Usage:
 
         return SimpleNamespace(get_state=get_state)
 
-    conversations = SimpleNamespace(get_event_service=get_event_service)
+    conversations = SimpleNamespace(
+        get_event_service=get_event_service, loaded_event_service=lambda _: None
+    )
     launcher = ConversationTeamLauncher(cast(ConversationService, conversations))
     return (await launcher.usage([conversation]))[conversation]
+
+
+async def test_counting_use_does_not_keep_an_idle_conversation_loaded():
+    conversation, loads = uuid4(), 0
+
+    async def get_event_service(_: UUID):
+        nonlocal loads
+        loads += 1
+
+        async def get_state():
+            stats = SimpleNamespace(
+                usage_to_metrics={"0": metered("claude-sonnet-4-5", 0.5)}
+            )
+            return SimpleNamespace(agent=object(), stats=stats)
+
+        return SimpleNamespace(get_state=get_state)
+
+    # It was evicted for being idle: nothing of it is loaded.
+    conversations = SimpleNamespace(
+        get_event_service=get_event_service, loaded_event_service=lambda _: None
+    )
+    launcher = ConversationTeamLauncher(cast(ConversationService, conversations))
+
+    first = await launcher.usage([conversation])
+    again = await launcher.usage([conversation])
+
+    assert first == again and first[conversation].cost == 0.5
+    assert loads == 1
 
 
 RUN = {

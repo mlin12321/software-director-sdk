@@ -75,6 +75,7 @@ from openhands.agent_server.director.service.state import (
 )
 from openhands.sdk.conversation.state import ConversationExecutionStatus
 from openhands.sdk.errors import (
+    Conflict,
     NotFound,
 )
 from openhands.sdk.tool.spec import Tool
@@ -468,6 +469,9 @@ class Teams(Delivery):
             return
         own = None if own_too else agent_conversation(team, "ic")
         conversations = self._conversations_below(team)
+        # The time it was stopped is not time it showed no progress.
+        for found in map(self.store.find_by_conversation, conversations):
+            self.progressed(found[0].id if found else None)
         # In the order it was sent, and before the message that set the
         # team going, which waits behind this in the team's lane.
         for held in self._runs().held():
@@ -699,10 +703,17 @@ class Teams(Delivery):
 
         Raises:
             NotFound: There is nobody to derive the agent from.
+            Conflict: A step of the director is replacing or removing the team.
             _Held: The org was paused while the team waited for a run.
         """
         place_id = place.id
         launcher = self._require_launcher()
+        if any(place_id in teams for teams, _ in self._settling.values()):
+            # The step fixed which conversations it stops before this one.
+            raise Conflict(
+                f"Team {place.title!r} is being replaced or removed, so its "
+                f"{role} was not started"
+            )
         text, told = await asyncio.to_thread(self._briefing, place, role, task)
         tool_params = await asyncio.to_thread(self._confine, place_id, role)
         if parent_conversation is None:
@@ -791,7 +802,13 @@ class Teams(Delivery):
         store, launcher = self.store, self._require_launcher()
         while place is not None:
             ic = agent_conversation(place, "ic")
-            if ic is not None and await launcher.started(UUID(ic)) is not None:
+            # Never a Division Lead IC, whose role of reviewer the new agent
+            # would inherit.
+            if (
+                ic is not None
+                and not is_division_lead(place)
+                and await launcher.started(UUID(ic)) is not None
+            ):
                 return ic
             place = store.place(place.parent_id) if place.parent_id else None
         return None

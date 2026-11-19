@@ -135,6 +135,9 @@ class Sync(Sessions):
         store = await asyncio.to_thread(lambda: self.store)
         if self._paused is None:
             return await self.recovery()
+        # A pause that is still stopping agents would stop them after this
+        # has set them going again.
+        await self._after(PAUSE_LANE)
         run = self._runs()
         await asyncio.to_thread(self._put_aside_stale)
         await asyncio.to_thread(
@@ -645,6 +648,8 @@ class Sync(Sessions):
         for node in nodes:
             if current.get(node["id"]) != node:
                 store.upsert(OrgNodeInput.model_validate(node))
+        # Teams may have changed place, which no one team's change tells.
+        store.show_again()
 
     def _put_aside_stale(self) -> None:
         run = self._runs()

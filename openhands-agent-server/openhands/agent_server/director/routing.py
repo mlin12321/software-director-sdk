@@ -357,6 +357,9 @@ def choose(
         return Choice(team_id, by, True, why, named_owners, tuple(answers), worded)
 
     by_name = settled(named_owners) if named_owners else None
+    if named_owners and by_name is None:
+        # It is for a team above both, which the team it was made at reaches.
+        return unsure("the request names files of a team outside this one")
     given = [answer for answer in answers if answer is not None]
     if not given or len(given) < len(answers):
         if by_name is None:

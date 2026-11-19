@@ -44,7 +44,7 @@ class MergeBack:
 
 
 @contextmanager
-def _one_at_a_time(checkout: Path) -> Iterator[None]:
+def one_at_a_time(checkout: Path) -> Iterator[None]:
     """Hold the lock the agents' git takes for commands that move ``HEAD``."""
     if sys.platform == "win32":
         yield
@@ -100,7 +100,7 @@ def merge_back(above: Path, team: Path, directory: str, title: str) -> MergeBack
         clashing = conflicts(above, ours, tip)
         if clashing:
             return MergeBack("conflicts", tip, clashing)
-    with _one_at_a_time(above):
+    with one_at_a_time(above):
         try:
             git(
                 above,
@@ -115,7 +115,7 @@ def merge_back(above: Path, team: Path, directory: str, title: str) -> MergeBack
             return MergeBack(
                 "refused", tip, detail=(error.stderr or error.stdout).strip()
             )
-        _bring_up_to_date(above, ours)
+        bring_up_to_date(above, ours)
     return MergeBack("merged", tip)
 
 
@@ -129,7 +129,7 @@ def take_merge(above: Path, commit: str) -> MergeBack:
     ours = head_of(above)
     if ours is None:
         raise GitError(["rev-parse", "HEAD"], 1, "A checkout has no commit", "")
-    with _one_at_a_time(above):
+    with one_at_a_time(above):
         try:
             git(
                 above,
@@ -140,12 +140,12 @@ def take_merge(above: Path, commit: str) -> MergeBack:
             return MergeBack(
                 "refused", commit, detail=(error.stderr or error.stdout).strip()
             )
-        _bring_up_to_date(above, ours)
+        bring_up_to_date(above, ours)
     return MergeBack("merged", commit)
 
 
-def _bring_up_to_date(checkout: Path, before: str) -> None:
-    """Take a merge that moved the ``HEAD`` of ``checkout`` on from
+def bring_up_to_date(checkout: Path, before: str) -> None:
+    """Take a commit that moved the ``HEAD`` of ``checkout`` on from
     ``before`` into the index of every agent that works there.
 
     An agent's git holds what is outside its team's directory at ``HEAD``

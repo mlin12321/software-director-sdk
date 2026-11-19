@@ -118,12 +118,15 @@ class Splits(Watch):
         # A team in the team's own checkout has its files there already.
         apart = [team for team in teams if team.worktree_path != place.worktree_path]
         for team in apart:
-            merged = merge_back(
-                Path(place.worktree_path),
-                Path(team.worktree_path),
-                team.boundary.path,
-                team.title,
-            )
+            try:
+                merged = merge_back(
+                    Path(place.worktree_path),
+                    Path(team.worktree_path),
+                    team.boundary.path,
+                    team.title,
+                )
+            except (GitError, OSError) as error:
+                return f"the work {team.title!r} committed could not be read ({error})."
             if merged.outcome in ("conflicts", "outside", "refused"):
                 detail = ", ".join(merged.files) or merged.detail
                 return (

@@ -2,7 +2,7 @@
 
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -11,12 +11,14 @@ from openhands.agent_server.director.service.state import (
     STALL_WAITS,
     failure_waits,
 )
-from openhands.agent_server.director.tools import MsgTeamTool
+from openhands.agent_server.director.tools import MsgTeamTool, PruneTeamTool
 from openhands.agent_server.director.tools.definition import MsgTeamAction
 from openhands.sdk.conversation.state import ConversationExecutionStatus
+from openhands.sdk.errors import Conflict
 from tests.agent_server.director.conftest import FakeLauncher, record_of
 from tests.agent_server.director.test_director_acp import started
 from tests.agent_server.director.test_director_tools import (
+    PRUNE_API,
     ic,
     manager,
     node,
@@ -231,3 +233,63 @@ async def test_the_human_is_asked_of_a_stalled_team_with_no_ic_above(
         assert node(service, "root").escalations == []
     finally:
         await service.aclose()
+
+
+async def test_a_team_whose_removal_failed_is_still_told_things(
+    service: DirectorService, launcher: FakeLauncher
+):
+    await woken(service, API)
+    api_ic = ic(service, API)
+
+    def fail_to_stop(call: str) -> None:
+        if call == "stop":
+            raise RuntimeError("the agent could not be stopped")
+
+    launcher.before = fail_to_stop
+    await use(service, manager(service), PruneTeamTool, PRUNE_API)
+    await service.settled()
+    launcher.before = lambda _: None
+    told = len(launcher.messages_to(api_ic))
+
+    service.notify(api_ic, "Go on with the orders endpoint.")
+    await service.settled()
+
+    assert launcher.messages_to(api_ic)[told:] == [
+        "[director] Go on with the orders endpoint."
+    ]
+
+
+async def test_a_message_that_could_not_be_sent_is_sent_again_before_the_next(
+    service: DirectorService, launcher: FakeLauncher
+):
+    top_ic = ic(service)
+    failed: list[str] = []
+
+    def fail_once(call: str) -> None:
+        if call == "send" and not failed:
+            failed.append(call)
+            raise RuntimeError("the server could not take it")
+
+    launcher.before = fail_once
+    told = len(launcher.messages_to(top_ic))
+
+    service.notify(top_ic, "first")
+    service.notify(top_ic, "second")
+    await service.settled()
+
+    sent = [text.splitlines()[0] for text in launcher.messages_to(top_ic)[told:]]
+    assert sent == ["[director] first", "[director] second"]
+
+
+async def test_no_agent_is_started_in_a_team_that_is_being_removed(
+    service: DirectorService, launcher: FakeLauncher
+):
+    api = node(service, API)
+    # A step that removes the team waits for its agents to stop.
+    service._settling[0] = ({api.id}, api.id)
+    starts = len(launcher.derived)
+
+    with pytest.raises(Conflict, match="being replaced or removed"):
+        await service._start_new(api, "ic", str(uuid4()), ic(service), "Build it.")
+
+    assert len(launcher.derived) == starts

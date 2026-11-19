@@ -59,6 +59,10 @@ from openhands.sdk.errors import (
 logger = logging.getLogger(__name__)
 
 
+# How often a message is sent before it is left held.
+_SEND_ATTEMPTS = 3
+
+
 class Delivery(Records):
     """Sends agents what the director has for them."""
 
@@ -176,7 +180,7 @@ class Delivery(Records):
             text, told = await asyncio.to_thread(
                 self._with_what_changed, conversation_id, text
             )
-            await self._require_launcher().send(UUID(conversation_id), text)
+            await self._send_again(UUID(conversation_id), text)
             if told is not None:
                 run.mark(TOLD, conversation_id, told)
             self._turn_begun(conversation_id)
@@ -198,6 +202,22 @@ class Delivery(Records):
         finally:
             self._delivering.discard(seq)
         run.delivered(seq)
+
+    async def _send_again(self, conversation_id: UUID, text: str) -> None:
+        """Send a message, trying again when the server could not take it.
+        What is sent to the team after it waits behind it meanwhile."""
+        launcher = self._require_launcher()
+        for attempt in range(_SEND_ATTEMPTS):
+            try:
+                return await launcher.send(conversation_id, text)
+            except NotFound:
+                raise
+            except Exception:
+                if attempt == _SEND_ATTEMPTS - 1:
+                    # It stays held, for the end of the agent's next turn.
+                    raise
+                logger.warning("A message to %s is sent again", conversation_id)
+                await asyncio.sleep(self._run_limit_retry)
 
     def knows(self, place_id: str, role: AgentRole, *keys: str) -> None:
         """Take as told to an agent the parts of its context it has just
@@ -298,17 +318,32 @@ class Delivery(Records):
                     self._deliver_what_waited(agent.conversation_id)
 
     def _deliver_what_waited(self, conversation_id: str) -> None:
-        """Deliver the messages that waited for an agent's turn to end."""
-        for held in self._runs().held():
-            if held.conversation_id != conversation_id:
-                continue
-            self._at_once.add(held.seq)
-            self._enqueue(
-                lambda held=held: self._deliver(
-                    held.seq, held.conversation_id, held.text
-                ),
-                held.node_id or ORG_LANE,
-            )
+        """Deliver what waited for an agent's turn to end, as one message:
+        each of several would end the turn the one before it began."""
+        if self._settles(conversation_id):
+            # A step is changing its team; the step delivers it when done.
+            return
+        run = self._runs()
+        waiting = [
+            held
+            for held in run.held()
+            if held.conversation_id == conversation_id
+            and held.seq not in self._delivering
+        ]
+        if not waiting:
+            return
+        seq, place_id, text = waiting[0].seq, waiting[0].node_id, waiting[0].text
+        if len(waiting) > 1:
+            text = "\n\n".join(held.text for held in waiting)
+            # Held as one before the others are forgotten: a server that ends
+            # in between says something twice, never loses it.
+            seq = run.hold(conversation_id, place_id, text)
+            for held in waiting:
+                run.delivered(held.seq)
+        self._at_once.add(seq)
+        self._enqueue(
+            lambda: self._deliver(seq, conversation_id, text), place_id or ORG_LANE
+        )
 
     async def _when_there_is_room[T](
         self, place_id: str, start: Callable[[], Awaitable[T]]

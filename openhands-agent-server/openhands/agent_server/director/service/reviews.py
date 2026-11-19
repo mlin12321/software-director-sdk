@@ -73,6 +73,7 @@ from openhands.agent_server.director.prompts import (
 )
 from openhands.agent_server.director.reconcile import changes_of
 from openhands.agent_server.director.run_state import (
+    CLEARING,
     DECIDED,
     HELD,
     MERGING,
@@ -1144,8 +1145,13 @@ class Reviews(Requests):
                 )
                 + (f"\n\n{note}" if note else ""),
             )
+        self._record_not_taken(top, landed)
+        self._org_turn()
+
+    def _record_not_taken(self, top: SessionTeam, landed: Landed) -> None:
+        """Keep on record the contracts of a session that the org did not
+        take, also when the session is closed and nobody is told."""
         for directory, _ in landed.others:
-            # On record also when the session is closed and nobody is told.
             self._land_event(
                 self._home_of(top, directory),
                 self._event(
@@ -1156,7 +1162,6 @@ class Reviews(Requests):
                     "written to them",
                 ),
             )
-        self._org_turn()
 
     async def _do_land_org(self, intent: Intent) -> None:
         """Land what a session's accepted work makes of the org's teams
@@ -1225,6 +1230,7 @@ class Reviews(Requests):
             )
         for team_id, role in landed.records.grown:
             self.reports_grew(team_id, role)
+        self._record_not_taken(top, landed)
 
     def _sent_back(self, top: SessionTeam) -> None:
         """The work of a session was sent back: it has no place in the
@@ -1490,12 +1496,18 @@ class Reviews(Requests):
     async def _do_request_review(self, intent: Intent) -> None:
         await self._request_review(intent.node_id)
 
-    def _ask_to_clear(self, place_id: str, detail: str) -> None:
+    def _ask_to_clear(
+        self, place_id: str, detail: str, reconciled: str, specs: list[dict[str, str]]
+    ) -> None:
         """Ask the human, once, to clear the way for accepted work into
-        their own checkout. Their answer merges it."""
+        their own checkout. Their answer merges it, as its reviewer
+        decided."""
         place = self.store.place(place_id)
         if place is None or any(e.id == MERGE_WAITS for e in place.escalations):
             return
+        self._runs().mark(
+            CLEARING, place_id, json.dumps({"reconciled": reconciled, "specs": specs})
+        )
         self.store.raise_escalation(
             place_id,
             MERGE_WAITS,
@@ -1600,10 +1612,22 @@ class Reviews(Requests):
         if place.review.state == "accepted":
             # Cut off after the acceptance was made: what follows it is
             # still owed.
+            merge = self._merge_of(place) if store.opens_session(place) else None
+            if merge is not None and not merge.code_landed:
+                await asyncio.to_thread(self._land_accepted, place, None)
             await self._pass_up(above.id, acted=True)
         if place.review.state != "pending":
             return
         reviewer = agent_conversation(above, "ic")
+        first = self._before(place)
+        if first is not None:
+            # The acceptance of work submitted earlier was carried out
+            # since this one was checked, and left that work waiting.
+            self._runs().mark(TURN, place.id)
+            self.notify(
+                reviewer, accept_in_order(place, first, store.session_title(first))
+            )
+            return
         where = place.boundary.path or "the repository"
         team, checkout = Path(place.worktree_path), Path(above.worktree_path)
         merged = False
@@ -1619,12 +1643,9 @@ class Reviews(Requests):
             self.notify(reviewer, refusal)
             return
         if _checkout_root(str(team)) != _checkout_root(str(checkout)):
-            on = await asyncio.to_thread(_branch_of, str(checkout))
-            session = store.session_of(place)
-            started_on = session.branch if session else ""
-            if is_division_lead(above) and started_on and on != started_on:
-                # The human's checkout is somewhere else than where the
-                # session started: the work is not merged into that.
+            elsewhere = await asyncio.to_thread(self._elsewhere, place, above)
+            if elsewhere is not None:
+                started_on, on = elsewhere
                 self._ask_to_clear(
                     place_id,
                     f"The session started from the branch {started_on!r}, "
@@ -1632,6 +1653,8 @@ class Reviews(Requests):
                     + ("on no branch" if on in ("", "HEAD") else f"on {on!r}")
                     + f".\nSwitch it back to {started_on!r}, then answer "
                     "this: the work is merged then.",
+                    reconciled,
+                    specs or [],
                 )
                 self.notify(
                     reviewer,
@@ -1681,6 +1704,8 @@ class Reviews(Requests):
                     f"git would not merge it as the checkout is:\n"
                     f"{result.detail}\nCommit or put aside what is in "
                     "the way, then answer this: the work is merged then.",
+                    reconciled,
+                    specs or [],
                 )
                 self.notify(
                     reviewer,
@@ -1760,6 +1785,7 @@ class Reviews(Requests):
             )
             self._changed_since_accept.pop(place.session, None)
         self._runs().unmark(SHOWN, place_id)
+        self._runs().unmark(CLEARING, place_id)
         self._tell_turns()
         if not is_division_lead(above):
             self.count_accepted_review(above.id)
@@ -1855,9 +1881,9 @@ class Reviews(Requests):
         try:
             names = git(
                 checkout,
-                ["diff", "--name-only", place.base_commit, "HEAD", "--"]
+                ["diff", "--name-only", "-z", place.base_commit, "HEAD", "--"]
                 + [pathspec(place.boundary.path)],
-            ).splitlines()
+            ).split("\0")
             names += uncommitted(checkout, place.boundary.path)
         except (GitError, OSError):
             return None
@@ -1873,6 +1899,19 @@ class Reviews(Requests):
             }
         )
 
+    def _elsewhere(
+        self, place: SessionTeam, above: SessionTeam
+    ) -> tuple[str, str] | None:
+        """The branch a session started from and the one the human's
+        checkout is on now, when they differ: the session's work is not
+        merged into that."""
+        session = self.store.session_of(place)
+        started_on = session.branch if session else ""
+        if not is_division_lead(above) or not started_on:
+            return None
+        on = _branch_of(above.worktree_path)
+        return None if on == started_on else (started_on, on)
+
     async def _pass_up(self, place_id: str, *, acted: bool) -> None:
         """Take a team's work into the team above without another review,
         when all of it is work of its sub-teams that was accepted.
@@ -1887,7 +1926,8 @@ class Reviews(Requests):
         """
         store = self.store
         place = store.place(place_id)
-        if place is None or not store.below(place_id):
+        # A Division Lead place reviews; it has no work to hand on.
+        if place is None or is_division_lead(place) or not store.below(place_id):
             return
         # A team that was set up and never given work owes none.
         teams = [
@@ -1912,13 +1952,17 @@ class Reviews(Requests):
         if own is None:
             return
         # The work of a session meets what other sessions delivered: where
-        # it does, the reviewer is asked even if the team changed nothing.
+        # it does, or the human's checkout has moved to another branch, the
+        # reviewer is asked even if the team changed nothing.
         meets = False
         if not own and above is not None and store.opens_session(place):
             try:
                 meets = (
                     await asyncio.to_thread(self._to_reconcile, place, above)
-                ) is not None
+                    is not None
+                    or await asyncio.to_thread(self._elsewhere, place, above)
+                    is not None
+                )
             except (GitError, OSError):
                 meets = True
         if own or above is None or meets:
@@ -1968,12 +2012,16 @@ class Reviews(Requests):
                 "its own.",
                 passed_up=True,
                 at=utc_now(),
+                # It goes into the org after what was submitted before now.
+                seq=self.next_submission() if opens else 0,
             ),
             base_commit=tip or place.base_commit,
         )
         self._work_accepted(place)
         if opens:
-            await asyncio.to_thread(self._land_accepted, place, None)
+            await asyncio.to_thread(
+                self._land_accepted, store.place(place_id) or place, None
+            )
         self._tell_turns()
         if acted:
             self.notify(

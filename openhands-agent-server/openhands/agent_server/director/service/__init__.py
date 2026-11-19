@@ -1,9 +1,11 @@
 """The director's state for one server: an org tree and its team_memory."""
 
 import asyncio
+import json
 import logging
 import os
 from collections.abc import Awaitable, Callable
+from contextlib import suppress
 from pathlib import Path
 from uuid import UUID
 
@@ -42,6 +44,7 @@ from openhands.agent_server.director.recovery import (
     has_work,
 )
 from openhands.agent_server.director.run_state import (
+    CLEARING,
     MERGING,
     Intent,
 )
@@ -365,6 +368,14 @@ class DirectorService(Sync):
             reason=reason,
         )
 
+    def is_agent(self, conversation_id: UUID) -> bool:
+        """Whether a conversation is one of an agent of the org."""
+        store = self._store
+        return store is not None and (
+            store.find_by_conversation(str(conversation_id)) is not None
+            or store.find_hand_over(str(conversation_id)) is not None
+        )
+
     def guard_action(self, conversation_id: UUID, event: ActionEvent) -> str | None:
         """Why an agent of the org may not carry out an action, if it may not.
 
@@ -422,7 +433,9 @@ class DirectorService(Sync):
                 )
                 if refusal is not None:
                     if role == "ic":
-                        self.record_need(node, relative, NEED_WRITE)
+                        # The refusal stands whether or not it could be kept.
+                        with suppress(Exception):
+                            self.record_need(node, relative, NEED_WRITE)
                     return refusal
             elif any(_is_in(target, checkout) for checkout in self._checkouts()):
                 return (
@@ -467,8 +480,9 @@ class DirectorService(Sync):
         store.settle_escalation(place_id, escalation_id)
         if escalation_id == MERGE_WAITS:
             # The way into the checkout was cleared: the accepted work is
-            # merged now, with nobody asked again.
-            self.accept_review(place_id, "")
+            # merged now as its reviewer decided, with nobody asked again.
+            decided = json.loads(self._runs().marked(CLEARING).get(place_id) or "{}")
+            self.accept_review(place_id, "", **decided)
             return store.place(place_id) or place
         if escalation_id == ORG_WAITS:
             # The human goes on without the Manager.

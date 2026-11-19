@@ -8,6 +8,7 @@ import os
 import re
 import secrets
 import shutil
+import sqlite3
 import threading
 from collections import deque
 from collections.abc import Awaitable, Callable, Sequence
@@ -172,6 +173,9 @@ def tools_of(place: SessionTeam, role: AgentRole) -> tuple[str, ...]:
 DIRECTOR_TOOL_NAMES = tuple(
     dict.fromkeys((*TOOLS_OF["ic"], *TOOLS_OF["manager"], *DIVISION_LEAD_MANAGER_TOOLS))
 )
+# Tools that start agents nothing holds to the team's folder. An org's
+# agent hands work on by proposing sub-teams.
+_SUB_AGENT_TOOLS = ("task_tool_set", "task", "delegate")
 # How a team that was set up and given no task reads to the IC above.
 NOT_STARTED = "not_started"
 # What follows a team's purpose in its task once something started it.
@@ -225,6 +229,8 @@ _RUN_STATE = "director/state.db"
 # Where, in the repository's git directory, the director keeps the shells
 # its agents' terminals start, and what those shells need.
 _SHELLS_DIR = "director-shells"
+# In the git directory, and not for an agent's shell to write.
+_PRIVATE = ("director", "hooks")
 # In the repository's git directory: the merges reviewers finish.
 _MERGING_DIR = "director-merging"
 # After a conversation id: the script an ACP agent's process is started by.
@@ -656,7 +662,8 @@ class ServiceState:
                 kept = [
                     tool
                     for tool in agent.tools
-                    if tool.name not in DIRECTOR_TOOL_NAMES or tool.name in offered
+                    if tool.name not in _SUB_AGENT_TOOLS
+                    and (tool.name not in DIRECTOR_TOOL_NAMES or tool.name in offered)
                 ]
                 has = {tool.name for tool in kept}
                 added = [Tool(name=name) for name in offered if name not in has]
@@ -807,7 +814,7 @@ class ServiceState:
             return RunState(None)
         try:
             return RunState(self._shells().parent / _RUN_STATE)
-        except (GitError, OSError, RunStateError):
+        except (GitError, OSError, RunStateError, sqlite3.Error):
             logger.exception("Run state of %s is kept in memory only", self._repo_dir)
             return RunState(None)
 
@@ -933,6 +940,9 @@ class ServiceState:
                 excludes, excludes_file(self._repo_dir, directory, sub_teams)
             )
             atomic_write_text(rc, rcfile(bin_dir))
+        # An agent's commits need the git directory, but not what the director
+        # keeps there, nor the hooks git runs for everyone.
+        private = [shells, *(shells.parent / name for name in _PRIVATE)]
         script = shells / f"{conversation_id}.sh"
         write_shell(
             script,
@@ -940,7 +950,8 @@ class ServiceState:
                 self._bwrap,
                 bash or "/bin/sh",
                 checkouts=self._checkouts(),
-                private=shells,
+                private=private,
+                secret=self._remembered,
                 directory=place.boundary.path if writes else None,
                 sub_team_directories=closed,
                 rcfile=rc,
@@ -953,7 +964,8 @@ class ServiceState:
             command_script(
                 self._bwrap,
                 checkouts=self._checkouts(),
-                private=shells,
+                private=private,
+                secret=self._remembered,
                 directory=place.boundary.path if writes else None,
                 sub_team_directories=closed,
                 first_on_path=bin_dir,
@@ -999,7 +1011,10 @@ class ServiceState:
                 logger.info("Director loaded %d teams from %s", len(store), repository)
                 kept = self._open_run_state()
                 try:
-                    restore_sessions(store, kept.marked(SESSION))
+                    # None of another server's run state is used, so its
+                    # sessions are not taken up without it either.
+                    if kept.get("instance") in (None, self._instance()):
+                        restore_sessions(store, kept.marked(SESSION))
                 finally:
                     kept.close()
                 return True
@@ -1116,6 +1131,9 @@ class ServiceState:
     def _keep_failure(self, intent: Intent, error: Exception) -> None:
         """Keep a step of the director that failed. The service does."""
 
+    def _let_go(self, intent: Intent) -> None:
+        """Deliver what waited for the teams a step changes. The service does."""
+
     async def _carry_out(self, intent_id: int) -> None:
         run = self._runs()
         if self._paused is not None or intent_id in self._in_flight:
@@ -1138,6 +1156,8 @@ class ServiceState:
         except Exception as error:
             logger.exception("A director action failed")
             run.finish(intent.id)
+            # What waited for the teams it was to change waits no longer.
+            self._let_go(intent)
             self._keep_failure(intent, error)
         else:
             if intent.kind in _SAVED_BEFORE_FORGOTTEN:

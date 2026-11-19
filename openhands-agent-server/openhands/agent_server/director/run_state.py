@@ -40,6 +40,8 @@ FORMER = "former"
 SHOWN = "shown"  # team id -> what its reviewer was shown to reconcile
 MERGING = "merging"  # team id -> the merge its reviewer finishes
 TURN = "turn"  # team id, its reviewer was told to wait for its turn
+# team id -> what its reviewer decided, of an acceptance that waits for the human
+CLEARING = "clearing"
 DECIDED = "decided"  # team id -> what a Manager decided of work sent back
 # session id and team id -> what became of the teams below that team there
 EVENTS = "events"

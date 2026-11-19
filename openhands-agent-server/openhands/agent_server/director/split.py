@@ -204,13 +204,19 @@ def _overlap(path: str, other: str) -> bool:
 def _may_write(parent: SessionTeam, path: str) -> bool:
     """Whether a directory is part of what the parent's own agents may
     write, as far as that can be told from its globs' directories."""
-    if not parent.boundary.writable:
-        return True
-    for glob in parent.boundary.writable:
+
+    def covers(glob: str, *, all_of_it: bool) -> bool:
         directory = glob.split("*", 1)[0].rstrip("/")
-        if not directory or path == directory or is_inside(path, directory):
-            return True
-    return False
+        if not directory:
+            return all_of_it
+        return path == directory or is_inside(path, directory)
+
+    boundary = parent.boundary
+    if any(covers(glob, all_of_it=False) for glob in boundary.readonly):
+        return False
+    return not boundary.writable or any(
+        covers(glob, all_of_it=True) for glob in boundary.writable
+    )
 
 
 def _kept(

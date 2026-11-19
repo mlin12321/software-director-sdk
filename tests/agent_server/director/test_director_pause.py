@@ -764,3 +764,31 @@ async def test_teams_that_wait_are_still_there_after_a_restart(
     )
     assert path_of(second, JOBS) == "services/api/jobs"
     await second.aclose()
+
+
+async def test_another_servers_run_state_brings_back_none_of_its_sessions(
+    repo: Path, launcher: FakeLauncher, tmp_path: Path
+):
+    first = await started(repo, launcher)
+    await split_root(first)
+    await first.aclose()
+    launcher.listeners.clear()
+    other = DirectorService(
+        repo, save_delay=0, remembered=tmp_path / "elsewhere" / "director.json"
+    )
+
+    await other.start(launcher)
+    await other.settled()
+
+    # Their drafts, reports and place in the order are not used either.
+    assert other.store.sessions() == []
+    await other.aclose()
+
+
+def test_a_state_file_that_is_no_database_leaves_the_director_working(repo: Path):
+    state = repo / ".git" / "director" / "state.db"
+    state.parent.mkdir(parents=True)
+    state.write_bytes(b"this is not a database" * 100)
+    service = DirectorService(repo, save_delay=0)
+
+    assert service._runs().path is None

@@ -52,8 +52,10 @@ from openhands.agent_server.director.tools.definition import (
     ProposeTeamsAction,
     SubmitReviewAction,
 )
+from openhands.sdk import LLM, Agent
 from openhands.sdk.agent import ACPAgent
 from openhands.sdk.conversation.state import ConversationExecutionStatus
+from openhands.sdk.tool.spec import Tool
 from tests.agent_server.director.conftest import (
     DerivedStart,
     FakeLauncher,
@@ -166,7 +168,7 @@ def test_a_launcher_without_a_sandbox_runs_the_command_with_the_teams_git_first(
         command_script(
             None,
             checkouts=[tmp_path],
-            private=tmp_path,
+            private=[tmp_path],
             directory="svc",
             first_on_path=programs,
         ),
@@ -193,7 +195,7 @@ def test_a_launcher_holds_the_whole_process_to_the_teams_directory(repo: Path):
         command_script(
             bwrap,
             checkouts=[repo],
-            private=script.parent,
+            private=[script.parent],
             directory="svc/api",
         ),
     )
@@ -610,7 +612,9 @@ async def test_a_notice_waits_for_the_turn_of_an_agent_that_runs_its_own_tools(
     await service.settled()
 
     assert waiting == []
-    assert [text.split("'")[1] for text in said_to(launcher, agent)] == ["API", "Web"]
+    # As one message: a second would end the turn the first began.
+    [said] = said_to(launcher, agent)
+    assert said.index("'API' is merged") < said.index("'Web' is merged")
     await service.aclose()
 
 
@@ -785,4 +789,22 @@ async def test_an_org_without_a_name_is_named_with_its_division_lead(repo: Path)
     launcher.report(agent, ConversationExecutionStatus.FINISHED)
     await service.settled()
     assert len(launcher.summarized) == asked
+    await service.aclose()
+
+
+async def test_an_agent_of_an_org_has_no_tool_that_starts_agents_nothing_holds(
+    repo: Path,
+):
+    launcher = FakeLauncher()
+    service = await started(repo, launcher)
+    assert launcher.root_adapt is not None
+    agent = Agent(
+        llm=LLM(model="gpt-4o", usage_id="test-llm"),
+        tools=[Tool(name="terminal"), Tool(name="task_tool_set")],
+    )
+
+    adapted = launcher.root_adapt(agent)
+
+    names = [tool.name for tool in adapted.tools]
+    assert "terminal" in names and "task_tool_set" not in names
     await service.aclose()

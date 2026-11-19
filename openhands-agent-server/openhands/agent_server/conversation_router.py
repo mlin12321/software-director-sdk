@@ -10,6 +10,7 @@ from fastapi import (
     Depends,
     Header,
     Query,
+    Request,
     Response,
     status,
 )
@@ -848,6 +849,17 @@ async def condense_conversation(
     return Success()
 
 
+def _not_an_agent_of_the_org(conversation_id: UUID, request: Request) -> None:
+    """Refuse a copy of an org agent's conversation: it would act as the
+    agent it was copied from, in no team."""
+    director = getattr(request.app.state, "director_service", None)
+    if director is not None and director.is_agent(conversation_id):
+        raise Conflict(
+            "This conversation is an agent of the org, and cannot be forked. "
+            "Open a session to give the org more work."
+        )
+
+
 @conversation_router.post(
     "/{conversation_id}/fork",
     responses={
@@ -860,6 +872,7 @@ async def condense_conversation(
         ),
     },
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(_not_an_agent_of_the_org)],
 )
 async def fork_conversation(
     conversation_id: UUID,

@@ -219,3 +219,56 @@ def test_the_exit_code_and_output_of_git_come_through(
 
     assert missing.returncode != 0 and "no-such-ref" in missing.stderr
     assert log.stdout == "teams\n"
+
+
+def test_a_checkout_named_with_dash_c_is_used_like_any_other(
+    shared: Path, agent: Callable[..., Git], tmp_path: Path
+):
+    api = agent("api", "svc/api")
+    (shared / "svc" / "api" / "main.py").write_text("api v2\n")
+    (shared / "svc" / "web" / "main.py").write_text("web v2\n")
+
+    api("-C", str(shared), "add", "-A", cwd=tmp_path)
+    committed = api("-C", str(shared), "commit", "-m", "api", cwd=tmp_path)
+
+    assert committed.returncode == 0, committed.stderr
+    assert files_of(shared, "HEAD") == ["svc/api/main.py"]
+
+
+def test_a_commit_that_changes_another_teams_file_is_undone(
+    shared: Path, agent: Callable[..., Git]
+):
+    api = agent("api", "svc/api")
+    head = run_git(shared, "rev-parse", "HEAD").strip()
+    blob = run_git(shared, "hash-object", "-w", "svc/api/main.py").strip()
+
+    api("update-index", "--cacheinfo", f"100644,{blob},svc/web/main.py")
+    committed = api("commit", "-m", "theirs")
+
+    assert committed.returncode != 0
+    assert "outside your team's folder" in committed.stderr
+    assert run_git(shared, "rev-parse", "HEAD").strip() == head
+    # Its index holds the other team's file as it is committed again.
+    assert api("diff", "--cached", "--quiet").returncode == 0
+
+
+def test_no_commit_is_made_on_an_index_that_could_not_be_brought_up_to_date(
+    shared: Path, agent: Callable[..., Git]
+):
+    api, web = agent("api", "svc/api"), agent("web", "svc/web")
+    api("status")
+    (shared / "svc" / "web" / "main.py").write_text("web v2\n")
+    web("commit", "-am", "web")
+    head = run_git(shared, "rev-parse", "HEAD").strip()
+    lock = shared / ".git" / "agent-index-api.lock"
+    lock.touch()
+    (shared / "svc" / "api" / "main.py").write_text("api v2\n")
+
+    refused = api("commit", "-am", "api")
+
+    assert refused.returncode != 0
+    assert run_git(shared, "rev-parse", "HEAD").strip() == head
+    lock.unlink()
+    assert api("commit", "-am", "api").returncode == 0
+    assert files_of(shared, "HEAD") == ["svc/api/main.py"]
+    assert run_git(shared, "show", "HEAD:svc/web/main.py") == "web v2\n"

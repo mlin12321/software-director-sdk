@@ -40,7 +40,8 @@ def shell_script(
     shell: str,
     *,
     checkouts: Sequence[Path],
-    private: Path,
+    private: Sequence[Path],
+    secret: Path | None = None,
     directory: str | None,
     sub_team_directories: Sequence[str] = (),
     rcfile: Path | None = None,
@@ -56,8 +57,10 @@ def shell_script(
         rcfile: What bash reads at its start in place of ``~/.bashrc``.
         checkouts: Where the org's checkouts are; nothing in them is writable
             but the team's directory.
-        private: A directory of the director inside the git directory, kept
-            read-only although the git directory is writable.
+        private: What is kept read-only inside the git directory although
+            the git directory is writable: the director's own files, and
+            the hooks git runs for everyone who uses the repository.
+        secret: A file of the director the shell cannot read.
         directory: The repo-relative directory the shell may write, with ''
             for the whole checkout; None for a shell that may write none of
             it. It is created if missing, and the shell starts in it.
@@ -71,6 +74,7 @@ def shell_script(
         start,
         checkouts=checkouts,
         private=private,
+        secret=secret,
         directory=directory,
         sub_team_directories=sub_team_directories,
     )
@@ -80,7 +84,8 @@ def command_script(
     bwrap: str | None,
     *,
     checkouts: Sequence[Path],
-    private: Path,
+    private: Sequence[Path],
+    secret: Path | None = None,
     directory: str | None,
     sub_team_directories: Sequence[str] = (),
     first_on_path: Path | None = None,
@@ -100,6 +105,7 @@ def command_script(
         start,
         checkouts=checkouts,
         private=private,
+        secret=secret,
         directory=directory,
         sub_team_directories=sub_team_directories,
         stay=True,
@@ -112,7 +118,8 @@ def _confined(
     start: str,
     *,
     checkouts: Sequence[Path],
-    private: Path,
+    private: Sequence[Path],
+    secret: Path | None = None,
     directory: str | None,
     sub_team_directories: Sequence[str],
     stay: bool = False,
@@ -153,10 +160,15 @@ def _confined(
     # A later mount covers an earlier one, so each entry narrows or reopens
     # what the entries before it set.
     mounts = [*(read_only(path) for path in checkouts), '--ro-bind "$top" "$top"']
+    if secret is not None:
+        mounts.append(f"--ro-bind /dev/null {quote(str(secret))}")
     if directory is not None:
         lines += [
             f'own="$top"/{quote(directory)}' if directory else 'own="$top"',
             'mkdir -p "$own"',
+            # A link would open whatever it leads to instead.
+            '[ "$(cd "$own" && pwd -P)" = "$own" ] ||',
+            '  { echo "The team\'s folder is reached through a link" >&2; exit 1; }',
             "git_dir=$(git rev-parse --path-format=absolute --git-common-dir)",
         ]
         mounts.append('--bind "$own" "$own"')
@@ -165,7 +177,7 @@ def _confined(
             for sub in sub_team_directories
         ]
         # Committing writes the repository's git directory.
-        mounts += ['--bind "$git_dir" "$git_dir"', read_only(private)]
+        mounts += ['--bind "$git_dir" "$git_dir"', *map(read_only, private)]
         if not stay:
             mounts.append('--chdir "$own"')
     command = [

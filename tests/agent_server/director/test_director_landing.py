@@ -764,9 +764,10 @@ async def test_contracts_both_changed_wait_for_the_manager_above(
     place = service.store.place(division_lead_of(service, top))
     assert place is not None and place.merge is None
     # The session reads what holds now, not what it wrote.
-    assert [c.contracts for c in service.contracts_of(api_place(service, top))] == [
-        holds
-    ]
+    contracts = service.contracts_of(api_place(service, top))
+    assert [c.contracts for c in contracts if c.own] == [holds]
+    # Its opening place also works to the contracts of the team above.
+    assert [c.path for c in contracts] == ["", "services/api"]
     # Where its own do not hold, its IC is told the ones that do, to follow
     # up on the code it delivered, and it is on the team's record.
     last = launcher.messages_to(conversation)[-1]
@@ -1432,3 +1433,174 @@ async def test_what_a_session_has_is_kept_at_once(repo: Path, launcher: FakeLaun
     assert opened.session.id in kept
     assert "Add refunds." in kept[opened.session.id]
     await service.aclose()
+
+
+async def test_closing_a_session_leaves_the_humans_own_checkout_as_it_is(
+    service: DirectorService, repo: Path, tmp_path: Path
+):
+    await landed(service)
+    await service.settled()
+    top = node(service, "root")
+    # The session works apart; its Division Lead place is in the repository.
+    worktree = tmp_path / "apart"
+    run_git(repo, "worktree", "add", "--quiet", "-b", "apart", str(worktree))
+    service.store.update_place(
+        top.id, worktree_path=str(worktree), isolation="worktree"
+    )
+    assert node(service, division_lead_of(service)).agents
+    (repo / "notes.txt").write_text("the human's, not committed\n")
+
+    service.close_session(top.session)
+    await service.settled()
+
+    assert (repo / "notes.txt").read_text() == "the human's, not committed\n"
+
+
+async def test_work_that_goes_up_by_itself_is_not_merged_into_another_branch(
+    service: DirectorService, repo: Path, tmp_path: Path
+):
+    await split_root(service)
+    worktree = own_worktree(service, repo, tmp_path)
+    commit(worktree, "services/api/app.py", "x = 1\n")
+    run_git(repo, "checkout", "--quiet", "-b", "elsewhere")
+    head = run_git(repo, "rev-parse", "HEAD").strip()
+    for team in ("services.api", "apps.web"):
+        await use(service, ic(service, team), SubmitReviewTool, DONE)
+
+    for team in ("services.api", "apps.web"):
+        await use(service, ic(service), ReviewTeamTool, accept(team))
+    await service.settled()
+
+    # The human's checkout is where they left it; the session's IC submits,
+    # and the human is asked when that is accepted.
+    assert run_git(repo, "rev-parse", "HEAD").strip() == head
+    assert node(service, "root").review is None
+
+
+async def test_a_division_lead_ic_is_not_told_to_submit_work(
+    service: DirectorService, launcher: FakeLauncher, repo: Path
+):
+    await split_root(service)
+    commit(repo, "README.md", "the team's own change\n")
+    await landed(service)
+    await service.settled()
+    lead = division_lead_ic(service)
+    assert lead is not None
+    told = len(launcher.messages_to(lead))
+    commit(repo, "services/api/app.py", "x = 1\n")
+    for team in ("services.api", "apps.web"):
+        await use(service, ic(service, team), SubmitReviewTool, DONE)
+
+    for team in ("services.api", "apps.web"):
+        await use(service, ic(service), ReviewTeamTool, accept(team))
+    await service.settled()
+
+    assert not any(
+        "submit_review" in message for message in launcher.messages_to(lead)[told:]
+    )
+
+
+async def test_an_acceptance_cut_off_before_its_landing_lands_when_it_is_run_again(
+    service: DirectorService, monkeypatch: pytest.MonkeyPatch
+):
+    await use(service, ic(service), WriteSpecTool, WriteSpecAction(text="# Spec"))
+    await use(service, ic(service), SubmitReviewTool, DONE)
+    top = node(service, "root")
+    land = service._land_accepted
+
+    def cut_off(*args: object) -> None:
+        raise RuntimeError("the server ends here")
+
+    monkeypatch.setattr(service, "_land_accepted", cut_off)
+    await use(service, division_lead_ic(service), ReviewTeamTool, accept(top.id))
+    await service.settled()
+    monkeypatch.setattr(service, "_land_accepted", land)
+
+    # What a restart does with the step that was still open.
+    service._begin(
+        "accept", top.id, needed_above="", reconciled="", specs=[], base=True
+    )
+    await service.settled()
+
+    assert service.team_memory.read("spec.md") == "# Spec"
+    assert service._in_order() == []
+
+
+async def test_work_that_waited_for_the_human_is_merged_as_its_reviewer_decided(
+    service: DirectorService, repo: Path, tmp_path: Path
+):
+    commit(repo, "app.py", "refunds = False\n")
+    worktree = own_worktree(service, repo, tmp_path)
+    commit(worktree, "app.py", "refunds = True\n")
+    (repo / "app.py").write_text("in the way\n")
+    await use(service, ic(service), WriteSpecTool, WriteSpecAction(text="# Session"))
+    await use(service, ic(service), SubmitReviewTool, DONE)
+    top = node(service, "root")
+    decided = SpecChoice.model_validate(
+        {"path": "", "take": "text", "text": "# Reviewer"}
+    )
+    await use(
+        service,
+        division_lead_ic(service),
+        ReviewTeamTool,
+        ReviewTeamAction(team=top.id, decision="accept", specs=[decided]),
+    )
+    assert [e.id for e in node(service, "root").escalations] == [MERGE_WAITS]
+    run_git(repo, "checkout", "--", "app.py")
+
+    service.answer_escalation(top.id, MERGE_WAITS, "Cleared.")
+    await service.settled()
+
+    assert (repo / "app.py").read_text() == "refunds = True\n"
+    assert service.team_memory.read("spec.md") == "# Reviewer"
+
+
+async def test_contracts_the_org_did_not_take_are_on_record_when_the_session_closes(
+    service: DirectorService,
+):
+    top, conversation = await at_api(service)
+    service.hand_over(api_place(service, top), "", "Refunds go through Jobs.")
+    service.team_memory.write(
+        "services/api", "contracts.md", "Orders go through Jobs.\n"
+    )
+    await accepted(service, top, conversation)
+
+    service.close_session(api_place(service, top).session)
+    await service.settled()
+
+    assert any(
+        event.kind == "not_taken" and "the contracts it wrote" in event.detail
+        for event in service.org_history(100).events
+    )
+
+
+async def test_contracts_for_a_team_the_org_lost_wait_with_the_rest_of_the_landing(
+    service: DirectorService,
+):
+    await split_root(service)
+    await landed(service)
+    # Work of another session waits ahead of this one's.
+    web = await service.open_session(
+        OpenSessionRequest(text="Web work.", node_id="apps.web")
+    )
+    await service.settled()
+    ahead = web.session.teams[0].id
+    service.hand_over(node(service, ahead), "", "The web session's contracts.")
+    service.team_memory.write("apps/web", "contracts.md", "The org's.\n")
+    await accepted(service, ahead, web.conversation_id)
+    opened = await service.open_session(
+        OpenSessionRequest(text="Add refunds.", node_id="services.api")
+    )
+    await service.settled()
+    top = opened.session.teams[0].id
+    place = api_place(service, top)
+    service.hand_over(place, "", "Refunds go through Jobs.")
+    # Other accepted work set the team at that directory up anew meanwhile.
+    service.store.update_team("services.api", since="set up anew")
+
+    await accepted(service, top, opened.conversation_id)
+
+    # Only its code has landed: what it wrote is not lost before the rest.
+    assert [text for text, _ in service.drafts(place.session).values()] == [
+        "Refunds go through Jobs.\n"
+    ]
