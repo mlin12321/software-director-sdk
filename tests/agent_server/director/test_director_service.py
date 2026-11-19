@@ -11,6 +11,7 @@ from uuid import UUID, uuid4
 import pytest
 
 from openhands.agent_server.director import agent_actions
+from openhands.agent_server.director.git import common_dir
 from openhands.agent_server.director.headline import TeamSummary
 from openhands.agent_server.director.models import (
     AgentRole,
@@ -628,6 +629,51 @@ async def test_a_file_tool_is_refused_a_write_outside_the_teams_boundary(
     assert "outside your team's boundary" in (
         refusal(repo / "services" / "api" / ".." / ".." / "README.md") or ""
     )
+
+
+async def test_a_file_tool_neither_reads_nor_writes_what_the_director_keeps(
+    service: DirectorService, repo: Path, tmp_path: Path
+):
+    kept = tmp_path / "director.json"
+    kept.write_text("{}")
+    service._remembered = kept
+    await service.create_org(org_request(repo))
+    await service.settled()
+    root_ic = agent_conversation(node(service, "root"), "ic")
+    view = FileEditorAction(command="view", path=str(kept))
+
+    # The key in it would let the agent act as any other.
+    assert "director's own" in (attempt(service, root_ic, "file_editor", view) or "")
+    assert "director's own" in (
+        attempt(service, root_ic, "file_editor", create(kept)) or ""
+    )
+    assert attempt(service, root_ic, "file_editor", create(repo / "a.py")) is None
+
+    # It stays the same file when it is written again: the one a shell that
+    # is already running is kept from.
+    before = kept.stat().st_ino
+    service._remember(server_url="http://elsewhere")
+    assert kept.stat().st_ino == before
+    assert "elsewhere" in kept.read_text()
+
+
+async def test_a_git_directory_outside_its_checkout_is_not_a_file_tools_to_write(
+    submodule: Path, launcher: FakeLauncher
+):
+    service = DirectorService(submodule, save_delay=0)
+    await service.start(launcher)
+    await service.create_org(org_request(submodule))
+    await service.settled()
+    root_ic = agent_conversation(node(service, "root"), "ic")
+    git_dir = common_dir(submodule)
+    assert not git_dir.is_relative_to(submodule)
+
+    refused = attempt(
+        service, root_ic, "file_editor", create(git_dir / "hooks" / "pre-commit")
+    )
+
+    assert "git directory" in (refused or "")
+    await service.aclose()
 
 
 async def test_a_link_out_of_the_boundary_does_not_carry_a_write_out(

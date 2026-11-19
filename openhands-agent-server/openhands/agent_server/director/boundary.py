@@ -22,19 +22,21 @@ _PATCH_TARGET = re.compile(
 )
 
 
-def written_paths(tool_name: str, action: Mapping[str, Any]) -> list[str]:
-    """The files an action of a file tool would change, as the agent named them.
-
-    Empty for an action that only reads and for tools that do not name the
-    files they change, such as the terminal.
-    """
+def named_paths(tool_name: str, action: Mapping[str, Any]) -> list[str]:
+    """The files an action of a file tool reads or changes, as the agent
+    named them. Empty for tools that do not name them, such as the terminal."""
     if tool_name == "apply_patch":
         return _PATCH_TARGET.findall(str(action.get("patch", "")))
-    field = _PATH_FIELDS.get(tool_name)
-    if field is None or action.get("command") in _READ_COMMANDS:
-        return []
-    path = action.get(field)
+    path = action.get(_PATH_FIELDS.get(tool_name, ""))
     return [path] if isinstance(path, str) and path else []
+
+
+def written_paths(tool_name: str, action: Mapping[str, Any]) -> list[str]:
+    """The files an action of a file tool would change, as the agent named
+    them. Empty for an action that only reads."""
+    if action.get("command") in _READ_COMMANDS:
+        return []
+    return named_paths(tool_name, action)
 
 
 @lru_cache(maxsize=1024)

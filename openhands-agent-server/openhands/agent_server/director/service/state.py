@@ -1069,10 +1069,11 @@ class ServiceState:
         with self._remember_lock:
             try:
                 self._remembered.parent.mkdir(parents=True, exist_ok=True)
-                atomic_write_text(
-                    self._remembered,
-                    json.dumps({**self._read_remembered(), **changes}) + "\n",
-                )
+                # Written in place: a file put in its place by a rename
+                # would no longer be the one an agent's shell is kept from.
+                kept = json.dumps({**self._read_remembered(), **changes}) + "\n"
+                self._remembered.touch(mode=0o600)
+                self._remembered.write_text(kept)
             except OSError:
                 logger.exception("Could not write %s", self._remembered)
 

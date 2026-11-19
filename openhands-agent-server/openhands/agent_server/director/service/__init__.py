@@ -11,11 +11,13 @@ from uuid import UUID
 
 from openhands.agent_server.director.boundary import (
     hand_over_refusal,
+    named_paths,
     nearest_team,
     write_refusal,
     written_paths,
 )
 from openhands.agent_server.director.git import (
+    common_dir,
     is_git_repository,
 )
 from openhands.agent_server.director.headline import provisional_summary
@@ -394,7 +396,14 @@ class DirectorService(Sync):
         if store is None or event.action is None:
             return None
         found = store.find_by_conversation(str(conversation_id))
-        paths = written_paths(event.tool_name, event.action.model_dump())
+        action = event.action.model_dump()
+        secret = self._remembered and os.path.realpath(self._remembered)
+        workspace = found[0].worktree_path if found else ""
+        for named in named_paths(event.tool_name, action):
+            # Read, the key in it lets an agent act as any other.
+            if os.path.realpath(os.path.join(workspace, named)) == secret:
+                return f"{named!r} is the director's own, and is not yours to open."
+        paths = written_paths(event.tool_name, action)
         if not paths:
             return None
         if found is None:
@@ -449,6 +458,12 @@ class DirectorService(Sync):
                 return (
                     f"{named!r} is in a checkout of the org that is not your "
                     "team's, so it was not changed."
+                )
+            elif _is_in(target, Path(os.path.realpath(common_dir(self._repo_dir)))):
+                # A git directory that is not inside its checkout.
+                return (
+                    f"{named!r} is in the repository's git directory, so it "
+                    "was not changed. Use git."
                 )
         return None
 
