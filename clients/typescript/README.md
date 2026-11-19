@@ -1,6 +1,6 @@
 # OpenHands Agent Server TypeScript Client
 
-The OpenHands Software Agent SDK provides Python, TypeScript, and REST APIs for **building agents that work with code**. This package is the browser-compatible TypeScript client for the Agent Server API, shipped and versioned as part of the Software Agent SDK. It mirrors the structure and functionality of the Python [OpenHands Software Agent SDK](https://github.com/OpenHands/software-agent-sdk), and controls remote Agent Server conversations: it connects to an Agent Server running the agent runtime and does not bundle a local agent implementation.
+The OpenHands Software Agent SDK provides Python, TypeScript, and REST APIs for **building agents that work with code**. This package is the browser-compatible TypeScript client for the Agent Server API, shipped and versioned as part of the Software Agent SDK. It mirrors the structure and functionality of the Python [OpenHands Software Agent SDK](https://github.com/OpenHands/software-agent-sdk), and controls remote Agent Server conversations: it connects to an Agent Server running the agent runtime and does not bundle a local agent implementation. In this tree the server also includes the director, an organisation of agent teams; the director's wire types are mirrored by hand in `src/models/director.ts`.
 
 ## ✨ Browser Compatible
 
