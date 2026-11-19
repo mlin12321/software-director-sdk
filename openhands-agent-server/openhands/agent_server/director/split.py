@@ -328,6 +328,13 @@ def normalize_split(
                     f"not {glob!r}"
                 )
         readonly = [clean_path(glob) for glob in child.readonly]
+        # What the team above may only read inside the folder, the new team
+        # may only read too.
+        readonly += [
+            glob
+            for glob in parent.boundary.readonly
+            if glob.startswith(f"{path}/") and glob not in readonly
+        ]
         proposed[path] = child.title
         normalized.append(
             child.model_copy(
