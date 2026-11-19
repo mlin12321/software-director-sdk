@@ -42,6 +42,8 @@ from openhands.sdk.tool.tool import Action
 from openhands.tools.apply_patch.definition import ApplyPatchAction
 from openhands.tools.file_editor.definition import FileEditorAction
 from openhands.tools.gemini.read_file.definition import ReadFileAction
+from openhands.tools.glob.definition import GlobAction
+from openhands.tools.grep.definition import GrepAction
 from openhands.tools.terminal.definition import TerminalAction
 from tests.agent_server.director.conftest import (
     FakeLauncher,
@@ -651,6 +653,15 @@ async def test_a_file_tool_neither_reads_nor_writes_what_the_director_keeps(
     # Reading is otherwise never refused.
     read_own = ReadFileAction(file_path=str(repo / "README.md"))
     assert attempt(service, root_ic, "read_file", read_own) is None
+    # Nor is it searched, which tells of it a character at a time.
+    search = GrepAction(pattern="tool_key", path=str(tmp_path))
+    assert "director's own" in (attempt(service, root_ic, "grep", search) or "")
+    assert "director's own" in (
+        attempt(service, root_ic, "glob", GlobAction(pattern="*", path=str(tmp_path)))
+        or ""
+    )
+    search_own = GrepAction(pattern="x", path=str(repo))
+    assert attempt(service, root_ic, "grep", search_own) is None
     assert "director's own" in (
         attempt(service, root_ic, "file_editor", create(kept)) or ""
     )

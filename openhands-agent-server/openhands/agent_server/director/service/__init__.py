@@ -13,6 +13,7 @@ from openhands.agent_server.director.boundary import (
     hand_over_refusal,
     named_paths,
     nearest_team,
+    searched_folder,
     write_refusal,
     written_paths,
 )
@@ -403,6 +404,15 @@ class DirectorService(Sync):
             # Read, the key in it lets an agent act as any other.
             if os.path.realpath(os.path.join(workspace, named)) == secret:
                 return f"{named!r} is the director's own, and is not yours to open."
+        searched = searched_folder(event.tool_name, action)
+        if secret and searched is not None:
+            folder = os.path.realpath(os.path.join(workspace, searched))
+            # What a search finds in it tells of it, a character at a time.
+            if secret.startswith(folder.rstrip(os.sep) + os.sep):
+                return (
+                    f"{searched or 'The workspace'!r} holds a file of the "
+                    "director's own: search a folder inside it instead."
+                )
         paths = written_paths(event.tool_name, action)
         if not paths:
             return None
