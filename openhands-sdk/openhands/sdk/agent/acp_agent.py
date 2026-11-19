@@ -4747,6 +4747,18 @@ class ACPAgent(AgentBase):
                     "This ACP server cannot fork a session, so its agent "
                     "cannot be asked on top of its conversation"
                 ) from None
+            if self.acp_model:
+                # A fork starts on the server's default model, which may cost
+                # many times what the conversation's own does.
+                with contextlib.suppress(ACPRequestError):
+                    await _apply_acp_model(
+                        conn,
+                        fork_response.session_id,
+                        self.acp_model,
+                        agent_name=self._agent_name,
+                        via_config_option=self._model_via_config_option,
+                        effort=self.acp_effort,
+                    )
             return await self._prompt_side_session(fork_response.session_id, question)
 
         with self._client._fork_lock:

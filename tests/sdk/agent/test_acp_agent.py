@@ -1709,7 +1709,7 @@ class TestACPActivityHeartbeat:
 
         def _capture_run_async(_coro, **_kwargs):
             wired_during_prompt.append(agent._client.on_activity)
-            return MagicMock(usage=None)
+            return PromptResponse(stop_reason="end_turn")
 
         agent._executor = MagicMock()
         agent._executor.run_async = _capture_run_async
@@ -4534,7 +4534,7 @@ class TestACPCancelInflightToolCalls:
             start.content = None
             asyncio.run(mock_client.session_update("sess", start))
             mock_client.accumulated_text.append("done")
-            return MagicMock(usage=None)
+            return PromptResponse(stop_reason="end_turn")
 
         mock_executor = MagicMock()
         mock_executor.run_async = _fake_run_async
@@ -4998,6 +4998,42 @@ class TestACPAgentAskAgent:
 
         _agent_conn(agent).prompt.assert_not_awaited()
         assert agent._client._fork_lock.acquire(blocking=False)
+
+    def test_ask_agent_asks_the_fork_on_the_conversations_model(self):
+        """A fork is put on the agent's model before it is prompted."""
+        agent = _make_agent(acp_model="haiku")
+        client = _OpenHandsACPBridge()
+        agent._client = client
+        agent._conn = MagicMock()
+        agent._session_id = "main-session"
+        agent._working_dir = "/workspace"
+        applied: list[tuple[str, str]] = []
+
+        async def _apply(conn, session_id, model, **kwargs):
+            applied.append((session_id, model))
+            return model
+
+        async def _fake_prompt(*args, **kwargs):
+            assert applied == [("fork-session", "haiku")]
+            return PromptResponse(stop_reason="end_turn")
+
+        def _fake_run_async(coro_fn, **_kwargs):
+            conn = _agent_conn(agent)
+            conn.fork_session = AsyncMock(
+                return_value=MagicMock(session_id="fork-session")
+            )
+            conn.prompt = _fake_prompt
+            return asyncio.run(coro_fn())
+
+        agent._executor = MagicMock(run_async=_fake_run_async)
+
+        with (
+            patch.object(acp_agent_module, "_apply_acp_model", _apply),
+            patch.object(acp_agent_module, "_USAGE_UPDATE_TIMEOUT", 0.01),
+        ):
+            agent.ask_agent("What changed?")
+
+        assert applied == [("fork-session", "haiku")]
 
     def test_ask_agent_cleans_up_fork_state(self):
         """ask_agent() cleans up fork state even on success."""
@@ -6270,7 +6306,7 @@ class TestACPPromptRetry:
             if call_count == 1:
                 raise ConnectionError("Connection reset by peer")
             mock_client.accumulated_text.append("Success after retry")
-            return MagicMock(usage=None)
+            return PromptResponse(stop_reason="end_turn")
 
         mock_executor = MagicMock()
         mock_executor.run_async = _fake_run_async
@@ -6392,7 +6428,7 @@ class TestACPPromptRetry:
             if call_count == 1:
                 raise ACPRequestError(-32603, "Internal Server Error")
             mock_client.accumulated_text.append("Success after server error retry")
-            return MagicMock(usage=None)
+            return PromptResponse(stop_reason="end_turn")
 
         mock_executor = MagicMock()
         mock_executor.run_async = _fake_run_async
