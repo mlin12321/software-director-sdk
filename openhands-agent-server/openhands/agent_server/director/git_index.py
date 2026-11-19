@@ -25,6 +25,8 @@ _UNWRAPPED = "clone|init|worktree|submodule"
 _MOVES_HEAD = "commit|merge|pull|cherry-pick|revert|rebase|am|reset|checkout|switch"
 # Commands that make commits out of what the agent gives them.
 _COMMITS = "commit|cherry-pick|revert|am"
+# Commands that take commits away, which may be other teams'.
+_DROPS = "reset"
 _IN_PROGRESS = (
     "MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD BISECT_LOG rebase-merge rebase-apply"
 )
@@ -82,6 +84,11 @@ def git_script(
             ' "$real" update-index -z --skip-worktree --stdin || return 1',
         )
     ]
+    put_back = [
+        f'      "$real" restore -q --source="$before" --worktree'
+        f" --ignore-skip-worktree-bits -- {' '.join(map(quote, specs))} 2>/dev/null"
+        for specs in hidden
+    ]
     outside = [
         f'  "$real" diff --quiet "$1" "$2" -- {" ".join(map(quote, specs))} || return 0'
         for specs in hidden
@@ -132,7 +139,12 @@ def git_script(
         '  head=$("$real" rev-parse -q --verify HEAD) || return 0',
         '  [ -f "$GIT_INDEX_FILE" ] || "$real" read-tree HEAD || return 1',
         f'  stamp="$head "{revision}',
-        '  [ "$(cat "$GIT_INDEX_FILE.synced" 2>/dev/null)" = "$stamp" ] && return 0',
+        '  was=$(cat "$GIT_INDEX_FILE.synced" 2>/dev/null)',
+        '  [ "$was" = "$stamp" ] && return 0',
+        # A folder that came back to the team is in the index as it was
+        # when it was hidden: a commit would undo what was committed since.
+        f'  [ -z "$was" ] || [ "${{was#* }}" = {revision} ] ||'
+        ' "$real" read-tree HEAD || return 1',
         '  "$real" ls-files -z |'
         ' "$real" update-index -z --no-skip-worktree --stdin || return 1',
         *hide,
@@ -189,6 +201,16 @@ def git_script(
         '      rm -f "$GIT_INDEX_FILE.synced"',
         "      fail \"the commit changed files outside your team's folder,"
         ' so it was undone"',
+        "    fi",
+        "  ;;",
+        f"  {_DROPS})",
+        '    if [ -n "$before" ] && [ "$before" != "$after" ] \\',
+        '        && outside "$before" "$after"; then',
+        '      "$real" reset -q --soft "$before"',
+        *put_back,
+        '      rm -f "$GIT_INDEX_FILE.synced"',
+        '      fail "that would take away commits of other teams, so the'
+        ' branch was put back; undo your own commit with git revert"',
         "    fi",
         "  ;;",
         "esac",
