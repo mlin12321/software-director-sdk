@@ -369,7 +369,11 @@ class InitService:
             # After the registry, so that it is closed before it on teardown.
             director = DirectorService.from_config(new_config)
             started.push_async_callback(director.aclose)
-            await director.start(ConversationTeamLauncher(service))
+            try:
+                await director.start(ConversationTeamLauncher(service))
+            except Exception:
+                # The server still serves its conversations, as on a boot.
+                logger.exception("The director could not be started")
 
             # VSCode's token is the first session key, as on a normal boot.
             # A dormant server that booted without one gave VSCode a random
