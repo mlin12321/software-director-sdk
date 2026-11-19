@@ -201,3 +201,21 @@ def test_sub_teams_do_not_crowd_out_the_team_beside_theirs():
     shown = {c.node_id for c in cards_to_show("gateway and console take cards", many)}
 
     assert {"gateway", "console"} <= shown
+
+
+def test_a_request_naming_a_file_of_a_team_outside_stays_where_it_was_made():
+    # Made at API, it names a file of Web: the model's pick of DB is not taken.
+    below_api = {"api", "db"}
+    choice = decide(
+        named=["web"], answers=[["db"], ["db"]], start="api", takes=below_api
+    )
+
+    assert (choice.node_id, choice.sure) == ("api", False)
+    assert "outside" in choice.reason
+    # One that names only what is below goes down as before.
+    assert (
+        decide(
+            named=["db"], answers=[["db"], ["db"]], start="api", takes=below_api
+        ).node_id
+        == "db"
+    )
