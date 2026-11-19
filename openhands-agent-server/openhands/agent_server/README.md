@@ -1,6 +1,8 @@
 # OpenHands Agent Server
 
-The OpenHands Agent Server is a minimal REST API and WebSocket server that provides a programmatic interface for interacting with OpenHands AI agents. It uses the local filesystem to store conversations, events, and workspace files, making it ideal for development, testing, and lightweight deployments.
+The OpenHands Agent Server is a REST API and WebSocket server for OpenHands AI agents. It stores conversations, events, and workspace files on the local filesystem, for development, testing, and lightweight deployments.
+
+This server also includes the director. The director runs OpenHands agents, and agents that bring their own tools, as an organisation of teams on a git repository. Its routes are under `/api/director`. What it is, part by part, is in [director/OVERVIEW.md](director/OVERVIEW.md); how to start an org is in [director/README.md](director/README.md). A stock OpenHands Agent Server has the conversation API and none of the director.
 
 ## Features
 

@@ -1,8 +1,8 @@
 <a name="readme-top"></a>
 
 <div align="center">
-  <img src="https://raw.githubusercontent.com/OpenHands/docs/main/openhands/static/img/logo.png" alt="Logo" width="200">
-  <h1 align="center">OpenHands Software Agent SDK </h1>
+  <img src="https://raw.githubusercontent.com/mlin12321/Agent-Director-Canvas/main/public/favicon.svg" alt="Agent Director" width="160">
+  <h1 align="center">Agent Director</h1>
 </div>
 
 
@@ -27,18 +27,19 @@
   <hr>
 </div>
 
-The OpenHands Software Agent SDK provides Python, TypeScript, and REST APIs for **building agents that work with code**.
+Agent Director is the [OpenHands Software Agent SDK](https://github.com/OpenHands/software-agent-sdk) with the director. The SDK provides Python, TypeScript, and REST APIs for **building agents that work with code**. The director, in the Agent Server under `/api/director`, runs those agents as an organisation of teams on a git repository: each team owns a folder, reviews the teams below it, and lands accepted work in the checkout. The org tree and the team memory are kept in the repository's hidden refs `refs/agents/*`. How it fits together is in [OVERVIEW.md](openhands-agent-server/openhands/agent_server/director/OVERVIEW.md); how to start an org is in [the director's README](openhands-agent-server/openhands/agent_server/director/README.md).
 
 You can use the OpenHands Software Agent SDK for:
 * One-off tasks, like building a README for your repo
 * Routine maintenance tasks, like updating dependencies
 * Major tasks that involve multiple agents, like refactors and rewrites
+* An org of teams on one repository, through the director
 
 Importantly, agents can either use the local machine as their workspace, or run inside ephemeral workspaces
-(e.g. in Docker or Kubernetes) using the Agent Server.
+(e.g. in Docker or Kubernetes) using the Agent Server. A session of the director works in a git worktree of the org's repository.
 
 You can even use the SDK to build new developer experiences: it’s the engine behind the
-[OpenHands CLI](https://github.com/OpenHands/OpenHands-CLI) and [OpenHands Cloud](https://github.com/OpenHands/OpenHands).
+[OpenHands CLI](https://github.com/OpenHands/OpenHands-CLI) and [OpenHands Cloud](https://github.com/OpenHands/OpenHands). Agent Canvas in the paired [Agent Director](https://github.com/mlin12321/Agent-Director-Canvas) checkout is the page for the org.
 
 Get started with some [examples](https://docs.openhands.dev/sdk/guides/hello-world) or [check out the docs](https://docs.openhands.dev/sdk) to learn more.
 
@@ -82,7 +83,7 @@ For local development from this repository, run `make build` to install the work
 
 ## Repository boundaries
 
-This repository owns the canonical Python SDK and Agent Server implementation as well as the browser-compatible [TypeScript client](clients/typescript/). It owns agents, tools, conversations, workspaces, events, the REST/WebSocket API, and typed client access to that API. [`OpenHands/OpenHands`](https://github.com/OpenHands/OpenHands) consumes the TypeScript client as Agent Canvas, while [`OpenHands/automation`](https://github.com/OpenHands/automation) owns scheduling, webhooks, run history, and dispatching. The SDK/Agent Server executes the conversations dispatched by automation.
+This repository owns the canonical Python SDK and Agent Server implementation as well as the browser-compatible [TypeScript client](clients/typescript/). It owns agents, tools, conversations, workspaces, events, the REST/WebSocket API, typed client access to that API, and the director. [`OpenHands/OpenHands`](https://github.com/OpenHands/OpenHands) consumes the TypeScript client as Agent Canvas. [Agent Director Canvas](https://github.com/mlin12321/Agent-Director-Canvas) is that page for the org. [`OpenHands/automation`](https://github.com/OpenHands/automation) owns scheduling, webhooks, run history, and dispatching. The SDK/Agent Server executes the conversations dispatched by automation, and the director runs the org's own conversations.
 
 The normal flow is SDK/Agent Server → OpenAPI contract → `clients/typescript` → Agent Canvas. Backend behavior and endpoints belong in the Python SDK or Agent Server packages; browser-compatible client access belongs in `clients/typescript`, UI in Agent Canvas, and automation lifecycle behavior in `automation`.
 
