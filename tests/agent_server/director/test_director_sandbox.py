@@ -224,6 +224,41 @@ def test_the_shell_cannot_change_what_git_runs_or_what_the_director_keeps(
     assert secret.read_text() == '{"tool_key": "k"}'
 
 
+def test_the_top_team_reads_no_key_and_writes_no_hook_inside_its_own_folder(
+    repo: Path,
+):
+    # The server started in the repository keeps its key there.
+    secret = repo / "workspace" / "director.json"
+    secret.parent.mkdir()
+    secret.write_text('{"tool_key": "k"}')
+    (repo / ".husky").mkdir()
+    subprocess.run(["git", "config", "core.hooksPath", ".husky"], cwd=repo, check=True)
+    bwrap = find_bwrap()
+    if bwrap is None:
+        pytest.skip("bubblewrap cannot make a sandbox on this machine")
+    script = repo / SHELLS / "top.sh"
+    write_shell(
+        script,
+        shell_script(
+            bwrap,
+            "/bin/sh",
+            checkouts=[repo],
+            private=[repo / SHELLS],
+            secret=secret,
+            directory="",
+        ),
+    )
+
+    def run(command: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [str(script), "-c", command], cwd=repo, capture_output=True, text=True
+        )
+
+    assert run(f"cat {secret}").stdout == ""
+    assert run("echo x > .husky/pre-commit").returncode != 0
+    assert run("echo x > top.txt").returncode == 0
+
+
 def test_a_shell_sees_no_process_of_another_agent(repo: Path):
     (repo / "svc" / "api").mkdir(parents=True)
     run = confined(repo, "svc/api")

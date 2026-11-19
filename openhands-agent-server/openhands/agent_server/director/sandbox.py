@@ -160,8 +160,6 @@ def _confined(
     # A later mount covers an earlier one, so each entry narrows or reopens
     # what the entries before it set.
     mounts = [*(read_only(path) for path in checkouts), '--ro-bind "$top" "$top"']
-    if secret is not None:
-        mounts.append(f"--ro-bind /dev/null {quote(str(secret))}")
     if directory is not None:
         lines += [
             f'own="$top"/{quote(directory)}' if directory else 'own="$top"',
@@ -178,6 +176,7 @@ def _confined(
             '[ "$own_git" = "$git_dir" ] && own_git="$git_dir"/objects',
             # The file that says where a worktree's git directory is.
             'dot="$top"/.git; [ -f "$dot" ] || dot="$git_dir"/config',
+            "hooks=$(git rev-parse --path-format=absolute --git-path hooks)",
         ]
         mounts.append('--bind "$own" "$own"')
         mounts += [
@@ -202,10 +201,15 @@ def _confined(
                 )
             ),
             '--ro-bind "$dot" "$dot"',
+            # The hooks git runs for every team, wherever the config has them.
+            '--ro-bind-try "$hooks" "$hooks"',
         ]
         if not stay:
             mounts.append('--chdir "$own"')
     mounts += map(read_only, private)
+    # Last, so that no mount of a folder it is in uncovers it.
+    if secret is not None:
+        mounts.append(f"--ro-bind /dev/null {quote(str(secret))}")
     command = [
         f"exec {quote(bwrap)} --dev-bind / /",
         *(["--die-with-parent"] if die_with_parent else []),
