@@ -1600,6 +1600,9 @@ class Reviews(Requests):
         if place.review.state == "accepted":
             # Cut off after the acceptance was made: what follows it is
             # still owed.
+            merge = self._merge_of(place) if store.opens_session(place) else None
+            if merge is not None and not merge.code_landed:
+                await asyncio.to_thread(self._land_accepted, place, None)
             await self._pass_up(above.id, acted=True)
         if place.review.state != "pending":
             return
@@ -1619,12 +1622,9 @@ class Reviews(Requests):
             self.notify(reviewer, refusal)
             return
         if _checkout_root(str(team)) != _checkout_root(str(checkout)):
-            on = await asyncio.to_thread(_branch_of, str(checkout))
-            session = store.session_of(place)
-            started_on = session.branch if session else ""
-            if is_division_lead(above) and started_on and on != started_on:
-                # The human's checkout is somewhere else than where the
-                # session started: the work is not merged into that.
+            elsewhere = await asyncio.to_thread(self._elsewhere, place, above)
+            if elsewhere is not None:
+                started_on, on = elsewhere
                 self._ask_to_clear(
                     place_id,
                     f"The session started from the branch {started_on!r}, "
@@ -1873,6 +1873,19 @@ class Reviews(Requests):
             }
         )
 
+    def _elsewhere(
+        self, place: SessionTeam, above: SessionTeam
+    ) -> tuple[str, str] | None:
+        """The branch a session started from and the one the human's
+        checkout is on now, when they differ: the session's work is not
+        merged into that."""
+        session = self.store.session_of(place)
+        started_on = session.branch if session else ""
+        if not is_division_lead(above) or not started_on:
+            return None
+        on = _branch_of(above.worktree_path)
+        return None if on == started_on else (started_on, on)
+
     async def _pass_up(self, place_id: str, *, acted: bool) -> None:
         """Take a team's work into the team above without another review,
         when all of it is work of its sub-teams that was accepted.
@@ -1887,7 +1900,8 @@ class Reviews(Requests):
         """
         store = self.store
         place = store.place(place_id)
-        if place is None or not store.below(place_id):
+        # A Division Lead place reviews; it has no work to hand on.
+        if place is None or is_division_lead(place) or not store.below(place_id):
             return
         # A team that was set up and never given work owes none.
         teams = [
@@ -1912,13 +1926,17 @@ class Reviews(Requests):
         if own is None:
             return
         # The work of a session meets what other sessions delivered: where
-        # it does, the reviewer is asked even if the team changed nothing.
+        # it does, or the human's checkout has moved to another branch, the
+        # reviewer is asked even if the team changed nothing.
         meets = False
         if not own and above is not None and store.opens_session(place):
             try:
                 meets = (
                     await asyncio.to_thread(self._to_reconcile, place, above)
-                ) is not None
+                    is not None
+                    or await asyncio.to_thread(self._elsewhere, place, above)
+                    is not None
+                )
             except (GitError, OSError):
                 meets = True
         if own or above is None or meets:

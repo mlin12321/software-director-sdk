@@ -1454,3 +1454,73 @@ async def test_closing_a_session_leaves_the_humans_own_checkout_as_it_is(
     await service.settled()
 
     assert (repo / "notes.txt").read_text() == "the human's, not committed\n"
+
+
+async def test_work_that_goes_up_by_itself_is_not_merged_into_another_branch(
+    service: DirectorService, repo: Path, tmp_path: Path
+):
+    await split_root(service)
+    worktree = own_worktree(service, repo, tmp_path)
+    commit(worktree, "services/api/app.py", "x = 1\n")
+    run_git(repo, "checkout", "--quiet", "-b", "elsewhere")
+    head = run_git(repo, "rev-parse", "HEAD").strip()
+    for team in ("services.api", "apps.web"):
+        await use(service, ic(service, team), SubmitReviewTool, DONE)
+
+    for team in ("services.api", "apps.web"):
+        await use(service, ic(service), ReviewTeamTool, accept(team))
+    await service.settled()
+
+    # The human's checkout is where they left it; the session's IC submits,
+    # and the human is asked when that is accepted.
+    assert run_git(repo, "rev-parse", "HEAD").strip() == head
+    assert node(service, "root").review is None
+
+
+async def test_a_division_lead_ic_is_not_told_to_submit_work(
+    service: DirectorService, launcher: FakeLauncher, repo: Path
+):
+    await split_root(service)
+    commit(repo, "README.md", "the team's own change\n")
+    await landed(service)
+    await service.settled()
+    lead = division_lead_ic(service)
+    assert lead is not None
+    told = len(launcher.messages_to(lead))
+    commit(repo, "services/api/app.py", "x = 1\n")
+    for team in ("services.api", "apps.web"):
+        await use(service, ic(service, team), SubmitReviewTool, DONE)
+
+    for team in ("services.api", "apps.web"):
+        await use(service, ic(service), ReviewTeamTool, accept(team))
+    await service.settled()
+
+    assert not any(
+        "submit_review" in message for message in launcher.messages_to(lead)[told:]
+    )
+
+
+async def test_an_acceptance_cut_off_before_its_landing_lands_when_it_is_run_again(
+    service: DirectorService, monkeypatch: pytest.MonkeyPatch
+):
+    await use(service, ic(service), WriteSpecTool, WriteSpecAction(text="# Spec"))
+    await use(service, ic(service), SubmitReviewTool, DONE)
+    top = node(service, "root")
+    land = service._land_accepted
+
+    def cut_off(*args: object) -> None:
+        raise RuntimeError("the server ends here")
+
+    monkeypatch.setattr(service, "_land_accepted", cut_off)
+    await use(service, division_lead_ic(service), ReviewTeamTool, accept(top.id))
+    await service.settled()
+    monkeypatch.setattr(service, "_land_accepted", land)
+
+    # What a restart does with the step that was still open.
+    service._begin(
+        "accept", top.id, needed_above="", reconciled="", specs=[], base=True
+    )
+    await service.settled()
+
+    assert service.team_memory.read("spec.md") == "# Spec"
+    assert service._in_order() == []
