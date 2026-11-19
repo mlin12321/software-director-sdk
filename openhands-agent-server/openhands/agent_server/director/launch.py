@@ -52,6 +52,7 @@ from openhands.sdk.profiles.agent_profile import (
     ACPAgentProfile,
     OpenHandsAgentProfile,
 )
+from openhands.sdk.security.confirmation_policy import NeverConfirm
 from openhands.sdk.tool.spec import Tool
 
 
@@ -366,7 +367,11 @@ class ConversationTeamLauncher:
             if base
             else ConversationWorktreeOptions(base="head"),
             tool_params=tool_params,
-            extra_tags=STARTED_BY_DIRECTOR,
+            # The human wrote in the conversation it comes from, not in it.
+            extra_tags={**STARTED_BY_DIRECTOR, **dict.fromkeys(HUMAN_JOINED)},
+            # Nobody is there to confirm what it does: the director's guard
+            # and its sandbox are what hold it.
+            confirmation_policy=NeverConfirm(),
             adapt_agent=adapt_agent,
             workspace_dir=checkout,
         )

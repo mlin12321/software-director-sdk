@@ -106,6 +106,7 @@ from openhands.sdk.llm.call_context import LLMCallContext
 from openhands.sdk.llm.llm_profile_store import LLMProfileStore
 from openhands.sdk.mcp.utils import MCPToolProvider
 from openhands.sdk.observability import OPERATION_METADATA_KEY, observe
+from openhands.sdk.security.confirmation_policy import ConfirmationPolicyBase
 from openhands.sdk.tool.client_tool import register_client_tools
 from openhands.sdk.tool.registry import get_tool_module_qualnames, is_tool_available
 from openhands.sdk.tool.spec import Tool
@@ -2375,7 +2376,8 @@ class ConversationService:
         extra_suffixes: Sequence[str] = (),
         worktree_options: ConversationWorktreeOptions | None = None,
         tool_params: ToolParams | None = None,
-        extra_tags: Mapping[str, str] | None = None,
+        extra_tags: Mapping[str, str | None] | None = None,
+        confirmation_policy: ConfirmationPolicyBase | None = None,
         adapt_agent: AgentAdapter | None = None,
         workspace_dir: str | None = None,
     ) -> StartChildConversationResponse | None:
@@ -2399,7 +2401,9 @@ class ConversationService:
                 repository's default branch when not given.
             tool_params: Parameters this server sets on the child's tools, by
                 tool name, over the ones it inherits.
-            extra_tags: Tags the child gets on top of its parent's.
+            extra_tags: Tags the child gets on top of its parent's; one
+                given as None is not inherited.
+            confirmation_policy: The child's own, instead of its parent's.
             adapt_agent: Applied last to the agent the child inherits.
             workspace_dir: An existing directory the child works in, instead
                 of the parent's directory or a new worktree.
@@ -2485,7 +2489,19 @@ class ConversationService:
                     "parent_conversation_id": parent_id,
                     "forked_from_conversation_id": None,
                     "forked_from_event_id": None,
-                    "tags": {**parent_stored.tags, **(extra_tags or {})},
+                    "tags": {
+                        key: value
+                        for key, value in {
+                            **parent_stored.tags,
+                            **(extra_tags or {}),
+                        }.items()
+                        if value is not None
+                    },
+                    **(
+                        {"confirmation_policy": confirmation_policy}
+                        if confirmation_policy is not None
+                        else {}
+                    ),
                 }
             )
             info, _ = await self._launch_prepared_conversation(

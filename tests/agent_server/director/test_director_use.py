@@ -26,6 +26,7 @@ from openhands.sdk.agent import ACPAgent
 from openhands.sdk.conversation.state import ConversationExecutionStatus
 from openhands.sdk.errors import Conflict
 from openhands.sdk.llm.utils.metrics import Metrics, TokenUsage
+from openhands.sdk.security.confirmation_policy import NeverConfirm
 from openhands.sdk.workspace import LocalWorkspace
 from tests.agent_server.director.conftest import FakeLauncher
 from tests.agent_server.director.test_director_limits import started
@@ -333,6 +334,34 @@ async def used_by(agent: object, *metrics: Metrics) -> Usage:
     )
     launcher = ConversationTeamLauncher(cast(ConversationService, conversations))
     return (await launcher.usage([conversation]))[conversation]
+
+
+async def test_an_agent_derived_from_another_is_its_own_in_what_the_human_did_there():
+    asked: dict = {}
+
+    async def start_child_conversation(*_, **options):
+        asked.update(options)
+        return SimpleNamespace(workspace="/repo", isolation="shared")
+
+    async def get_event_service(_: UUID):
+        return SimpleNamespace(
+            get_conversation=lambda: SimpleNamespace(agent=ACPAgent(acp_command=["x"]))
+        )
+
+    conversations = SimpleNamespace(
+        start_child_conversation=start_child_conversation,
+        get_event_service=get_event_service,
+    )
+    launcher = ConversationTeamLauncher(cast(ConversationService, conversations))
+
+    await launcher.start_derived(
+        uuid4(), uuid4(), title="API (IC)", task="Serve orders.", isolation="shared"
+    )
+
+    # The human wrote in the conversation it comes from, not in it, and is
+    # not there to confirm what it does.
+    assert asked["extra_tags"] == {"startedby": "director", "humanjoined": None}
+    assert asked["confirmation_policy"] == NeverConfirm()
 
 
 async def test_counting_use_does_not_keep_an_idle_conversation_loaded():

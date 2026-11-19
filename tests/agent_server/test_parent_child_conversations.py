@@ -40,6 +40,7 @@ from openhands.sdk.conversation.state import (
 )
 from openhands.sdk.git.exceptions import GitCommandError
 from openhands.sdk.git.utils import run_git_command
+from openhands.sdk.security.confirmation_policy import AlwaysConfirm, NeverConfirm
 from openhands.sdk.tool.spec import Tool
 from openhands.sdk.workspace import LocalWorkspace
 
@@ -437,13 +438,19 @@ async def test_start_child_conversation_adds_tags_to_the_ones_it_inherits(
         tmp_path,
         workspace_dir,
         StartChildConversationRequest(task="Review the plan"),
-        extra_tags={"startedby": "director"},
+        # One that is named with no value is not inherited.
+        extra_tags={"startedby": "director", "source": None},
+        confirmation_policy=AlwaysConfirm(),
     )
 
     assert launch.result is not None
     child_stored = launch.services[launch.result.conversation_id].stored
-    assert child_stored.tags == {"source": "test", "startedby": "director"}
+    assert child_stored.tags == {"startedby": "director"}
+    assert child_stored.confirmation_policy == AlwaysConfirm()
     assert launch.services[launch.parent_id].stored.tags == {"source": "test"}
+    assert launch.services[launch.parent_id].stored.confirmation_policy == (
+        NeverConfirm()
+    )
 
 
 @pytest.mark.asyncio
