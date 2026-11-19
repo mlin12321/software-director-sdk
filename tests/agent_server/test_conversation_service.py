@@ -27,6 +27,7 @@ from openhands.agent_server.conversation_service import (
     _create_conversation_worktree,
     _get_worktree_start_point,
     _plan_conversation_worktree,
+    _worktree_start_point,
 )
 from openhands.agent_server.event_service import EventService, ServiceInactive
 from openhands.agent_server.models import (
@@ -2490,6 +2491,33 @@ class TestConversationServiceStartConversation:
         assert not (
             conversation_service.conversations_dir / conversation_id.hex
         ).exists()
+
+    def test_a_worktree_from_a_commit_here_fetches_nothing(self, tmp_path):
+        """A commit id cannot move: the remote is not asked for it."""
+        repo_dir = tmp_path / "repo"
+        _init_git_repo(repo_dir)
+        run_git_command(
+            ["git", "remote", "add", "origin", str(tmp_path / "unreachable")],
+            repo_dir,
+        )
+        head = run_git_command(["git", "rev-parse", "HEAD"], repo_dir).strip()
+        fetched = []
+
+        with patch(
+            "openhands.agent_server.conversation_service._fetch_origin",
+            side_effect=fetched.append,
+        ):
+            assert (
+                _worktree_start_point(
+                    repo_dir, ConversationWorktreeOptions(base="ref", ref=head)
+                )
+                == head
+            )
+            _worktree_start_point(
+                repo_dir, ConversationWorktreeOptions(base="ref", ref="main")
+            )
+
+        assert fetched == [repo_dir]
 
     def test_get_worktree_start_point_tolerates_fetch_failure(self, tmp_path):
         """If ``git fetch origin`` fails, fall back to cached refs.

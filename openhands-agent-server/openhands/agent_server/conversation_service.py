@@ -3,6 +3,7 @@ import importlib
 import json
 import logging
 import os
+import re
 from collections.abc import Awaitable, Callable, Collection, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager, suppress
@@ -177,6 +178,17 @@ def _local_branch_exists(repo_root: Path, branch: str) -> bool:
     return True
 
 
+def _is_local_commit(repo_root: Path, ref: str) -> bool:
+    """Whether ``ref`` is the full id of a commit this repository has."""
+    if not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", ref):
+        return False
+    try:
+        run_git_command(["git", "cat-file", "-e", f"{ref}^{{commit}}"], repo_root)
+    except GitCommandError:
+        return False
+    return True
+
+
 def _fetch_origin(repo_root: Path) -> None:
     """Refresh ``origin``'s refs for a worktree start point; keep cached ones on
     failure."""
@@ -295,7 +307,8 @@ def _worktree_start_point(repo_root: Path, options: ConversationWorktreeOptions)
     if options.base == "head":
         return "HEAD"
     if options.base == "ref" and options.ref:
-        if _has_git_remote(repo_root):
+        # A commit that is here already cannot move: nothing to fetch.
+        if _has_git_remote(repo_root) and not _is_local_commit(repo_root, options.ref):
             _fetch_origin(repo_root)
         return options.ref
     return _get_worktree_start_point(repo_root)
