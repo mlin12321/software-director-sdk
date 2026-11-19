@@ -55,8 +55,8 @@ def git_script(
     sub_team_directories: Sequence[str],
     excludes: Path,
     flock: str | None,
-    readonly: Sequence[str] = (),
-    writable: Sequence[str] = (),
+    readonly: Sequence[str],
+    writable: Sequence[str],
 ) -> str:
     """A ``git`` that keeps one agent's index apart from everyone else's.
 
@@ -68,7 +68,7 @@ def git_script(
         sub_team_directories: Directories inside it that sub-teams own.
         excludes: The ignore file from :func:`excludes_file`.
         readonly: Globs of the boundary the team may only read.
-        writable: Globs of the boundary the team may write; none is all.
+        writable: Globs of the boundary the team may write; none is nothing.
         flock: The ``flock`` binary, or None where there is none; commands
             that move HEAD are then not kept apart.
     """
@@ -89,17 +89,10 @@ def git_script(
     # What the boundary's globs keep from the team counts as outside too.
     held = [
         *([[f":(glob){glob}" for glob in readonly]] if readonly else []),
-        *(
-            [
-                [
-                    f":(glob){directory}/**" if directory else ":(glob)**",
-                    *(f":(exclude,glob){glob}" for glob in writable),
-                ]
-            ]
-            # None named is all of it.
-            if writable
-            else []
-        ),
+        [
+            f":(glob){directory}/**" if directory else ":(glob)**",
+            *(f":(exclude,glob){glob}" for glob in writable),
+        ],
     ]
     outside = [
         f'  "$real" diff --quiet "$1" "$2" -- {" ".join(map(quote, specs))} || return 0'

@@ -215,7 +215,7 @@ def _may_write(parent: SessionTeam, path: str) -> bool:
     ):
         return False
     # Only a glob of all that is below a folder holds all of the new team's.
-    return not boundary.writable or any(
+    return any(
         glob == "**" or (glob.endswith("/**") and covers(glob[: -len("/**")]))
         for glob in boundary.writable
     )

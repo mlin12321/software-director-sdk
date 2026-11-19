@@ -1,6 +1,7 @@
 """What a team that is replaced or pruned leaves, and what the teams that
 come after it are given of it."""
 
+import asyncio
 import json
 from contextlib import suppress
 from pathlib import Path
@@ -55,6 +56,7 @@ from tests.agent_server.director.test_director_limits import started
 from tests.agent_server.director.test_director_pause import (
     ServerEnded,
     again,
+    cut_off,
     end_server_at,
 )
 from tests.agent_server.director.test_director_service import attempt, create
@@ -854,3 +856,39 @@ async def test_a_client_is_shown_the_teams_removed_from_below_a_team_and_their_r
     ]
     # They are the team above's to see, not the new team's.
     assert get_node_memory(node(service, API).id, service).former_teams == []
+
+
+async def test_a_split_finished_again_after_a_restart_hands_over_once(
+    repo: Path,
+    service: DirectorService,
+    launcher: FakeLauncher,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """The server ends after the hand-over was begun and before the end of
+    the split was saved, so the split is finished a second time."""
+    save_tree = service._save_tree
+    ended = asyncio.Event()
+
+    def save(store) -> None:
+        # Nothing is saved once the server has ended.
+        if ended.is_set():
+            return
+        if any(i.kind == "hand_over" for i in service._runs().open_intents()):
+            ended.set()
+            raise ServerEnded
+        save_tree(store)
+
+    monkeypatch.setattr(service, "_save_tree", save)
+    await use(service, ic(service), ProposeTeamsTool, proposing([ORDERS], "", ["Web"]))
+    await cut_off(
+        launcher, ended, use(service, manager(service), ApproveTeamsTool, APPROVE)
+    )
+    await service.aclose()
+
+    second = await again(repo, launcher)
+    await second.resume()
+    await second.settled()
+
+    asides = [s for s in launcher.derived if s.suffixes == [HAND_OVER_ROLE]]
+    assert len(asides) == 1
+    await second.aclose()

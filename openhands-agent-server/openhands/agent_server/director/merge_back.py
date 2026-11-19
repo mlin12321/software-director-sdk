@@ -100,10 +100,7 @@ def merge_back(above: Path, team: Path, boundary: Boundary, title: str) -> Merge
         if (directory and path != directory and not path.startswith(f"{directory}/"))
         # What the team may only read, though it is in its folder.
         or any(glob_matches(glob, path) for glob in boundary.readonly)
-        or (
-            bool(boundary.writable)
-            and not any(glob_matches(glob, path) for glob in boundary.writable)
-        )
+        or not any(glob_matches(glob, path) for glob in boundary.writable)
     )
     if outside:
         return MergeBack("outside", tip, tuple(outside))
