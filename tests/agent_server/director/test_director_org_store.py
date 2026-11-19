@@ -10,6 +10,7 @@ from openhands.agent_server.director.models import (
     Escalation,
     Review,
     ReviewState,
+    SnapshotEvent,
 )
 from openhands.agent_server.director.org_persistence import (
     ORG_REF,
@@ -841,6 +842,7 @@ def test_updating_a_team_cannot_move_it(working: OrgStore):
 
 def test_a_moved_team_takes_what_is_below_it(store: OrgStore):
     events = record(store, "root", full=True)
+    under = record(store, "a1")
 
     moved = store.move("a", "b")
 
@@ -848,13 +850,17 @@ def test_a_moved_team_takes_what_is_below_it(store: OrgStore):
     assert [node.id for node in store.sub_teams("root")] == ["b"]
     assert [node.id for node in store.sub_teams("b")] == ["a"]
     assert [node.id for node in store.teams_above("a1")] == ["root", "b", "a"]
-    # The team and both parents are announced; the team is not announced as
-    # removed, since it is still in the org.
-    assert describe(events) == [
-        ("node_upsert", "a"),
-        ("node_upsert", "root"),
-        ("node_upsert", "b"),
-    ]
+    # Every subscriber is shown its part anew, also one below the team,
+    # which no single team's change would reach.
+    [shown] = events
+    assert isinstance(shown, SnapshotEvent)
+    assert {node.id: node.parent_id for node in shown.nodes}["a"] == "b"
+    [below] = under
+    assert isinstance(below, SnapshotEvent)
+    assert [node.id for node in below.nodes] == ["root", "b", "a", "a1"]
+    # It now hears of the team that came to be above it.
+    store.update_team("b", title="B again")
+    assert describe(under) == [("node_upsert", "b")]
 
 
 def test_moving_a_team_of_the_tree_leaves_the_places_of_a_session(working: OrgStore):
@@ -987,3 +993,13 @@ def test_sessions_come_back_whatever_order_their_places_were_kept_in():
 
     assert [kept.id for kept in store.sessions()] == ["s"]
     assert {place.id for place in store.session("s")} == {p.id for p in places}
+
+
+def test_a_tree_read_again_is_shown_to_those_who_follow_it(store: OrgStore):
+    events = record(store, "root", full=True)
+
+    store.replace_all(node for node in small_tree() if node.id in ("root", "b"))
+
+    [shown] = events
+    assert isinstance(shown, SnapshotEvent)
+    assert [node.id for node in shown.nodes] == ["root", "b"]

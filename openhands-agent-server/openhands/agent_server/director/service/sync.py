@@ -648,6 +648,8 @@ class Sync(Sessions):
         for node in nodes:
             if current.get(node["id"]) != node:
                 store.upsert(OrgNodeInput.model_validate(node))
+        # Teams may have changed place, which no one team's change tells.
+        store.show_again()
 
     def _put_aside_stale(self) -> None:
         run = self._runs()

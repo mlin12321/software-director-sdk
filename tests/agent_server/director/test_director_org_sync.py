@@ -10,11 +10,16 @@ from openhands.agent_server.director.models import (
     OrgNode,
     ResolveMergeRequest,
     RouteMessageRequest,
+    SnapshotEvent,
     StartAgainRequest,
 )
 from openhands.agent_server.director.org_merge import by_id, merge_orgs
 from openhands.agent_server.director.org_persistence import create_org_board
-from openhands.agent_server.director.org_store import AGENT_LOST, team_id_of
+from openhands.agent_server.director.org_store import (
+    AGENT_LOST,
+    OrgChange,
+    team_id_of,
+)
 from openhands.agent_server.director.service import DirectorService
 from openhands.sdk.errors import Conflict, Unprocessable
 from tests.agent_server.director.conftest import (
@@ -529,5 +534,23 @@ async def test_a_message_with_a_conversation_opens_a_session_in_a_pulled_org(
     assert routed.conversation_id == str(fake.root.conversation_id)
     assert routed.conversation_id == ic(there, routed.node_id)
     assert "Add a health check" in fake.messages_to(routed.conversation_id)[-1]
+    await here.aclose()
+    await there.aclose()
+
+
+async def test_a_pull_shows_the_tree_again_to_a_page_that_has_it_open(
+    repo: Path, launcher: FakeLauncher, remote: Path, tmp_path: Path
+):
+    here, there = await an_org_on_two_machines(repo, launcher, remote, tmp_path)
+    change(here, API, title="Payments")
+    await here.push_org("origin")
+    events: list[OrgChange] = []
+    there.store.subscribe("root", events.append, full=True)
+
+    await there.pull_org("origin")
+
+    shown = events[-1]
+    assert isinstance(shown, SnapshotEvent)
+    assert {node.id: node.title for node in shown.nodes}[API] == "Payments"
     await here.aclose()
     await there.aclose()

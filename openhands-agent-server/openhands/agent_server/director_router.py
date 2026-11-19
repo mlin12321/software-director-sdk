@@ -155,7 +155,7 @@ def _require_session(service: DirectorService, session_id: str) -> Session:
     raise NotFound(f"No session {session_id!r} is open")
 
 
-def _sse(event: SnapshotEvent | OrgChange | OrgStateEvent) -> str:
+def _sse(event: OrgChange | OrgStateEvent) -> str:
     return f"event: {event.type}\ndata: {event.model_dump_json()}\n\n"
 
 
@@ -233,15 +233,16 @@ async def stream_org_tree(
     if snapshot is None:
         raise NotFound(f"Unknown team: {focus_id}")
     unwatch = service.watch_state(on_change)
-    state = await asyncio.to_thread(service.state)
+
+    async def with_state(snapshot: SnapshotEvent) -> SnapshotEvent:
+        state = await asyncio.to_thread(service.state)
+        return snapshot.model_copy(
+            update={"paused": state.paused, "merging": state.merging}
+        )
 
     async def events() -> AsyncIterator[str]:
         try:
-            yield _sse(
-                snapshot.model_copy(
-                    update={"paused": state.paused, "merging": state.merging}
-                )
-            )
+            yield _sse(await with_state(snapshot))
             while True:
                 try:
                     event = await asyncio.wait_for(
@@ -250,6 +251,9 @@ async def stream_org_tree(
                 except TimeoutError:
                     yield ": keep-alive\n\n"
                     continue
+                if isinstance(event, SnapshotEvent):
+                    # Teams changed place: the client starts over from it.
+                    event = await with_state(event)
                 yield _sse(event)
         finally:
             unsubscribe()
