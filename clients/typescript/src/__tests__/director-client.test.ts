@@ -308,6 +308,7 @@ describe('DirectorClient', () => {
     await client.abortMerge();
     await client.pushOrg('upstream');
     await client.startAgain('s1a2b3c', 'services.api');
+    await client.startAgain('s1a2b3c', 'services.api', { workspace: { working_dir: '/r' } });
 
     const calls = fetchMock.mock.calls.map(
       ([url, init]) => `${init.method} ${url} ${init.body ?? ''}`
@@ -319,6 +320,7 @@ describe('DirectorClient', () => {
       'POST http://example.com/api/director/org/merge/abort ',
       'POST http://example.com/api/director/org/push {"remote":"upstream"}',
       'POST http://example.com/api/director/org/sessions/s1a2b3c/teams/services.api/start-again {}',
+      'POST http://example.com/api/director/org/sessions/s1a2b3c/teams/services.api/start-again {"conversation":{"workspace":{"working_dir":"/r"}}}',
     ]);
     expect(pulled).toEqual(sync);
   });

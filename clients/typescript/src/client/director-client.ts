@@ -454,17 +454,23 @@ export class DirectorClient {
    * Start afresh what a session has at a team when its agents have no
    * conversation on this server, on the work its branch has.
    *
-   * @param nodeId The team of the org.
+   * @param nodeId The team of the org, or the id of the session's place.
+   * @param conversation How to start the team's IC, where no conversation of
+   *   the org runs here to start it from.
    * @throws HttpError 404 when the session has no such team, 409 when it is
    *   done, its IC has a conversation here, or no conversation of the org
-   *   runs here to start it from.
+   *   runs here to start it from and none is given.
    */
-  async startAgain(sessionId: string, nodeId: DirectorNodeId): Promise<DirectorSessionTeam> {
+  async startAgain(
+    sessionId: string,
+    nodeId: DirectorNodeId,
+    conversation?: CreateConversationPayload
+  ): Promise<DirectorSessionTeam> {
     const response = await this.client.post<DirectorSessionTeam>(
       `${DIRECTOR_PATH}/org/sessions/${encodeURIComponent(sessionId)}/teams/${encodeURIComponent(
         nodeId
       )}/start-again`,
-      {}
+      conversation ? { conversation } : {}
     );
     return response.data;
   }
