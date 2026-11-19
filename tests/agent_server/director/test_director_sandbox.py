@@ -58,9 +58,19 @@ def confined(
 def test_a_shell_nothing_confines_still_starts_in_its_teams_directory(repo: Path):
     script = repo / SHELLS / "unconfined.sh"
     none = repo / SHELLS / "none.sh"
-    given = {"checkouts": [repo], "private": [repo / SHELLS]}
-    write_shell(script, shell_script(None, "/bin/sh", directory="svc/api", **given))
-    write_shell(none, shell_script(None, "/bin/sh", directory=None, **given))
+    private = [repo / SHELLS]
+    write_shell(
+        script,
+        shell_script(
+            None, "/bin/sh", directory="svc/api", checkouts=[repo], private=private
+        ),
+    )
+    write_shell(
+        none,
+        shell_script(
+            None, "/bin/sh", directory=None, checkouts=[repo], private=private
+        ),
+    )
 
     def at(shell: Path) -> str:
         ran = subprocess.run(
@@ -153,11 +163,21 @@ def test_an_unchanged_script_is_not_rewritten(repo: Path):
 def test_an_agents_whole_process_ends_with_the_server_and_a_shell_does_not(
     repo: Path,
 ):
-    given = {"checkouts": [repo], "private": [repo / ".git" / "director-shells"]}
+    private = [repo / ".git" / "director-shells"]
 
-    command = command_script("/usr/bin/bwrap", directory="api", **given)
-    shell = shell_script("/usr/bin/bwrap", "/bin/bash", directory="api", **given)
-    unconfined = command_script(None, directory="api", **given)
+    command = command_script(
+        "/usr/bin/bwrap", directory="api", checkouts=[repo], private=private
+    )
+    shell = shell_script(
+        "/usr/bin/bwrap",
+        "/bin/bash",
+        directory="api",
+        checkouts=[repo],
+        private=private,
+    )
+    unconfined = command_script(
+        None, directory="api", checkouts=[repo], private=private
+    )
 
     assert "--die-with-parent" in command
     assert "--die-with-parent" not in shell
