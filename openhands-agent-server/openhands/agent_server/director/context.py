@@ -77,8 +77,9 @@ def changed(
     before: dict[str, Any], now: dict[str, Any], role: AgentRole
 ) -> dict[str, Any]:
     """The parts of a steady context that differ from what an agent was
-    last told. A list that only grew gives what was added to it, and the
-    list of sub-teams gives the teams that changed or went."""
+    last told. A list that only grew gives what was added to it, the list
+    of sub-teams gives the teams that changed or went, and a part that is
+    gone is None."""
     found: dict[str, Any] = {}
     for key, value in now.items():
         was = before.get(key)
@@ -91,7 +92,9 @@ def changed(
             found[key] = value
             continue
         if key in _KEYED and was:
-            found[key] = _entries_changed(was, value, _KEYED[key])
+            # The same entries in another order are no news.
+            if entries := _entries_changed(was, value, _KEYED[key]):
+                found[key] = entries
             continue
         if key in _LATEST:
             new = [item for item in value if item not in was]
@@ -107,6 +110,9 @@ def changed(
             added = [item for item in added if by is not None and item[by] != role]
         if added:
             found[key] = {"added": added}
+    # A part that is no longer there is told as gone, or the agent goes on
+    # believing it: the last other session of its team that closed.
+    found.update({key: None for key, was in before.items() if was and key not in now})
     return found
 
 

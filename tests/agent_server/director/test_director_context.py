@@ -416,3 +416,22 @@ async def test_the_directors_own_notices_bring_what_changed_too(
         (node(service, "apps.web").id, "at work"),
     ]
     await service.aclose()
+
+
+def test_a_part_that_is_gone_is_told_and_another_order_is_not():
+    api = {"team_id": "api", "title": "API"}
+    web = {"team_id": "web", "title": "Web"}
+    other = [{"session": "s2", "title": "Refunds"}]
+    before = context(sub_teams=[api, web], other_sessions_of_your_team=other)
+
+    assert changed(before, context(sub_teams=[web, api]), "ic") == {
+        "other_sessions_of_your_team": None
+    }
+    assert (
+        changed(
+            before,
+            context(sub_teams=[web, api], other_sessions_of_your_team=other),
+            "ic",
+        )
+        == {}
+    )
