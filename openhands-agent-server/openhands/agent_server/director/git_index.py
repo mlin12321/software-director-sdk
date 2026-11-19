@@ -139,9 +139,14 @@ def git_script(
         # What was hidden is taken as HEAD has it; nothing else is touched.
         '  top=$("$real" rev-parse --show-toplevel) || return 1',
         '  was_hidden=$("$real" -C "$top" ls-files -t | sed -n "s/^S //p")',
-        '  [ -z "$was_hidden" ] || printf "%s\\n" "$was_hidden" |',
-        '    "$real" --literal-pathspecs -C "$top" reset -q HEAD'
-        " --pathspec-from-file=- || return 1",
+        # Taken out first: an entry kept would keep what git last saw of
+        # the file, and a change since might not be seen.
+        '  [ -z "$was_hidden" ] || {',
+        '    printf "%s\\n" "$was_hidden" |'
+        ' "$real" -C "$top" update-index --force-remove --stdin &&',
+        '    printf "%s\\n" "$was_hidden" |'
+        ' "$real" --literal-pathspecs -C "$top" reset -q HEAD --pathspec-from-file=-',
+        "  } || return 1",
         '  "$real" ls-files -z |'
         ' "$real" update-index -z --no-skip-worktree --stdin || return 1',
         *hide,

@@ -260,7 +260,7 @@ def test_a_worktree_made_after_a_shell_started_is_closed_to_it(
 ):
     (repo / "svc" / "api").mkdir(parents=True)
     assert not (repo / ".git" / "worktrees").exists()
-    run = confined(repo, "svc/api")
+    confined(repo, "svc/api")
     later = repo / ".git" / "worktrees" / "later" / "commondir"
     shell = subprocess.Popen(
         [
