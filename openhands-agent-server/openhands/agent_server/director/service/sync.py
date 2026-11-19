@@ -452,7 +452,9 @@ class Sync(Sessions):
             restore_worktrees, self._repo_dir, [place], self._home()
         )
         ic_id = uuid4()
-        task = await asyncio.to_thread(self._purpose if leads else self._task_of, place)
+        task = await asyncio.to_thread(
+            lambda: self._purpose(place) if leads else self._task_of(place)
+        )
         if conversation is None:
             store.update_place(node_id, agents=_new_agents(ic_id), status="idle")
             self._begin(
