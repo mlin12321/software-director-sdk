@@ -15,6 +15,7 @@ from tests.agent_server.director.conftest import run_git
 
 
 SHELLS = ".git/director-shells"
+PRIVATE = ("director", "hooks", "config")
 
 
 def confined(
@@ -36,7 +37,7 @@ def confined(
             bwrap,
             "/bin/sh",
             checkouts=[repo, *checkouts],
-            private=repo / SHELLS,
+            private=[repo / SHELLS],
             directory=directory,
             sub_team_directories=sub_teams,
         ),
@@ -57,7 +58,7 @@ def confined(
 def test_a_shell_nothing_confines_still_starts_in_its_teams_directory(repo: Path):
     script = repo / SHELLS / "unconfined.sh"
     none = repo / SHELLS / "none.sh"
-    given = {"checkouts": [repo], "private": repo / SHELLS}
+    given = {"checkouts": [repo], "private": [repo / SHELLS]}
     write_shell(script, shell_script(None, "/bin/sh", directory="svc/api", **given))
     write_shell(none, shell_script(None, "/bin/sh", directory=None, **given))
 
@@ -152,7 +153,7 @@ def test_an_unchanged_script_is_not_rewritten(repo: Path):
 def test_an_agents_whole_process_ends_with_the_server_and_a_shell_does_not(
     repo: Path,
 ):
-    given = {"checkouts": [repo], "private": repo / ".git" / "director-shells"}
+    given = {"checkouts": [repo], "private": [repo / ".git" / "director-shells"]}
 
     command = command_script("/usr/bin/bwrap", directory="api", **given)
     shell = shell_script("/usr/bin/bwrap", "/bin/bash", directory="api", **given)
@@ -161,3 +162,47 @@ def test_an_agents_whole_process_ends_with_the_server_and_a_shell_does_not(
     assert "--die-with-parent" in command
     assert "--die-with-parent" not in shell
     assert "--die-with-parent" not in unconfined
+
+
+def test_the_shell_cannot_change_what_git_runs_or_what_the_director_keeps(
+    repo: Path, tmp_path: Path
+):
+    git_dir = repo / ".git"
+    (git_dir / "director").mkdir()
+    secret = tmp_path / "director.json"
+    secret.write_text('{"tool_key": "k"}')
+    bwrap = find_bwrap()
+    if bwrap is None:
+        pytest.skip("bubblewrap cannot make a sandbox on this machine")
+    script = repo / SHELLS / "held.sh"
+    write_shell(
+        script,
+        shell_script(
+            bwrap,
+            "/bin/sh",
+            checkouts=[repo],
+            private=[repo / SHELLS, *(git_dir / name for name in PRIVATE)],
+            secret=secret,
+            directory="svc/api",
+        ),
+    )
+
+    def run(command: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [str(script), "-c", command], cwd=repo, capture_output=True, text=True
+        )
+
+    assert run(f"echo x > {git_dir}/hooks/post-commit").returncode != 0
+    assert run("git config user.name other").returncode != 0
+    assert run(f"echo x > {git_dir}/director/state.db").returncode != 0
+    assert run(f"cat {secret}").stdout == ""
+    assert secret.read_text() == '{"tool_key": "k"}'
+
+
+def test_a_teams_folder_that_is_a_link_opens_nothing(repo: Path):
+    (repo / "svc" / "web").mkdir(parents=True)
+    (repo / "svc" / "api").symlink_to("web")
+    run = confined(repo, "svc/api")
+
+    assert run("echo x > main.py").returncode != 0
+    assert not (repo / "svc" / "web" / "main.py").exists()

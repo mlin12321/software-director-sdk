@@ -11,6 +11,7 @@ from openhands.agent_server.director.changes import (
     team_changes,
     write_by_hand,
 )
+from openhands.agent_server.director.git import git, uncommitted
 from openhands.agent_server.director.models import Boundary, SessionTeam
 from openhands.sdk.errors import Forbidden, Invalid, NotFound
 from tests.agent_server.director.conftest import commit, make_place, make_team, run_git
@@ -197,3 +198,38 @@ def test_a_change_by_hand_is_held_to_what_the_team_may_write(
     assert run_git(repo, "rev-parse", "HEAD") == head
     assert list(outside.iterdir()) == []
     assert (repo / "api" / "sub" / "x.py").read_text() == "x\n"
+
+
+def test_a_change_by_hand_reaches_the_index_of_an_agent_that_works_there(
+    repo: Path,
+):
+    commit(repo, "api/a.py", "old\n")
+    api = team(repo, "api")
+    own = {"GIT_INDEX_FILE": str(repo / ".git" / "agent-index-ic")}
+    git(repo, ["read-tree", "HEAD"], env=own)
+
+    write_by_hand(api, [], "api/a.py", "by hand\n")
+
+    # Or the agent's next commit would put the old file back.
+    assert git(repo, ["diff", "--cached", "--name-only", "HEAD"], env=own) == ""
+
+
+def test_a_change_by_hand_does_not_follow_a_link_into_another_teams_folder(
+    repo: Path,
+):
+    commit(repo, "web/w.py", "theirs\n")
+    (repo / "api").mkdir()
+    (repo / "api" / "link").symlink_to("../web")
+
+    with pytest.raises(Forbidden):
+        write_by_hand(team(repo, "api"), [], "api/link/w.py", "mine\n")
+
+    assert (repo / "web" / "w.py").read_text() == "theirs\n"
+
+
+def test_uncommitted_files_are_named_as_they_are(repo: Path):
+    (repo / "api").mkdir()
+    (repo / "api" / "a b.py").write_text("x\n")
+    (repo / "api" / "é.py").write_text("x\n")
+
+    assert sorted(uncommitted(repo, "api")) == ["api/a b.py", "api/é.py"]

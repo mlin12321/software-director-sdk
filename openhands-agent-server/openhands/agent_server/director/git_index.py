@@ -23,6 +23,8 @@ _UNWRAPPED = "clone|init|worktree|submodule"
 # Commands that move HEAD. Two agents running one at a time is what keeps a
 # commit from being built on an index that is one commit behind.
 _MOVES_HEAD = "commit|merge|pull|cherry-pick|revert|rebase|am|reset|checkout|switch"
+# Commands that make commits out of what the agent gives them.
+_COMMITS = "commit|cherry-pick|revert|am"
 _IN_PROGRESS = (
     "MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD BISECT_LOG rebase-merge rebase-apply"
 )
@@ -75,15 +77,20 @@ def git_script(
         line
         for specs in hidden
         for line in (
-            f'  "$real" reset -q -- {" ".join(map(quote, specs))}',
+            f'  "$real" reset -q -- {" ".join(map(quote, specs))} || return 1',
             f'  "$real" ls-files -z -- {" ".join(map(quote, specs))} |'
-            ' "$real" update-index -z --skip-worktree --stdin',
+            ' "$real" update-index -z --skip-worktree --stdin || return 1',
         )
+    ]
+    outside = [
+        f'  "$real" diff --quiet "$1" "$2" -- {" ".join(map(quote, specs))} || return 0'
+        for specs in hidden
     ]
     lock = (
         [
             f'  exec 9>>"$common/{LOCK_FILE}"',
-            f"  {quote(flock)} -w {_LOCK_WAIT_SECONDS} 9",
+            f"  {quote(flock)} -w {_LOCK_WAIT_SECONDS} 9 ||"
+            ' fail "another git command holds the checkout; try again"',
         ]
         if flock
         else ["  :"]
@@ -93,6 +100,12 @@ def git_script(
         f"real={quote(real_git)}",
         # Set by this script further up the process tree, or by the caller.
         '[ -n "${GIT_INDEX_FILE-}" ] && exec "$real" "$@"',
+        'fail() { printf "git: %s\\n" "$1" >&2; exit 1; }',
+        # The checkout named is used like any other.
+        'while [ "${1-}" = -C ] && [ $# -ge 2 ]; do',
+        '  cd "$2" || exit 128',
+        "  shift 2",
+        "done",
         "command=",
         "skip=",
         'for arg in "$@"; do',
@@ -117,12 +130,19 @@ def git_script(
         "",
         "sync() {",
         '  head=$("$real" rev-parse -q --verify HEAD) || return 0',
-        '  [ -f "$GIT_INDEX_FILE" ] || "$real" read-tree HEAD || return 0',
+        '  [ -f "$GIT_INDEX_FILE" ] || "$real" read-tree HEAD || return 1',
         f'  stamp="$head "{revision}',
         '  [ "$(cat "$GIT_INDEX_FILE.synced" 2>/dev/null)" = "$stamp" ] && return 0',
-        '  "$real" ls-files -z | "$real" update-index -z --no-skip-worktree --stdin',
+        '  "$real" ls-files -z |'
+        ' "$real" update-index -z --no-skip-worktree --stdin || return 1',
         *hide,
         '  printf "%s\\n" "$stamp" > "$GIT_INDEX_FILE.synced"',
+        "}",
+        "",
+        "# Whether anything that is not the team's differs between two commits.",
+        "outside() {",
+        *outside,
+        "  return 1",
         "}",
         "",
         'case "$command" in',
@@ -134,12 +154,26 @@ def git_script(
         f"for marker in {_IN_PROGRESS}; do",
         '  [ -e "$git_dir/$marker" ] && busy=1',
         "done",
-        '[ -n "$busy" ] || sync </dev/null >/dev/null 2>&1',
+        # A commit built on an index that is behind would undo other teams' work.
+        '[ -n "$busy" ] || sync </dev/null >/dev/null 2>&1 ||',
+        '  fail "your index could not be brought up to date; try again"',
         'before=$("$real" rev-parse -q --verify HEAD)',
         # The lock is not for what git leaves running behind it.
         f'"$real" -c core.excludesFile={quote(str(excludes))} "$@" 9>&-',
         "code=$?",
         'after=$("$real" rev-parse -q --verify HEAD)',
+        'case "$command" in',
+        f"  {_COMMITS})",
+        # What finishes a merge commits what the merge brought.
+        '    if [ -z "$busy" ] && [ -n "$before" ] && [ "$before" != "$after" ] \\',
+        '        && outside "$before" "$after"; then',
+        '      "$real" reset -q --soft "$before"',
+        '      rm -f "$GIT_INDEX_FILE.synced"',
+        "      fail \"the commit changed files outside your team's folder,"
+        ' so it was undone"',
+        "    fi",
+        "  ;;",
+        "esac",
         # The checkout's own index has not seen the commit; without this,
         # whoever uses it sees the committed files as staged to be undone.
         'if [ -n "$before" ] && [ -n "$after" ] && [ "$before" != "$after" ] \\',

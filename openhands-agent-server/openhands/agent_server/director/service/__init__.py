@@ -4,6 +4,7 @@ import asyncio
 import logging
 import os
 from collections.abc import Awaitable, Callable
+from contextlib import suppress
 from pathlib import Path
 from uuid import UUID
 
@@ -422,7 +423,9 @@ class DirectorService(Sync):
                 )
                 if refusal is not None:
                     if role == "ic":
-                        self.record_need(node, relative, NEED_WRITE)
+                        # The refusal stands whether or not it could be kept.
+                        with suppress(Exception):
+                            self.record_need(node, relative, NEED_WRITE)
                     return refusal
             elif any(_is_in(target, checkout) for checkout in self._checkouts()):
                 return (

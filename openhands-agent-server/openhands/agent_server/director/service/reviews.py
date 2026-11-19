@@ -1855,9 +1855,9 @@ class Reviews(Requests):
         try:
             names = git(
                 checkout,
-                ["diff", "--name-only", place.base_commit, "HEAD", "--"]
+                ["diff", "--name-only", "-z", place.base_commit, "HEAD", "--"]
                 + [pathspec(place.boundary.path)],
-            ).splitlines()
+            ).split("\0")
             names += uncommitted(checkout, place.boundary.path)
         except (GitError, OSError):
             return None

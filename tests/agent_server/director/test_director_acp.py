@@ -166,7 +166,7 @@ def test_a_launcher_without_a_sandbox_runs_the_command_with_the_teams_git_first(
         command_script(
             None,
             checkouts=[tmp_path],
-            private=tmp_path,
+            private=[tmp_path],
             directory="svc",
             first_on_path=programs,
         ),
@@ -193,7 +193,7 @@ def test_a_launcher_holds_the_whole_process_to_the_teams_directory(repo: Path):
         command_script(
             bwrap,
             checkouts=[repo],
-            private=script.parent,
+            private=[script.parent],
             directory="svc/api",
         ),
     )
