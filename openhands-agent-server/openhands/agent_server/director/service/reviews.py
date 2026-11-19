@@ -989,6 +989,22 @@ class Reviews(Requests):
                 f"({home.boundary.path or 'the repository'}), so it cannot go "
                 "under it."
             )
+        # Beside a team that holds its folder, both would own it.
+        holder = next(
+            (
+                team
+                for team in store.sub_teams(home.id)
+                if team.id != choice.team
+                and is_inside(path, normalize_store_path(team.boundary.path))
+            ),
+            None,
+        )
+        if holder is not None:
+            raise Invalid(
+                f"The folder of team {choice.team} ({path}) is inside that of "
+                f"team {holder.id}, which is under team {choice.under}, so it "
+                f"goes under team {holder.id} or one below it."
+            )
         level = len(store.teams_above(home.id)) + 2
         if level > self.settings.max_depth:
             raise Invalid(

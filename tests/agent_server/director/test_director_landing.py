@@ -1327,15 +1327,20 @@ async def test_a_manager_puts_a_team_it_takes_where_it_fits_the_org(
         placed(take="session", under="services.api.queue"),
     )
     kept = await use(service, asked, SettleTeamsTool, placed(take="org", title="Jobs"))
+    # Beside the team that holds its folder, both would own it.
+    above = await use(
+        service, asked, SettleTeamsTool, placed(take="session", under="root")
+    )
     assert outside.is_error and "is not inside" in outside.text
     assert beside.is_error and "is not inside" in beside.text
     assert kept.is_error and "stays as the org has it" in kept.text
+    assert above.is_error and "goes under team services.api" in above.text
 
     settled = await use(
         service,
         asked,
         SettleTeamsTool,
-        placed(take="session", under="root", title="Refund jobs"),
+        placed(take="session", under="services.api", title="Refund jobs"),
     )
     assert not settled.is_error
     # Nothing of it is the org's before the code is accepted.
@@ -1347,11 +1352,10 @@ async def test_a_manager_puts_a_team_it_takes_where_it_fits_the_org(
     jobs = service.store.team(JOBS)
     assert jobs is not None
     assert (jobs.parent_id, jobs.title, jobs.boundary.path) == (
-        "root",
+        "services.api",
         "Refund jobs",
         "services/api/jobs",
     )
-    assert "moved" in [event.kind for event in record_of(service, "root")]
 
 
 @pytest.mark.parametrize("rewritten", [True, False])
