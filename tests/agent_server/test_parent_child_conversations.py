@@ -553,7 +553,7 @@ async def test_a_taken_child_id_leaves_the_worktree_of_its_conversation(tmp_path
         ) as service:
             parent, _ = await service.start_conversation(_start_request(repo_dir))
             first = await service.start_child_conversation(parent.id, request)
-            assert first is not None
+            assert first is not None and first.workspace is not None
             worktree = Path(first.workspace)
             (worktree / "draft.txt").write_text("uncommitted\n")
 
