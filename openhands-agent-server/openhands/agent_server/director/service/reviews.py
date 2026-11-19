@@ -1145,8 +1145,13 @@ class Reviews(Requests):
                 )
                 + (f"\n\n{note}" if note else ""),
             )
+        self._record_not_taken(top, landed)
+        self._org_turn()
+
+    def _record_not_taken(self, top: SessionTeam, landed: Landed) -> None:
+        """Keep on record the contracts of a session that the org did not
+        take, also when the session is closed and nobody is told."""
         for directory, _ in landed.others:
-            # On record also when the session is closed and nobody is told.
             self._land_event(
                 self._home_of(top, directory),
                 self._event(
@@ -1157,7 +1162,6 @@ class Reviews(Requests):
                     "written to them",
                 ),
             )
-        self._org_turn()
 
     async def _do_land_org(self, intent: Intent) -> None:
         """Land what a session's accepted work makes of the org's teams
@@ -1226,6 +1230,7 @@ class Reviews(Requests):
             )
         for team_id, role in landed.records.grown:
             self.reports_grew(team_id, role)
+        self._record_not_taken(top, landed)
 
     def _sent_back(self, top: SessionTeam) -> None:
         """The work of a session was sent back: it has no place in the

@@ -1553,3 +1553,54 @@ async def test_work_that_waited_for_the_human_is_merged_as_its_reviewer_decided(
 
     assert (repo / "app.py").read_text() == "refunds = True\n"
     assert service.team_memory.read("spec.md") == "# Reviewer"
+
+
+async def test_contracts_the_org_did_not_take_are_on_record_when_the_session_closes(
+    service: DirectorService,
+):
+    top, conversation = await at_api(service)
+    service.hand_over(api_place(service, top), "", "Refunds go through Jobs.")
+    service.team_memory.write(
+        "services/api", "contracts.md", "Orders go through Jobs.\n"
+    )
+    await accepted(service, top, conversation)
+
+    service.close_session(api_place(service, top).session)
+    await service.settled()
+
+    assert any(
+        event.kind == "not_taken" and "the contracts it wrote" in event.detail
+        for event in service.org_history(100).events
+    )
+
+
+async def test_contracts_for_a_team_the_org_lost_wait_with_the_rest_of_the_landing(
+    service: DirectorService,
+):
+    await split_root(service)
+    await landed(service)
+    # Work of another session waits ahead of this one's.
+    web = await service.open_session(
+        OpenSessionRequest(text="Web work.", node_id="apps.web")
+    )
+    await service.settled()
+    ahead = web.session.teams[0].id
+    service.hand_over(node(service, ahead), "", "The web session's contracts.")
+    service.team_memory.write("apps/web", "contracts.md", "The org's.\n")
+    await accepted(service, ahead, web.conversation_id)
+    opened = await service.open_session(
+        OpenSessionRequest(text="Add refunds.", node_id="services.api")
+    )
+    await service.settled()
+    top = opened.session.teams[0].id
+    place = api_place(service, top)
+    service.hand_over(place, "", "Refunds go through Jobs.")
+    # Other accepted work set the team at that directory up anew meanwhile.
+    service.store.update_team("services.api", since="set up anew")
+
+    await accepted(service, top, opened.conversation_id)
+
+    # Only its code has landed: what it wrote is not lost before the rest.
+    assert [text for text, _ in service.drafts(place.session).values()] == [
+        "Refunds go through Jobs.\n"
+    ]

@@ -1269,7 +1269,8 @@ class Records(ServiceState):
                 )
         for place in left.values():
             for file in self.drafts(session):
-                if by_path.get(_directory_of(file)) is place:
+                # What waits for the org's part of the landing stays a draft.
+                if by_path.get(_directory_of(file)) is place and file not in held:
                     self._undraft(session, file)
         for place in places:
             if place.team_id not in waits:
