@@ -408,7 +408,9 @@ class ConversationTeamLauncher:
             agent_profile_id=stored.id,
             workspace=workspace,
             conversation_id=conversation_id,
-            parent_conversation_id=parent_id,
+            # A conversation's parent is in its own workspace; a team started
+            # again in a checkout of its own is not.
+            parent_conversation_id=None if checkout else parent_id,
             initial_message=SendMessageRequest(
                 role="user", content=[TextContent(text=task)], run=True
             ),

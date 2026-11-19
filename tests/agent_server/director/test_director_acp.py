@@ -52,8 +52,10 @@ from openhands.agent_server.director.tools.definition import (
     ProposeTeamsAction,
     SubmitReviewAction,
 )
+from openhands.sdk import LLM, Agent
 from openhands.sdk.agent import ACPAgent
 from openhands.sdk.conversation.state import ConversationExecutionStatus
+from openhands.sdk.tool.spec import Tool
 from tests.agent_server.director.conftest import (
     DerivedStart,
     FakeLauncher,
@@ -785,4 +787,22 @@ async def test_an_org_without_a_name_is_named_with_its_division_lead(repo: Path)
     launcher.report(agent, ConversationExecutionStatus.FINISHED)
     await service.settled()
     assert len(launcher.summarized) == asked
+    await service.aclose()
+
+
+async def test_an_agent_of_an_org_has_no_tool_that_starts_agents_nothing_holds(
+    repo: Path,
+):
+    launcher = FakeLauncher()
+    service = await started(repo, launcher)
+    assert launcher.root_adapt is not None
+    agent = Agent(
+        llm=LLM(model="gpt-4o", usage_id="test-llm"),
+        tools=[Tool(name="terminal"), Tool(name="task_tool_set")],
+    )
+
+    adapted = launcher.root_adapt(agent)
+
+    names = [tool.name for tool in adapted.tools]
+    assert "terminal" in names and "task_tool_set" not in names
     await service.aclose()

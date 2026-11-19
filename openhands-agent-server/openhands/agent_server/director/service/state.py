@@ -173,6 +173,9 @@ def tools_of(place: SessionTeam, role: AgentRole) -> tuple[str, ...]:
 DIRECTOR_TOOL_NAMES = tuple(
     dict.fromkeys((*TOOLS_OF["ic"], *TOOLS_OF["manager"], *DIVISION_LEAD_MANAGER_TOOLS))
 )
+# Tools that start agents nothing holds to the team's folder. An org's
+# agent hands work on by proposing sub-teams.
+_SUB_AGENT_TOOLS = ("task_tool_set", "task", "delegate")
 # How a team that was set up and given no task reads to the IC above.
 NOT_STARTED = "not_started"
 # What follows a team's purpose in its task once something started it.
@@ -659,7 +662,8 @@ class ServiceState:
                 kept = [
                     tool
                     for tool in agent.tools
-                    if tool.name not in DIRECTOR_TOOL_NAMES or tool.name in offered
+                    if tool.name not in _SUB_AGENT_TOOLS
+                    and (tool.name not in DIRECTOR_TOOL_NAMES or tool.name in offered)
                 ]
                 has = {tool.name for tool in kept}
                 added = [Tool(name=name) for name in offered if name not in has]
