@@ -60,9 +60,12 @@ def merge_orgs(
             if parent in base and parent not in gone_from:
                 continue  # settled with the removed team above it
             below = _subtree(kept_in, team_id)
-            settled.update(below)
             if all(base.get(each) == kept_in[each] for each in below):
-                continue  # removed on one side, untouched on the other
+                # Removed on one side, untouched on the other. A team the
+                # removing side kept elsewhere is merged as any other.
+                settled.update(each for each in below if each not in gone_from)
+                continue
+            settled.update(below)
             conflict = OrgConflict(
                 id=f"team:{team_id}",
                 kind="team",
