@@ -1453,6 +1453,11 @@ class Reviews(Requests):
         above = store.place(place.parent_id) if place and place.parent_id else None
         if place is None or above is None or place.review is None:
             return
+        if any(
+            intent.kind == "accept" and intent.node_id == place_id
+            for intent in self._runs().open_intents()
+        ):
+            raise Conflict(f"The work of {place.title!r} is being accepted already.")
         first = self._before(place)
         if first is not None:
             theirs = first.parent_id != place.parent_id
