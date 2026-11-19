@@ -500,6 +500,8 @@ export interface DirectorMerge {
    * submitted earlier. What waits of them is not known yet.
    */
   org_queued?: boolean;
+  /** What names the state its Manager was last asked of. */
+  asked?: string;
   /** When its Manager was last asked; '' when it was not. */
   asked_at?: string;
   /** Whether its Manager was asked again for not answering. */
@@ -562,6 +564,12 @@ export interface DirectorSession {
    * human is asked; 0 while nothing limits it.
    */
   cost_allowance: number;
+  /**
+   * The sub-teams the org had under the team when the session's work was
+   * last made the org's: each team, the team above it, its directory and
+   * what else makes it that team.
+   */
+  shape?: [string, string, string, string][];
   /**
    * Of the whole session: blocked while the team it was opened at is; else
    * working while any of its teams or its reviewer is; else blocked while
