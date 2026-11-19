@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from openhands.agent_server.director.git import (
+    DIRECTOR_IDENTITY,
     GitError,
     bring_over,
     git,
@@ -153,3 +154,21 @@ def test_what_was_kept_already_is_found_again(repo: Path):
     # A server that ended before it could say so asks again.
     assert kept is not None and save_and_discard(repo, "svc", REF) == kept
     assert save_and_discard(repo, "svc", "refs/agents/pruned/team/2") is None
+
+
+def test_no_command_the_repositorys_config_names_is_run(repo: Path, tmp_path: Path):
+    ran = tmp_path / "ran"
+    hooks = tmp_path / "hooks"
+    hooks.mkdir()
+    for name in ("pre-commit", "fsmonitor"):
+        script = hooks / name
+        script.write_text(f"#!/bin/sh\ntouch {ran}\n")
+        script.chmod(0o755)
+    # What an agent can write from its sandbox.
+    run_git(repo, "config", "core.hooksPath", str(hooks))
+    run_git(repo, "config", "core.fsmonitor", str(hooks / "fsmonitor"))
+
+    git(repo, ["status", "--porcelain"])
+    git(repo, ["commit", "--allow-empty", "-m", "x"], env=DIRECTOR_IDENTITY)
+
+    assert not ran.exists()
