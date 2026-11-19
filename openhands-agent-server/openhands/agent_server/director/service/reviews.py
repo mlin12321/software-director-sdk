@@ -1064,63 +1064,76 @@ class Reviews(Requests):
             )
             records = self._land_records(top, seen, waits=waits, held=agreements)
             return Landed(records, [], [], [], [], [])
-        take, items = org
-        session_places, theirs, _ = shapes
-        places = {place.team_id: place for place in session_places}
-        decided = {item.key: item for item in items if item.kind == "team"}
-        taken: list[str] = []
-        kept = [team for team, item in decided.items() if item.take != "session"]
-        # Those above before those below, and what goes after what moved.
-        for team in places:
-            settled = team in decided and decided[team].take == "session"
-            if take.get(team) is not None or settled:
-                item = decided.get(team)
-                done = self._put_team(
-                    session,
-                    places,
-                    team,
-                    item.under if item and settled else None,
-                    item.named if item and settled else None,
-                )
-                if settled:
-                    (taken if done else kept).append(team)
-        for team in [
-            *(team for team, side in take.items() if side is None),
-            *(
-                team
-                for team, item in decided.items()
-                if item.take == "session" and team not in places
-            ),
-        ]:
-            store.remove(team)
-            if team in decided:
-                taken.append(team)
-        # What it has now is what it is next compared by: a team the org
-        # keeps otherwise is not brought up again unless the session changes
-        # it once more.
-        store.set_shape(session.id, theirs)
-        texts: dict[str, str | None] = {}
-        agreed: list[str] = []
-        held: list[str] = []
-        others: list[tuple[str, str]] = []
-        for item in items:
-            if item.kind != "contracts":
-                continue
-            file = _contracts_file(item.key)
-            if item.take == "org" or (
-                item.with_team is not None and item.with_team not in taken
-            ):
-                self._undraft(top.session, file)
-                held.append(item.key or "the repository")
-                others.append((item.key, item.org))
-                continue
-            text = item.text if item.take == "text" else item.session
-            texts[file] = f"{text.strip()}\n" if text.strip() else None
-            agreed.append(item.key or "the repository")
-            if item.take == "text":
-                others.append((item.key, text))
-        self._keep_merge(top, None)
-        records = self._land_records(top, seen, chosen=texts, tree=True)
+        # What the tree and the merge were, for a landing that fails: the
+        # tree never moves without the team memory that goes with it.
+        tree = [
+            OrgNodeInput.model_validate(team.model_dump(exclude={"child_ids"}))
+            for team in store.teams()
+        ]
+        shape = list(session.shape)
+        try:
+            take, items = org
+            session_places, theirs, _ = shapes
+            places = {place.team_id: place for place in session_places}
+            decided = {item.key: item for item in items if item.kind == "team"}
+            taken: list[str] = []
+            kept = [team for team, item in decided.items() if item.take != "session"]
+            # Those above before those below, and what goes after what moved.
+            for team in places:
+                settled = team in decided and decided[team].take == "session"
+                if take.get(team) is not None or settled:
+                    item = decided.get(team)
+                    done = self._put_team(
+                        session,
+                        places,
+                        team,
+                        item.under if item and settled else None,
+                        item.named if item and settled else None,
+                    )
+                    if settled:
+                        (taken if done else kept).append(team)
+            for team in [
+                *(team for team, side in take.items() if side is None),
+                *(
+                    team
+                    for team, item in decided.items()
+                    if item.take == "session" and team not in places
+                ),
+            ]:
+                store.remove(team)
+                if team in decided:
+                    taken.append(team)
+            # What it has now is what it is next compared by: a team the org
+            # keeps otherwise is not brought up again unless the session changes
+            # it once more.
+            store.set_shape(session.id, theirs)
+            texts: dict[str, str | None] = {}
+            agreed: list[str] = []
+            held: list[str] = []
+            others: list[tuple[str, str]] = []
+            for item in items:
+                if item.kind != "contracts":
+                    continue
+                file = _contracts_file(item.key)
+                if item.take == "org" or (
+                    item.with_team is not None and item.with_team not in taken
+                ):
+                    self._undraft(top.session, file)
+                    held.append(item.key or "the repository")
+                    others.append((item.key, item.org))
+                    continue
+                text = item.text if item.take == "text" else item.session
+                texts[file] = f"{text.strip()}\n" if text.strip() else None
+                agreed.append(item.key or "the repository")
+                if item.take == "text":
+                    others.append((item.key, text))
+            self._keep_merge(top, None)
+            records = self._land_records(top, seen, chosen=texts, tree=True)
+        except BaseException:
+            store.replace_all(tree)
+            store.set_shape(session.id, shape)
+            self._keep_merge(top, merge)
+            raise
         return Landed(records, taken, kept, agreed, held, others)
 
     def _land_accepted(

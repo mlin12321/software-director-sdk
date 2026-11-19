@@ -23,7 +23,12 @@ from openhands.agent_server.director.models import (
     SpecChoice,
     TeamChoice,
 )
-from openhands.agent_server.director.org_store import session_id_of, team_id_of
+from openhands.agent_server.director.org_persistence import create_org_board, load_org
+from openhands.agent_server.director.org_store import (
+    OrgStore,
+    session_id_of,
+    team_id_of,
+)
 from openhands.agent_server.director.routing import USAGE_ID
 from openhands.agent_server.director.run_state import SESSION
 from openhands.agent_server.director.service import DirectorService
@@ -48,7 +53,7 @@ from openhands.agent_server.director.tools.definition import (
     WriteSpecAction,
 )
 from openhands.sdk.conversation.state import ConversationExecutionStatus
-from openhands.sdk.errors import NotFound
+from openhands.sdk.errors import NotFound, OperationFailed
 from tests.agent_server.director.conftest import (
     FakeLauncher,
     record_of,
@@ -1671,3 +1676,34 @@ async def test_work_that_went_up_without_a_review_counts_as_an_accept_for_remind
     review = node(service, "root").review
     assert review is not None and review.passed_up
     assert session not in service._changed_since_accept
+
+
+async def test_a_landing_that_cannot_be_committed_leaves_the_tree_as_it_was(
+    repo: Path, launcher: FakeLauncher
+):
+    service = await started(repo, launcher)
+    await split_root(service)
+    real = service._commit_landing
+
+    def fails(landing, message, tree):
+        if tree:
+            raise OperationFailed("another writer kept moving a ref first")
+        return real(landing, message, tree)
+
+    service._commit_landing = fails  # type: ignore[method-assign]
+    await use(service, ic(service), SubmitReviewTool, DONE)
+    top = node(service, "root").id
+    await use(service, division_lead_ic(service), ReviewTeamTool, accept(top))
+    await service.settled()
+    service._commit_landing = real  # type: ignore[method-assign]
+    await service._save()
+
+    # Neither the tree nor what decides how it lands moved without the
+    # team memory that goes with it.
+    assert [team.id for team in service.store.teams()] == ["root"]
+    saved = OrgStore()
+    load_org(create_org_board(repo), saved)
+    assert [team.id for team in saved.teams()] == ["root"]
+    lead = service.store.place(division_lead_of(service))
+    assert lead is not None and lead.merge is not None
+    await service.aclose()
