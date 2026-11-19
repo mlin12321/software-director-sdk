@@ -808,3 +808,23 @@ async def test_an_agent_of_an_org_has_no_tool_that_starts_agents_nothing_holds(
     names = [tool.name for tool in adapted.tools]
     assert "terminal" in names and "task_tool_set" not in names
     await service.aclose()
+
+
+async def test_an_agent_that_cannot_be_asked_on_its_conversation_is_no_failure(
+    caplog: pytest.LogCaptureFixture,
+):
+    async def ask_agent(question: str) -> str:
+        raise NotImplementedError("This ACP server cannot fork a session")
+
+    async def get_event_service(_: UUID):
+        return SimpleNamespace(ask_agent=ask_agent)
+
+    launcher = ConversationTeamLauncher(
+        cast(ConversationService, SimpleNamespace(get_event_service=get_event_service))
+    )
+
+    with caplog.at_level("INFO"):
+        answer = await launcher.ask_agent(uuid4(), "Why did you stop?")
+
+    assert answer is None
+    assert not [record for record in caplog.records if record.exc_info]

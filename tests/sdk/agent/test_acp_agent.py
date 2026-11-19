@@ -4975,6 +4975,30 @@ class TestACPAgentAskAgent:
         assert agent._client._fork_session_id is None
         assert agent._client._fork_lock.acquire(blocking=False)
 
+    def test_ask_agent_says_plainly_that_a_server_cannot_fork(self):
+        """A server without session/fork is not a failure to retry."""
+        agent = _make_agent()
+        agent._client = _OpenHandsACPBridge()
+        agent._conn = MagicMock()
+        agent._session_id = "main-session"
+        agent._working_dir = "/workspace"
+
+        def _fake_run_async(coro_fn, **_kwargs):
+            conn = _agent_conn(agent)
+            conn.fork_session = AsyncMock(
+                side_effect=ACPRequestError(-32601, "Method not found")
+            )
+            conn.prompt = AsyncMock()
+            return asyncio.run(coro_fn())
+
+        agent._executor = MagicMock(run_async=_fake_run_async)
+
+        with pytest.raises(NotImplementedError, match="cannot fork"):
+            agent.ask_agent("Why did you stop?")
+
+        _agent_conn(agent).prompt.assert_not_awaited()
+        assert agent._client._fork_lock.acquire(blocking=False)
+
     def test_ask_agent_cleans_up_fork_state(self):
         """ask_agent() cleans up fork state even on success."""
         agent = _make_agent()

@@ -599,6 +599,10 @@ class ConversationTeamLauncher:
             raise NotFound(f"Conversation {conversation_id} does not exist")
         try:
             answer = await event_service.ask_agent(question)
+        except NotImplementedError as error:
+            # Not a failure: some agents cannot be asked this way at all.
+            logger.info("%s", error)
+            return None
         except Exception:
             logger.warning("An agent did not answer the director", exc_info=True)
             return None
