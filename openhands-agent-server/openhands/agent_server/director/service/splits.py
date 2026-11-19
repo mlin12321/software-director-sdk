@@ -401,9 +401,9 @@ class Splits(Watch):
             for team in map(store.place, plan["teams"]):
                 if team is not None:
                     await self._archive(team, "pruned", plan["stamp"])
-            self.record_event(
-                plan["parent"], "pruned", store.place(place_id), plan["reason"]
-            )
+            if "recorded" not in intent.steps:
+                self.record_event(plan["parent"], "pruned", pruned, plan["reason"])
+                intent = run.step_done(intent, "recorded")
             if pruned is not None and above is not None:
                 # The directory is the team above's again, with a spec that
                 # says how the pruned team worked.
@@ -425,6 +425,8 @@ class Splits(Watch):
             await self._save()
             intent = run.step_done(intent, "removed")
         self._settling.pop(intent.id, None)
+        if "told" in intent.steps:
+            return
         former = [
             record
             for record in self.former_drafts(above.session if above else "")
@@ -445,6 +447,7 @@ class Splits(Watch):
                 where=where,
                 reason=plan["reason"],
             )
+        run.step_done(intent, "told")
 
     async def _do_hand_over(self, intent: Intent) -> None:
         """Put a team's IC in hand-over mode: start the side conversation

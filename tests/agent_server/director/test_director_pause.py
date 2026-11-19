@@ -324,6 +324,33 @@ async def test_a_prune_cut_off_by_a_crash_is_finished_and_recorded_once(
     await second.aclose()
 
 
+async def test_a_prune_cut_off_after_it_is_recorded_is_recorded_once(
+    repo: Path, launcher: FakeLauncher, monkeypatch: pytest.MonkeyPatch
+):
+    first = await started(repo, launcher)
+    await split_root(first)
+    await woken(first, "services.api")
+    api = place(first, "services.api")
+    ended = asyncio.Event()
+
+    def server_ends(*_: object) -> None:
+        ended.set()
+        raise ServerEnded
+
+    # The team is on record as pruned by now, and not yet removed.
+    monkeypatch.setattr(first, "_specs_left_in", server_ends)
+    await cut_off(launcher, ended, use(first, manager(first), PruneTeamTool, PRUNE_API))
+
+    second = await again(repo, launcher)
+    await second.resume()
+    await second.settled()
+
+    assert second.store.place(api) is None
+    pruned = [event for event in record_of(second, "root") if event.kind == "pruned"]
+    assert len(pruned) == 1
+    await second.aclose()
+
+
 async def cut_off(launcher: FakeLauncher, ended: asyncio.Event, doing) -> None:
     """Let the server end in the middle of ``doing``."""
     task = asyncio.create_task(doing)
