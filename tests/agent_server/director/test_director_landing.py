@@ -1634,3 +1634,18 @@ async def test_contracts_for_a_team_the_org_lost_wait_with_the_rest_of_the_landi
     assert [text for text, _ in service.drafts(place.session).values()] == [
         "Refunds go through Jobs.\n"
     ]
+
+
+async def test_a_team_beside_one_inside_its_directory_waits_for_the_manager_above(
+    service: DirectorService,
+):
+    top, conversation = await at_api(service)
+    sets_up_jobs(service, top)
+    # Other accepted work gave the org a team inside the same directory.
+    org_gains(service, "services.api.nightly", "services/api/jobs/nightly")
+
+    await accepted(service, top, conversation)
+
+    # Side by side, one would hold the other's directory: not the org's yet.
+    assert service.store.team(JOBS) is None
+    assert waiting(service, top) == [JOBS]

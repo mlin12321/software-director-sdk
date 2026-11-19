@@ -500,8 +500,8 @@ def merge_shapes(
     org's, which may have changed since (:func:`settle`).
 
     A team is also a conflict when it would not hang together with the
-    rest: under a team that is gone, with a directory another team has, or
-    removed while a team is still below it.
+    rest: under a team that is gone, with a directory another team has or
+    one beside it holds, or removed while a team is still below it.
 
     Args:
         base: The sub-teams as the session last knew the org's.
@@ -529,7 +529,12 @@ def merge_shapes(
                 if side is None
                 else (side[0] != "" and side[0] not in after)
                 or any(
-                    other != team and held[1] == side[1]
+                    other != team
+                    and (
+                        held[1] == side[1]
+                        # Side by side, one would hold the other's directory.
+                        or (held[0] == side[0] and _overlap(held[1], side[1]))
+                    )
                     for other, held in after.items()
                 )
             )

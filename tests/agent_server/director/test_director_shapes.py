@@ -86,6 +86,14 @@ CACHE = ("cache", "api", "services/api/cache")
             [ShapeConflict("jobs", JOBS[1:], None)],
             id="one-directory-two-teams",
         ),
+        pytest.param(
+            [TOP],
+            [TOP, JOBS],
+            [TOP, ("nightly", "api", "services/api/jobs/nightly")],
+            {},
+            [ShapeConflict("jobs", JOBS[1:], None)],
+            id="side-by-side-one-inside-the-other",
+        ),
     ],
 )
 def test_sub_teams_are_merged_team_by_team(
