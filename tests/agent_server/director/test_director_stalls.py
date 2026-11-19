@@ -478,3 +478,32 @@ async def test_a_team_set_up_and_given_no_task_is_told_to_the_ic_above(
     ]
     assert len(again) == 1
     await service.aclose()
+
+
+async def test_the_time_a_team_was_stopped_is_not_time_without_progress(
+    service: DirectorService, launcher: FakeLauncher, clock: Clock
+):
+    db = [SplitChild(title="DB", path="services/api/db", task="Own the schema")]
+    await use(service, ic(service, API), ProposeTeamsTool, proposing(db))
+    await use(service, manager(service, API), ApproveTeamsTool, APPROVE)
+    await tasked(service)
+    api_ic = str(ic(service, API))
+    await looked(service)
+    await use(service, ic(service), StopTeamTool, STOP_API)
+    await service.settled()
+    clock.passes(300)
+    await looked(service)
+
+    def stalls() -> list[str]:
+        told = launcher.messages_to(api_ic)
+        return [text for text in told if "has shown no progress" in text]
+
+    before = stalls()
+    await use(
+        service, ic(service), MsgTeamTool, MsgTeamAction(team=API, text="Try v2.")
+    )
+    await service.settled()
+    clock.passes(1)
+    await looked(service)
+
+    assert stalls() == before

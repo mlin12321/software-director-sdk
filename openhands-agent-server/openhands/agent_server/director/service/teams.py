@@ -468,6 +468,9 @@ class Teams(Delivery):
             return
         own = None if own_too else agent_conversation(team, "ic")
         conversations = self._conversations_below(team)
+        # The time it was stopped is not time it showed no progress.
+        for found in map(self.store.find_by_conversation, conversations):
+            self.progressed(found[0].id if found else None)
         # In the order it was sent, and before the message that set the
         # team going, which waits behind this in the team's lane.
         for held in self._runs().held():

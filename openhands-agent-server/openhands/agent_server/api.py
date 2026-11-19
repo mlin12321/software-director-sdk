@@ -457,7 +457,11 @@ async def api_lifespan(api: FastAPI) -> AsyncIterator[None]:
                 api.state, "director_service", None
             )
             if director is not None:
-                await director.start(ConversationTeamLauncher(service))
+                try:
+                    await director.start(ConversationTeamLauncher(service))
+                except Exception:
+                    # The server still serves its conversations.
+                    logger.exception("The director could not be started")
 
             retention_task: asyncio.Task | None = None
             if config.bash_events_retention_seconds is not None:
@@ -475,7 +479,11 @@ async def api_lifespan(api: FastAPI) -> AsyncIterator[None]:
                 yield
             finally:
                 if director is not None:
-                    await director.aclose()
+                    try:
+                        await director.aclose()
+                    except Exception:
+                        # The rest of the server is still shut down.
+                        logger.exception("The director could not be closed")
                 session_store = getattr(api.state, "app_backend_session_store", None)
                 if session_store is not None:
                     await session_store.shutdown()
@@ -810,7 +818,9 @@ async def _domain_error_handler(request: Request, exc: DomainError) -> JSONRespo
         request,
         HTTPException(status_for(exc), exc.detail, headers),
         exc.extra,
-        show_detail=isinstance(exc, GatewayTimeout),
+        # What the director says of its own failures is written for the human.
+        show_detail=isinstance(exc, GatewayTimeout)
+        or request.url.path.startswith("/api/director/"),
     )
 
 

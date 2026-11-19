@@ -8,6 +8,7 @@ import os
 import re
 import secrets
 import shutil
+import sqlite3
 import threading
 from collections import deque
 from collections.abc import Awaitable, Callable, Sequence
@@ -809,7 +810,7 @@ class ServiceState:
             return RunState(None)
         try:
             return RunState(self._shells().parent / _RUN_STATE)
-        except (GitError, OSError, RunStateError):
+        except (GitError, OSError, RunStateError, sqlite3.Error):
             logger.exception("Run state of %s is kept in memory only", self._repo_dir)
             return RunState(None)
 
@@ -1006,7 +1007,10 @@ class ServiceState:
                 logger.info("Director loaded %d teams from %s", len(store), repository)
                 kept = self._open_run_state()
                 try:
-                    restore_sessions(store, kept.marked(SESSION))
+                    # None of another server's run state is used, so its
+                    # sessions are not taken up without it either.
+                    if kept.get("instance") in (None, self._instance()):
+                        restore_sessions(store, kept.marked(SESSION))
                 finally:
                     kept.close()
                 return True
