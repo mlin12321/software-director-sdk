@@ -312,6 +312,8 @@ class ConversationTeamLauncher:
         # What the director's own model calls used, by the conversation
         # whose agent's model they ran on.
         self._own_use: dict[UUID, Usage] = {}
+        # What each conversation had used when it was last counted.
+        self._counted: dict[UUID, Usage] = {}
         self._conversations = conversations
 
     async def start_root(
@@ -538,8 +540,17 @@ class ConversationTeamLauncher:
 
     async def usage(self, conversation_ids: Collection[UUID]) -> dict[UUID, Usage]:
         found: dict[UUID, Usage] = {}
+        conversations = self._conversations
         for conversation_id in conversation_ids:
-            event_service = await self._conversations.get_event_service(conversation_id)
+            # Counting must not keep a conversation from being evicted for
+            # being idle; one that was has used nothing since it was counted.
+            event_service = conversations.loaded_event_service(conversation_id)
+            if event_service is None and conversation_id in self._counted:
+                found[conversation_id] = self._counted[conversation_id]
+                continue
+            event_service = event_service or await conversations.get_event_service(
+                conversation_id
+            )
             if event_service is None:
                 continue
             try:
@@ -550,7 +561,7 @@ class ConversationTeamLauncher:
             own_model = isinstance(state.agent, ACPAgent)
             for metrics in state.stats.usage_to_metrics.values():
                 used = used.plus(_used(metrics, own_model=own_model))
-            found[conversation_id] = used
+            found[conversation_id] = self._counted[conversation_id] = used
         return found
 
     def on_status(self, listener: ExecutionStatusListener) -> Callable[[], None]:

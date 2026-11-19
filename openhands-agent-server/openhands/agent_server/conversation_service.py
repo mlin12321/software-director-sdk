@@ -1263,6 +1263,14 @@ class ConversationService:
                     self._exclusive_lifecycle_pending = False
                     self._lifecycle_condition.notify_all()
 
+    def loaded_event_service(self, conversation_id: UUID) -> EventService | None:
+        """The event service of a conversation that is loaded, which is
+        neither loaded for this nor counted as active because of it."""
+        event_service = (self._event_services or {}).get(conversation_id)
+        if event_service is None or not event_service.is_open():
+            return None
+        return event_service
+
     async def _get_or_load_event_service(
         self, conversation_id: UUID
     ) -> EventService | None:
