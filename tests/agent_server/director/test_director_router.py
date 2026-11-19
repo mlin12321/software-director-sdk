@@ -845,6 +845,9 @@ async def test_the_conversation_of_an_agent_of_the_org_cannot_be_forked(running,
 
     assert forked.status_code == 409
     assert "agent of the org" in forked.json()["detail"]
+    # Nor is it deleted from under its session.
+    deleted = await client.delete(f"/api/conversations/{opened['conversation_id']}")
+    assert deleted.status_code == 409
     # Nor does it start a conversation of its own, which no team would hold.
     child = await client.post(
         f"/api/conversations/{opened['conversation_id']}/children",
