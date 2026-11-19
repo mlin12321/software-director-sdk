@@ -1,6 +1,7 @@
 """DirectorService running an org through a launcher."""
 
 import os
+import shutil
 import subprocess
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -1002,6 +1003,8 @@ async def test_every_agent_starts_its_terminal_in_a_shell_held_to_its_boundary(
     confining: DirectorService, launcher: FakeLauncher, repo: Path
 ):
     assert confining.summary().boundary_enforcement == "sandbox"
+    # Missing, the hooks folder would be left for an agent to make.
+    shutil.rmtree(repo / ".git" / "hooks")
     await confining.create_org(org_request(repo))
     await confining.settled()
     await split_root(confining, API)
@@ -1018,6 +1021,7 @@ async def test_every_agent_starts_its_terminal_in_a_shell_held_to_its_boundary(
     script = Path(cast(dict, api_ic.tool_params)["terminal"]["shell_path"])
     assert script.parent == repo / ".git" / "director-shells"
     assert script.name == f"{api_ic.conversation_id}.sh"
+    assert (repo / ".git" / "hooks").is_dir()
 
 
 def run_in_shell(params: object, command: str, home: Path) -> str:

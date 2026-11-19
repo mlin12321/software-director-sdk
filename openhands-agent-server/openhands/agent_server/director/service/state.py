@@ -970,6 +970,9 @@ class ServiceState:
         # An agent's commits need the git directory, but not what the director
         # keeps there, nor the hooks git runs for everyone.
         private = [shells, *(shells.parent / name for name in _PRIVATE)]
+        # Made now: one missing would be left for an agent to make.
+        for path in private:
+            path.mkdir(exist_ok=True)
         script = shells / f"{conversation_id}.sh"
         write_shell(
             script,
