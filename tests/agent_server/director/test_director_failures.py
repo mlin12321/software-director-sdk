@@ -256,3 +256,25 @@ async def test_a_team_whose_removal_failed_is_still_told_things(
     assert launcher.messages_to(api_ic)[told:] == [
         "[director] Go on with the orders endpoint."
     ]
+
+
+async def test_a_message_that_could_not_be_sent_is_sent_again_before_the_next(
+    service: DirectorService, launcher: FakeLauncher
+):
+    top_ic = ic(service)
+    failed: list[str] = []
+
+    def fail_once(call: str) -> None:
+        if call == "send" and not failed:
+            failed.append(call)
+            raise RuntimeError("the server could not take it")
+
+    launcher.before = fail_once
+    told = len(launcher.messages_to(top_ic))
+
+    service.notify(top_ic, "first")
+    service.notify(top_ic, "second")
+    await service.settled()
+
+    sent = [text.splitlines()[0] for text in launcher.messages_to(top_ic)[told:]]
+    assert sent == ["[director] first", "[director] second"]
