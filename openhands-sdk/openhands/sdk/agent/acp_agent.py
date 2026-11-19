@@ -169,6 +169,12 @@ if TYPE_CHECKING:
 # or remote servers.
 _USAGE_UPDATE_TIMEOUT: float = float(os.environ.get("ACP_USAGE_UPDATE_TIMEOUT", "2.0"))
 
+# How long a question asked beside the conversation may take. It holds the
+# lock every such question takes, so one that hangs is given up.
+_SIDE_QUESTION_TIMEOUT: float = float(
+    os.environ.get("ACP_SIDE_QUESTION_TIMEOUT", "120.0")
+)
+
 # Retry configuration for transient ACP connection errors.
 # These errors can occur when the connection drops mid-conversation but the
 # session state is still valid on the server side.
@@ -1645,6 +1651,13 @@ class _OpenHandsACPBridge:
                     self._fork_accumulated_text.append(
                         self._mask_value(update.content.text)
                     )
+            elif isinstance(update, UsageUpdate):
+                # What the question cost; the conversation's own context
+                # window is not this session's.
+                self._turn_usage_updates[session_id] = update
+                event = self._usage_received.get(session_id)
+                if event is not None:
+                    event.set()
             return
 
         if isinstance(update, AgentMessageChunk):
@@ -4770,10 +4783,20 @@ class ACPAgent(AgentBase):
         try:
             fork_t0 = time.monotonic()
             usage_sync = client.prepare_usage_sync(side_session_id)
-            response = await conn.prompt(
-                session_id=side_session_id,
-                prompt=[text_block(question)],
-            )
+            try:
+                response = await asyncio.wait_for(
+                    conn.prompt(
+                        session_id=side_session_id, prompt=[text_block(question)]
+                    ),
+                    timeout=_SIDE_QUESTION_TIMEOUT,
+                )
+            except TimeoutError:
+                # Only this session is given up: the conversation's goes on.
+                with contextlib.suppress(Exception):
+                    sent = conn.cancel(side_session_id)
+                    if inspect.isawaitable(sent):
+                        await sent
+                raise
             if client.get_turn_usage_update(side_session_id) is None:
                 try:
                     await asyncio.wait_for(

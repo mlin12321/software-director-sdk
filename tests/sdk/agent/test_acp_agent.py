@@ -18,7 +18,7 @@ from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 from acp.exceptions import RequestError as ACPRequestError
-from acp.schema import NewSessionResponse, PromptResponse
+from acp.schema import NewSessionResponse, PromptResponse, UsageUpdate
 from pydantic import SecretStr
 
 import openhands.sdk.agent.acp_agent as acp_agent_module
@@ -4912,6 +4912,68 @@ class TestACPAgentAskAgent:
         assert usage.cache_write_tokens == 5
         assert usage.reasoning_tokens == 20
         assert usage.context_window == 200000
+
+    def test_ask_agent_counts_what_the_side_session_reports_it_cost(self):
+        """A UsageUpdate of the fork session reaches the metrics."""
+        agent = _make_agent()
+        client = _OpenHandsACPBridge()
+        agent._client = client
+        agent._conn = MagicMock()
+        agent._session_id = "main-session"
+        agent._working_dir = "/workspace"
+        response = MagicMock()
+        response.usage = None
+
+        async def _fake_prompt(*args, **kwargs):
+            update = MagicMock(spec=UsageUpdate)
+            update.size, update.used = 200000, 1000
+            update.cost = MagicMock(amount=0.25)
+            await client.session_update("fork-session", update)
+            return response
+
+        def _fake_run_async(coro_fn, **_kwargs):
+            conn = _agent_conn(agent)
+            conn.fork_session = AsyncMock(
+                return_value=MagicMock(session_id="fork-session")
+            )
+            conn.prompt = _fake_prompt
+            return asyncio.run(coro_fn())
+
+        agent._executor = MagicMock(run_async=_fake_run_async)
+
+        agent.ask_agent("How far along are you?")
+
+        assert agent.llm.metrics.accumulated_cost == pytest.approx(0.25)
+
+    def test_ask_agent_gives_up_a_side_session_that_never_answers(self):
+        """A hung side question is cancelled alone and frees the lock."""
+        agent = _make_agent()
+        agent._client = _OpenHandsACPBridge()
+        agent._conn = MagicMock()
+        agent._session_id = "main-session"
+        agent._working_dir = "/workspace"
+
+        async def _never(*args, **kwargs):
+            await asyncio.sleep(3600)
+
+        def _fake_run_async(coro_fn, **_kwargs):
+            conn = _agent_conn(agent)
+            conn.fork_session = AsyncMock(
+                return_value=MagicMock(session_id="fork-session")
+            )
+            conn.prompt = _never
+            conn.cancel = AsyncMock()
+            return asyncio.run(coro_fn())
+
+        agent._executor = MagicMock(run_async=_fake_run_async)
+
+        with patch("openhands.sdk.agent.acp_agent._SIDE_QUESTION_TIMEOUT", 0.05):
+            with pytest.raises(TimeoutError):
+                agent.ask_agent("Still there?")
+
+        _agent_conn(agent).cancel.assert_awaited_once_with("fork-session")
+        assert agent._client._fork_session_id is None
+        assert agent._client._fork_lock.acquire(blocking=False)
 
     def test_ask_agent_cleans_up_fork_state(self):
         """ask_agent() cleans up fork state even on success."""
