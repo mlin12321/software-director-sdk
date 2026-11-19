@@ -63,7 +63,10 @@ def _owner(path: str, reports: Sequence[OrgNode]) -> str | None:
     owners = [
         report
         for report in reports
-        if path == report.boundary.path or path.startswith(f"{report.boundary.path}/")
+        # The top team's place holds every path.
+        if not report.boundary.path
+        or path == report.boundary.path
+        or path.startswith(f"{report.boundary.path}/")
     ]
     nearest = max(owners, key=lambda report: len(report.boundary.path), default=None)
     return nearest.id if nearest else None

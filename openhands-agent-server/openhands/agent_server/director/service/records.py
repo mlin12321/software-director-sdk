@@ -131,11 +131,11 @@ class Taken(NamedTuple):
 
 
 def _written_by(report: Report, session: str) -> str:
-    """Who wrote a report, as the agents of a team in the session titled
-    ``session`` are told."""
+    """Who wrote a report, as the agents of a team in the session with the
+    id ``session`` are told."""
     if report.handed_over:
         return "ic_of_the_team_above"
-    if report.session == session:
+    if report.session_id == session:
         return report.role
     return f"{report.role} in {report.session!r}"
 
@@ -673,7 +673,7 @@ class Records(ServiceState):
             ],
             "reports_of_your_team": [
                 {
-                    "by": _written_by(report, title),
+                    "by": _written_by(report, session_of(place)),
                     "at": report.at,
                     "text": report.text,
                 }

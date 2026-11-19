@@ -538,6 +538,34 @@ async def test_start_child_conversation_shares_workspace_outside_git_repo(
 
 
 @pytest.mark.asyncio
+async def test_a_taken_child_id_leaves_the_worktree_of_its_conversation(tmp_path):
+    repo_dir = tmp_path / "repo"
+    _init_git_repo(repo_dir)
+    request = StartChildConversationRequest(task="Fix the bug", isolation="worktree")
+    services: dict[UUID, Any] = {}
+    with patch(
+        "openhands.agent_server.conversation_service.EventService",
+        side_effect=_event_service_factory(services),
+    ):
+        async with ConversationService(
+            conversations_dir=tmp_path / "conversations",
+            conversation_worktree_root=tmp_path / "worktrees",
+        ) as service:
+            parent, _ = await service.start_conversation(_start_request(repo_dir))
+            first = await service.start_child_conversation(parent.id, request)
+            assert first is not None and first.workspace is not None
+            worktree = Path(first.workspace)
+            (worktree / "draft.txt").write_text("uncommitted\n")
+
+            with pytest.raises(ValueError, match="already exists"):
+                await service.start_child_conversation(
+                    parent.id, request, child_id=first.conversation_id
+                )
+
+            assert (worktree / "draft.txt").read_text() == "uncommitted\n"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("subdirectory", ["", "src/pkg"])
 async def test_start_child_conversation_uses_worktree_in_git_repo(
     tmp_path, subdirectory

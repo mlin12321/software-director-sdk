@@ -505,6 +505,10 @@ class Report(BaseModel):
             "for a report a model rewrote or the IC above handed over."
         ),
     )
+    session_id: str = Field(
+        default="",
+        description="That session's id: two sessions may have one title.",
+    )
     compacted: bool = Field(
         default=False,
         description=(

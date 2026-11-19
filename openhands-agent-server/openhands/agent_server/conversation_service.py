@@ -2418,6 +2418,11 @@ class ConversationService:
         if parent_service is None:
             return None
 
+        # Before the worktree of the conversation that has the id is put
+        # away to make room for the child's.
+        if child_id is not None and child_id in self._conversation_records:
+            raise ValueError(f"Conversation with id {child_id} already exists")
+
         # Admission first, as in a normal start: a full server refuses the
         # launch before a worktree or the child's persistence directory exists.
         with await RunSlot.acquire(self._run_semaphore) as run_slot:

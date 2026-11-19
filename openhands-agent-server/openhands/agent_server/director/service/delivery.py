@@ -38,7 +38,7 @@ from openhands.agent_server.director.run_state import (
     WAITING,
     Intent,
 )
-from openhands.agent_server.director.service.records import Records
+from openhands.agent_server.director.service.records import Records, session_of
 from openhands.agent_server.director.service.state import (
     MODELS_LANE,
     ORG_LANE,
@@ -102,6 +102,7 @@ class Delivery(Records):
             role=role,
             text=text,
             session=self.store.session_title(place),
+            session_id=session_of(place),
         )
         # Its session's alone until the session's work is accepted.
         self._keep_report(place, report)

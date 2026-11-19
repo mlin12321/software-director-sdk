@@ -138,6 +138,21 @@ async def test_a_session_at_its_limit_rests_until_the_human_lets_it_go_on(
     )
 
 
+async def test_an_open_session_follows_a_limit_that_is_changed(
+    service: DirectorService, launcher: FakeLauncher
+):
+    service.update_settings(DirectorSettingsUpdate(session_cost_limit=2.0))
+    uses(launcher, ic(service), 700, 100, 1.5)
+    assert (await counted(service)).cost_allowance == 2.0
+
+    service.update_settings(DirectorSettingsUpdate(session_cost_limit=5.0))
+    uses(launcher, ic(service), 900, 150, 2.25)
+    session = await counted(service)
+
+    assert session.cost_allowance == 5.0
+    assert node(service, "root").stopped is None
+
+
 async def test_nothing_rests_while_the_org_has_no_limit(
     service: DirectorService, launcher: FakeLauncher
 ):
