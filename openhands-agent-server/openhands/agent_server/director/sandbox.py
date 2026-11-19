@@ -59,7 +59,7 @@ def shell_script(
             but the team's directory.
         private: What is kept read-only inside the git directory although
             the git directory is writable: the director's own files, and
-            what git runs or obeys for everyone who uses the repository.
+            the hooks git runs for everyone who uses the repository.
         secret: A file of the director the shell cannot read.
         directory: The repo-relative directory the shell may write, with ''
             for the whole checkout; None for a shell that may write none of

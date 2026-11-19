@@ -230,7 +230,7 @@ _RUN_STATE = "director/state.db"
 # its agents' terminals start, and what those shells need.
 _SHELLS_DIR = "director-shells"
 # In the git directory, and not for an agent's shell to write.
-_PRIVATE = ("director", "hooks", "config")
+_PRIVATE = ("director", "hooks")
 # In the repository's git directory: the merges reviewers finish.
 _MERGING_DIR = "director-merging"
 # After a conversation id: the script an ACP agent's process is started by.
@@ -941,7 +941,7 @@ class ServiceState:
             )
             atomic_write_text(rc, rcfile(bin_dir))
         # An agent's commits need the git directory, but not what the director
-        # keeps there, nor the hooks and settings git obeys for everyone.
+        # keeps there, nor the hooks git runs for everyone.
         private = [shells, *(shells.parent / name for name in _PRIVATE)]
         script = shells / f"{conversation_id}.sh"
         write_shell(

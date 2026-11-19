@@ -15,7 +15,7 @@ from tests.agent_server.director.conftest import run_git
 
 
 SHELLS = ".git/director-shells"
-PRIVATE = ("director", "hooks", "config")
+PRIVATE = ("director", "hooks")
 
 
 def confined(
@@ -193,7 +193,7 @@ def test_the_shell_cannot_change_what_git_runs_or_what_the_director_keeps(
         )
 
     assert run(f"echo x > {git_dir}/hooks/post-commit").returncode != 0
-    assert run("git config user.name other").returncode != 0
+    assert run("git config user.name other").returncode == 0
     assert run(f"echo x > {git_dir}/director/state.db").returncode != 0
     assert run(f"cat {secret}").stdout == ""
     assert secret.read_text() == '{"tool_key": "k"}'

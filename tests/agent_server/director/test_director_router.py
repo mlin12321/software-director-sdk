@@ -833,3 +833,15 @@ async def test_an_escalation_at_a_division_lead_place_is_answered_there(running,
     assert answered.status_code == 200
     now = service.store.place(lead.id)
     assert now is not None and now.escalations == []
+
+
+async def test_the_conversation_of_an_agent_of_the_org_cannot_be_forked(running, repo):
+    client, _, service = running
+    opened = (await client.post("/api/director/org", json=org_body(repo))).json()
+
+    forked = await client.post(
+        f"/api/conversations/{opened['conversation_id']}/fork", json={}
+    )
+
+    assert forked.status_code == 409
+    assert "agent of the org" in forked.json()["detail"]

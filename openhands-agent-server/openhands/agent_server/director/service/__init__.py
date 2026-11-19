@@ -368,6 +368,14 @@ class DirectorService(Sync):
             reason=reason,
         )
 
+    def is_agent(self, conversation_id: UUID) -> bool:
+        """Whether a conversation is one of an agent of the org."""
+        store = self._store
+        return store is not None and (
+            store.find_by_conversation(str(conversation_id)) is not None
+            or store.find_hand_over(str(conversation_id)) is not None
+        )
+
     def guard_action(self, conversation_id: UUID, event: ActionEvent) -> str | None:
         """Why an agent of the org may not carry out an action, if it may not.
 

@@ -2,7 +2,7 @@
 
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -14,6 +14,7 @@ from openhands.agent_server.director.service.state import (
 from openhands.agent_server.director.tools import MsgTeamTool, PruneTeamTool
 from openhands.agent_server.director.tools.definition import MsgTeamAction
 from openhands.sdk.conversation.state import ConversationExecutionStatus
+from openhands.sdk.errors import Conflict
 from tests.agent_server.director.conftest import FakeLauncher, record_of
 from tests.agent_server.director.test_director_acp import started
 from tests.agent_server.director.test_director_tools import (
@@ -278,3 +279,17 @@ async def test_a_message_that_could_not_be_sent_is_sent_again_before_the_next(
 
     sent = [text.splitlines()[0] for text in launcher.messages_to(top_ic)[told:]]
     assert sent == ["[director] first", "[director] second"]
+
+
+async def test_no_agent_is_started_in_a_team_that_is_being_removed(
+    service: DirectorService, launcher: FakeLauncher
+):
+    api = node(service, API)
+    # A step that removes the team waits for its agents to stop.
+    service._settling[0] = ({api.id}, api.id)
+    starts = len(launcher.derived)
+
+    with pytest.raises(Conflict, match="being replaced or removed"):
+        await service._start_new(api, "ic", str(uuid4()), ic(service), "Build it.")
+
+    assert len(launcher.derived) == starts
