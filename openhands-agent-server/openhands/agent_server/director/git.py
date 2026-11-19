@@ -226,7 +226,15 @@ def save_and_discard(checkout: Path, path: str, ref: str) -> str | None:
     """
     spec = [pathspec(path)]
     if not git(checkout, ["status", "--porcelain", "-uall", "--", *spec]):
-        return None
+        # Kept already, by a server that ended before it could say so.
+        kept = _run(
+            checkout,
+            ["rev-parse", "--verify", "--quiet", ref],
+            None,
+            None,
+            _TIMEOUT_SECONDS,
+        )
+        return kept.stdout.decode().strip() or None
     with tempfile.TemporaryDirectory(prefix="director-discard-") as scratch:
         env = {"GIT_INDEX_FILE": str(Path(scratch) / "index")}
         git(checkout, ["read-tree", "HEAD"], env=env)

@@ -143,3 +143,13 @@ def test_a_git_that_does_not_finish_fails_like_any_other(
 
     with pytest.raises(GitError, match="did not finish"):
         git(tmp_path, ["status"], timeout=1)
+
+
+def test_what_was_kept_already_is_found_again(repo: Path):
+    (repo / "svc").mkdir()
+    (repo / "svc" / "draft.py").write_text("draft\n")
+    kept = save_and_discard(repo, "svc", REF)
+
+    # A server that ended before it could say so asks again.
+    assert kept is not None and save_and_discard(repo, "svc", REF) == kept
+    assert save_and_discard(repo, "svc", "refs/agents/pruned/team/2") is None
