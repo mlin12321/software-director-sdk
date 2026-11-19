@@ -989,7 +989,11 @@ def session_brief(team: SessionTeam, title: str, others: list[str]) -> str:
 
 
 def review_request(
-    team: SessionTeam, review: Review, so_far: str = "", asked: list[str] | None = None
+    team: SessionTeam,
+    review: Review,
+    so_far: str = "",
+    asked: list[str] | None = None,
+    instructions: str = "",
 ) -> str:
     """What the IC above is told when a team below submits its work.
 
@@ -997,6 +1001,8 @@ def review_request(
         so_far: What became of the team's work before, in words.
         asked: What the human asked the team directly since its work was
             last accepted.
+        instructions: The code review skill, for this IC to apply to the
+            diff. Empty when it could not be loaded.
     """
     directory = team.boundary.path or "the repository"
     lines = [
@@ -1027,22 +1033,14 @@ def review_request(
         "Name a file in place of the folder to read that file alone.",
         "",
     ]
-    if not review.automated_ran:
-        lines.append("The team's own review of the changes did not run.")
-    elif review.automated:
-        lines.append(
-            "Asked to review the changes by the code review instructions, "
-            "the team's IC found, for you to verify:"
-        )
-        lines += _finding_lines(review.automated)
-    else:
-        lines.append(
-            "Asked to review the changes by the code review instructions, "
-            "the team's IC found nothing."
-        )
+    if instructions.strip():
+        lines += [
+            "Review the diff by these instructions:",
+            instructions.strip(),
+            "",
+        ]
     lines += [
-        "",
-        "The account and that review are the team's own. Read the diff of "
+        "The account is the team's own. Read the diff of "
         "what you rely on, run the repository's checks on it, and compare it "
         "with the contracts you set and with the team's task. Then call "
         f"`review_team` for team {team.id}: `accept`, or `reject` with what "

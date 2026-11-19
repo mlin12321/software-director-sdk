@@ -22,8 +22,9 @@ part, is in [OVERVIEW.md](OVERVIEW.md); the rules its code keeps to are in
 - **bubblewrap (`bwrap`)** for an agent that runs its own tools: without it
   the agent is not confined to its team's folder, and the server logs a
   warning.
-- **Network** for the automated review: its instructions are fetched from
-  GitHub. Without network that review is skipped.
+- **Network** for the code review instructions: they are fetched from
+  GitHub and given to the IC that reviews. Without network that checklist
+  is left out of the review request.
 
 ## Starting it with Canvas
 

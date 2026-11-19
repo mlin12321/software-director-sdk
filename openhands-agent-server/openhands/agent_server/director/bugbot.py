@@ -1,22 +1,16 @@
 """What a team's IC is asked about its own work before the IC above reviews
-it: to write up what changed, and to review it.
+it: to write up what changed.
 
-Both are questions put on top of the IC's conversation, which already holds
+The question is put on top of the IC's conversation, which already holds
 the work, so no diff is sent to a model. The review instructions are
-OpenHands' public code review skill, the one its pull request reviewer runs
-with; the IC answers with findings instead of commenting on a pull request.
+OpenHands' public code review skill. They go to the IC above, with the
+write-up, and that IC applies them when it reviews.
 """
 
-import json
 import logging
-import re
 from pathlib import Path
 
-from pydantic import BaseModel, ValidationError
-
 from openhands.agent_server.director.git import GitError, git, pathspec
-from openhands.agent_server.director.models import ReviewFinding
-from openhands.sdk.conversation.title_utils import strip_reasoning_blocks
 from openhands.sdk.skills import KeywordTrigger, Skill, TaskTrigger, load_public_skills
 
 
@@ -42,23 +36,6 @@ will notice.
 Say only what you know from your work. git lists these changed files; \
 account for all of them:
 """
-
-_REVIEW = """\
-Review the change your team just reported done by the instructions below, \
-as its reviewer would. Report only what you know is in the committed code, \
-and nothing you would have to guess.
-
-Answer with one JSON object and nothing else:
-{"findings": [{"path": "<file>", "line": <line in the file, or null>, \
-"issue": "<what is wrong and what it breaks>", "evidence": "<the code that \
-shows it>"}]}
-An empty list means you found nothing that must change."""
-
-_OBJECT = re.compile(r"\{.*\}", re.DOTALL)
-
-
-class _Answer(BaseModel):
-    findings: list[ReviewFinding]
 
 
 def review_instructions() -> str | None:
@@ -103,37 +80,3 @@ def changed_files(checkout: Path, base: str, directory: str) -> str | None:
 def write_up_question(files: str) -> str:
     """Asks a team's IC to describe its team's changes for the reviewer."""
     return f"{_WRITE_UP}\n{files}"
-
-
-def review_question(
-    instructions: str, spec: str | None, contracts: list[str], files: str
-) -> str:
-    """Asks a team's IC to review its team's changes."""
-    parts = [
-        _REVIEW,
-        "",
-        "The review instructions:",
-        instructions.strip(),
-        "",
-        "The team's spec:",
-        spec or "(the team wrote none)",
-        "",
-        "Contracts the team must keep:",
-        "\n\n".join(contracts) or "(none)",
-        "",
-        "The changed files:",
-        files,
-    ]
-    return "\n".join(parts)
-
-
-def parse_findings(answer: str) -> list[ReviewFinding] | None:
-    """Read the model's findings; None when the answer cannot be read."""
-    text = strip_reasoning_blocks(answer)
-    match = _OBJECT.search(text)
-    if match is None:
-        return None
-    try:
-        return _Answer.model_validate(json.loads(match.group(0))).findings
-    except (ValueError, ValidationError):
-        return None

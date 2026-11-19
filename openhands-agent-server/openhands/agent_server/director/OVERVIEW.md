@@ -98,8 +98,8 @@ flowchart TB
 5. **Work.** Each IC writes only inside its folder. A guard on every file
    tool, a sandboxed shell and a scoped `git` hold it there.
 6. **Submit.** `submit_review` rests the IC. The director asks that IC, on a
-   copy of its conversation, for a write-up and an automated review, and
-   sends both to the IC above.
+   copy of its conversation, for a write-up, and sends that account to the
+   IC above with the code review instructions.
 7. **Review.** The IC above decides with `review_team`: accept, which merges
    the work into the checkout above, or reject with findings, which sends it
    back. A team that changed nothing itself, with all its sub-teams
