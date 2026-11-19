@@ -130,7 +130,7 @@ class Splits(Watch):
             refusal = None
             try:
                 merged = merge_back(
-                    checkout, Path(team.worktree_path), team.boundary.path, team.title
+                    checkout, Path(team.worktree_path), team.boundary, team.title
                 )
             except (GitError, OSError) as error:
                 refusal = f"could not be read ({error})."

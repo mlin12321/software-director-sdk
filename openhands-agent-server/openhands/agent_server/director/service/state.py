@@ -961,6 +961,8 @@ class ServiceState:
                     sub_team_directories=sub_teams,
                     excludes=excludes,
                     flock=shutil.which("flock"),
+                    readonly=place.boundary.readonly,
+                    writable=place.boundary.writable,
                 ),
             )
             atomic_write_text(

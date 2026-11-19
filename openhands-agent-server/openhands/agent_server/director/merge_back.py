@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+from openhands.agent_server.director.boundary import glob_matches
 from openhands.agent_server.director.git import (
     DIRECTOR_IDENTITY,
     GitError,
@@ -17,6 +18,7 @@ from openhands.agent_server.director.git import (
     top_of,
 )
 from openhands.agent_server.director.git_index import LOCK_FILE
+from openhands.agent_server.director.models import Boundary
 from openhands.agent_server.director.ownership import can_merge_in_memory, conflicts
 from openhands.agent_server.director.reconcile import MERGE_SUBJECT
 
@@ -33,8 +35,9 @@ class MergeBack:
 
     ``merged``: they are in it now. ``nothing``: they already were.
     ``conflicts``: ``files`` do not merge. ``outside``: the team committed
-    ``files`` that are not in its directory. ``refused``: git would not
-    merge into the checkout as it is; ``detail`` says why.
+    ``files`` that are not in its directory, or that it may not write there.
+    ``refused``: git would not merge into the checkout as it is; ``detail``
+    says why.
     """
 
     outcome: Literal["merged", "nothing", "conflicts", "outside", "refused"]
@@ -61,7 +64,7 @@ def merge_message(title: str, directory: str) -> str:
     return f"{MERGE_SUBJECT}{title} ({directory or '/'})"
 
 
-def merge_back(above: Path, team: Path, directory: str, title: str) -> MergeBack:
+def merge_back(above: Path, team: Path, boundary: Boundary, title: str) -> MergeBack:
     """Merge what a team committed in its own worktree into the checkout of
     the team above.
 
@@ -71,7 +74,8 @@ def merge_back(above: Path, team: Path, directory: str, title: str) -> MergeBack
     Args:
         above: The checkout of the team above.
         team: The team's worktree.
-        directory: The directory the team owns, relative to the repository.
+        boundary: What the team owns, its directory relative to the
+            repository, and which files in it it may write.
 
     Raises:
         GitError: A checkout could not be read.
@@ -89,10 +93,17 @@ def merge_back(above: Path, team: Path, directory: str, title: str) -> MergeBack
         for path in git(above, ["diff", "--name-only", "-z", base, tip]).split("\0")
         if path
     }
+    directory = boundary.path
     outside = sorted(
         path
         for path in changed
-        if directory and path != directory and not path.startswith(f"{directory}/")
+        if (directory and path != directory and not path.startswith(f"{directory}/"))
+        # What the team may only read, though it is in its folder.
+        or any(glob_matches(glob, path) for glob in boundary.readonly)
+        or (
+            bool(boundary.writable)
+            and not any(glob_matches(glob, path) for glob in boundary.writable)
+        )
     )
     if outside:
         return MergeBack("outside", tip, tuple(outside))

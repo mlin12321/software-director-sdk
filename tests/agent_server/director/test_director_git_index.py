@@ -274,6 +274,46 @@ def test_a_merge_that_brings_in_other_teams_changes_is_undone(
     assert web("status", "--porcelain").stdout == ""
 
 
+def test_a_commit_of_what_the_team_may_only_read_is_undone(
+    shared: Path, tmp_path: Path
+):
+    real = shutil.which("git")
+    assert real is not None
+    home = tmp_path / "held"
+    home.mkdir()
+    excludes = home / "exclude"
+    excludes.write_text(excludes_file(shared, "svc/api", ()))
+    common = run_git(
+        shared, "rev-parse", "--path-format=absolute", "--git-common-dir"
+    ).strip()
+    write_shell(
+        home / "git",
+        git_script(
+            real,
+            common_dir=common,
+            conversation_id="held",
+            directory="svc/api",
+            sub_team_directories=(),
+            excludes=excludes,
+            flock=shutil.which("flock"),
+            readonly=["svc/api/main.py"],
+            writable=["svc/api/**"],
+        ),
+    )
+    head = run_git(shared, "rev-parse", "HEAD")
+    (shared / "svc" / "api" / "main.py").write_text("api v2\n")
+
+    committed = subprocess.run(
+        [str(home / "git"), "commit", "-qam", "contract"],
+        cwd=shared,
+        capture_output=True,
+        text=True,
+    )
+
+    assert committed.returncode != 0 and "outside your team" in committed.stderr
+    assert run_git(shared, "rev-parse", "HEAD") == head
+
+
 def test_git_in_another_repository_is_the_real_git(
     shared: Path, agent: Callable[..., Git], tmp_path: Path
 ):

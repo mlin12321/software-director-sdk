@@ -12,6 +12,7 @@ from openhands.agent_server.director.git import git
 from openhands.agent_server.director.headline import TeamSummary
 from openhands.agent_server.director.merge_back import merge_back
 from openhands.agent_server.director.models import (
+    Boundary,
     OpenedSession,
     OpenSessionRequest,
     RouteMessageRequest,
@@ -687,6 +688,19 @@ async def test_closing_a_session_that_never_started_touches_no_checkout(
     assert run_git(repo, "for-each-ref", "refs/agents/pruned/") == ""
 
 
+def test_a_merge_takes_nothing_the_team_may_only_read(repo: Path, tmp_path: Path):
+    commit(repo, "api/contract.md", "v1\n")
+    worktree = tmp_path / "session"
+    run_git(repo, "worktree", "add", "--quiet", "-b", "session", str(worktree))
+    commit(worktree, "api/contract.md", "changed by the team\n")
+
+    held = Boundary(path="api", writable=["api/**"], readonly=["api/contract.md"])
+    result = merge_back(repo, worktree, held, "API")
+
+    assert (result.outcome, result.files) == ("outside", ("api/contract.md",))
+    assert (repo / "api" / "contract.md").read_text() == "v1\n"
+
+
 def test_a_merge_reaches_the_index_of_an_agent_that_owns_the_same_directory(
     repo: Path, tmp_path: Path
 ):
@@ -704,7 +718,7 @@ def test_a_merge_reaches_the_index_of_an_agent_that_owns_the_same_directory(
     (repo / "api/own.ts").write_text("staged by the agent\n")
     git(repo, ["add", "api/own.ts"], env=own)
 
-    result = merge_back(repo, worktree, "api", "API")
+    result = merge_back(repo, worktree, Boundary(path="api"), "API")
     git(repo, ["commit", "--quiet", "-m", "The agent's own"], env=own)
 
     assert result.outcome == "merged"

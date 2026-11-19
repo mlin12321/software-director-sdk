@@ -1705,7 +1705,7 @@ class Reviews(Requests):
                     merge_back,
                     checkout,
                     team,
-                    place.boundary.path,
+                    place.boundary,
                     self._merged_as(place),
                 )
             except (GitError, OSError) as error:
@@ -2016,7 +2016,7 @@ class Reviews(Requests):
         if _checkout_root(str(team)) != _checkout_root(str(checkout)):
             try:
                 result = await asyncio.to_thread(
-                    merge_back, checkout, team, place.boundary.path, place.title
+                    merge_back, checkout, team, place.boundary, place.title
                 )
                 problem = (
                     f"{result.outcome}: {', '.join(result.files) or result.detail}"
