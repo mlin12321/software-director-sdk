@@ -334,6 +334,10 @@ class Teams(Delivery):
             ThreadMessage(at=_instant(), sender="ic", text=text),
             ic_to_ic=True,
         )
+        if team.review is not None and team.review.state == "accepted":
+            # What it does with this is new work, which it submits again:
+            # left accepted, it would go up with a sibling's, unreviewed.
+            store.set_review(below_id, None)
         stopped = team.stopped
         if stopped is not None:
             store.set_stopped(below_id, None)
