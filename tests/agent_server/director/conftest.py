@@ -95,12 +95,13 @@ def submodule(repo: Path, tmp_path: Path) -> Path:
 def make_team(
     node_id: str, parent_id: str | None, *, path: str | None = None
 ) -> OrgNodeInput:
-    """A team of the org tree."""
+    """A team of the org tree, which may write all of its folder."""
+    path = node_id if path is None else path
     return OrgNodeInput(
         id=node_id,
         parent_id=parent_id,
         title=node_id,
-        boundary=Boundary(path=node_id if path is None else path),
+        boundary=Boundary(path=path, writable=[f"{path}/**" if path else "**"]),
         isolation="worktree",
     )
 

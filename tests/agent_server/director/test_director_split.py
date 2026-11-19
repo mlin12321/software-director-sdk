@@ -318,3 +318,14 @@ def test_a_sub_team_cannot_write_more_of_its_folder_than_its_parent_may(
 
     with pytest.raises(OrgStoreError, match="inside what your team may write"):
         check(store, "b", [child("api", "svc/b/api")])
+
+
+def test_a_team_that_may_write_nothing_proposes_no_sub_team(store: OrgStore):
+    place = store.place(at("b"))
+    assert place is not None
+    store.update_place(
+        place.id, boundary=place.boundary.model_copy(update={"writable": []})
+    )
+
+    with pytest.raises(OrgStoreError, match="inside what your team may write"):
+        check(store, "b", [child("api", "svc/b/api")])

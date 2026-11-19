@@ -714,6 +714,20 @@ def test_a_merge_takes_nothing_the_team_may_only_read(repo: Path, tmp_path: Path
     assert (repo / "api" / "contract.md").read_text() == "v1\n"
 
 
+def test_a_merge_takes_nothing_from_a_team_that_may_write_nothing(
+    repo: Path, tmp_path: Path
+):
+    commit(repo, "api/routes.ts", "v1\n")
+    worktree = tmp_path / "session"
+    run_git(repo, "worktree", "add", "--quiet", "-b", "session", str(worktree))
+    commit(worktree, "api/routes.ts", "changed by the team\n")
+
+    result = merge_back(repo, worktree, Boundary(path="api"), "API")
+
+    assert (result.outcome, result.files) == ("outside", ("api/routes.ts",))
+    assert (repo / "api" / "routes.ts").read_text() == "v1\n"
+
+
 def test_a_merge_reaches_the_index_of_an_agent_that_owns_the_same_directory(
     repo: Path, tmp_path: Path
 ):
@@ -731,7 +745,9 @@ def test_a_merge_reaches_the_index_of_an_agent_that_owns_the_same_directory(
     (repo / "api/own.ts").write_text("staged by the agent\n")
     git(repo, ["add", "api/own.ts"], env=own)
 
-    result = merge_back(repo, worktree, Boundary(path="api"), "API")
+    result = merge_back(
+        repo, worktree, Boundary(path="api", writable=["api/**"]), "API"
+    )
     git(repo, ["commit", "--quiet", "-m", "The agent's own"], env=own)
 
     assert result.outcome == "merged"

@@ -53,6 +53,8 @@ def agent(shared: Path, tmp_path: Path) -> Callable[..., Git]:
                 sub_team_directories=sub_teams,
                 excludes=excludes,
                 flock=shutil.which("flock"),
+                readonly=(),
+                writable=[f"{directory}/**" if directory else "**"],
             ),
         )
         env = {
@@ -305,6 +307,44 @@ def test_a_commit_of_what_the_team_may_only_read_is_undone(
 
     committed = subprocess.run(
         [str(home / "git"), "commit", "-qam", "contract"],
+        cwd=shared,
+        capture_output=True,
+        text=True,
+    )
+
+    assert committed.returncode != 0 and "outside your team" in committed.stderr
+    assert run_git(shared, "rev-parse", "HEAD") == head
+
+
+def test_a_team_that_may_write_nothing_commits_nothing(shared: Path, tmp_path: Path):
+    real = shutil.which("git")
+    assert real is not None
+    home = tmp_path / "reader"
+    home.mkdir()
+    excludes = home / "exclude"
+    excludes.write_text(excludes_file(shared, "svc/api", ()))
+    common = run_git(
+        shared, "rev-parse", "--path-format=absolute", "--git-common-dir"
+    ).strip()
+    write_shell(
+        home / "git",
+        git_script(
+            real,
+            common_dir=common,
+            conversation_id="reader",
+            directory="svc/api",
+            sub_team_directories=(),
+            excludes=excludes,
+            flock=shutil.which("flock"),
+            readonly=(),
+            writable=(),
+        ),
+    )
+    head = run_git(shared, "rev-parse", "HEAD")
+    (shared / "svc" / "api" / "main.py").write_text("api v2\n")
+
+    committed = subprocess.run(
+        [str(home / "git"), "commit", "-qam", "change"],
         cwd=shared,
         capture_output=True,
         text=True,
