@@ -40,6 +40,7 @@ from openhands.sdk.tool.spec import Tool
 from openhands.sdk.tool.tool import Action
 from openhands.tools.apply_patch.definition import ApplyPatchAction
 from openhands.tools.file_editor.definition import FileEditorAction
+from openhands.tools.gemini.read_file.definition import ReadFileAction
 from openhands.tools.terminal.definition import TerminalAction
 from tests.agent_server.director.conftest import (
     FakeLauncher,
@@ -644,6 +645,11 @@ async def test_a_file_tool_neither_reads_nor_writes_what_the_director_keeps(
 
     # The key in it would let the agent act as any other.
     assert "director's own" in (attempt(service, root_ic, "file_editor", view) or "")
+    read = ReadFileAction(file_path=str(kept))
+    assert "director's own" in (attempt(service, root_ic, "read_file", read) or "")
+    # Reading is otherwise never refused.
+    read_own = ReadFileAction(file_path=str(repo / "README.md"))
+    assert attempt(service, root_ic, "read_file", read_own) is None
     assert "director's own" in (
         attempt(service, root_ic, "file_editor", create(kept)) or ""
     )
