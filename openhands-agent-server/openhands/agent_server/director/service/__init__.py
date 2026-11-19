@@ -524,6 +524,19 @@ class DirectorService(Sync):
         role = escalation.raised_by
         if escalation_id == LIMIT_WAITS:
             self.go_on_past_limit(place_id)
+        if (
+            escalation_id == failure_waits(role)
+            and role == "manager"
+            and any(a.role == role and a.status == AGENT_LOST for a in place.agents)
+        ):
+            # A new Manager starts with the answer; the IC goes on as it was.
+            self.tell_manager(
+                place_id,
+                "The Manager before you could not be started. The human was "
+                f"told, and says:\n{answer}",
+                division_lead=is_division_lead(place),
+            )
+            return store.place(place_id) or place
         if escalation_id == failure_waits(role) and any(
             a.role == role and a.status == AGENT_LOST for a in place.agents
         ):

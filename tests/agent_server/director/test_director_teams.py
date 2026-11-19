@@ -15,6 +15,7 @@ from openhands.agent_server.director.org_store import team_id_of
 from openhands.agent_server.director.routing import USAGE_ID
 from openhands.agent_server.director.run_state import SESSION, RunState
 from openhands.agent_server.director.service import DirectorService
+from openhands.agent_server.director.service.state import failure_waits
 from openhands.agent_server.director.session_state import kept_sessions
 from openhands.agent_server.director.tools import (
     ApproveTeamsTool,
@@ -682,3 +683,27 @@ async def test_sub_teams_that_fail_to_be_set_up_are_put_aside_and_told(
     # Another proposal is not refused for one that is "still being set up".
     assert node(service, "apps.web").pending_split is None
     assert "disk full" in launcher.messages_to(ic(service, "apps.web"))[-1]
+
+
+async def test_a_manager_that_could_not_be_started_is_started_again_by_the_answer(
+    repo: Path, launcher: FakeLauncher
+):
+    service = await started(repo, launcher)
+    top = node(service, "root")
+    launcher.derive_error = RuntimeError("npx is not installed")
+    service.tell_manager(top.id, "Look in on your team.")
+    await service.settled()
+    [asked] = node(service, "root").escalations
+    assert asked.id == failure_waits("manager")
+    derived = len(launcher.derived)
+
+    service.answer_escalation(top.id, asked.id, "Fixed, go on.")
+    await service.settled()
+
+    top = node(service, "root")
+    [manager] = [agent for agent in top.agents if agent.role == "manager"]
+    assert manager.status != "lost" and top.escalations == []
+    assert len(launcher.derived) == derived + 1
+    told = launcher.messages_to(manager.conversation_id)
+    assert any("Fixed, go on." in text for text in told)
+    await service.aclose()

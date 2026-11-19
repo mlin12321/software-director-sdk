@@ -141,11 +141,18 @@ class Teams(Delivery):
                 return
             if is_division_lead(place) and not division_lead:
                 return
-            if agent_conversation(place, "manager") is None:
+            # One that could not be started is started afresh.
+            lost = [
+                agent
+                for agent in place.agents
+                if agent.role == "manager" and agent.status == AGENT_LOST
+            ]
+            if lost or agent_conversation(place, "manager") is None:
                 manager = AgentRef(
                     role="manager", conversation_id=str(uuid4()), status="idle"
                 )
-                place = store.update_place(place_id, agents=[*place.agents, manager])
+                kept = [agent for agent in place.agents if agent not in lost]
+                place = store.update_place(place_id, agents=[*kept, manager])
                 task = self._runs().marked(TASK).get(place_id) or place.spec_summary
                 self._begin("launch_manager", place_id, task=task)
         self.notify(agent_conversation(place, "manager"), text)
