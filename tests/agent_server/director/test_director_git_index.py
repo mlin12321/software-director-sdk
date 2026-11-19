@@ -151,6 +151,24 @@ def test_the_checkouts_own_index_follows_an_agents_commit(
     ]
 
 
+def test_a_committed_name_that_reads_as_a_pattern_leaves_the_rest_staged(
+    shared: Path, agent: Callable[..., Git]
+):
+    api = agent("api", "svc/api")
+    (shared / "svc" / "api" / "f2").write_text("staged by the human\n")
+    run_git(shared, "add", "svc/api/f2")
+    (shared / "svc" / "api" / "f?").write_text("x\n")
+
+    assert api("--literal-pathspecs", "add", "svc/api/f?").returncode == 0
+    assert api("commit", "-qm", "odd name").returncode == 0
+    assert (
+        run_git(shared, "show", "--name-only", "--format=", "HEAD").strip()
+        == "svc/api/f?"
+    )
+
+    assert "A  svc/api/f2" in run_git(shared, "status", "--porcelain").splitlines()
+
+
 def test_a_team_does_not_stage_what_it_handed_to_a_sub_team(
     shared: Path, agent: Callable[..., Git]
 ):
