@@ -410,23 +410,27 @@ class Sync(Sessions):
         launcher = self._require_launcher()
         store = await asyncio.to_thread(lambda: self.store)
         place = store.place(node_id)
-        if place is None or is_division_lead(place):
-            team = place or store.team(node_id)
+        if place is None:
+            team = store.team(node_id)
             if team is None:
                 raise NotFound(f"There is no team {node_id}")
             raise Conflict(
                 f"Nobody works at {team.title!r} itself: open a session there."
             )
+        # A session's reviewer starts like the first time: from the IC the
+        # session works with, in the checkout it reviews in.
+        leads = is_division_lead(place)
         if place.status == "done":
             raise Conflict(f"Team {place.title} is done")
         ic = agent_conversation(place, "ic")
         if ic is not None and await launcher.started(UUID(ic)) is not None:
             raise Conflict(f"The IC of team {place.title} has a conversation here")
         conversation = request.conversation
-        above = store.place(place.parent_id) if place.parent_id else None
+        like = self._derived_from(place) if leads else place.parent_id
+        above = store.place(like) if like else None
         # A session's IC that never started has no checkout yet: it gets
         # one of its own, never the one of the team it works beside.
-        own_checkout = not (
+        own_checkout = not leads and not (
             above is not None and store.opens_session(place) and not apart(place, above)
         )
         if conversation is not None and not own_checkout:
@@ -448,14 +452,14 @@ class Sync(Sessions):
             restore_worktrees, self._repo_dir, [place], self._home()
         )
         ic_id = uuid4()
-        task = await asyncio.to_thread(self._task_of, place)
+        task = await asyncio.to_thread(self._purpose if leads else self._task_of, place)
         if conversation is None:
             store.update_place(node_id, agents=_new_agents(ic_id), status="idle")
             self._begin(
                 "start_team",
                 node_id,
                 task=task,
-                parent=place.parent_id,
+                parent=like,
                 checkout=place.worktree_path
                 if own_checkout or self._in_place(place)
                 else None,

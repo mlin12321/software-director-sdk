@@ -21,6 +21,7 @@ from openhands.agent_server.director.org_store import (
     team_id_of,
 )
 from openhands.agent_server.director.service import DirectorService
+from openhands.agent_server.director.tools import SubmitReviewTool
 from openhands.sdk.errors import Conflict, Unprocessable
 from tests.agent_server.director.conftest import (
     FakeLauncher,
@@ -30,7 +31,15 @@ from tests.agent_server.director.conftest import (
 )
 from tests.agent_server.director.test_director_landing import landed
 from tests.agent_server.director.test_director_limits import started
-from tests.agent_server.director.test_director_tools import ic, node, split_root
+from tests.agent_server.director.test_director_review import DONE
+from tests.agent_server.director.test_director_tools import (
+    division_lead_ic,
+    division_lead_of,
+    ic,
+    node,
+    split_root,
+    use,
+)
 
 
 API, WEB = "services.api", "apps.web"
@@ -584,3 +593,24 @@ async def test_a_pull_shows_the_tree_again_to_a_page_that_has_it_open(
     assert {node.id: node.title for node in shown.nodes}[API] == "Payments"
     await here.aclose()
     await there.aclose()
+
+
+async def test_a_sessions_reviewer_that_is_lost_is_started_again(
+    repo: Path, launcher: FakeLauncher
+):
+    here = await started(repo, launcher)
+    await use(here, ic(here), SubmitReviewTool, DONE)
+    await here.settled()
+    lead, lost = division_lead_of(here), division_lead_ic(here)
+    assert lost is not None
+    del launcher.known[UUID(lost)]
+
+    before = len(launcher.derived)
+    await here.start_again(lead, StartAgainRequest())
+    await here.settled()
+
+    # Like the first time: from the IC the session works with.
+    [again] = launcher.derived[before:]
+    assert str(again.parent_id) == ic(here)
+    assert str(again.conversation_id) == division_lead_ic(here) != lost
+    await here.aclose()

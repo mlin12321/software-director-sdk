@@ -968,7 +968,17 @@ async def start_team_again(
     the session recorded.
     """
     session = _require_session(service, session_id)
-    team = next((team for team in session.teams if team.team_id == node_id), None)
+    # By the id of the place, or of its team: at the top team the session's
+    # reviewer and its IC are two places of one team.
+    team = next(
+        (
+            team
+            for by in ("id", "team_id")
+            for team in session.teams
+            if getattr(team, by) == node_id
+        ),
+        None,
+    )
     if team is None:
         raise NotFound(f"Session {session_id!r} has no team {node_id}")
     return await service.start_again(team.id, request)
