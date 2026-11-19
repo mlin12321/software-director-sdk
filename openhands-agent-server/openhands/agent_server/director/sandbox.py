@@ -170,6 +170,9 @@ def _confined(
             '[ "$(cd "$own" && pwd -P)" = "$own" ] ||',
             '  { echo "The team\'s folder is reached through a link" >&2; exit 1; }',
             "git_dir=$(git rev-parse --path-format=absolute --git-common-dir)",
+            # Made now, or worktrees made after the shell started would be
+            # left open to it.
+            'mkdir -p "$git_dir"/worktrees',
             # What git keeps for this checkout alone, where it is a worktree.
             "own_git=$(git rev-parse --absolute-git-dir)",
             '[ "$own_git" = "$git_dir" ] && own_git="$git_dir"/objects',

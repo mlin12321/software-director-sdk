@@ -2,6 +2,7 @@
 
 import os
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -252,6 +253,34 @@ def test_a_worktrees_shell_cannot_point_it_or_another_at_another_repository(
     assert run("git config core.worktree /elsewhere").returncode != 0
     (mine / "new.py").write_text("x")
     assert run("git add new.py && git commit -q -m mine").returncode == 0
+
+
+def test_a_worktree_made_after_a_shell_started_is_closed_to_it(
+    repo: Path, tmp_path: Path
+):
+    (repo / "svc" / "api").mkdir(parents=True)
+    assert not (repo / ".git" / "worktrees").exists()
+    run = confined(repo, "svc/api")
+    later = repo / ".git" / "worktrees" / "later" / "commondir"
+    shell = subprocess.Popen(
+        [
+            str(repo / SHELLS / "svc-api.sh"),
+            "-c",
+            f"sleep 2; echo /elsewhere > {later}",
+        ],
+        cwd=repo,
+        stderr=subprocess.PIPE,
+    )
+    time.sleep(1)
+
+    subprocess.run(
+        ["git", "worktree", "add", "-q", "-b", "later", str(tmp_path / "later")],
+        cwd=repo,
+        check=True,
+    )
+
+    assert shell.wait(timeout=30) != 0
+    assert later.read_text().strip() != "/elsewhere"
 
 
 def test_a_teams_folder_that_is_a_link_opens_nothing(repo: Path):
