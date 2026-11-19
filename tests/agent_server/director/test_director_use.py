@@ -232,6 +232,24 @@ async def test_a_team_started_from_a_profile_spends_under_its_parents_caps(
 
     [request] = started_with
     assert (request.max_iterations, request.max_budget_per_run) == (40, 2.5)
+    assert request.parent_conversation_id == parent_id
+
+    # Started again in the checkout it had, it names no parent: one in
+    # another workspace is refused.
+    own = tmp_path / "own"
+    await launcher.start_from_profile(
+        "claude-code",
+        parent_id,
+        child_id,
+        [],
+        title="API (IC)",
+        task="Serve the orders API.",
+        isolation="worktree",
+        checkout=str(own),
+    )
+    again = started_with[1]
+    assert again.parent_conversation_id is None and not again.worktree
+    assert again.workspace.working_dir == str(own)
 
 
 def test_an_agent_is_known_by_the_model_it_is_configured_with():
