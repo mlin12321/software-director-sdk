@@ -1524,3 +1524,32 @@ async def test_an_acceptance_cut_off_before_its_landing_lands_when_it_is_run_aga
 
     assert service.team_memory.read("spec.md") == "# Spec"
     assert service._in_order() == []
+
+
+async def test_work_that_waited_for_the_human_is_merged_as_its_reviewer_decided(
+    service: DirectorService, repo: Path, tmp_path: Path
+):
+    commit(repo, "app.py", "refunds = False\n")
+    worktree = own_worktree(service, repo, tmp_path)
+    commit(worktree, "app.py", "refunds = True\n")
+    (repo / "app.py").write_text("in the way\n")
+    await use(service, ic(service), WriteSpecTool, WriteSpecAction(text="# Session"))
+    await use(service, ic(service), SubmitReviewTool, DONE)
+    top = node(service, "root")
+    decided = SpecChoice.model_validate(
+        {"path": "", "take": "text", "text": "# Reviewer"}
+    )
+    await use(
+        service,
+        division_lead_ic(service),
+        ReviewTeamTool,
+        ReviewTeamAction(team=top.id, decision="accept", specs=[decided]),
+    )
+    assert [e.id for e in node(service, "root").escalations] == [MERGE_WAITS]
+    run_git(repo, "checkout", "--", "app.py")
+
+    service.answer_escalation(top.id, MERGE_WAITS, "Cleared.")
+    await service.settled()
+
+    assert (repo / "app.py").read_text() == "refunds = True\n"
+    assert service.team_memory.read("spec.md") == "# Reviewer"

@@ -73,6 +73,7 @@ from openhands.agent_server.director.prompts import (
 )
 from openhands.agent_server.director.reconcile import changes_of
 from openhands.agent_server.director.run_state import (
+    CLEARING,
     DECIDED,
     HELD,
     MERGING,
@@ -1490,12 +1491,18 @@ class Reviews(Requests):
     async def _do_request_review(self, intent: Intent) -> None:
         await self._request_review(intent.node_id)
 
-    def _ask_to_clear(self, place_id: str, detail: str) -> None:
+    def _ask_to_clear(
+        self, place_id: str, detail: str, reconciled: str, specs: list[dict[str, str]]
+    ) -> None:
         """Ask the human, once, to clear the way for accepted work into
-        their own checkout. Their answer merges it."""
+        their own checkout. Their answer merges it, as its reviewer
+        decided."""
         place = self.store.place(place_id)
         if place is None or any(e.id == MERGE_WAITS for e in place.escalations):
             return
+        self._runs().mark(
+            CLEARING, place_id, json.dumps({"reconciled": reconciled, "specs": specs})
+        )
         self.store.raise_escalation(
             place_id,
             MERGE_WAITS,
@@ -1632,6 +1639,8 @@ class Reviews(Requests):
                     + ("on no branch" if on in ("", "HEAD") else f"on {on!r}")
                     + f".\nSwitch it back to {started_on!r}, then answer "
                     "this: the work is merged then.",
+                    reconciled,
+                    specs or [],
                 )
                 self.notify(
                     reviewer,
@@ -1681,6 +1690,8 @@ class Reviews(Requests):
                     f"git would not merge it as the checkout is:\n"
                     f"{result.detail}\nCommit or put aside what is in "
                     "the way, then answer this: the work is merged then.",
+                    reconciled,
+                    specs or [],
                 )
                 self.notify(
                     reviewer,
@@ -1760,6 +1771,7 @@ class Reviews(Requests):
             )
             self._changed_since_accept.pop(place.session, None)
         self._runs().unmark(SHOWN, place_id)
+        self._runs().unmark(CLEARING, place_id)
         self._tell_turns()
         if not is_division_lead(above):
             self.count_accepted_review(above.id)

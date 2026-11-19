@@ -1,6 +1,7 @@
 """The director's state for one server: an org tree and its team_memory."""
 
 import asyncio
+import json
 import logging
 import os
 from collections.abc import Awaitable, Callable
@@ -43,6 +44,7 @@ from openhands.agent_server.director.recovery import (
     has_work,
 )
 from openhands.agent_server.director.run_state import (
+    CLEARING,
     MERGING,
     Intent,
 )
@@ -470,8 +472,9 @@ class DirectorService(Sync):
         store.settle_escalation(place_id, escalation_id)
         if escalation_id == MERGE_WAITS:
             # The way into the checkout was cleared: the accepted work is
-            # merged now, with nobody asked again.
-            self.accept_review(place_id, "")
+            # merged now as its reviewer decided, with nobody asked again.
+            decided = json.loads(self._runs().marked(CLEARING).get(place_id) or "{}")
+            self.accept_review(place_id, "", **decided)
             return store.place(place_id) or place
         if escalation_id == ORG_WAITS:
             # The human goes on without the Manager.
