@@ -179,6 +179,10 @@ class Splits(Watch):
         if place is None or proposal is None or proposal.status != "approved":
             return
         if "planned" not in intent.steps:
+            if any(place_id in teams for teams, _ in self._settling.values()):
+                # What is closing or pruning it fixed what it removes first.
+                self._decline(place, "The team is being closed or removed.")
+                return
             try:
                 # The org may have changed since the sub-teams were approved.
                 split = normalize_split(store, place, proposal.children)

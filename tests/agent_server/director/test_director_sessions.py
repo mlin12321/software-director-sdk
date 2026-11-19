@@ -27,7 +27,9 @@ from openhands.agent_server.director.routing import USAGE_ID
 from openhands.agent_server.director.run_state import TASK
 from openhands.agent_server.director.service import DirectorService
 from openhands.agent_server.director.tools import (
+    ApproveTeamsTool,
     MsgTeamTool,
+    ProposeTeamsTool,
     PruneTeamTool,
     ReadTeamContextTool,
     ReportTool,
@@ -43,6 +45,7 @@ from openhands.agent_server.director.tools.definition import (
     ReviewTeamAction,
     WriteSpecAction,
 )
+from openhands.sdk.conversation.state import ConversationExecutionStatus
 from openhands.sdk.errors import Conflict, NotFound, Unprocessable
 from tests.agent_server.director.conftest import (
     FakeLauncher,
@@ -60,9 +63,12 @@ from tests.agent_server.director.test_director_teams import (
     propose_and_approve,
 )
 from tests.agent_server.director.test_director_tools import (
+    APPROVE,
+    SPLIT,
     division_lead_ic,
     division_lead_of,
     ic,
+    manager,
     node,
     split_root,
     use,
@@ -954,4 +960,32 @@ async def test_a_session_whose_ic_could_not_be_started_leaves_nothing_in_the_his
         event for event in service.org_history(100).events if event.id not in before
     ] == []
     assert service._runs().marked(TASK) == tasks
+    await service.aclose()
+
+
+async def test_no_team_is_set_up_in_a_session_that_is_being_closed(
+    repo: Path, launcher: FakeLauncher
+):
+    service = await started(repo, launcher)
+    await woken(service, "root")
+    await use(service, ic(service), ProposeTeamsTool, SPLIT)
+    root_ic, root_manager = ic(service), manager(service)
+    # Both agents are in a turn as the human closes the session.
+    launcher.report(root_ic, ConversationExecutionStatus.RUNNING)
+    launcher.report(root_manager, ConversationExecutionStatus.RUNNING)
+    await service.settled()
+    [session] = service.store.sessions()
+    places = {place.id for place in service.store.session(session.id)}
+    service.close_session(session.id)
+    await service.settled()
+
+    # In the turn it is finishing, the Manager approves the sub-teams.
+    await use(service, root_manager, ApproveTeamsTool, APPROVE)
+    await service.settled()
+
+    assert {place.id for place in service.store.session(session.id)} == places
+    launcher.report(root_manager, ConversationExecutionStatus.FINISHED)
+    launcher.report(root_ic, ConversationExecutionStatus.FINISHED)
+    await service.settled()
+    assert service.sessions() == []
     await service.aclose()
