@@ -1123,6 +1123,9 @@ class ServiceState:
     def _keep_failure(self, intent: Intent, error: Exception) -> None:
         """Keep a step of the director that failed. The service does."""
 
+    def _let_go(self, intent: Intent) -> None:
+        """Deliver what waited for the teams a step changes. The service does."""
+
     async def _carry_out(self, intent_id: int) -> None:
         run = self._runs()
         if self._paused is not None or intent_id in self._in_flight:
@@ -1145,6 +1148,8 @@ class ServiceState:
         except Exception as error:
             logger.exception("A director action failed")
             run.finish(intent.id)
+            # What waited for the teams it was to change waits no longer.
+            self._let_go(intent)
             self._keep_failure(intent, error)
         else:
             if intent.kind in _SAVED_BEFORE_FORGOTTEN:

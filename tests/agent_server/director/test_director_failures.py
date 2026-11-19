@@ -11,12 +11,13 @@ from openhands.agent_server.director.service.state import (
     STALL_WAITS,
     failure_waits,
 )
-from openhands.agent_server.director.tools import MsgTeamTool
+from openhands.agent_server.director.tools import MsgTeamTool, PruneTeamTool
 from openhands.agent_server.director.tools.definition import MsgTeamAction
 from openhands.sdk.conversation.state import ConversationExecutionStatus
 from tests.agent_server.director.conftest import FakeLauncher, record_of
 from tests.agent_server.director.test_director_acp import started
 from tests.agent_server.director.test_director_tools import (
+    PRUNE_API,
     ic,
     manager,
     node,
@@ -231,3 +232,27 @@ async def test_the_human_is_asked_of_a_stalled_team_with_no_ic_above(
         assert node(service, "root").escalations == []
     finally:
         await service.aclose()
+
+
+async def test_a_team_whose_removal_failed_is_still_told_things(
+    service: DirectorService, launcher: FakeLauncher
+):
+    await woken(service, API)
+    api_ic = ic(service, API)
+
+    def fail_to_stop(call: str) -> None:
+        if call == "stop":
+            raise RuntimeError("the agent could not be stopped")
+
+    launcher.before = fail_to_stop
+    await use(service, manager(service), PruneTeamTool, PRUNE_API)
+    await service.settled()
+    launcher.before = lambda _: None
+    told = len(launcher.messages_to(api_ic))
+
+    service.notify(api_ic, "Go on with the orders endpoint.")
+    await service.settled()
+
+    assert launcher.messages_to(api_ic)[told:] == [
+        "[director] Go on with the orders endpoint."
+    ]
