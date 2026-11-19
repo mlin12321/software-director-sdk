@@ -2030,9 +2030,9 @@ class Reviews(Requests):
                     ic,
                     "The work of all your sub-teams is accepted, but your "
                     "team's checkout does not merge into the checkout of "
-                    f"{above.title!r} ({problem}). Merge its branch into "
-                    "yours, resolve what is in the way, commit, and call "
-                    "`submit_review`.",
+                    f"{above.title!r} ({problem}). Call `submit_review`: "
+                    f"the IC of {above.title!r} is given the merge to finish "
+                    "when it accepts the work.",
                 )
                 return
         tip = await asyncio.to_thread(head_of, team)
