@@ -10,6 +10,8 @@ so a server that stops at any point can take its work up again.
 import json
 import sqlite3
 import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -184,14 +186,12 @@ class RunState:
         )
 
     def replace_marks(self, kind: str, marks: dict[str, str]) -> None:
-        with self._lock:
-            self._db.execute("BEGIN")
+        with self._together():
             self._db.execute("DELETE FROM marks WHERE kind = ?", (kind,))
             self._db.executemany(
                 "INSERT INTO marks (kind, key, value) VALUES (?, ?, ?)",
                 [(kind, key, value) for key, value in marks.items()],
             )
-            self._db.execute("COMMIT")
 
     def begin(self, kind: str, place_id: str, payload: dict[str, Any]) -> Intent:
         with self._lock:
@@ -266,12 +266,23 @@ class RunState:
 
     def forget(self) -> None:
         """Drop everything but the schema version."""
-        with self._lock:
-            self._db.execute("BEGIN")
+        with self._together():
             self._db.execute("DELETE FROM marks")
             self._db.execute("DELETE FROM intents")
             self._db.execute("DELETE FROM outbox")
             self._db.execute("DELETE FROM meta WHERE key != 'schema_version'")
+
+    @contextmanager
+    def _together(self) -> Iterator[None]:
+        """Several statements that all take effect or none does."""
+        with self._lock:
+            self._db.execute("BEGIN")
+            try:
+                yield
+            except BaseException:
+                # Or the connection stays inside the transaction for good.
+                self._db.execute("ROLLBACK")
+                raise
             self._db.execute("COMMIT")
 
     def _run(self, statement: str, values: tuple[Any, ...]) -> None:

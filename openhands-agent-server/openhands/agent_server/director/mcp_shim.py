@@ -50,7 +50,9 @@ def answer(message: dict[str, Any], url: str, token: str) -> dict[str, Any] | No
     method, request_id = message.get("method"), message.get("id")
     if request_id is None:
         return None
-    params = message.get("params") or {}
+    params = message.get("params")
+    if not isinstance(params, dict):
+        params = {}
     try:
         if method == "initialize":
             result: Any = {

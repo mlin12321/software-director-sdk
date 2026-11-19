@@ -40,10 +40,30 @@ def git(
     """Run one git command in ``repo_dir`` and return its stdout.
 
     Raises:
-        GitError: The command exited with a non-zero status.
+        GitError: The command exited with a non-zero status, or did not
+            finish in ``timeout`` seconds.
     """
+    try:
+        result = _run(repo_dir, args, env, stdin, timeout)
+    except subprocess.TimeoutExpired as error:
+        raise GitError(args, -1, f"did not finish in {timeout:g}s", "") from error
+    stdout = result.stdout.decode(errors="replace")
+    if result.returncode != 0:
+        raise GitError(
+            args, result.returncode, result.stderr.decode(errors="replace"), stdout
+        )
+    return stdout
+
+
+def _run(
+    repo_dir: Path,
+    args: list[str],
+    env: Mapping[str, str] | None,
+    stdin: str | None,
+    timeout: float,
+) -> subprocess.CompletedProcess[bytes]:
     # Bytes in and out: text mode would rewrite line endings in file content.
-    result = subprocess.run(
+    return subprocess.run(
         # Paths are read as relative to the top of the checkout, whatever
         # the machine's git is configured to print.
         ["git", "-c", "diff.relative=false", *args],
@@ -56,12 +76,6 @@ def git(
         check=False,
         timeout=timeout,
     )
-    stdout = result.stdout.decode(errors="replace")
-    if result.returncode != 0:
-        raise GitError(
-            args, result.returncode, result.stderr.decode(errors="replace"), stdout
-        )
-    return stdout
 
 
 def git_version(repo_dir: Path) -> tuple[int, int]:

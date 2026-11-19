@@ -48,6 +48,7 @@ from openhands.agent_server.director.service.state import (
     _branch_of,
     _new_agents,
     apart,
+    conversations_of,
 )
 from openhands.agent_server.director.split import shape_of
 from openhands.sdk.conversation.request import (
@@ -506,12 +507,7 @@ class Sessions(Splits):
                 team=top.title,
                 parent=session.above_id,
                 teams=[team.id for team in teams],
-                conversations=[
-                    agent.conversation_id
-                    for team in teams
-                    for agent in team.agents
-                    if agent.conversation_id is not None
-                ],
+                conversations=conversations_of(teams),
                 stamp=ref_stamp(),
             )
         plan = intent.payload

@@ -54,6 +54,7 @@ from openhands.agent_server.director.service.state import (
     _contracts_file,
     _spec_file,
     agent_conversation,
+    conversations_of,
     hand_over_of,
 )
 from openhands.agent_server.director.service.watch import Watch
@@ -196,12 +197,7 @@ class Splits(Watch):
                     for team in split.replaces
                     for below in store.below(team.id)
                 },
-                conversations=[
-                    agent.conversation_id
-                    for team in split.replaces
-                    for agent in team.agents
-                    if agent.conversation_id is not None
-                ],
+                conversations=conversations_of(split.replaces),
                 # Agents a replaced team that was stopped had cut off: the
                 # sub-teams that stay go on.
                 cut_off=sorted(
@@ -373,12 +369,7 @@ class Splits(Watch):
                 path=place.boundary.path,
                 parent=above.id,
                 teams=[team.id for team in teams],
-                conversations=[
-                    agent.conversation_id
-                    for team in teams
-                    for agent in team.agents
-                    if agent.conversation_id is not None
-                ],
+                conversations=conversations_of(teams),
                 stamp=ref_stamp(),
             )
         plan = intent.payload

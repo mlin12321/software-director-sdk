@@ -182,7 +182,8 @@ def describe(
         if intent.kind in STARTING:
             starting.add(intent.node_id)
         if intent.kind == "start_team" and node is not None:
-            ic = node.agents[0].conversation_id
+            # A place whose agents were never set has none to look at.
+            ic = next((a.conversation_id for a in node.agents if a.role == "ic"), None)
             if ic is not None and UUID(ic) in statuses:
                 what = STEP_NAMES["launch_manager"]
         items.append(

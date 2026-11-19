@@ -118,6 +118,8 @@ def test_a_token_names_its_agent_only_with_the_key_it_was_made_with():
 
     assert conversation_of(b"key", token) == conversation_id
     assert conversation_of(b"other", token) is None
+    # Not one of ours, whatever it is made of.
+    assert conversation_of(b"key", "caf\u00e9.abc") is None
     assert conversation_of(b"key", f"{uuid4()}.{token.partition('.')[2]}") is None
     assert conversation_of(b"key", "") is None
     assert conversation_of(b"key", conversation_id) is None
@@ -828,3 +830,11 @@ async def test_an_agent_that_cannot_be_asked_on_its_conversation_is_no_failure(
 
     assert answer is None
     assert not [record for record in caplog.records if record.exc_info]
+
+
+def test_the_shim_answers_a_request_whose_params_are_no_object():
+    reply = mcp_shim.answer(
+        {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": [1]}, "", ""
+    )
+
+    assert reply is not None and "result" in reply

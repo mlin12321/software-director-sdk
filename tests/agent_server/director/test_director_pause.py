@@ -1,7 +1,9 @@
 """Pausing an org, and taking up what a stopped server left unfinished."""
 
 import asyncio
+import sqlite3
 from pathlib import Path
+from typing import cast
 from uuid import UUID
 
 import pytest
@@ -850,3 +852,19 @@ async def test_an_agent_not_yet_run_again_is_taken_up_by_the_next_start(
     assert root_ic in second._runs().marked(RUNNING)
     never.set()
     await second.aclose()
+
+
+def test_a_failed_change_of_several_marks_leaves_the_run_state_usable(
+    tmp_path: Path,
+):
+    run = RunState(tmp_path / "state.db")
+    run.replace_marks("kind", {"a": "1"})
+
+    with pytest.raises(sqlite3.Error):
+        run.replace_marks("kind", {"b": cast(str, object())})
+
+    # Nothing of the failed change stays, and the next one is taken.
+    assert run.marked("kind") == {"a": "1"}
+    run.replace_marks("kind", {"c": "3"})
+    assert run.marked("kind") == {"c": "3"}
+    run.close()

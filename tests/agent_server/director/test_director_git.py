@@ -1,8 +1,16 @@
 """The director's own git operations on a checkout."""
 
+import subprocess
 from pathlib import Path
 
-from openhands.agent_server.director.git import bring_over, git, save_and_discard
+import pytest
+
+from openhands.agent_server.director.git import (
+    GitError,
+    bring_over,
+    git,
+    save_and_discard,
+)
 from tests.agent_server.director.conftest import run_git
 
 
@@ -123,3 +131,15 @@ def test_changed_files_are_named_from_the_top_whatever_git_is_set_to_print(
     named = git(repo / "svc" / "api", ["diff", "--name-only", "HEAD~1", "HEAD"])
 
     assert named.split() == ["svc/api/main.py"]
+
+
+def test_a_git_that_does_not_finish_fails_like_any_other(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    def never(*args: object, **kwargs: object):
+        raise subprocess.TimeoutExpired(cmd="git", timeout=1)
+
+    monkeypatch.setattr(subprocess, "run", never)
+
+    with pytest.raises(GitError, match="did not finish"):
+        git(tmp_path, ["status"], timeout=1)

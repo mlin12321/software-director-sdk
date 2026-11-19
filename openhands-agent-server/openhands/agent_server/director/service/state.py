@@ -11,7 +11,7 @@ import shutil
 import sqlite3
 import threading
 from collections import deque
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Sequence
 from contextvars import ContextVar
 from datetime import UTC, datetime
 from functools import lru_cache
@@ -289,6 +289,20 @@ _LANDING_ATTEMPTS = 8
 
 class _Held(Exception):
     """The org was paused before a step could be finished."""
+
+
+def conversations_of(teams: Iterable[SessionTeam]) -> list[str]:
+    """Every conversation of ``teams``' agents, hand-over ones included."""
+    return [
+        conversation_id
+        for team in teams
+        for agent in team.agents
+        for conversation_id in (
+            agent.conversation_id,
+            agent.hand_over.conversation_id if agent.hand_over else None,
+        )
+        if conversation_id is not None
+    ]
 
 
 def agent_conversation(place: SessionTeam, role: AgentRole) -> str | None:
@@ -743,16 +757,7 @@ class ServiceState:
         teams = [team]
         for found in teams:
             teams.extend(store.below(found.id))
-        return [
-            conversation_id
-            for found in teams
-            for agent in found.agents
-            for conversation_id in (
-                agent.conversation_id,
-                agent.hand_over.conversation_id if agent.hand_over else None,
-            )
-            if conversation_id is not None
-        ]
+        return conversations_of(teams)
 
     def _is_stopped(self, conversation_id: str) -> bool:
         """Whether the agent's team, or a team above it, is stopped."""
