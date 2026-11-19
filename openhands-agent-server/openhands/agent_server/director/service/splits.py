@@ -377,13 +377,21 @@ class Splits(Watch):
                 unfinished=unfinished,
             ),
         )
-        if former:
+        named = [[team.id, team.at] for team in former]
+        # Begun already by a server that ended before the split was saved.
+        begun = any(
+            intent.kind == "hand_over"
+            and intent.node_id == place_id
+            and intent.payload.get("former") == named
+            for intent in self._runs().open_intents()
+        )
+        if former and not begun:
             self._begin(
                 "hand_over",
                 place_id,
                 conversation=str(uuid4()),
                 ended="replaced",
-                former=[[team.id, team.at] for team in former],
+                former=named,
                 children=[child.model_dump(mode="json") for child in proposal.children],
                 contracts_replaced=replaced,
             )
