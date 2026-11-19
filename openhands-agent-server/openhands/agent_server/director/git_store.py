@@ -195,7 +195,8 @@ def _settle(path: str, ours: str | None, theirs: str | None) -> tuple[str | None
         The content, and whether the other side's text was left out of it.
     """
     if ours is None or theirs is None:
-        return (theirs if ours is None else ours), False
+        # What this side removed stays removed, with their text left out.
+        return ours, ours is None
     try:
         if path.startswith(f"{REPORTS_DIR}/"):
             reports = _union(_parse_reports(ours), _parse_reports(theirs))

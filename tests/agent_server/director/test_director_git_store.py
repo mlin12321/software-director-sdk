@@ -368,6 +368,21 @@ class TestMerge:
         assert merged.kept_local == []
         assert board.history("root") == [shared, their, ours]
 
+    def test_a_file_this_side_removed_stays_removed_and_is_named(
+        self, board: GitStore, theirs: GitStore, merge_supported: bool
+    ):
+        if not merge_supported:
+            pytest.skip("needs git 2.38")
+        board.write("svc/a", "spec.md", "base")
+        git(board.repo_dir, ["update-ref", theirs.ref, board.head() or ""])
+        board.commit(lambda _read: [StoreChange("svc/a/spec.md", None)], "remove")
+        theirs.write("svc/a", "spec.md", "theirs")
+
+        merged = board.merge(theirs.ref)
+
+        assert merged.kept_local == ["svc/a/spec.md"]
+        assert board.read("svc/a/spec.md") is None
+
     def test_of_a_spec_both_sides_changed_ours_is_kept_and_named(
         self, board: GitStore, theirs: GitStore, merge_supported: bool
     ):
