@@ -576,9 +576,19 @@ def answer_session_escalation(
     go on.
     """
     session = _require_session(service, session_id)
-    team = next((team for team in session.teams if team.team_id == node_id), None)
-    if team is None:
+    # A session opened at the top team has two places there: the one it was
+    # opened at and its Division Lead place.
+    places = [team for team in session.teams if team.team_id == node_id]
+    if not places:
         raise NotFound(f"Session {session_id!r} has no team {node_id}")
+    team = next(
+        (
+            place
+            for place in places
+            if any(e.id == escalation_id for e in place.escalations)
+        ),
+        places[0],
+    )
     return service.answer_escalation(team.id, escalation_id, request.answer)
 
 

@@ -809,3 +809,27 @@ async def test_a_teams_changes_are_listed_shown_and_edited_by_hand(running, repo
     assert not_ids.status_code == 400
     assert [f["path"] for f in taken.json()["files"]] == ["README.md"]
     assert taken_file.json()["after"] == "mine\n"
+
+
+async def test_an_escalation_at_a_division_lead_place_is_answered_there(running, repo):
+    client, _, service = running
+    opened = (await client.post("/api/director/org", json=org_body(repo))).json()
+    session = opened["session"]
+    # A session opened at the top team has two places there.
+    [lead] = [
+        place for place in service.store.session(session["id"]) if place.division_lead
+    ]
+    service.store.raise_escalation(
+        lead.id, "agent-failed", kind="critical_issue", title="Its IC failed"
+    )
+
+    answered = await client.post(
+        f"/api/director/org/sessions/{session['id']}/teams/root"
+        "/escalations/agent-failed/answer",
+        json={"answer": "Start it again."},
+    )
+    await service.settled()
+
+    assert answered.status_code == 200
+    now = service.store.place(lead.id)
+    assert now is not None and now.escalations == []
