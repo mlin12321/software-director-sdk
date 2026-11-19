@@ -252,6 +252,10 @@ class RunState:
         """Forget a message: it was delivered, or will never be."""
         self._run("DELETE FROM outbox WHERE seq = ?", (seq,))
 
+    def drop_held(self, conversation_id: str) -> None:
+        """Forget the messages held for a conversation that is gone."""
+        self._run("DELETE FROM outbox WHERE conversation_id = ?", (conversation_id,))
+
     def is_held(self, seq: int) -> bool:
         return self._one("SELECT 1 FROM outbox WHERE seq = ?", (seq,)) is not None
 

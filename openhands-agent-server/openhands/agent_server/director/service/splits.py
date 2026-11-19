@@ -267,6 +267,7 @@ class Splits(Watch):
                 await launcher.stop(conversation_id)
                 await launcher.delete(conversation_id)
                 run.unmark(TOLD, str(conversation_id))
+                run.drop_held(str(conversation_id))
         if "replaced" not in intent.steps:
             intent = run.step_done(intent, "replaced")
         # Done whenever a replaced team is still in the tree: the tree may
@@ -432,6 +433,7 @@ class Splits(Watch):
             for conversation_id in conversations:
                 await launcher.delete(conversation_id)
                 run.unmark(TOLD, str(conversation_id))
+                run.drop_held(str(conversation_id))
             intent = run.step_done(intent, "deleted")
         above = store.place(plan["parent"])
         parent_ic = agent_conversation(above, "ic") if above else None

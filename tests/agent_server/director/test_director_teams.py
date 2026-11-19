@@ -23,11 +23,13 @@ from openhands.agent_server.director.tools import (
     MsgTeamTool,
     ProposeTeamsTool,
     PruneTeamTool,
+    StopTeamTool,
     SubmitReviewTool,
 )
 from openhands.agent_server.director.tools.definition import (
     MsgIcAction,
     MsgTeamAction,
+    StopTeamAction,
 )
 from openhands.sdk.conversation.state import ConversationExecutionStatus
 from tests.agent_server.director.conftest import (
@@ -707,3 +709,23 @@ async def test_a_manager_that_could_not_be_started_is_started_again_by_the_answe
     told = launcher.messages_to(manager.conversation_id)
     assert any("Fixed, go on." in text for text in told)
     await service.aclose()
+
+
+async def test_what_was_held_for_a_pruned_team_does_not_pause_the_org_on_a_restart(
+    repo: Path, launcher: FakeLauncher
+):
+    first = await started(repo, launcher)
+    await split_root(first)
+    await woken(first, "root")
+    await use(first, ic(first), StopTeamTool, StopTeamAction(team=API, reason="Stuck."))
+    first.notify(ic(first, API), "A notice for the stopped team.")
+    await first.settled()
+    assert first._runs().held()
+    await use(first, manager(first), PruneTeamTool, PRUNE_API)
+    await first.settled()
+    assert first._runs().held() == []
+    await first.aclose()
+
+    second = await again(repo, launcher)
+    assert second.summary().paused is None
+    await second.aclose()

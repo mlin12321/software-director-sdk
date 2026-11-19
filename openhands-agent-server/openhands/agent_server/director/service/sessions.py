@@ -541,6 +541,7 @@ class Sessions(Splits):
             for conversation_id in conversations:
                 await launcher.delete(conversation_id)
                 run.unmark(TOLD, str(conversation_id))
+                run.drop_held(str(conversation_id))
             intent = run.step_done(intent, "deleted")
         if "removed" not in intent.steps:
             top = store.place(place_id)
