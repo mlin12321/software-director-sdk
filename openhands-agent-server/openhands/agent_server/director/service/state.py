@@ -758,6 +758,21 @@ class ServiceState:
             if not allowed or name in allowed
         ]
 
+    def profile_exists(self, name: str) -> bool:
+        """Whether the server has an agent profile of that name. Called
+        from an agent's tool, off the loop; where it cannot be asked, the
+        answer is yes and the team's start says otherwise."""
+        launcher, loop = self._launcher, self._loop
+        if launcher is None or loop is None:
+            return True
+        try:
+            if asyncio.get_running_loop() is loop:
+                return True
+        except RuntimeError:
+            pass
+        asked = asyncio.run_coroutine_threadsafe(launcher.profile_kind(name), loop)
+        return asked.result(timeout=30) is not None
+
     def default_type(self) -> str:
         """The type of a new team whose making names none."""
         return self.own_settings.default_agent_type or self.settings.default_agent_type
@@ -771,7 +786,10 @@ class ServiceState:
             own=self.own_settings,
             agent_types=[
                 AgentTypeInfo(
-                    name=name, description=kind.description, allowed=name in allowed
+                    name=name,
+                    description=kind.description,
+                    allowed=name in allowed,
+                    sas_profile=kind.sas_profile,
                 )
                 for name, kind in self.agent_types.items()
             ],

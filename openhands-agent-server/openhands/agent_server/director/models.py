@@ -977,6 +977,13 @@ class AgentTypeInfo(BaseModel):
     name: str
     description: str
     allowed: bool = Field(description="Whether a new team of the org may be of it.")
+    sas_profile: str | None = Field(
+        default=None,
+        description=(
+            "The agent profile a new team of this type runs on when its "
+            "making names none; none when the type names none."
+        ),
+    )
 
 
 class OrgSettingsState(BaseModel):

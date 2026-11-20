@@ -185,10 +185,19 @@ def _checked(
                 f"Sub-team {child.title!r} cannot be of the type "
                 f"{child.agent_type!r}. The types are: {', '.join(types)}."
             )
-        # A type may say which model its teams run on; the proposal's own
-        # choice holds over it, and the org must allow it either way.
-        if not child.agent_profile and kind.model and kind.model in allowed:
-            child = child.model_copy(update={"agent_profile": kind.model})
+        # A type may name the profile its teams run on. The proposal's own
+        # choice holds over it. It need not be among the profiles an IC
+        # may choose: whoever runs the server wrote the type.
+        if not child.agent_profile and kind.sas_profile:
+            if not service.profile_exists(kind.sas_profile):
+                raise Invalid(
+                    f"Sub-team {child.title!r} cannot be of the type "
+                    f"{kind.name!r}: that type runs on the agent profile "
+                    f"{kind.sas_profile!r}, and this server has none of that "
+                    "name. Choose another type, or raise it with "
+                    "raise_escalation."
+                )
+            child = child.model_copy(update={"agent_profile": kind.sas_profile})
         children.append(child)
     proposed = proposed._replace(children=children)
     split = normalize_split(store, place, proposed.children, proposed.keep)

@@ -136,6 +136,8 @@ Which type a team gets:
 - **The default type and the types allowed** are set for every org in `director.yaml` (`default_agent_type`, `allowed_agent_types`; empty allows all), and for one org on its settings page. An org's own are kept in its repository.
 - **They hold for new teams only.** A team that exists keeps its type.
 
+A type may also name the agent profile its teams run on, with `sas_profile: <profile name>` (a software-agent-sdk profile, as made in the settings of Canvas). It is used when the IC that proposes the team names no model for it, and it need not be among the profiles the org lets ICs choose. That is the only tie between the two: a type without it runs on whatever the team above does. The first team of an org always runs on the profile picked in the chat box.
+
 ## Limits to set before a real run
 
 All are in the settings of the org page. The two on use are off (0) until
