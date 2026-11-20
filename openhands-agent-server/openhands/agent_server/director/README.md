@@ -96,7 +96,7 @@ An agent profile is made in the settings of Canvas and made active there.
 
 ## Agent types and `director.yaml`
 
-Every team has a type, and a type is a YAML file of what its agents are told: what the team is for, what its spec, contracts and reports hold, what the director's tools mean to it, and how its work is reviewed. One is shipped (`director/types`): `software-engineer`, the default. An IC names a type for each sub-team it proposes, so one org can hold several.
+Every team has a type, and a type is a YAML file of what its agents are told: what the team is for, what its spec, contracts and reports hold, what the director's tools mean to it, and how its work is reviewed. Three are shipped (`director/types`): `software-engineer` (the default), `researcher` and `research-engineer`. An IC names a type for each sub-team it proposes, so one org can hold all three.
 
 To add one, point the server at a settings file and put the type beside it:
 
@@ -138,6 +138,21 @@ Which type a team gets:
 
 A type may also name the agent profile its teams run on, with `sas_profile: <profile name>` (a software-agent-sdk profile, as made in the settings of Canvas). It is used when the IC that proposes the team names no model for it, and it need not be among the profiles the org lets ICs choose. That is the only tie between the two: a type without it runs on whatever the team above does. The first team of an org always runs on the profile picked in the chat box.
 
+For research, an IC of type `researcher` splits by hypothesis, each direction submits after every experiment, and the IC above compares what its sub-teams submit and adds what it checked to the contracts with `review_team`, which every sub-team reads.
+
+### What has been run with the research types
+
+Small sessions on a toy data set (400 rows, four columns), two directions under one `researcher` team, on Cursor and on Claude Code:
+
+- **A whole session lands.** Split by hypothesis, a finding with its command and committed result from each direction, `Checked:` lines added to the contracts on accept, the top team's submit, the Division Lead's accept, and the merge into the checkout.
+- **A direction that waits on a long run** (minutes in one command) is told of to the IC above after the stall time and is not disturbed. The IC above is not itself reported as stalled while it waits.
+- **A server stopped in the middle of an experiment** comes back paused; after the resume the direction ran its experiment again and submitted, and nothing was reviewed twice. This needs `OH_SECRET_KEY` (see below).
+- **What it cost.** The same task on Claude Code (five agents, no review sent back) cost $7.57 in nine minutes for 2.1 million tokens. The top team submitted twice, once before and once after it wrote down what was established, so the Division Lead reviewed twice. Cursor reports no use, so a session on Cursor shows no cost and no cost limit holds it.
+
+What a type does not do, since it is text: nothing but the reviewing IC checks that held-out data was left alone or that a claim has a committed result. Directions can read each other's folders. Contracts are never shortened by the director; the IC that owns them trims them with `edit_contracts`. Only trees one or two levels deep have been run.
+
+A setting to start from: `default_agent_type: researcher`, `stall_check_minutes` longer than a usual experiment (the notice wakes the IC above, which costs a turn), `max_depth: 2`, and a session cost limit.
+
 ## Limits to set before a real run
 
 All are in the settings of the org page. The two on use are off (0) until
@@ -161,6 +176,10 @@ you set them.
 
 - **After a restart the org is paused.** Resume it on the org page, or turn
   on "resume on start" in the settings.
+- **Set `OH_SECRET_KEY` on the server if it may be restarted.** Without it
+  the server keeps no secrets between runs, and an agent that runs its own
+  tools (Claude Code, Cursor, any ACP agent) comes back without the
+  director's tools: it can work but cannot submit, review or escalate.
 - **An agent that fails** shows its reason in the team's details. The IC of
   the team above is told; where there is none, you are asked.
 - **What waits on you** is counted on the sidebar's org link and listed at
