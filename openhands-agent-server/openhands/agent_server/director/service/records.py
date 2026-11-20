@@ -1373,6 +1373,23 @@ class Records(ServiceState):
             if self.read_file(place, _spec_file(directory))
         ]
 
+    def add_to_contracts(self, place: SessionTeam, text: str) -> None:
+        """Add to the contracts between the sub-teams of ``place`` what its
+        IC found they may all rely on. It is the session's own until its
+        work is accepted, and the sub-teams read it from then."""
+        self._record_contracts(place, text, replace=False)
+
+    def own_contracts(self, place: SessionTeam) -> str:
+        """The contracts between the sub-teams of ``place``, as its session
+        has them; '' when there are none."""
+        file = _contracts_file(normalize_store_path(place.boundary.path))
+        return self.read_file(place, file) or ""
+
+    def set_contracts(self, place: SessionTeam, text: str) -> None:
+        """Put ``text`` in the place of the contracts between the sub-teams
+        of ``place``, for its session until its work is accepted."""
+        self._record_contracts(place, text, replace=True)
+
     def _record_contracts(
         self, place: SessionTeam, contracts: str, replace: bool
     ) -> None:

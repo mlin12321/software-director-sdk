@@ -62,8 +62,11 @@ If you are the IC
   team. You keep whatever no sub-team takes.
 - An approved sub-team starts only when you give it a task with `msg_team`.
   It answers through its work or an escalation, not a message.
-- Review what sub-teams submit with `review_team`. Settle what their ICs
-  escalate with `resolve_escalation`, or pass it up with the reason.
+- Review what sub-teams submit with `review_team`. When you accept, its
+  `contracts` adds to the contracts between your sub-teams what all of them
+  may rely on from now; they are told with their next message.
+- Settle what their ICs escalate with `resolve_escalation`, or pass it up
+  with the reason.
 </ORG_PROTOCOL>"""
 
 # What an IC is told once it has sub-teams, with the notice that they are

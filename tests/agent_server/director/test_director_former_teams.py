@@ -93,7 +93,9 @@ async def service(repo: Path, launcher: FakeLauncher):
     await use(service, manager(service), ApproveTeamsTool, APPROVE)
     await tasked(service)
     api_ic = ic(service, API)
-    await use(service, api_ic, WriteSpecTool, WriteSpecAction(text="# API by hand"))
+    await use(
+        service, api_ic, WriteSpecTool, WriteSpecAction(file_text="# API by hand")
+    )
     await use(service, api_ic, ReportTool, ReportAction(text="Chose SQLite."))
     await use(service, api_ic, ReportTool, ReportAction(text="Dropped the cache."))
     await use(
@@ -182,7 +184,7 @@ async def test_the_spec_of_the_team_before_stays_and_is_shown_as_old(
     ]
 
     orders_ic = ic(service, API)
-    await use(service, orders_ic, WriteSpecTool, WriteSpecAction(text="# Orders"))
+    await use(service, orders_ic, WriteSpecTool, WriteSpecAction(file_text="# Orders"))
 
     orders = node(service, API)
     assert orders.old_specs == []
@@ -193,7 +195,9 @@ async def test_the_spec_of_the_team_before_stays_and_is_shown_as_old(
 async def test_teams_that_split_or_merge_directories_are_shown_the_specs_left_there(
     service: DirectorService,
 ):
-    await use(service, ic(service, WEB), WriteSpecTool, WriteSpecAction(text="# Web"))
+    await use(
+        service, ic(service, WEB), WriteSpecTool, WriteSpecAction(file_text="# Web")
+    )
 
     # A merge: one team over both directories.
     await replace(
@@ -504,7 +508,7 @@ async def test_a_hand_over_is_a_side_conversation_of_the_ic_with_its_own_briefin
     service: DirectorService, launcher: FakeLauncher
 ):
     launcher.answers[compaction.USAGE_ID] = "SQLite, no cache."
-    await use(service, ic(service), WriteSpecTool, WriteSpecAction(text="# Shop"))
+    await use(service, ic(service), WriteSpecTool, WriteSpecAction(file_text="# Shop"))
     before = len(launcher.derived)
 
     await replace(service, ORDERS, keep=["Web"], contracts="Orders serves Web.")
@@ -546,7 +550,7 @@ async def test_a_hand_over_conversation_hands_over_and_writes_the_spec_and_no_mo
     handed = await use(
         service, side, HandOverTool, HandOverAction(team=API, notes="Keep SQLite.")
     )
-    spec = await use(service, side, WriteSpecTool, WriteSpecAction(text="# Shop"))
+    spec = await use(service, side, WriteSpecTool, WriteSpecAction(file_text="# Shop"))
     read = await use(service, side, ReadTeamContextTool, ReadTeamContextAction())
     refused = [
         await use(service, side, ReportTool, ReportAction(text="Done.")),
@@ -578,7 +582,7 @@ async def test_the_ic_is_told_what_its_hand_over_conversation_did_when_it_ends(
     # A hand-over beside the team's work does not change how the team stands.
     assert node(service, "root").status == was
     await use(service, side, HandOverTool, HandOverAction(team=API, notes="Keep it."))
-    await use(service, side, WriteSpecTool, WriteSpecAction(text="# Shop"))
+    await use(service, side, WriteSpecTool, WriteSpecAction(file_text="# Shop"))
     launcher.report(side, ConversationExecutionStatus.FINISHED)
     await service.settled()
 
