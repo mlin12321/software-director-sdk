@@ -290,23 +290,31 @@ async def test_the_top_team_rests_after_it_submits_too(
     assert node(service, "root").status == "done"
 
 
-async def test_reviews_wait_until_every_sub_team_has_submitted(
+async def test_a_review_is_asked_for_as_soon_as_its_team_submits(
     service: DirectorService, launcher: FakeLauncher, repo: Path
 ):
     await split_root(service)
 
     submitted = await api_submits(service, repo)
 
+    # The team beside it still works: its review does not wait for that.
     assert "Your turn ends here" in submitted.text
-    assert requests(service, launcher) == []
+    [first] = requests(service, launcher)
+    assert "Team 'API'" in first and "Team 'Web'" not in first
+    assert "review_team` for team services.api" in first
+    assert "Still waiting for your decision" not in first
 
+    # The reviewer ended its turn without deciding, to compare the two.
     commit(repo, "apps/web/page.tsx", "export {}\n")
     await use(service, ic(service, "apps.web"), SubmitReviewTool, DONE)
 
-    [both] = requests(service, launcher)
-    assert "Team 'API'" in both and "Team 'Web'" in both
-    assert "review_team` for team services.api" in both
-    assert "review_team` for team apps.web" in both
+    [_, second] = requests(service, launcher)
+    assert "Team 'Web'" in second.split("---")[0]
+    assert "review_team` for team apps.web" in second
+    # What it was asked before is named again, not sent again.
+    assert "Still waiting for your decision" in second
+    assert "'API'" in second.split("Still waiting for your decision")[1]
+    assert "Team 'API' (id" not in second
 
 
 async def test_a_blocked_sub_team_is_not_waited_for(
@@ -361,8 +369,8 @@ async def test_reviews_that_waited_through_a_pause_go_out_after_it(
     service: DirectorService, launcher: FakeLauncher, repo: Path
 ):
     await split_root(service)
-    await api_submits(service, repo)
     await service.pause()
+    await api_submits(service, repo)
     commit(repo, "apps/web/page.tsx", "export {}\n")
     await use(service, ic(service, "apps.web"), SubmitReviewTool, DONE)
     assert requests(service, launcher) == []
@@ -370,8 +378,8 @@ async def test_reviews_that_waited_through_a_pause_go_out_after_it(
     await service.resume()
     await service.settled()
 
-    [both] = requests(service, launcher)
-    assert "Team 'API'" in both and "Team 'Web'" in both
+    asked = "\n".join(requests(service, launcher))
+    assert asked.count("Team 'API' (id") == 1 and asked.count("Team 'Web' (id") == 1
 
 
 async def test_only_the_ic_directly_above_reviews_and_only_work_that_waits(
@@ -829,3 +837,55 @@ async def test_work_accepted_twice_before_it_is_carried_out_goes_up_once(
         if "changed nothing itself, so its work went up" in text
     ]
     assert len(went_up) == 1
+
+
+async def test_work_goes_up_only_when_every_sub_team_below_is_finished(
+    service: DirectorService, launcher: FakeLauncher, repo: Path
+):
+    await split_root(service)
+    web = ic(service, "apps.web")
+    assert web is not None
+    launcher.report(web, ConversationExecutionStatus.RUNNING)
+    await service.settled()
+
+    # One sub-team still works.
+    working = await use(service, ic(service), SubmitReviewTool, DONE)
+    assert working.is_error and "'Web' is working" in working.text
+
+    # One waits for this IC's review.
+    launcher.report(web, ConversationExecutionStatus.FINISHED)
+    await api_submits(service, repo)
+    waiting = await use(service, ic(service), SubmitReviewTool, DONE)
+    assert waiting.is_error and "'API' waits for your review" in waiting.text
+    assert "review_team" in waiting.text and "prune_team" in waiting.text
+
+    # One was sent back and has not submitted again.
+    await use(service, ic(service), ReviewTeamTool, reject())
+    launcher.report(
+        str(ic(service, "services.api")), ConversationExecutionStatus.FINISHED
+    )
+    await service.settled()
+    sent_back = await use(service, ic(service), SubmitReviewTool, DONE)
+    assert sent_back.is_error and "was sent back" in sent_back.text
+
+    # Accepted: nothing below is unfinished, and the work goes up.
+    commit(repo, "services/api/app.py", "order_id = '2'\n")
+    await use(service, ic(service, "services.api"), SubmitReviewTool, DONE)
+    await use(service, ic(service), ReviewTeamTool, accept())
+    done = await use(service, ic(service), SubmitReviewTool, DONE)
+    assert not done.is_error, done.text
+
+
+async def test_a_blocked_sub_team_does_not_keep_work_from_going_up(
+    service: DirectorService, launcher: FakeLauncher, repo: Path
+):
+    await split_root(service)
+    web = ic(service, "apps.web")
+    assert web is not None
+    launcher.report(web, ConversationExecutionStatus.ERROR)
+    await service.settled()
+    assert node(service, "apps.web").status == "blocked"
+
+    done = await use(service, ic(service), SubmitReviewTool, DONE)
+
+    assert not done.is_error, done.text

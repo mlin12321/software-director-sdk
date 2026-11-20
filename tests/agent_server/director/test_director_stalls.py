@@ -181,20 +181,21 @@ async def test_a_team_that_submitted_is_not_stalled_and_one_sent_back_can_be(
     assert "You sent its work back (review round 1)" in told
 
 
-async def test_a_stalled_team_no_longer_holds_back_the_reviews_beside_it(
+async def test_a_review_does_not_wait_for_a_team_beside_it_that_stalls(
     service: DirectorService, launcher: FakeLauncher, clock: Clock, repo: Path
 ):
     await looked(service)
     await api_submits(service, repo)
-    assert requests(service, launcher) == []
+    [request] = requests(service, launcher)
+    assert "Team 'API'" in request
 
     clock.passes(120)
     await looked(service)
 
     [told] = notices(service, launcher)
     assert "Team 'Web'" in told
-    [request] = requests(service, launcher)
-    assert "Team 'API'" in request
+    # The stall is told of; the review is not asked for again.
+    assert requests(service, launcher) == [request]
 
 
 async def test_a_team_in_a_turn_is_not_asked_and_the_check_can_be_turned_off(

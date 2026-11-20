@@ -467,11 +467,13 @@ async def test_a_review_request_cut_off_by_a_crash_reaches_the_reviewer_once(
 
     review = node(second, "services.api").review
     assert review is not None and review.state == "pending"
-    [asked] = [
+    asked = "\n".join(
         text for text in launcher.messages_to(ic(second)) if "Review request" in text
-    ]
-    # Both teams have submitted, so the reviewer is woken once for the two.
-    assert "Team 'Web'" in asked and "Team 'API'" in asked
+    )
+    # Each went when its team submitted, and neither twice: the one the
+    # crash cut off goes after it, and names the other as still to decide.
+    assert asked.count("Team 'Web' (id") == 1 and asked.count("Team 'API' (id") == 1
+    assert "Still waiting for your decision" in asked
     await second.aclose()
 
 

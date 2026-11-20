@@ -316,16 +316,24 @@ async def test_reviews_and_escalations_below_come_with_what_wakes_the_ic(
         RaiseEscalationAction(category="design_decision", title="Which router?"),
     )
 
-    # The escalation and the review request come in either order; the
-    # first of the two carries what changed.
-    told = next(
+    # The review request went when the work was submitted and the
+    # escalation after it: each carries what had changed by then.
+    updates = [
         told
         for told in map(update_of, launcher.messages_to(ic(service))[-2:])
         if told is not None
-    )
-    [to_settle] = told["escalations_for_you_to_settle"]["added"]
+    ]
+    [[to_settle]] = [
+        told["escalations_for_you_to_settle"]["added"]
+        for told in updates
+        if "escalations_for_you_to_settle" in told
+    ]
     assert to_settle["title"] == "Which router?"
-    by_team = {team["team_id"]: team for team in told["sub_teams"]["changed"]}
+    by_team = {
+        team["team_id"]: team
+        for told in updates
+        for team in told.get("sub_teams", {}).get("changed", [])
+    }
     assert by_team[node(service, "apps.web").id]["status"] == "blocked"
     assert by_team[node(service, "services.api").id]["review"] == "pending"
     # The Web IC raised it itself and is not told so.

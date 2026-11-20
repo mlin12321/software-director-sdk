@@ -68,7 +68,7 @@ class Watch(Reviews):
         history = "".join(f"\nPassed up by {entry}" for entry in passed_up)
         if escalation.raised_by == "ic":
             # It is woken now anyway, so it gets what waits for its review too.
-            self.release_reviews(holder_id, now=True)
+            self.release_reviews(holder_id)
             self.count_ic_escalation(holder_id, through.id)
         text = (
             f"The {ROLE_NAMES[escalation.raised_by]} of team {raiser.title!r} "
@@ -342,7 +342,7 @@ class Watch(Reviews):
             account = await self._ask_agent(ic, STALL_QUESTION)
         self.record_event(above.id, "stalled", team, f"{minutes} min")
         # Its reviewer is woken now anyway, and no longer waits for it.
-        self._release_reviews(above.id, now=True)
+        self._release_reviews(above.id)
         said = (
             "Its IC is in a turn right now, so it was not asked what it is doing."
             if in_a_turn
