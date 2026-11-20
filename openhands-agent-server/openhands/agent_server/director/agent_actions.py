@@ -518,7 +518,9 @@ def submit_review(service: DirectorService, caller: Caller, summary: str) -> str
         if team.agents
         and team.status != "blocked"
         and (
-            team.status == "working"
+            # A team whose work was accepted is finished, also in the turn
+            # that tells it so: a new task takes its review away.
+            (team.review is None and team.status == "working")
             or (team.review is not None and team.review.state != "accepted")
         )
     ]
@@ -529,9 +531,9 @@ def submit_review(service: DirectorService, caller: Caller, summary: str) -> str
                 f"{team.title!r} "
                 + (
                     "is working"
-                    if team.status == "working"
+                    if team.review is None
                     else "waits for your review"
-                    if team.review is not None and team.review.state == "pending"
+                    if team.review.state == "pending"
                     else "was sent back and has not submitted again"
                 )
                 for team in unfinished

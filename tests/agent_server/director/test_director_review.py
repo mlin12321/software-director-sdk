@@ -872,6 +872,11 @@ async def test_work_goes_up_only_when_every_sub_team_below_is_finished(
     commit(repo, "services/api/app.py", "order_id = '2'\n")
     await use(service, ic(service, "services.api"), SubmitReviewTool, DONE)
     await use(service, ic(service), ReviewTeamTool, accept())
+    # The accepted team is in the turn that tells it so: it is finished.
+    launcher.report(
+        str(ic(service, "services.api")), ConversationExecutionStatus.RUNNING
+    )
+    await service.settled()
     done = await use(service, ic(service), SubmitReviewTool, DONE)
     assert not done.is_error, done.text
 
