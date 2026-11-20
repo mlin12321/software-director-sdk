@@ -14,6 +14,7 @@ from uuid import UUID, uuid4
 from openhands.agent_server.director.boundary import owns
 from openhands.agent_server.director.git import uncommitted
 from openhands.agent_server.director.git_store import team_key
+from openhands.agent_server.director.memory_edit import edited
 from openhands.agent_server.director.models import (
     ROLE_NAMES,
     AgentRole,
@@ -26,7 +27,7 @@ from openhands.agent_server.director.models import (
     SplitProposal,
     TeamChoice,
 )
-from openhands.agent_server.director.org_store import utc_now
+from openhands.agent_server.director.org_store import is_division_lead, utc_now
 from openhands.agent_server.director.service import (
     DirectorService,
     agent_conversation,
@@ -103,9 +104,32 @@ def node_context(service: DirectorService, caller: Caller) -> str:
     return json.dumps(context, indent=2)
 
 
-def write_spec(service: DirectorService, caller: Caller, content: str) -> str:
-    """Replace the spec of the caller's boundary."""
+def write_spec(
+    service: DirectorService,
+    caller: Caller,
+    content: str,
+    old_str: str = "",
+    new_str: str = "",
+) -> str:
+    """Replace the spec of the caller's boundary, or change one place in it.
+
+    Args:
+        old_str: The text of the spec to replace with ``new_str``, there
+            exactly once. With it, ``content`` is left out.
+    """
     _only(caller, "ic", "write its spec", aside=True)
+    if old_str.strip() or new_str.strip():
+        if content.strip():
+            raise Invalid(
+                "Give the whole spec in `text`, or one change in `old_str` "
+                "and `new_str`, not both"
+            )
+        own = next(
+            (spec for spec in service.specs_of(caller.node) if not spec.old), None
+        )
+        if own is None:
+            raise Invalid("Your team has no spec to change yet: give it in `text`")
+        content = edited(own.spec, old_str, new_str, "the spec")
     if not content.strip():
         raise Invalid("A spec cannot be empty")
     path = caller.node.boundary.path
@@ -526,8 +550,14 @@ def review_team(
     needed_above: str,
     reconciled: str = "",
     specs: list[SpecChoice] | None = None,
+    contracts: str = "",
 ) -> str:
-    """Accept the work a team directly below submitted, or send it back."""
+    """Accept the work a team directly below submitted, or send it back.
+
+    Args:
+        contracts: What the accepted work establishes for every team below
+            the caller's, added to the contracts between them.
+    """
     _only(caller, "ic", "review the work of a team")
     team = _team_named(service, caller, place_id)
     if team is None or team.parent_id != caller.node.id:
@@ -535,6 +565,17 @@ def review_team(
     place_id = team.id
     if team.review is None or team.review.state != "pending":
         raise Conflict(f"Team {place_id} has no work waiting for your review")
+    contracts = contracts.strip()
+    if contracts and decision == "reject":
+        raise Invalid(
+            "`contracts` records what accepted work establishes; leave it "
+            "empty when you reject"
+        )
+    if contracts and is_division_lead(caller.node):
+        raise Invalid(
+            "Contracts are not yours as the Division Lead IC: the Division "
+            "Lead Manager settles them"
+        )
     if decision == "reject":
         if not findings:
             raise Invalid("Say what must change before you can accept the work")
@@ -543,9 +584,17 @@ def review_team(
     chosen = service.spec_choices(place_id, specs or [])
     service.check_accept(place_id, reconciled.strip())
     service.accept_review(place_id, needed_above.strip(), reconciled.strip(), chosen)
+    if contracts:
+        service.add_to_contracts(caller.node, contracts)
     return (
         f"Accepting the work of {team.title!r}. You are told if it cannot be "
         "brought into your checkout."
+        + (
+            " What you wrote was added to the contracts between your "
+            "sub-teams; each is told with its next message."
+            if contracts
+            else ""
+        )
     )
 
 
@@ -572,6 +621,33 @@ def settle_teams(
         ],
         note.strip(),
         contracts,
+    )
+
+
+def edit_contracts(
+    service: DirectorService, caller: Caller, old_str: str, new_str: str
+) -> str:
+    """Change one place in the contracts between the caller's sub-teams, or
+    add to them."""
+    _only(caller, "ic", "change the contracts between its sub-teams")
+    node = caller.node
+    if is_division_lead(node):
+        raise Invalid(
+            "Contracts are not yours as the Division Lead IC: the Division "
+            "Lead Manager settles them"
+        )
+    if not service.store.below(node.id):
+        raise Invalid(
+            "Your team has no sub-teams, so it sets no contracts. The ones "
+            "you keep are the team's above; raise what must change in them "
+            "with raise_escalation."
+        )
+    now = service.own_contracts(node)
+    service.set_contracts(node, edited(now, old_str, new_str, "the contracts"))
+    return (
+        "The contracts between your sub-teams are changed. Each sub-team is "
+        "told with its next message; write to one with msg_team if it must "
+        "know at once."
     )
 
 

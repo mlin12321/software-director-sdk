@@ -128,6 +128,7 @@ flowchart TB
 | IC to the IC above | `submit_review`, `raise_escalation` | Never a direct message |
 | Any agent, up its own line | `raise_escalation`, `resolve_escalation` | IC to IC, Manager to Manager, one place at a time, ending at the human |
 | IC or Manager to team memory | `report`, `write_spec`, `hand_over` | Decisions, specs, what a removed team left |
+| IC to its sub-teams' contracts | `review_team` with `contracts`, `edit_contracts` | What accepted work establishes for every team below; a correction |
 | Director to an agent | Messages, with context updates attached | Notices. A change of context never wakes anyone by itself |
 | Director to a model | A side question, or a copy of an agent's conversation | Titles and routing; write-ups and stall questions |
 

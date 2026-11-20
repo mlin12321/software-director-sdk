@@ -153,6 +153,7 @@ TOOLS_OF: dict[AgentRole, tuple[str, ...]] = {
     "ic": (
         *_TOOLS_OF_BOTH,
         "write_spec",
+        "edit_contracts",
         "msg_manager",
         "propose_teams",
         "msg_team",
