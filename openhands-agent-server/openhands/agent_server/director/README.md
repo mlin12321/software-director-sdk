@@ -96,7 +96,7 @@ An agent profile is made in the settings of Canvas and made active there.
 
 ## Agent types and `director.yaml`
 
-Every team has a type, and a type is a YAML file of what its agents are told: what the team is for, what its spec, contracts and reports hold, what the director's tools mean to it, and how its work is reviewed. One is shipped (`director/types`): `software-engineer`, the default. An IC names a type for each sub-team it proposes, so one org can hold several.
+Every team has a type, and a type is a YAML file of what its agents are told: what the team is for, what its spec, contracts and reports hold, what the director's tools mean to it, and how its work is reviewed. Three are shipped (`director/types`): `software-engineer` (the default), `researcher` and `research-engineer`. An IC names a type for each sub-team it proposes, so one org can hold all three.
 
 To add one, point the server at a settings file and put the type beside it:
 
@@ -137,6 +137,8 @@ Which type a team gets:
 - **They hold for new teams only.** A team that exists keeps its type.
 
 A type may also name the agent profile its teams run on, with `sas_profile: <profile name>` (a software-agent-sdk profile, as made in the settings of Canvas). It is used when the IC that proposes the team names no model for it, and it need not be among the profiles the org lets ICs choose. That is the only tie between the two: a type without it runs on whatever the team above does. The first team of an org always runs on the profile picked in the chat box.
+
+For research, an IC of type `researcher` splits by hypothesis, each direction submits after every experiment, and the IC above compares what its sub-teams submit and adds what it checked to the contracts with `review_team`, which every sub-team reads.
 
 ## Limits to set before a real run
 
