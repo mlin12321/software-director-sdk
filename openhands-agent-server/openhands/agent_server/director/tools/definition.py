@@ -3,7 +3,7 @@
 from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING, ClassVar, Literal, Self
 
-from pydantic import Field
+from pydantic import AliasChoices, Field
 
 from openhands.agent_server.director import agent_actions
 from openhands.agent_server.director.agent_actions import Caller
@@ -32,42 +32,54 @@ class ReadTeamContextAction(Action):
     """Read who you are in the org and what concerns your team."""
 
 
-class WriteSpecAction(Action):
-    """Replace the spec of your team's folder, or change one place in it."""
+_OLD_STR = (
+    "For `str_replace`: the text now there, exactly as it stands and there only once."
+)
+_NEW_STR = (
+    "For `str_replace`: what `old_str` is to read, empty to remove it. For "
+    "`insert`: the text to insert."
+)
+_INSERT_LINE = (
+    "For `insert`: the line `new_str` goes after; 0 is the top. Left out: at the end."
+)
 
-    text: str = Field(
-        default="",
+
+class WriteSpecAction(Action):
+    """Write the spec of your team's folder, or change one place in it.
+
+    The commands and arguments of the file editor.
+    """
+
+    command: Literal["create", "str_replace", "insert"] = Field(
+        default="create",
         description=(
-            "The whole spec, in Markdown. Leave empty to change one place "
-            "with `old_str` and `new_str`."
+            "`create`: `file_text` is the whole spec. `str_replace`: one "
+            "place changes. `insert`: text is added after a line."
         ),
     )
-    old_str: str = Field(
+    file_text: str = Field(
         default="",
-        description=(
-            "To change one place: the text now in the spec, exactly as it "
-            "stands and there only once. Empty with `new_str`: add it at "
-            "the end."
-        ),
+        validation_alias=AliasChoices("file_text", "text"),
+        description="For `create`: the whole spec, in Markdown.",
     )
-    new_str: str = Field(
-        default="", description="What `old_str` is to read; empty to remove it."
-    )
+    old_str: str = Field(default="", description=_OLD_STR)
+    new_str: str = Field(default="", description=_NEW_STR)
+    insert_line: int | None = Field(default=None, ge=0, description=_INSERT_LINE)
 
 
 class EditContractsAction(Action):
-    """Change one place in the contracts between your sub-teams."""
+    """Change one place in the contracts between your sub-teams, or add to
+    them.
 
-    old_str: str = Field(
-        default="",
-        description=(
-            "The text now in the contracts, exactly as it stands and there "
-            "only once. Empty: `new_str` is added at the end."
-        ),
+    The commands and arguments of the file editor, without `create`.
+    """
+
+    command: Literal["str_replace", "insert"] = Field(
+        description="`str_replace`: one place changes. `insert`: text is added."
     )
-    new_str: str = Field(
-        default="", description="What `old_str` is to read; empty to remove it."
-    )
+    old_str: str = Field(default="", description=_OLD_STR)
+    new_str: str = Field(default="", description=_NEW_STR)
+    insert_line: int | None = Field(default=None, ge=0, description=_INSERT_LINE)
 
 
 class MsgManagerAction(Action):
@@ -352,8 +364,9 @@ class ReadTeamContextTool(_DirectorTool[ReadTeamContextAction]):
 class WriteSpecTool(_DirectorTool[WriteSpecAction]):
     summary = (
         "IC only. Write the spec of your folder, how your team works inside "
-        "it: the whole of it in `text`, or one change with `old_str` and "
-        "`new_str`, as your file editor's str_replace makes it. It is kept "
+        "it, with the commands of your file editor: `create` with the whole "
+        "of it in `file_text`, `str_replace` to change one place, `insert` "
+        "to add text after a line. It is kept "
         "outside the working tree and is your team's "
         "own; sub-teams see only the contracts of the split that made them. "
         "What teams promise each other goes in contracts, not here."
@@ -366,19 +379,24 @@ class WriteSpecTool(_DirectorTool[WriteSpecAction]):
     @classmethod
     def act(cls):
         return lambda service, caller, action: agent_actions.write_spec(
-            service, caller, action.text, action.old_str, action.new_str
+            service,
+            caller,
+            action.file_text,
+            command=action.command,
+            old_str=action.old_str,
+            new_str=action.new_str,
+            insert_line=action.insert_line,
         )
 
 
 class EditContractsTool(_DirectorTool[EditContractsAction]):
     summary = (
         "IC only, with sub-teams. Change the contracts between your "
-        "sub-teams in one place: `old_str` as it stands now, there only "
-        "once, and `new_str` in its place, as your file editor's "
-        "str_replace makes it; with no `old_str`, `new_str` is added at the "
-        "end. The contracts are kept outside the working tree. Every "
-        "sub-team reads them and is told of the change with its next "
-        "message."
+        "sub-teams with the commands of your file editor: `str_replace` to "
+        "change one place, `insert` to add text after a line, or at the end "
+        "with no `insert_line`. The contracts are kept outside the working "
+        "tree. Every sub-team reads them and is told of the change with its "
+        "next message."
     )
 
     @classmethod
@@ -388,7 +406,12 @@ class EditContractsTool(_DirectorTool[EditContractsAction]):
     @classmethod
     def act(cls):
         return lambda service, caller, action: agent_actions.edit_contracts(
-            service, caller, action.old_str, action.new_str
+            service,
+            caller,
+            action.command,
+            old_str=action.old_str,
+            new_str=action.new_str,
+            insert_line=action.insert_line,
         )
 
 

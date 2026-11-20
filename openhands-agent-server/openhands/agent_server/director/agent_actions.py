@@ -14,7 +14,7 @@ from uuid import UUID, uuid4
 from openhands.agent_server.director.boundary import owns
 from openhands.agent_server.director.git import uncommitted
 from openhands.agent_server.director.git_store import team_key
-from openhands.agent_server.director.memory_edit import edited
+from openhands.agent_server.director.memory_edit import EditCommand, edited
 from openhands.agent_server.director.models import (
     ROLE_NAMES,
     AgentRole,
@@ -108,28 +108,43 @@ def write_spec(
     service: DirectorService,
     caller: Caller,
     content: str,
+    *,
+    command: Literal["create", "str_replace", "insert"] = "create",
     old_str: str = "",
     new_str: str = "",
+    insert_line: int | None = None,
 ) -> str:
-    """Replace the spec of the caller's boundary, or change one place in it.
+    """Write the spec of the caller's boundary, or change one place in it,
+    as the file editor's command of that name does.
 
     Args:
-        old_str: The text of the spec to replace with ``new_str``, there
-            exactly once. With it, ``content`` is left out.
+        content: The whole spec, for ``create``.
     """
     _only(caller, "ic", "write its spec", aside=True)
-    if old_str.strip() or new_str.strip():
+    if command != "create":
         if content.strip():
             raise Invalid(
-                "Give the whole spec in `text`, or one change in `old_str` "
-                "and `new_str`, not both"
+                f"`file_text` is the whole spec and goes with `create`; "
+                f"`{command}` takes `old_str`, `new_str` and `insert_line`"
             )
         own = next(
             (spec for spec in service.specs_of(caller.node) if not spec.old), None
         )
         if own is None:
-            raise Invalid("Your team has no spec to change yet: give it in `text`")
-        content = edited(own.spec, old_str, new_str, "the spec")
+            raise Invalid("Your team has no spec to change yet: write it with `create`")
+        content = edited(
+            own.spec,
+            command,
+            old_str=old_str,
+            new_str=new_str,
+            insert_line=insert_line,
+            name="the spec",
+        )
+    elif old_str or new_str or insert_line is not None:
+        raise Invalid(
+            "`create` takes the whole spec in `file_text`; to change one "
+            "place use `str_replace` or `insert`"
+        )
     if not content.strip():
         raise Invalid("A spec cannot be empty")
     path = caller.node.boundary.path
@@ -625,10 +640,16 @@ def settle_teams(
 
 
 def edit_contracts(
-    service: DirectorService, caller: Caller, old_str: str, new_str: str
+    service: DirectorService,
+    caller: Caller,
+    command: EditCommand,
+    *,
+    old_str: str = "",
+    new_str: str = "",
+    insert_line: int | None = None,
 ) -> str:
     """Change one place in the contracts between the caller's sub-teams, or
-    add to them."""
+    add to them, as the file editor's command of that name does."""
     _only(caller, "ic", "change the contracts between its sub-teams")
     node = caller.node
     if is_division_lead(node):
@@ -643,7 +664,17 @@ def edit_contracts(
             "with raise_escalation."
         )
     now = service.own_contracts(node)
-    service.set_contracts(node, edited(now, old_str, new_str, "the contracts"))
+    service.set_contracts(
+        node,
+        edited(
+            now,
+            command,
+            old_str=old_str,
+            new_str=new_str,
+            insert_line=insert_line,
+            name="the contracts",
+        ),
+    )
     return (
         "The contracts between your sub-teams are changed. Each sub-team is "
         "told with its next message; write to one with msg_team if it must "

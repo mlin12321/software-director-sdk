@@ -101,31 +101,64 @@ async def test_the_spec_is_changed_in_one_place_as_a_file_editor_changes_a_file(
         service,
         ic(service),
         WriteSpecTool,
-        WriteSpecAction(old_str="Baseline: 0.98", new_str="Baseline: 0.97"),
+        WriteSpecAction(
+            command="str_replace", old_str="Baseline: 0.98", new_str="Baseline: 0.97"
+        ),
     )
     assert not changed.is_error
     [spec] = service.specs_of(root)
     assert spec.spec == "# Lab\n\nBaseline: 0.97\nSeeds: 3\n"
 
     twice = await use(
-        service, ic(service), WriteSpecTool, WriteSpecAction(old_str=": ", new_str="=")
+        service,
+        ic(service),
+        WriteSpecTool,
+        WriteSpecAction(command="str_replace", old_str=": ", new_str="="),
     )
     assert twice.is_error and "Multiple occurrences" in twice.text
     missing = await use(
         service,
         ic(service),
         WriteSpecTool,
-        WriteSpecAction(old_str="Epochs: 9", new_str="Epochs: 10"),
+        WriteSpecAction(
+            command="str_replace", old_str="Epochs: 9", new_str="Epochs: 10"
+        ),
     )
     assert missing.is_error and "did not appear verbatim in the spec" in missing.text
     both = await use(
         service,
         ic(service),
         WriteSpecTool,
-        WriteSpecAction(text="# New", old_str="Seeds: 3", new_str="Seeds: 5"),
+        WriteSpecAction(
+            command="str_replace", text="# New", old_str="Seeds: 3", new_str="Seeds: 5"
+        ),
     )
     assert both.is_error
+    whole = await use(
+        service,
+        ic(service),
+        WriteSpecTool,
+        WriteSpecAction(command="create", old_str="Seeds: 3", new_str="Seeds: 5"),
+    )
+    assert whole.is_error
     assert service.specs_of(root)[0].spec == spec.spec
+
+    # As the editor inserts: after a line, and at the end with none named.
+    await use(
+        service,
+        ic(service),
+        WriteSpecTool,
+        WriteSpecAction(command="insert", insert_line=1, new_str="Owner: Lab"),
+    )
+    await use(
+        service,
+        ic(service),
+        WriteSpecTool,
+        WriteSpecAction(command="insert", new_str="Epochs: 9"),
+    )
+    assert service.specs_of(root)[0].spec == (
+        "# Lab\nOwner: Lab\n\nBaseline: 0.97\nSeeds: 3\n\nEpochs: 9\n"
+    )
 
 
 async def test_a_team_without_a_spec_has_nothing_to_change_in_one_place(
@@ -135,7 +168,7 @@ async def test_a_team_without_a_spec_has_nothing_to_change_in_one_place(
         service,
         ic(service),
         WriteSpecTool,
-        WriteSpecAction(old_str="Baseline", new_str="Base"),
+        WriteSpecAction(command="str_replace", old_str="Baseline", new_str="Base"),
     )
 
     assert answer.is_error and "no spec to change yet" in answer.text
@@ -151,13 +184,17 @@ async def test_the_contracts_are_changed_by_the_ic_whose_sub_teams_keep_them(
         service,
         ic(service),
         EditContractsTool,
-        EditContractsAction(old_str="to `out/`", new_str="to `results/`"),
+        EditContractsAction(
+            command="str_replace", old_str="to `out/`", new_str="to `results/`"
+        ),
     )
     await use(
         service,
         ic(service),
         EditContractsTool,
-        EditContractsAction(new_str="Unchecked: 4k warmup diverges (Tables)."),
+        EditContractsAction(
+            command="insert", new_str="Unchecked: 4k warmup diverges (Tables)."
+        ),
     )
 
     assert service.own_contracts(root) == (
@@ -170,7 +207,7 @@ async def test_the_contracts_are_changed_by_the_ic_whose_sub_teams_keep_them(
         service,
         ic(service, "harness"),
         EditContractsTool,
-        EditContractsAction(new_str="Mine now."),
+        EditContractsAction(command="insert", new_str="Mine now."),
     )
     assert leaf.is_error and "sets no contracts" in leaf.text
     assert division_lead_ic(service) is None
