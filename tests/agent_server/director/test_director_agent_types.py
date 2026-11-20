@@ -259,7 +259,8 @@ async def test_the_top_team_is_of_the_type_the_request_or_the_settings_name(
     service = await an_org(repo, launcher, config)
     try:
         assert node(service, "root").agent_type == "analyst"
-        assert service.store.team("root").agent_type == "analyst"
+        kept = service.store.team("root")
+        assert kept is not None and kept.agent_type == "analyst"
     finally:
         await service.aclose()
 

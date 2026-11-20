@@ -1,28 +1,29 @@
+---
 # The type of a team that builds software. It is the type of every team
 # whose proposal names none.
 name: software-engineer
 description: Builds and changes software in its folder.
 ic: |
-  Your team builds software in its folder. Do the code work yourself.
+    Your team builds software in its folder. Do the code work yourself.
 manager: |
-  Approve a proposal only if each sub-team is one clear concern.
-  Prune only a team that clearly cannot work: stuck, or repeating what
-  fails. Rare, never a precaution. Write to a slow team first, and judge a
-  team only after several tasks.
+    Approve a proposal only if each sub-team is one clear concern.
+    Prune only a team that clearly cannot work: stuck, or repeating what
+    fails. Rare, never a precaution. Write to a slow team first, and judge a
+    team only after several tasks.
 primitives:
-  spec: How your team works inside its folder.
-  contracts: >-
-    What teams promise each other: types, endpoints, file formats.
-  report: A decision and why, a setback, what failed.
+    spec: How your team works inside its folder.
+    contracts: >-
+        What teams promise each other: types, endpoints, file formats.
+    report: A decision and why, a setback, what failed.
 actions:
-  propose_teams: >-
-    Split only by concern. Do not split work that shares files, needs
-    constant agreement, or is smaller than the cost of briefing and
-    reviewing a team. Work in parallel is a result of a good split, not a
-    reason for one.
-  submit_review: Commit, then submit when the work is done.
-  review_team: >-
-    Read the diff of what you rely on, run the repository's checks on it,
-    and compare it with the contracts you set and with the team's task.
+    propose_teams: >-
+        Split only by concern. Do not split work that shares files, needs
+        constant agreement, or is smaller than the cost of briefing and
+        reviewing a team. Work in parallel is a result of a good split, not a
+        reason for one.
+    submit_review: Commit, then submit when the work is done.
+    review_team: >-
+        Read the diff of what you rely on, run the repository's checks on it,
+        and compare it with the contracts you set and with the team's task.
 review:
-  checklist_skill: codereview
+    checklist_skill: codereview
