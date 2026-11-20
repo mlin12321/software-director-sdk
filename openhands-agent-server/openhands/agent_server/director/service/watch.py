@@ -305,8 +305,8 @@ class Watch(Reviews):
         of each team it has not turned to or been told of for the time
         between two check-ins. A team is never told of twice at once: being
         told that it shows no progress is a check-in too."""
-        limit = self.settings.stall_check_minutes
-        check_in = self.settings.check_in_minutes
+        limit = self.settings.soft_check_in_minutes
+        check_in = self.settings.hard_check_in_minutes
         store = self._store
         if (not limit and not check_in) or store is None or self._paused is not None:
             return

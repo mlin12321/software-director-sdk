@@ -295,7 +295,7 @@ class Config(BaseModel):
         default=None,
         description=(
             "The org's `director.yaml`: the director's settings as a person "
-            "writes them, such as `stall_check_minutes: 30`. The org's own "
+            "writes them, such as `soft_check_in_minutes: 30`. The org's own "
             "agent types are the YAML files in the folder `types` beside it. "
             "What is changed later through the settings route holds over "
             "the file."

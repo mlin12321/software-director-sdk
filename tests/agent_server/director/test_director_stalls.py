@@ -8,7 +8,11 @@ from uuid import UUID
 
 import pytest
 
-from openhands.agent_server.director.models import DirectorSettingsUpdate, SplitChild
+from openhands.agent_server.director.models import (
+    DirectorSettings,
+    DirectorSettingsUpdate,
+    SplitChild,
+)
 from openhands.agent_server.director.service import DirectorService
 from openhands.agent_server.director.tools import (
     ApproveTeamsTool,
@@ -233,7 +237,7 @@ async def test_a_team_in_a_turn_is_not_asked_and_the_check_can_be_turned_off(
         asked for asked, _ in launcher.agents_asked
     ]
 
-    service.update_settings(DirectorSettingsUpdate(stall_check_minutes=0))
+    service.update_settings(DirectorSettingsUpdate(soft_check_in_minutes=0))
     clock.passes(1000)
     await looked(service)
     assert len(notices(service, launcher)) == 2
@@ -612,7 +616,7 @@ async def test_the_check_in_time_starts_again_when_the_ic_above_writes_to_the_te
 async def test_a_check_in_is_never_sooner_than_the_time_without_progress_allowed(
     service: DirectorService, launcher: FakeLauncher, clock: Clock, repo: Path
 ):
-    service.update_settings(DirectorSettingsUpdate(check_in_minutes=60))
+    service.update_settings(DirectorSettingsUpdate(hard_check_in_minutes=60))
     await looked(service)
     await working_for(service, clock, repo, 119)
     assert check_ins(service, launcher, "API") == []
@@ -623,11 +627,11 @@ async def test_a_check_in_is_never_sooner_than_the_time_without_progress_allowed
 
     # Turned off, nobody is checked in on; without the other check it
     # still runs by itself.
-    service.update_settings(DirectorSettingsUpdate(check_in_minutes=0))
+    service.update_settings(DirectorSettingsUpdate(hard_check_in_minutes=0))
     await working_for(service, clock, repo, 400)
     assert len(check_ins(service, launcher, "API")) == 1
     service.update_settings(
-        DirectorSettingsUpdate(check_in_minutes=60, stall_check_minutes=0)
+        DirectorSettingsUpdate(hard_check_in_minutes=60, soft_check_in_minutes=0)
     )
     await working_for(service, clock, repo, 60)
     assert len(check_ins(service, launcher, "API")) == 2
@@ -636,7 +640,7 @@ async def test_a_check_in_is_never_sooner_than_the_time_without_progress_allowed
 async def test_teams_checked_in_on_at_once_are_told_of_in_one_message(
     service: DirectorService, launcher: FakeLauncher, clock: Clock, repo: Path
 ):
-    service.update_settings(DirectorSettingsUpdate(stall_check_minutes=0))
+    service.update_settings(DirectorSettingsUpdate(soft_check_in_minutes=0))
     await looked(service)
     before = len(launcher.messages_to(ic(service)))
     clock.passes(360)
@@ -644,3 +648,15 @@ async def test_teams_checked_in_on_at_once_are_told_of_in_one_message(
 
     [told] = launcher.messages_to(ic(service))[before:]
     assert "Check-in: team 'API'" in told and "Check-in: team 'Web'" in told
+
+
+def test_the_names_the_two_check_ins_had_before_are_still_read():
+    earlier = DirectorSettings.model_validate(
+        {"stall_check_minutes": 30, "check_in_minutes": 90}
+    )
+    assert (earlier.soft_check_in_minutes, earlier.hard_check_in_minutes) == (30, 90)
+    # Where both are there, the name of now is the one that counts.
+    both = DirectorSettings.model_validate(
+        {"stall_check_minutes": 30, "soft_check_in_minutes": 45}
+    )
+    assert both.soft_check_in_minutes == 45

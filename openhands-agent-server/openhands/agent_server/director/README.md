@@ -108,7 +108,7 @@ OH_DIRECTOR_CONFIG_PATH=/path/to/org/director.yaml
 
 ```yaml
 # director.yaml: any of the director's settings
-stall_check_minutes: 30
+soft_check_in_minutes: 30
 max_depth: 2
 ```
 
@@ -151,7 +151,7 @@ Small sessions on a toy data set (400 rows, four columns), two directions under 
 
 What a type does not do, since it is text: nothing but the reviewing IC checks that held-out data was left alone or that a claim has a committed result. Directions can read each other's folders. Contracts are never shortened by the director; the IC that owns them trims them with `edit_contracts`. Only trees one or two levels deep have been run.
 
-A setting to start from: `default_agent_type: researcher`, `stall_check_minutes` longer than a usual experiment (the notice wakes the IC above, which costs a turn), `max_depth: 2`, and a session cost limit.
+A setting to start from: `default_agent_type: researcher`, `soft_check_in_minutes` longer than a usual experiment (the notice wakes the IC above, which costs a turn), `max_depth: 2`, and a session cost limit.
 
 ## Limits to set before a real run
 
@@ -170,11 +170,11 @@ you set them.
   shown as "without a price" and no limit holds them.
 - **Sessions open at once.**
 - **Teams and depth** of the org.
-- **How often an IC is told of a team at work** (`check_in_minutes`, 360).
+- **How often an IC is told of a team at work** (`hard_check_in_minutes`, 360).
   A team that commits steadily never counts as showing no progress, so the
   IC above is told how it stands this often anyway, counted from when it
   last wrote to the team or was told of it. Each check-in costs that IC a
-  turn. It is never more often than `stall_check_minutes`; 0 turns it off.
+  turn. It is never more often than `soft_check_in_minutes`; 0 turns it off.
 - **`OH_MAX_CONCURRENT_RUNS`** (server): how many agents run at once.
 
 ## What to expect

@@ -1428,7 +1428,7 @@ async def test_a_manager_that_does_not_answer_is_asked_again_and_then_the_human(
 ):
     now = [datetime(2026, 11, 14, tzinfo=UTC)]
     service = await started(repo, launcher, clock=lambda: now[0], stall_poll=3600)
-    service.update_settings(DirectorSettingsUpdate(stall_check_minutes=60))
+    service.update_settings(DirectorSettingsUpdate(soft_check_in_minutes=60))
     top, conversation = await at_api(service)
     sets_up_jobs(service, top)
     org_gains(service, JOBS, "services/api/workers")
