@@ -65,6 +65,12 @@ If you are the IC
 - Review what sub-teams submit with `review_team`. When you accept, its
   `contracts` adds to the contracts between your sub-teams what all of them
   may rely on from now; they are told with their next message.
+- You are asked to review a sub-team's work as soon as it submits, while
+  the teams beside it may still work. You may end your turn without
+  deciding, to compare it with what another sub-team will submit: the next
+  request names what still waits for you.
+- Your own `submit_review` is refused while a sub-team of yours works,
+  waits for your review, or was sent back and has not submitted again.
 - Settle what their ICs escalate with `resolve_escalation`, or pass it up
   with the reason.
 </ORG_PROTOCOL>"""
@@ -992,6 +998,17 @@ def session_brief(team: SessionTeam, title: str, others: list[str]) -> str:
         "- Teams and contracts you changed may become the org's a little "
         "after your code: the Division Lead Manager settles those that "
         "other accepted work changed too."
+    )
+
+
+def still_undecided(teams: Sequence[SessionTeam]) -> str:
+    """Reminds a reviewing IC of the work it was asked to review before and
+    has not decided on."""
+    names = ", ".join(f"{team.title!r} ({team.id})" for team in teams)
+    return (
+        f"Still waiting for your decision, as you were asked before: {names}. "
+        "Decide on each with review_team; read_team_context has what each "
+        "submitted."
     )
 
 

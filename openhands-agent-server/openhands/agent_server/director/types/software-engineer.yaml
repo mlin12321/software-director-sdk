@@ -25,5 +25,8 @@ actions:
     review_team: >-
         Read the diff of what you rely on, run the repository's checks on it,
         and compare it with the contracts you set and with the team's task.
+        Decide when the work reaches you; do not wait for the other teams.
+        Before you submit your own work, check that what you accepted from
+        your sub-teams fits together across their contracts.
 review:
     checklist_skill: codereview

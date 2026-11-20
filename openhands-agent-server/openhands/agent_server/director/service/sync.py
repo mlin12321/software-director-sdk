@@ -794,7 +794,7 @@ class Sync(Sessions):
                 # A blocked team is no longer waited for.
                 self.release_reviews(node.parent_id)
             if role == "ic" and status == ConversationExecutionStatus.RUNNING:
-                self.release_reviews(node.id, now=True)
+                self.release_reviews(node.id)
             if status != ConversationExecutionStatus.RUNNING:
                 self._remind_to_submit(node.session)
 

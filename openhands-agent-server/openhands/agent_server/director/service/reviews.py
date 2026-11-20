@@ -69,6 +69,7 @@ from openhands.agent_server.director.prompts import (
     reconcile_request,
     review_request,
     session_work,
+    still_undecided,
     teams_settled,
 )
 from openhands.agent_server.director.reconcile import changes_of
@@ -278,22 +279,23 @@ class Reviews(Requests):
         if store.opens_session(place):
             self._sent_back(place)
 
-    def release_reviews(self, place_id: str | None, *, now: bool = False) -> None:
-        """Hand a team's IC the reviews its sub-teams wait for, if it is
-        time (see :meth:`_release_reviews`). Safe from any thread."""
+    def release_reviews(self, place_id: str | None) -> None:
+        """Hand a team's IC the reviews its sub-teams wait for (see
+        :meth:`_release_reviews`). Safe from any thread."""
         if place_id is not None and self._loop is not None:
-            self._enqueue(lambda: self._released(place_id, now), f"review:{place_id}")
+            self._enqueue(lambda: self._released(place_id), f"review:{place_id}")
 
-    async def _released(self, place_id: str, now: bool) -> None:
-        self._release_reviews(place_id, now=now)
+    async def _released(self, place_id: str) -> None:
+        self._release_reviews(place_id)
 
-    def _release_reviews(self, place_id: str | None, *, now: bool = False) -> None:
+    def _release_reviews(self, place_id: str | None) -> None:
         """Hand a team's IC the reviews its sub-teams wait for.
 
-        They are held until every sub-team has submitted its work or is
-        blocked, so that the IC is woken once for all of them. They go at
-        once when the IC is in a turn anyway, or when ``now`` says that
-        something else wakes it.
+        Each goes as soon as its team has submitted: no team waits for
+        the teams beside it to be reviewed. What must be whole before work
+        moves up is checked where the IC submits its own
+        (``agent_actions.submit_review``). The IC may end its turn without
+        deciding; the next request names what still waits for it.
         """
         store = self.store
         node = store.place(place_id) if place_id else None
@@ -312,29 +314,6 @@ class Reviews(Requests):
                 # Decided on, or taken back, some other way meanwhile.
                 run.unmark(HELD, team.id)
         if not waiting:
-            return
-        reviewer = agent_conversation(node, "ic")
-        # A team whose own account of its work is still being written has
-        # not finished submitting.
-        preparing = {
-            intent.node_id
-            for intent in run.open_intents()
-            if intent.kind == "request_review" and intent.node_id not in held
-        }
-        settled = all(
-            team.status == "blocked"
-            or agent_conversation(team, "ic") is None
-            or (
-                team.review is not None
-                and team.review.state in ("pending", "accepted")
-                and team.id not in preparing
-            )
-            for team in teams
-        )
-        # The work of a session waits for no sub-team: no task of this IC
-        # brought it.
-        of_a_session = any(store.opens_session(team) for team in waiting)
-        if not (now or settled or of_a_session or reviewer in self._running):
             return
         requests = []
         # In the order the work was submitted, which is the order it is
@@ -360,6 +339,17 @@ class Reviews(Requests):
                         self.review_instructions(self.type_of(team)),
                     )
                 )
+        # What it was asked before and has not decided: it may have waited
+        # for this work to compare the two.
+        asked_before = [
+            team
+            for team in teams
+            if team not in waiting
+            and team.review is not None
+            and team.review.state == "pending"
+        ]
+        if asked_before:
+            requests.append(still_undecided(sorted(asked_before, key=_submitted)))
         self.tell_ic(node.id, "\n\n---\n\n".join(requests), division_lead=True)
         # Only now: a server that ends before the request is kept asks again.
         for team in waiting:

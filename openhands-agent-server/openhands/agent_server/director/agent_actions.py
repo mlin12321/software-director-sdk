@@ -511,6 +511,35 @@ def submit_review(service: DirectorService, caller: Caller, summary: str) -> str
         raise Conflict("Your team's work already waits for its review")
     if node.parent_id is None:
         raise Conflict("A session's work is reviewed from here; nothing is submitted")
+    unfinished = [
+        team
+        for team in store.below(node.id)
+        # A team that is blocked or has no agent holds nothing up.
+        if team.agents
+        and team.status != "blocked"
+        and (
+            team.status == "working"
+            or (team.review is not None and team.review.state != "accepted")
+        )
+    ]
+    if unfinished:
+        raise Conflict(
+            "Your team's work goes up whole. Not finished below you: "
+            + "; ".join(
+                f"{team.title!r} "
+                + (
+                    "is working"
+                    if team.status == "working"
+                    else "waits for your review"
+                    if team.review is not None and team.review.state == "pending"
+                    else "was sent back and has not submitted again"
+                )
+                for team in unfinished
+            )
+            + ". Review what waits with review_team, wait for a team that "
+            "works or write to it with msg_team, or remove one you no "
+            "longer need with prune_team. Then submit."
+        )
     left = uncommitted(Path(node.worktree_path), node.boundary.path)
     for team in store.below(node.id):
         theirs = [path for path in left if owns(team, path)]
