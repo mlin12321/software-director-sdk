@@ -1117,6 +1117,51 @@ def unstarted_notice(team: SessionTeam, minutes: int) -> str:
     )
 
 
+def check_in_notice(
+    team: SessionTeam, minutes: int, *, in_a_turn: bool, head: str | None, again: int
+) -> str:
+    """What the IC above is told of a team it has not turned to for the
+    time between two check-ins, whether or not the team shows progress.
+
+    Args:
+        minutes: How long ago that IC last turned to it or was told of it.
+        in_a_turn: Whether the team's IC is in a turn.
+        head: The last commit in the team's directory; None when it has none.
+        again: After how many minutes it is told of again.
+    """
+    directory = team.boundary.path or "the repository"
+    sent_back = team.review is not None and team.review.state == "changes_requested"
+    lines = [
+        f"Check-in: team {team.title!r} (id {team.id}) has not submitted, and "
+        f"you last turned to it or were told of it {_span(minutes)} ago. This "
+        "is sent whether or not it shows progress; nothing has to be wrong."
+    ]
+    if sent_back and team.review is not None:
+        lines.append(
+            f"You sent its work back (review round {team.review.round}) and "
+            "it has not submitted it again."
+        )
+    lines += [
+        "",
+        "Its IC is in a turn right now."
+        if in_a_turn
+        else "Its IC is not in a turn right now.",
+        f"The last commit in {directory} is {head[:12]}."
+        if head
+        else f"Nothing is committed in {directory} yet.",
+        "",
+        "Look for yourself: run these in " + team.worktree_path,
+        f"  git log --oneline -5 -- {directory}",
+        f"  git status --short -- {directory}",
+        "",
+        "If it is on course, do nothing. If it is off course or has taken "
+        "too long, write to its IC with `msg_team`. You are told of it again "
+        f"in {_span(again)}; writing to it, or being told that it shows no "
+        "progress, starts that time again.",
+    ]
+    return "\n".join(lines)
+
+
 def stall_notice(
     team: SessionTeam, minutes: int, *, in_a_turn: bool, account: str | None
 ) -> str:

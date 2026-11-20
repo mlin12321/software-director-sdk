@@ -128,6 +128,7 @@ class DirectorService(Sync):
         self._quiet.set()
         self._stop_status = launcher.on_status(self._on_status)
         self._stop_guard = launcher.on_action(self.guard_action)
+        self._stop_resume = launcher.on_resume(self.with_tools_again)
         self._bwrap = await asyncio.to_thread(self._find_sandbox)
         if self._bwrap is None:
             logger.warning(
@@ -164,6 +165,9 @@ class DirectorService(Sync):
         if self._stop_guard is not None:
             self._stop_guard()
             self._stop_guard = None
+        if self._stop_resume is not None:
+            self._stop_resume()
+            self._stop_resume = None
         workers = list(self._workers)
         if self._stall_watch is not None:
             workers.append(self._stall_watch)

@@ -891,6 +891,17 @@ class DirectorSettings(BaseModel):
             "team above is told. 0 turns the check off."
         ),
     )
+    check_in_minutes: int = Field(
+        default=360,
+        ge=0,
+        description=(
+            "After how many minutes the IC of the team above is told how a "
+            "team that has not submitted stands, whether or not it shows "
+            "progress. Counted from when that IC last wrote to the team, "
+            "sent its work back, or was told of it, and never shorter than "
+            "stall_check_minutes. 0 turns the check-in off."
+        ),
+    )
     manager_check_accepted_reviews: int = Field(
         default=5,
         ge=0,
@@ -945,6 +956,7 @@ class DirectorSettingsUpdate(BaseModel):
     resume_on_start: bool | None = None
     report_compaction_chars: int | None = Field(default=None, ge=1_000)
     stall_check_minutes: int | None = Field(default=None, ge=0)
+    check_in_minutes: int | None = Field(default=None, ge=0)
     manager_check_accepted_reviews: int | None = Field(default=None, ge=0)
     manager_check_ic_setbacks: int | None = Field(default=None, ge=0)
     route_requests: bool | None = None

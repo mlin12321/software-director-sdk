@@ -247,7 +247,7 @@ class Reviews(Requests):
         store.set_review(place_id, review)
         self._drop_merge_checkout(place_id)
         self._tell_turns()
-        self.progressed(place_id)
+        self.progressed(place_id, by_above=True)
         self.record_event(
             place.parent_id,
             "sent_back",

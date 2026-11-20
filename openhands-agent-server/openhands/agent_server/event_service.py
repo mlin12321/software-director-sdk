@@ -266,6 +266,11 @@ def _without_agent_context_secret(
 # action, it returns why not, or None to let it run.
 type ActionGuard = Callable[[UUID, ActionEvent], str | None]
 
+# Changes the agent a conversation was saved with as the conversation is
+# loaded again, before that agent starts: given the conversation and the
+# saved agent, it returns the agent to go on with (the same one to keep it).
+type ResumeAdapter = Callable[[UUID, AgentBase], AgentBase]
+
 
 @dataclass
 class EventService:
@@ -293,6 +298,8 @@ class EventService:
     lease_ttl_seconds: float = DEFAULT_LEASE_TTL_SECONDS
     # Asked about every action of the agent before it runs; see ``ActionGuard``.
     action_guards: Sequence[ActionGuard] = ()
+    # Applied to the saved agent of a resumed conversation; see ``ResumeAdapter``.
+    resume_adapters: Sequence[ResumeAdapter] = ()
     _conversation: LocalConversation | None = field(default=None, init=False)
     _persisted_events: EventLog | None = field(default=None, init=False)
     _pub_sub: PubSub[Event] = field(
@@ -1476,6 +1483,16 @@ class EventService:
             )
             if not streaming_enabled:
                 conversation.set_token_callbacks(None)
+        if base_state_exists:
+            # What is not kept between runs (a secret with no key to keep it
+            # under) is given to the saved agent again, before it starts.
+            saved = conversation.agent
+            adapted = saved
+            for adapt_on_resume in list(self.resume_adapters):
+                adapted = adapt_on_resume(self.stored.id, adapted)
+            if adapted is not saved:
+                with conversation._state:
+                    conversation.agent = conversation._state.agent = adapted
         self._conversation = conversation
         if isinstance(conversation.agent, ACPAgent):
             for secret_name, binding in self.credential_bindings.items():

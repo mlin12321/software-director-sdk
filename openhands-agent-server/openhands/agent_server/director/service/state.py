@@ -23,6 +23,7 @@ from openhands.agent_server.config import Config
 from openhands.agent_server.conversation_service import ToolParams
 from openhands.agent_server.director import bugbot
 from openhands.agent_server.director.acp import (
+    MCP_SERVER_NAME,
     agent_token,
     as_org_agent,
     conversation_of,
@@ -493,6 +494,7 @@ class ServiceState:
         self._routed_read: tuple[str | None, list[RoutedRequest]] | None = None
         self._bwrap: str | None = None
         self._stop_guard: Callable[[], None] | None = None
+        self._stop_resume: Callable[[], None] | None = None
         self._save_delay = save_delay
         self._run_limit_retry = run_limit_retry
         self._lock = threading.Lock()
@@ -910,6 +912,27 @@ class ServiceState:
                 self._tool_key = kept.encode()
             return self._tool_key
 
+    def with_tools_again(self, conversation_id: UUID, agent: AgentBase) -> AgentBase:
+        """The saved agent of a conversation that is loaded again, able to
+        reach the director's tools.
+
+        An agent that runs its own tools reaches them through an MCP server
+        that is given its token in its environment. A server with no key to
+        keep secrets under does not keep that between runs, so it is made
+        again here: the token is worked out from the director's own key,
+        which is kept. Any other agent is returned as it is. Safe from any
+        thread.
+        """
+        if not isinstance(agent, ACPAgent) or MCP_SERVER_NAME not in agent.mcp_config:
+            return agent
+        url = self._url()
+        if url is None:
+            return agent
+        tools = tools_server(url, agent_token(self._key(), str(conversation_id)))
+        return agent.model_copy(
+            update={"mcp_config": {**agent.mcp_config, MCP_SERVER_NAME: tools}}
+        )
+
     def _adapter(
         self, conversation_id: str, offered: Sequence[str]
     ) -> Callable[[AgentBase], AgentBase]:
@@ -1032,7 +1055,7 @@ class ServiceState:
             seen = _progress_of(kept)
             # A team without a task was told of once, and stays told.
             told = {"told": now} if "told" in seen else {}
-            again = {"at": now, "head": seen.get("head")}
+            again = {"at": now, "head": seen.get("head"), "checked": now}
             run.mark(PROGRESS, place_id, json.dumps(again | told))
 
     def _repository(self) -> Path:
@@ -1684,8 +1707,9 @@ def _new_agents(ic_id: UUID) -> list[AgentRef]:
 
 def _progress_of(kept: str | None) -> dict[str, Any]:
     """What is known of a team's progress: when it last got anywhere
-    (``at``), the last commit in its directory then (``head``), and when
-    the IC above was last told that it shows none (``told``)."""
+    (``at``), the last commit in its directory then (``head``), when the IC
+    above was last told that it shows none (``told``), and when that IC last
+    turned to the team or was told of it (``checked``)."""
     try:
         seen = json.loads(kept) if kept else {}
     except ValueError:

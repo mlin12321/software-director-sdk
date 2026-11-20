@@ -177,6 +177,18 @@ added to it: what it is working on, what has kept it from committing or
 submitting, and what it needs. The answer goes into the notice. It is not
 asked while that IC is in a turn.
 
+### What is a check-in?
+
+A team that commits steadily never stalls, however long it takes. So the IC
+above is also told how a team that has not submitted stands every
+`check_in_minutes` (default 360), whether or not it shows progress: whether
+its IC is in a turn, its last commit, and where to look. The time is counted
+from when that IC last turned to the team (gave it its task, wrote to it,
+sent its work back) or was last told of it, and is never shorter than
+`stall_check_minutes`. A stall notice counts as being told, so a team is
+never told of twice at once, and teams due at the same time are told of in
+one message. The team itself is not asked or disturbed.
+
 ### What can the human do?
 
 Send requests, write to any agent, answer escalations, edit a team's file

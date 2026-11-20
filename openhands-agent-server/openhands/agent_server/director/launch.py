@@ -27,6 +27,7 @@ from openhands.agent_server.director.pricing import priced
 from openhands.agent_server.event_service import (
     ActionGuard,
     ConversationRunLimitExceeded,
+    ResumeAdapter,
 )
 from openhands.agent_server.launch import launch_error
 from openhands.agent_server.local_storage import conversation_worktree_dir
@@ -246,6 +247,11 @@ class TeamLauncher(Protocol):
 
         It is asked before an action runs, on the conversation's own thread.
         """
+        ...
+
+    def on_resume(self, adapter: ResumeAdapter) -> Callable[[], None]:
+        """Pass the saved agent of any conversation that is loaded again
+        through ``adapter`` before it starts, until stopped."""
         ...
 
     async def summarize(self, conversation_id: UUID, task: str) -> TeamSummary | None:
@@ -599,6 +605,9 @@ class ConversationTeamLauncher:
 
     def on_action(self, guard: ActionGuard) -> Callable[[], None]:
         return self._conversations.add_action_guard(guard)
+
+    def on_resume(self, adapter: ResumeAdapter) -> Callable[[], None]:
+        return self._conversations.add_resume_adapter(adapter)
 
     async def summarize(self, conversation_id: UUID, task: str) -> TeamSummary | None:
         agent = await self._agent(conversation_id)
