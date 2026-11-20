@@ -220,7 +220,7 @@ async def test_an_ic_is_not_sent_back_what_it_wrote_itself(
         service,
         await woken(service, "apps.web"),
         WriteSpecTool,
-        WriteSpecAction(text="# Web\nThe router is server-side."),
+        WriteSpecAction(file_text="# Web\nThe router is server-side."),
     )
     assert "spec" not in (update_of(await tell(service, launcher, "apps/web")) or {})
     await service.aclose()

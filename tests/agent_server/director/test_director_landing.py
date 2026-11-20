@@ -825,7 +825,9 @@ async def test_what_a_reviewer_reconciled_holds_only_for_what_it_was_shown(
     service: DirectorService,
 ):
     top, conversation = await at_api(service)
-    await use(service, conversation, WriteSpecTool, WriteSpecAction(text="# Refunds"))
+    await use(
+        service, conversation, WriteSpecTool, WriteSpecAction(file_text="# Refunds")
+    )
     service.team_memory.write("services/api", "spec.md", "# Orders")
     await use(service, conversation, SubmitReviewTool, DONE)
     decided = ReviewTeamAction(team=top, decision="accept", reconciled="Refunds.")
@@ -854,7 +856,9 @@ async def test_what_a_session_wrote_for_a_team_that_was_replaced_is_not_the_new_
     service: DirectorService,
 ):
     top, conversation = await at_api(service)
-    await use(service, conversation, WriteSpecTool, WriteSpecAction(text="# Refunds"))
+    await use(
+        service, conversation, WriteSpecTool, WriteSpecAction(file_text="# Refunds")
+    )
     await use(service, conversation, ReportTool, ReportAction(text="Chose a ledger."))
     # Other accepted work put another team in the same directory, which has
     # the same id.
@@ -890,7 +894,9 @@ async def test_closing_a_session_leaves_the_org_nothing_it_never_had_accepted(
     service: DirectorService,
 ):
     top, conversation = await at_api(service)
-    await use(service, conversation, WriteSpecTool, WriteSpecAction(text="# Refunds"))
+    await use(
+        service, conversation, WriteSpecTool, WriteSpecAction(file_text="# Refunds")
+    )
     await use(service, conversation, ReportTool, ReportAction(text="Chose a ledger."))
     place = api_place(service, top)
 
@@ -1216,7 +1222,9 @@ async def test_the_division_lead_ic_is_told_of_a_spec_that_could_not_be_written(
     monkeypatch: pytest.MonkeyPatch,
 ):
     top, conversation = await at_api(service)
-    await use(service, conversation, WriteSpecTool, WriteSpecAction(text="# Refunds"))
+    await use(
+        service, conversation, WriteSpecTool, WriteSpecAction(file_text="# Refunds")
+    )
     commit_landing = service._commit_landing
 
     def changed_meanwhile(landing, message, tree):
@@ -1234,7 +1242,9 @@ async def test_the_division_lead_ic_is_told_of_a_spec_that_could_not_be_written(
 
 async def test_a_reviewer_writes_the_spec_that_holds(service: DirectorService):
     top, conversation = await at_api(service)
-    await use(service, conversation, WriteSpecTool, WriteSpecAction(text="# Refunds"))
+    await use(
+        service, conversation, WriteSpecTool, WriteSpecAction(file_text="# Refunds")
+    )
     service.team_memory.write("services/api", "spec.md", "# Orders")
     await use(service, conversation, SubmitReviewTool, DONE)
     shown = await use(
@@ -1283,7 +1293,9 @@ async def test_a_reviewer_writes_the_spec_that_holds(service: DirectorService):
 
 async def test_a_reviewer_keeps_the_orgs_spec(service: DirectorService):
     top, conversation = await at_api(service)
-    await use(service, conversation, WriteSpecTool, WriteSpecAction(text="# Refunds"))
+    await use(
+        service, conversation, WriteSpecTool, WriteSpecAction(file_text="# Refunds")
+    )
     service.team_memory.write("services/api", "spec.md", "# Orders")
     await use(service, conversation, SubmitReviewTool, DONE)
     await use(service, division_lead_ic(service, top), ReviewTeamTool, accept(top))
@@ -1368,7 +1380,9 @@ async def test_a_spec_written_for_a_team_the_org_lost_is_left_to_the_team_that_h
     service: DirectorService, rewritten: bool
 ):
     top, conversation = await at_api(service)
-    await use(service, conversation, WriteSpecTool, WriteSpecAction(text="# Refunds"))
+    await use(
+        service, conversation, WriteSpecTool, WriteSpecAction(file_text="# Refunds")
+    )
     service.store.remove("services.api")
     await use(service, conversation, SubmitReviewTool, DONE)
 
@@ -1542,7 +1556,7 @@ async def test_a_division_lead_ic_is_not_told_to_submit_work(
 async def test_an_acceptance_cut_off_before_its_landing_lands_when_it_is_run_again(
     service: DirectorService, monkeypatch: pytest.MonkeyPatch
 ):
-    await use(service, ic(service), WriteSpecTool, WriteSpecAction(text="# Spec"))
+    await use(service, ic(service), WriteSpecTool, WriteSpecAction(file_text="# Spec"))
     await use(service, ic(service), SubmitReviewTool, DONE)
     top = node(service, "root")
     land = service._land_accepted
@@ -1572,7 +1586,9 @@ async def test_work_that_waited_for_the_human_is_merged_as_its_reviewer_decided(
     worktree = own_worktree(service, repo, tmp_path)
     commit(worktree, "app.py", "refunds = True\n")
     (repo / "app.py").write_text("in the way\n")
-    await use(service, ic(service), WriteSpecTool, WriteSpecAction(text="# Session"))
+    await use(
+        service, ic(service), WriteSpecTool, WriteSpecAction(file_text="# Session")
+    )
     await use(service, ic(service), SubmitReviewTool, DONE)
     top = node(service, "root")
     decided = SpecChoice.model_validate(
