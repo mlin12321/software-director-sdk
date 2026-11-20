@@ -28,6 +28,13 @@ from openhands.agent_server.director.acp import (
     conversation_of,
     tools_server,
 )
+from openhands.agent_server.director.agent_types import (
+    DEFAULT_TYPE,
+    SHIPPED_TYPES,
+    TYPES_FOLDER,
+    AgentType,
+    load_types,
+)
 from openhands.agent_server.director.git import (
     GitError,
     common_dir,
@@ -59,11 +66,15 @@ from openhands.agent_server.director.models import (
     AgentKind,
     AgentRef,
     AgentRole,
+    AgentTypeInfo,
     DirectorSettings,
     DirectorSettingsState,
     DirectorSettingsUpdate,
     FormerTeam,
     HandOverMode,
+    OrgNodeInput,
+    OrgSettings,
+    OrgSettingsState,
     OrgStateEvent,
     OrgSummary,
     PauseReason,
@@ -75,10 +86,13 @@ from openhands.agent_server.director.models import (
     TeamEnforcement,
     TeamMatch,
 )
+from openhands.agent_server.director.org_config import load_org_config
 from openhands.agent_server.director.org_persistence import (
     create_org_board,
     load_org,
+    own_settings,
     save_org,
+    save_own_settings,
     saving,
 )
 from openhands.agent_server.director.org_store import (
@@ -114,6 +128,7 @@ from openhands.sdk.agent.base import AgentBase
 from openhands.sdk.conversation.state import ConversationExecutionStatus
 from openhands.sdk.errors import (
     DomainError,
+    Invalid,
     NotFound,
     OperationFailed,
     Unavailable,
@@ -154,6 +169,9 @@ TOOLS_OF: dict[AgentRole, tuple[str, ...]] = {
         "prune_team",
     ),
 }
+# What no type takes from an agent: without them it could not read its
+# place, hand its work on, or say that it cannot go on.
+_TOOLS_NO_TYPE_REMOVES = ("read_team_context", "raise_escalation", "submit_review")
 HAND_OVER_TOOLS = ("read_team_context", "hand_over", "write_spec")
 # What an IC has of the director's tools where it only reviews the work of
 # a session.
@@ -163,11 +181,23 @@ DIVISION_LEAD_IC_TOOLS = ("read_team_context", "report", "review_team")
 DIVISION_LEAD_MANAGER_TOOLS = ("read_team_context", "report", "settle_teams")
 
 
-def tools_of(place: SessionTeam, role: AgentRole) -> tuple[str, ...]:
-    """The director's tools an agent of ``node`` is offered."""
+def tools_of(
+    place: SessionTeam, role: AgentRole, without: Sequence[str] = ()
+) -> tuple[str, ...]:
+    """The director's tools an agent of ``node`` is offered.
+
+    Args:
+        without: The tools the team's type leaves its agents without. A
+            type takes tools away and never adds one; what an agent needs
+            to read its place and hand its work on stays.
+    """
     if is_division_lead(place):
         return DIVISION_LEAD_IC_TOOLS if role == "ic" else DIVISION_LEAD_MANAGER_TOOLS
-    return TOOLS_OF[role]
+    return tuple(
+        name
+        for name in TOOLS_OF[role]
+        if name not in without or name in _TOOLS_NO_TYPE_REMOVES
+    )
 
 
 DIRECTOR_TOOL_NAMES = tuple(
@@ -242,6 +272,9 @@ _MERGING_DIR = "director-merging"
 # After a conversation id: the script an ACP agent's process is started by.
 _ACP_LAUNCHER = ".acp.sh"
 _REMEMBERED_FILE = "director.json"
+# In it: the settings changed through the settings route, which hold over
+# the org's ``director.yaml`` field by field.
+_CHANGED_SETTINGS = "settings_changed"
 # Set by the server's entry point to the address it is bound to.
 _INTERNAL_SERVER_URL_ENV = "OH_INTERNAL_SERVER_URL"
 # The lane of what concerns the org as a whole, such as saving its tree.
@@ -384,11 +417,19 @@ class ServiceState:
         server_url: str | None = None,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
         stall_poll: float = STALL_POLL_SECONDS,
+        config_file: Path | None = None,
     ) -> None:
         """
         Args:
+            config_file: The org's ``director.yaml``: its settings as a
+                person writes them. The org's own agent types are in the
+                folder ``types`` beside it. None: the director's defaults
+                and the types it ships.
             clock: The time, for telling how long a team has shown no
                 progress.
+
+        Raises:
+            InvalidOrgConfig: ``config_file`` does not hold settings.
             stall_poll: How many seconds lie between two looks for teams
                 that show no progress.
             server_url: Where this server answers, for agents that reach the
@@ -414,7 +455,9 @@ class ServiceState:
         self._summary_timeout = summary_timeout
         self._remembered = remembered
         self._find_review_instructions = find_review_instructions
-        self._review_instructions: str | None = None
+        # The public skills that were looked for, by name; '' for one that
+        # could not be loaded.
+        self._review_instructions: dict[str, str] = {}
         self._model_call_timeout = model_call_timeout
         self._run: RunState | None = None
         self._run_of: Path | None = None
@@ -474,6 +517,16 @@ class ServiceState:
         self._launcher: TeamLauncher | None = None
         self._max_concurrent_runs = max_concurrent_runs
         self._settings: DirectorSettings | None = None
+        self._config_file = config_file
+        # What ``director.yaml`` sets; a server that cannot read its
+        # settings does not start.
+        self._configured: dict[str, Any] = (
+            load_org_config(config_file) if config_file else {}
+        )
+        self._agent_types: dict[str, AgentType] | None = None
+        self._agent_types_seen: tuple[tuple[str, int], ...] = ()
+        # What the org sets for itself, by the repository it was read from.
+        self._own_settings: tuple[str, OrgSettings] | None = None
         self._server_url = server_url
         self._tool_key: bytes | None = None
         # What each lane still has to carry out; a lane exists while it works.
@@ -497,16 +550,33 @@ class ServiceState:
         self._sync_lock = asyncio.Lock()
         self._resume_lock = asyncio.Lock()
 
-    def review_instructions(self) -> str:
-        """The code review skill for an IC reviewing a team below.
+    def review_instructions(self, kind: AgentType | None = None) -> str:
+        """What an IC reviewing a team below checks its work by: the skill
+        the team's type names, then the type's own checklist.
 
-        Loaded once. Empty when it cannot be loaded, in which case the
-        review request stands without it.
+        A skill is loaded once. One that cannot be loaded is left out, and
+        the review request stands without it.
+
+        Args:
+            kind: The type of the team whose work is reviewed; the default
+                type when None.
         """
-        if self._review_instructions is None:
-            found = self._find_review_instructions()
-            self._review_instructions = found.strip() if found else ""
-        return self._review_instructions
+        kind = kind or self.agent_types.get(DEFAULT_TYPE)
+        if kind is None:
+            return ""
+        parts: list[str] = []
+        skill = kind.review.checklist_skill
+        if skill:
+            if skill not in self._review_instructions:
+                found = (
+                    self._find_review_instructions()
+                    if skill in bugbot.CODE_REVIEW_SKILLS
+                    else bugbot.public_skill((skill,))
+                )
+                self._review_instructions[skill] = found.strip() if found else ""
+            parts.append(self._review_instructions[skill])
+        parts.append(kind.review.checklist.strip())
+        return "\n\n".join(part for part in parts if part)
 
     @classmethod
     def from_config(cls, config: Config) -> Self:
@@ -516,6 +586,7 @@ class ServiceState:
             find_sandbox=find_bwrap,
             remembered=config.conversations_path.parent / _REMEMBERED_FILE,
             find_review_instructions=bugbot.review_instructions,
+            config_file=config.director_config_path,
             max_concurrent_runs=config.max_concurrent_runs,
             server_url=config.director_server_url,
         )
@@ -607,13 +678,146 @@ class ServiceState:
         """The limits on new teams, as last saved."""
         with self._lock:
             if self._settings is None:
-                saved = self._read_remembered().get("settings")
+                remembered = self._read_remembered()
+                # With a ``director.yaml`` only what was changed since
+                # holds over it; without one, the settings as last saved.
+                saved = (
+                    {**self._configured, **self._settings_changed()}
+                    if self._config_file
+                    else remembered.get("settings")
+                )
                 try:
                     self._settings = DirectorSettings.model_validate(saved or {})
                 except ValueError:
                     logger.warning("Ignoring the saved director settings: %r", saved)
-                    self._settings = DirectorSettings()
+                    self._settings = DirectorSettings.model_validate(self._configured)
             return self._settings
+
+    @property
+    def agent_types(self) -> dict[str, AgentType]:
+        """The types a team may be, by name: the ones the director ships
+        and the ones beside ``director.yaml``. They are read again when a
+        file among them is added, removed or changed, so a new type can be
+        given to the next team without a restart."""
+        folders = [SHIPPED_TYPES]
+        if self._config_file:
+            folders.append(self._config_file.parent / TYPES_FOLDER)
+        files = sorted(
+            path
+            for folder in folders
+            if folder.is_dir()
+            for path in folder.iterdir()
+            if path.suffix in (".yaml", ".yml")
+        )
+        seen = tuple((str(path), path.stat().st_mtime_ns) for path in files)
+        with self._lock:
+            if self._agent_types is None or seen != self._agent_types_seen:
+                self._agent_types = load_types(folders, DIRECTOR_TOOL_NAMES)
+                self._agent_types_seen = seen
+            return self._agent_types
+
+    def type_of(self, node: OrgNodeInput) -> AgentType:
+        """The type of a team. A team whose type the director no longer
+        finds is told as the default type is, and as nothing when that is
+        gone too."""
+        types = self.agent_types
+        found = types.get(node.agent_type) or types.get(DEFAULT_TYPE)
+        if found is None:
+            return AgentType(
+                name=node.agent_type or DEFAULT_TYPE, description="A team."
+            )
+        return found
+
+    @property
+    def own_settings(self) -> OrgSettings:
+        """What the org sets for itself: kept with it in its repository, so
+        another org on the same server has its own."""
+        repo = str(self._repo_dir)
+        kept = self._own_settings
+        if kept is None or kept[0] != repo:
+            found = (
+                own_settings(create_org_board(self._repo_dir))
+                if self.store.root_id is not None
+                else OrgSettings()
+            )
+            kept = self._own_settings = (repo, found)
+        return kept[1]
+
+    def _allowed_type_names(self) -> list[str]:
+        own = self.own_settings.allowed_agent_types
+        return self.settings.allowed_agent_types if own is None else own
+
+    def types_allowed(self) -> list[AgentType]:
+        """The types a new team may be. A team that exists keeps its type
+        whatever this says."""
+        allowed = self._allowed_type_names()
+        return [
+            found
+            for name, found in self.agent_types.items()
+            if not allowed or name in allowed
+        ]
+
+    def default_type(self) -> str:
+        """The type of a new team whose making names none."""
+        return self.own_settings.default_agent_type or self.settings.default_agent_type
+
+    def org_settings_state(self) -> OrgSettingsState:
+        """What holds for new teams of the org, and the types there are."""
+        allowed = {kind.name for kind in self.types_allowed()}
+        return OrgSettingsState(
+            default_agent_type=self.default_type(),
+            allowed_agent_types=self._allowed_type_names(),
+            own=self.own_settings,
+            agent_types=[
+                AgentTypeInfo(
+                    name=name, description=kind.description, allowed=name in allowed
+                )
+                for name, kind in self.agent_types.items()
+            ],
+        )
+
+    def update_org_settings(self, update: OrgSettings) -> OrgSettingsState:
+        """Set what the org sets for itself. Only what ``update`` names is
+        changed; an empty default goes back to the one for every org.
+
+        It holds for teams made from now on: no team that exists changes
+        its type or is removed.
+
+        Raises:
+            NotFound: There is no org to set it for.
+            Invalid: A type is named that the director does not find, or
+                the default is not among the allowed ones.
+        """
+        if self.store.root_id is None:
+            raise NotFound("No org exists")
+        named = update.model_dump(exclude_unset=True)
+        changed = self.own_settings.model_copy(update=named)
+        if changed.default_agent_type == "":
+            changed.default_agent_type = None
+        types = self.agent_types
+        asked = [*(changed.allowed_agent_types or [])]
+        if changed.default_agent_type:
+            asked.append(changed.default_agent_type)
+        unknown = sorted(set(asked) - set(types))
+        if unknown:
+            raise Invalid(
+                f"The director finds no agent type named {', '.join(unknown)}. "
+                f"The types are: {', '.join(types)}."
+            )
+        allowed = (
+            self.settings.allowed_agent_types
+            if changed.allowed_agent_types is None
+            else changed.allowed_agent_types
+        )
+        default = changed.default_agent_type or self.settings.default_agent_type
+        if allowed and default not in allowed:
+            raise Invalid(
+                f"The default agent type {default!r} is not among the allowed "
+                f"ones: {', '.join(allowed)}"
+            )
+        save_own_settings(create_org_board(self._repo_dir), changed)
+        self._own_settings = (str(self._repo_dir), changed)
+        return self.org_settings_state()
 
     def settings_state(self) -> DirectorSettingsState:
         """The settings, with how large the org is now."""
@@ -627,6 +831,11 @@ class ServiceState:
             max_concurrent_runs=self._max_concurrent_runs,
         )
 
+    def _settings_changed(self) -> dict[str, Any]:
+        """The settings changed through the settings route, as kept."""
+        kept = self._read_remembered().get(_CHANGED_SETTINGS)
+        return kept if isinstance(kept, dict) else {}
+
     def update_settings(self, update: DirectorSettingsUpdate) -> DirectorSettingsState:
         """Change the limits on new teams. Existing teams are left alone.
 
@@ -635,6 +844,10 @@ class ServiceState:
         """
         values = update.model_dump(exclude_none=True)
         before = self.settings.session_cost_limit
+        now = self.settings.model_dump()
+        # The org page sends every setting when one is changed: only what
+        # differs was changed, and only that holds over ``director.yaml``.
+        values = {key: value for key, value in values.items() if now[key] != value}
         changed = self.settings.model_copy(update=values)
         with self._lock:
             self._settings = changed
@@ -644,7 +857,10 @@ class ServiceState:
                     self._store.set_session_use(
                         session.id, session.usage, changed.session_cost_limit
                     )
-        self._remember(settings=changed.model_dump())
+        earlier = self._settings_changed()
+        self._remember(
+            settings=changed.model_dump(), **{_CHANGED_SETTINGS: {**earlier, **values}}
+        )
         return self.settings_state()
 
     def agent_of(self, token: str) -> UUID:
@@ -1415,6 +1631,7 @@ def _child_node(
         boundary=child_boundary(child),
         isolation=child.isolation,
         agent_profile=child.agent_profile,
+        agent_type=child.agent_type,
         worktree_path=parent.worktree_path,
         branch=parent.branch,
         agents=[],

@@ -97,6 +97,13 @@ class ProposedTeam(BaseModel):
         default=None,
         description="One of the profiles read_team_context lists. Optional.",
     )
+    type: str | None = Field(
+        default=None,
+        description=(
+            "One of the types read_team_context lists: what kind of team it "
+            "is. The org's default type when left out."
+        ),
+    )
     writable: list[str] = Field(
         default_factory=list,
         description="Globs the team may write; all of `path` when left out.",
@@ -120,9 +127,17 @@ class Proposed(NamedTuple):
 
 
 def proposed_teams(
-    teams: Sequence[ProposedTeam], contracts: str, keep: Sequence[str], reason: str
+    teams: Sequence[ProposedTeam],
+    contracts: str,
+    keep: Sequence[str],
+    reason: str,
+    default_type: str = "software-engineer",
 ) -> Proposed:
-    """What a call of ``propose_teams`` proposes."""
+    """What a call of ``propose_teams`` proposes.
+
+    Args:
+        default_type: The type of a sub-team whose proposal names none.
+    """
     return Proposed(
         [
             SplitChild(
@@ -131,6 +146,7 @@ def proposed_teams(
                 task=team.instruction,
                 reason=team.reason.strip(),
                 agent_profile=team.model,
+                agent_type=team.type or default_type,
                 writable=team.writable,
                 readonly=team.readonly,
                 isolation=team.isolation,
@@ -168,6 +184,7 @@ def as_written(proposed: Proposed) -> str:
             team["reason"] = child.reason
         if child.agent_profile:
             team["model"] = child.agent_profile
+        team["type"] = child.agent_type
         if child.writable:
             team["writable"] = child.writable
         if child.readonly:

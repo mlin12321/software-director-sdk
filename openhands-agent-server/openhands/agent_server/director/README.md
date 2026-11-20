@@ -94,6 +94,48 @@ An agent profile is made in the settings of Canvas and made active there.
 - **Keys stay with the server's conversations.** They never reach the org's
   git refs, so a pushed org carries none.
 
+## Agent types and `director.yaml`
+
+Every team has a type, and a type is a YAML file of what its agents are told: what the team is for, what its spec, contracts and reports hold, what the director's tools mean to it, and how its work is reviewed. One is shipped (`director/types`): `software-engineer`, the default. An IC names a type for each sub-team it proposes, so one org can hold several.
+
+To add one, point the server at a settings file and put the type beside it:
+
+```
+OH_DIRECTOR_CONFIG_PATH=/path/to/org/director.yaml
+/path/to/org/director.yaml
+/path/to/org/types/analyst.yaml
+```
+
+```yaml
+# director.yaml: any of the director's settings
+stall_check_minutes: 30
+max_depth: 2
+```
+
+```yaml
+# types/analyst.yaml
+description: Reads results and says what they mean.
+ic: |
+  Your team analyses results. It runs no experiments.
+actions:
+  submit_review: Submit one table and what it shows.
+review:
+  checklist: |
+    Every number in the table is in a committed result file.
+omit_tools: [propose_teams]
+```
+
+A type cannot change what the runtime enforces: folders, review and landing are the same for every team. Settings changed on the org page hold over `director.yaml`.
+
+Every type needs a `description`: the agents and the org page choose a type by it. A type file added while the server runs is found without a restart.
+
+Which type a team gets:
+
+- **The first team of an org** is of the type chosen beside the chat box, or the default one.
+- **A sub-team** is of the type its IC names for it in `propose_teams`, or the default one.
+- **The default type and the types allowed** are set for every org in `director.yaml` (`default_agent_type`, `allowed_agent_types`; empty allows all), and for one org on its settings page. An org's own are kept in its repository.
+- **They hold for new teams only.** A team that exists keeps its type.
+
 ## Limits to set before a real run
 
 All are in the settings of the org page. The two on use are off (0) until

@@ -579,6 +579,7 @@ class Teams(Delivery):
             contracts,
             self.reports_of(place),
             briefing_block(context),
+            self.type_of(place).text_for(role),
         )
         return text, json.dumps(steady(context))
 
@@ -754,7 +755,7 @@ class Teams(Delivery):
             # Nothing holds its process to the team's directory, so its
             # work is kept apart and checked when it is merged.
             isolation = "worktree"
-        tools = tools_of(place, role)
+        tools = tools_of(place, role, self.type_of(place).omit_tools)
         adapt = await asyncio.to_thread(self._adapter, conversation_id, tools)
         # A session starts from where the repository's checkout is.
         base = (

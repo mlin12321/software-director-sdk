@@ -16,12 +16,14 @@ from openhands.agent_server.director.git_store import (
     StoreChange,
     StoreReader,
 )
-from openhands.agent_server.director.models import OrgNodeInput
+from openhands.agent_server.director.models import OrgNodeInput, OrgSettings
 from openhands.agent_server.director.org_store import OrgStore
 
 
 ORG_REF = "refs/agents/org"
 _ORG_FILE = "org.json"
+# What the org sets for itself, beside its tree in the same ref.
+_SETTINGS_FILE = "settings.json"
 _VERSION = 1
 
 
@@ -33,6 +35,31 @@ class _PersistedOrg(BaseModel):
 def create_org_board(repo_dir: Path) -> GitStore:
     """The store that holds the org tree of ``repo_dir``."""
     return GitStore(repo_dir, ref=ORG_REF)
+
+
+def own_settings(board: GitStore) -> OrgSettings:
+    """What the org of ``board`` sets for itself; nothing when it kept none
+    or what it kept cannot be read."""
+    raw = board.read(_SETTINGS_FILE)
+    if raw is None:
+        return OrgSettings()
+    try:
+        return OrgSettings.model_validate_json(raw)
+    except ValueError:
+        return OrgSettings()
+
+
+def save_own_settings(board: GitStore, settings: OrgSettings) -> None:
+    """Keep what the org sets for itself beside its tree."""
+    content = settings.model_dump_json(indent=2, exclude_none=True) + "\n"
+    board.commit(
+        lambda read: (
+            []
+            if read(_SETTINGS_FILE) == content
+            else [StoreChange(_SETTINGS_FILE, content)]
+        ),
+        "org: save settings",
+    )
 
 
 def reference(node: OrgNodeInput) -> dict[str, Any]:

@@ -357,7 +357,7 @@ class Reviews(Requests):
                         team.review,
                         self._so_far(team),
                         self.asked_of(team),
-                        self.review_instructions(),
+                        self.review_instructions(self.type_of(team)),
                     )
                 )
         self.tell_ic(node.id, "\n\n---\n\n".join(requests), division_lead=True)
@@ -520,6 +520,7 @@ class Reviews(Requests):
                     boundary=place.boundary,
                     isolation=place.isolation,
                     agent_profile=place.agent_profile,
+                    agent_type=place.agent_type,
                     headline=place.headline,
                     spec_summary=place.spec_summary,
                     old_specs=place.old_specs,
@@ -537,6 +538,7 @@ class Reviews(Requests):
                 title=title or place.title,
                 boundary=place.boundary,
                 agent_profile=place.agent_profile,
+                agent_type=place.agent_type,
                 spec_summary=place.spec_summary,
                 old_specs=place.old_specs,
                 since=place.since,
@@ -1593,7 +1595,8 @@ class Reviews(Requests):
         )
         if not files:
             return ""
-        description = await self._ask_agent(ic, bugbot.write_up_question(files))
+        asked = self.type_of(place).review.write_up
+        description = await self._ask_agent(ic, bugbot.write_up_question(files, asked))
         return description or ""
 
     async def _request_review(self, place_id: str) -> None:

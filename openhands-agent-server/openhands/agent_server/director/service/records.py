@@ -645,7 +645,12 @@ class Records(ServiceState):
         ]
         title = store.session_title(place)
         context: dict[str, Any] = {
-            "you": {"role": role, "team_id": place.id, "team": place.title}
+            "you": {
+                "role": role,
+                "team_id": place.id,
+                "team": place.title,
+                "type": place.agent_type,
+            }
             | ({"session": title} if title else {}),
             "team_above": place.parent_id,
             "status": place.status,
@@ -700,6 +705,10 @@ class Records(ServiceState):
                 else None
             ),
             "agent_profiles_a_sub_team_may_run_on": self.settings.allowed_profiles,
+            "types_a_sub_team_may_be": {
+                kind.name: kind.description for kind in self.types_allowed()
+            },
+            "type_of_a_sub_team_that_names_none": self.default_type(),
             # The proposal itself is in the message that made it.
             "pending_split": (
                 None

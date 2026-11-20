@@ -38,8 +38,17 @@ account for all of them:
 """
 
 
+CODE_REVIEW_SKILLS = _SKILL_NAMES
+
+
 def review_instructions() -> str | None:
     """OpenHands' public code review skill; None when it cannot be loaded."""
+    return public_skill(_SKILL_NAMES, _SKILL_TRIGGER)
+
+
+def public_skill(names: tuple[str, ...], trigger: str | None = None) -> str | None:
+    """The public skill of one of ``names``, or the one ``trigger`` calls
+    up; None when it cannot be loaded or is not there."""
     try:
         # Every public skill, whatever the default marketplace lists.
         skills = load_public_skills(marketplace_path=None)
@@ -47,7 +56,7 @@ def review_instructions() -> str | None:
         logger.warning("Could not load the public skills", exc_info=True)
         return None
     for skill in skills:
-        if skill.name in _SKILL_NAMES or _SKILL_TRIGGER in _keywords(skill):
+        if skill.name in names or (trigger and trigger in _keywords(skill)):
             return skill.content
     return None
 
@@ -77,6 +86,11 @@ def changed_files(checkout: Path, base: str, directory: str) -> str | None:
         return None
 
 
-def write_up_question(files: str) -> str:
-    """Asks a team's IC to describe its team's changes for the reviewer."""
-    return f"{_WRITE_UP}\n{files}"
+def write_up_question(files: str, asked: str = "") -> str:
+    """Asks a team's IC to describe its team's changes for the reviewer.
+
+    Args:
+        asked: What a team of its type is asked to write, in place of the
+            description of a pull request.
+    """
+    return f"{asked.strip() or _WRITE_UP.rstrip()}\n\n{files}"

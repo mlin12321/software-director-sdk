@@ -193,6 +193,8 @@ async def test_settings_are_kept_for_the_next_start_beside_the_repository(
         "max_teams": 32,
         "max_depth": 3,
         "allowed_profiles": [],
+        "default_agent_type": "software-engineer",
+        "allowed_agent_types": [],
         "resume_on_start": False,
         "report_compaction_chars": 24_000,
         "stall_check_minutes": 120,

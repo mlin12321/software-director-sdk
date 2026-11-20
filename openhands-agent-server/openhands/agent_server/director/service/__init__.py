@@ -208,6 +208,18 @@ class DirectorService(Sync):
             raise Unprocessable(
                 "An org's agents run in the server's own process, not in Docker"
             )
+        root_type = request.agent_type or self.settings.default_agent_type
+        allowed = self.settings.allowed_agent_types
+        if root_type not in await asyncio.to_thread(lambda: self.agent_types):
+            raise Unprocessable(
+                f"The director finds no agent type named {root_type!r} for the "
+                "org's top team"
+            )
+        if allowed and root_type not in allowed:
+            raise Unprocessable(
+                f"The org's top team cannot be of the type {root_type!r}. "
+                f"The settings allow: {', '.join(allowed)}."
+            )
         named = provisional_summary(request.task)
         title = request.title or named.title
         async with self._create_lock:
@@ -231,6 +243,7 @@ class DirectorService(Sync):
                     title=title,
                     boundary=Boundary(path="", writable=["**"]),
                     isolation="shared",
+                    agent_type=root_type,
                     headline=named.headline,
                     spec_summary=_summary_of(request.task),
                     since=_instant(),
@@ -331,7 +344,11 @@ class DirectorService(Sync):
                 )
                 if not joined:
                     opened = await self.create_org(
-                        CreateOrgRequest(task=request.text, conversation=conversation)
+                        CreateOrgRequest(
+                            task=request.text,
+                            agent_type=request.agent_type,
+                            conversation=conversation,
+                        )
                     )
                     return RoutedMessage(
                         node_id=opened.session.teams[0].id,

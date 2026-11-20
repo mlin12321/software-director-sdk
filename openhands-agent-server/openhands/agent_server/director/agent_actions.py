@@ -95,9 +95,12 @@ def _only(caller: Caller, role: AgentRole, what: str, *, aside: bool = False) ->
 
 def node_context(service: DirectorService, caller: Caller) -> str:
     """Who the agent is and everything of the org that concerns its team."""
-    return json.dumps(
-        service.context_of(caller.node, caller.role, in_full=True), indent=2
-    )
+    context = service.context_of(caller.node, caller.role, in_full=True)
+    kind = service.type_of(caller.node).text_for(caller.role)
+    if kind:
+        # The briefing said it once; it is given again only when asked for.
+        context["what_your_teams_type_says"] = kind
+    return json.dumps(context, indent=2)
 
 
 def write_spec(service: DirectorService, caller: Caller, content: str) -> str:
@@ -134,6 +137,21 @@ def _checked(
                     else "The org allows none; leave `model` out."
                 )
             )
+    types = {kind.name: kind for kind in service.types_allowed()}
+    children = []
+    for child in proposed.children:
+        kind = types.get(child.agent_type)
+        if kind is None:
+            raise Invalid(
+                f"Sub-team {child.title!r} cannot be of the type "
+                f"{child.agent_type!r}. The types are: {', '.join(types)}."
+            )
+        # A type may say which model its teams run on; the proposal's own
+        # choice holds over it, and the org must allow it either way.
+        if not child.agent_profile and kind.model and kind.model in allowed:
+            child = child.model_copy(update={"agent_profile": kind.model})
+        children.append(child)
+    proposed = proposed._replace(children=children)
     split = normalize_split(store, place, proposed.children, proposed.keep)
     check_limits(
         store, place, len(split.children) - len(split.replaces), service.settings
@@ -194,7 +212,7 @@ def propose_teams(
     node = caller.node
     if node.pending_split and node.pending_split.status == "approved":
         raise Conflict("The sub-teams your Manager approved are still being set up")
-    proposed = proposed_teams(teams, contracts, keep, text)
+    proposed = proposed_teams(teams, contracts, keep, text, service.default_type())
     proposal = _checked(service, node, proposed)
     store = service.store
     store.update_place(node.id, pending_split=proposal)
