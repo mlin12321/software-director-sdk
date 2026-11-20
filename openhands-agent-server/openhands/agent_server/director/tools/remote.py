@@ -38,10 +38,10 @@ class ToolAnswer(BaseModel):
     )
 
 
-def _offered(caller: Caller) -> tuple[str, ...]:
+def _offered(service: DirectorService, caller: Caller) -> tuple[str, ...]:
     if caller.hand_over:
         return HAND_OVER_TOOLS
-    return tools_of(caller.node, caller.role)
+    return tools_of(caller.node, caller.role, service.type_of(caller.node).omit_tools)
 
 
 def list_tools(service: DirectorService, conversation_id: UUID) -> list[RemoteTool]:
@@ -50,7 +50,7 @@ def list_tools(service: DirectorService, conversation_id: UUID) -> list[RemoteTo
     Raises:
         NotFound: The conversation is not an agent of the org.
     """
-    offered = _offered(caller_of(service, conversation_id))
+    offered = _offered(service, caller_of(service, conversation_id))
     return [
         RemoteTool(
             name=name,
@@ -79,7 +79,7 @@ def call_tool(
         return ToolAnswer(text=str(error), is_error=True)
     try:
         caller = caller_of(service, conversation_id)
-        if name not in _offered(caller):
+        if name not in _offered(service, caller):
             return ToolAnswer(text=f"{name} is not one of your tools.", is_error=True)
         return ToolAnswer(text=tool.act()(service, caller, action), is_error=False)
     except (DomainError, GitError) as error:

@@ -732,6 +732,8 @@ def test_the_limits_on_new_teams_are_read_changed_and_kept(saved_tree: Path):
         "max_teams": 32,
         "max_depth": 8,
         "allowed_profiles": [],
+        "default_agent_type": "software-engineer",
+        "allowed_agent_types": [],
         "resume_on_start": False,
         "report_compaction_chars": 24_000,
         "stall_check_minutes": 120,

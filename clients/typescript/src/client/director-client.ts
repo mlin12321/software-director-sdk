@@ -22,6 +22,8 @@ import type {
   DirectorRecovery,
   DirectorResolveMerge,
   DirectorSettings,
+  DirectorOrgSettings,
+  DirectorOrgSettingsState,
   DirectorSettingsState,
   DirectorTeamChanges,
   DirectorTeamMatch,
@@ -91,6 +93,11 @@ export interface RouteMessageRequest {
    * starts an org there and becomes its task.
    */
   conversation?: CreateConversationPayload;
+  /**
+   * The agent type of the top team of the org this message starts. Left
+   * out, the default one. Ignored when the org exists.
+   */
+  agent_type?: string;
 }
 
 /** A request the human wants worked on, in a session of its own. */
@@ -514,6 +521,30 @@ export class DirectorClient {
   async updateSettings(settings: Partial<DirectorSettings>): Promise<DirectorSettingsState> {
     const response = await this.client.patch<DirectorSettingsState>(
       `${DIRECTOR_PATH}/settings`,
+      settings
+    );
+    return response.data;
+  }
+
+  /**
+   * The agent type of a new team and the types one may be, for this org,
+   * beside every agent type the director finds now. Without an org these
+   * are the ones every new org starts with.
+   */
+  async getOrgSettings(): Promise<DirectorOrgSettingsState> {
+    const response = await this.client.get<DirectorOrgSettingsState>(
+      `${DIRECTOR_PATH}/org/settings`
+    );
+    return response.data;
+  }
+
+  /**
+   * Set, for this org alone, the agent type of a new team and the types one
+   * may be. It holds for teams made from now on.
+   */
+  async updateOrgSettings(settings: DirectorOrgSettings): Promise<DirectorOrgSettingsState> {
+    const response = await this.client.patch<DirectorOrgSettingsState>(
+      `${DIRECTOR_PATH}/org/settings`,
       settings
     );
     return response.data;

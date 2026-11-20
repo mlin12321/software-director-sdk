@@ -146,6 +146,8 @@ def as_proposed(children: list[SplitChild]) -> list[ProposedTeam]:
             writable=child.writable,
             readonly=child.readonly,
             isolation=child.isolation,
+            # Only a type the test names: one left out is the org's default.
+            type=(child.agent_type if "agent_type" in child.model_fields_set else None),
         )
         for child in children
     ]

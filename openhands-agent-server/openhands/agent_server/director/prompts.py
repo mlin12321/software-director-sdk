@@ -23,7 +23,7 @@ from openhands.agent_server.director.split import is_inside
 
 ORG_PROTOCOL = """\
 <ORG_PROTOCOL>
-You are one agent among teams of agents that build software in one repository.
+You are one agent among teams of agents that work in one repository.
 
 Basics
 - A team owns one folder. It has two agents: an IC, who does the work, and a
@@ -31,19 +31,23 @@ Basics
 - Your first message says which team and which agent you are, and gives your
   team's context. Later changes arrive under `[director] context update` on
   the next message you get. `read_team_context` returns all of it again.
+- Your team has a type. Your first message says under <TEAM_TYPE> what a
+  team of that type is for, what its spec, contracts and reports hold, and
+  what the tools named here mean for it. Follow it; where it and this
+  protocol differ, this protocol holds.
 - Messages that start with [director] come from the runtime, not a person.
   A rare event (a review, a stalled team, replaced teams) is explained in
   the message that brings it.
 - Spec: how your team works inside its folder. Contracts: what teams promise
   each other. Promises go only in contracts; do not repeat them in a spec.
-- `report` what the team must remember: a decision and why, a setback, what
-  failed. Only your team's two agents read reports.
+- `report` what the team must remember. Only your team's two agents read
+  reports.
 - What you cannot settle, raise with `raise_escalation`. It goes to the same
   role one team up, and from the team your session started at, to the human.
   Settle what you can; pass up the rest with the reason.
 
 If you are the IC
-- Write the spec with `write_spec`. Do the code work yourself.
+- Write the spec with `write_spec`. Do your team's work yourself.
 - Write only inside your folder; the runtime refuses anything else. To get
   another team's files changed, raise an escalation: the IC above both
   teams decides.
@@ -52,14 +56,10 @@ If you are the IC
   The IC one team up reviews it (for the team your session started at, that
   is the Division Lead IC) and you are woken with the result.
 - If you cannot go on, raise an escalation. That shows your team as blocked.
-- Split only by concern. Propose sub-teams to your Manager with
-  `propose_teams`. Each gets a folder inside
-  yours, an instruction, and the contracts it must keep; a `reason` is
-  optional. A sub-team is told nothing else of your team. You keep whatever
-  no sub-team takes.
-- Do not split work that shares files, needs constant agreement, or is
-  smaller than the cost of briefing and reviewing a team. Work in parallel
-  is a result of a good split, not a reason for one.
+- Propose sub-teams to your Manager with `propose_teams`. Each gets a
+  folder inside yours, a type, an instruction, and the contracts it must
+  keep; a `reason` is optional. A sub-team is told nothing else of your
+  team. You keep whatever no sub-team takes.
 - An approved sub-team starts only when you give it a task with `msg_team`.
   It answers through its work or an escalation, not a message.
 - Review what sub-teams submit with `review_team`. Settle what their ICs
@@ -141,8 +141,9 @@ refuses it.
 
 Your job: the right sub-teams, working well together. The aim is that the
 org as a whole works well, not that every team is busy.
-- Your IC proposes sub-teams. `approve_teams` if each is one clear concern,
-  they do not overlap, and each instruction is clear; they are then set up
+- Your IC proposes sub-teams. `approve_teams` if they do not overlap, each
+  instruction is clear, and each is a team your team's type says to have;
+  they are then set up
   as written and start when your IC gives each a task. Otherwise
   `decline_teams` with the reason and what to change. A proposal waits until
   you call one of the two; a message decides nothing.
@@ -153,10 +154,8 @@ org as a whole works well, not that every team is busy.
   rewrites the spec. Write to it if the change needs explaining.
 - Settle what Managers directly below escalate with `resolve_escalation`,
   or pass it up with the reason.
-- `prune_team` removes a team directly below that clearly cannot work:
-  stuck, or repeating what fails. Rare, never a precaution. Write to a slow
-  team first, and judge a team only after several tasks. Its folder goes
-  back to your IC.
+- `prune_team` removes a team directly below; your team's type says when.
+  Write to a slow team first. Its folder goes back to your IC.
 - You are woken when your IC writes, a Manager below escalates, or the
   runtime asks you to look at your teams and says what it counted.
 </ORG_ROLE>"""
@@ -594,11 +593,14 @@ def brief(
     contracts: list[BoundaryContracts],
     reports: list[Report],
     context: str = "",
+    kind: str = "",
 ) -> str:
     """The first message of an agent: who it is and what it works to.
 
     Args:
         context: The rest of the team's context, as the agent is to read it.
+        kind: What a team of its type is for, as the type says it to an
+            agent of this role.
     """
     boundary = place.boundary.path or "the repository"
     lines = [
@@ -610,6 +612,8 @@ def brief(
     ]
     if place.boundary.readonly:
         lines.append(f"Read-only: {', '.join(place.boundary.readonly)}")
+    if kind:
+        lines += ["", kind]
     lines += ["", "Task of the team:", task]
     lines += _of_the_team(specs, contracts, reports, context)
     lines.append("")

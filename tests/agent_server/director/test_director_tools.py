@@ -216,6 +216,7 @@ async def test_an_agent_reads_who_it_is_and_what_its_team_reported(
         "role": "manager",
         "team_id": node(service, "root").id,
         "team": "Checkout",
+        "type": "software-engineer",
         "session": "Checkout",
     }
     [reported] = context["reports_of_your_team"]

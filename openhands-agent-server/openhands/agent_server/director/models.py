@@ -2,7 +2,7 @@
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from openhands.agent_server.models import StartConversationRequest
 
@@ -193,6 +193,13 @@ class SplitChild(BaseModel):
             "as your own."
         ),
     )
+    agent_type: str = Field(
+        default="software-engineer",
+        description=(
+            "The type of the sub-team, from the ones `read_team_context` "
+            "lists: what its two agents are told their team is for."
+        ),
+    )
 
 
 class SplitProposal(BaseModel):
@@ -335,6 +342,14 @@ class OrgNodeInput(BaseModel):
         description=(
             "The agent profile the team's agents were started from; None "
             "when they were derived from the team above."
+        ),
+    )
+    agent_type: str = Field(
+        default="software-engineer",
+        description=(
+            "The type of the team: the name of the YAML file its agents are "
+            "told from what the team is for and how its work is reviewed. "
+            "It changes nothing the runtime enforces."
         ),
     )
     since: str = Field(
@@ -837,6 +852,21 @@ class DirectorSettings(BaseModel):
             "team above."
         ),
     )
+    default_agent_type: str = Field(
+        default="software-engineer",
+        description=(
+            "For every org that sets none of its own: the agent type of a "
+            "new team whose making names none. A team that exists keeps its "
+            "type."
+        ),
+    )
+    allowed_agent_types: list[str] = Field(
+        default_factory=list,
+        description=(
+            "For every org that sets none of its own: the agent types a new "
+            "team may be. Empty: every type the director finds."
+        ),
+    )
     resume_on_start: bool = Field(
         default=False,
         description=(
@@ -910,6 +940,8 @@ class DirectorSettingsUpdate(BaseModel):
     max_teams: int | None = Field(default=None, ge=1)
     max_depth: int | None = Field(default=None, ge=1)
     allowed_profiles: list[str] | None = None
+    default_agent_type: str | None = None
+    allowed_agent_types: list[str] | None = None
     resume_on_start: bool | None = None
     report_compaction_chars: int | None = Field(default=None, ge=1_000)
     stall_check_minutes: int | None = Field(default=None, ge=0)
@@ -918,6 +950,48 @@ class DirectorSettingsUpdate(BaseModel):
     route_requests: bool | None = None
     session_cost_limit: float | None = Field(default=None, ge=0)
     max_open_sessions: int | None = Field(default=None, ge=0)
+
+
+class OrgSettings(BaseModel):
+    """What one org sets for itself, kept with the org in its repository.
+    What it leaves out is as the director's settings say for every org."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    default_agent_type: str | None = Field(
+        default=None,
+        description="The agent type of a new team whose making names none.",
+    )
+    allowed_agent_types: list[str] | None = Field(
+        default=None,
+        description=(
+            "The agent types a new team may be; empty allows every type the "
+            "director finds. A team that exists keeps its type."
+        ),
+    )
+
+
+class AgentTypeInfo(BaseModel):
+    """An agent type, as someone choosing one sees it."""
+
+    name: str
+    description: str
+    allowed: bool = Field(description="Whether a new team of the org may be of it.")
+
+
+class OrgSettingsState(BaseModel):
+    """What holds for new teams of the org, and what it has to choose from."""
+
+    default_agent_type: str = Field(
+        description="The agent type of a new team whose making names none."
+    )
+    allowed_agent_types: list[str] = Field(
+        description="The agent types a new team may be; empty allows every one."
+    )
+    own: OrgSettings = Field(description="What the org sets for itself.")
+    agent_types: list[AgentTypeInfo] = Field(
+        description="Every agent type the director finds now."
+    )
 
 
 class DirectorSettingsState(DirectorSettings):
@@ -1118,6 +1192,13 @@ class CreateOrgRequest(BaseModel):
         ),
     )
     task: str = Field(min_length=1, description="What the org is to deliver.")
+    agent_type: str | None = Field(
+        default=None,
+        description=(
+            "The agent type of the org's top team. Left out, the one the "
+            "settings name (`default_agent_type`)."
+        ),
+    )
     conversation: StartConversationRequest = Field(
         description=(
             "How to start the IC of the org's first session, which works at "
@@ -1161,6 +1242,13 @@ class RouteMessageRequest(BaseModel):
             "is sure of one below, and always that team while the org's "
             "`route_requests` is off. `path`, `auto` and `conversation` are "
             "ignored."
+        ),
+    )
+    agent_type: str | None = Field(
+        default=None,
+        description=(
+            "The agent type of the top team of the org this message starts. "
+            "Left out, the default one. Ignored when the org exists."
         ),
     )
     conversation: StartConversationRequest | None = Field(

@@ -133,6 +133,12 @@ export interface DirectorSplitChild {
    * same agent as the proposing team's.
    */
   agent_profile: string | null;
+  /**
+   * The type of the sub-team: the name of the YAML file its agents are told
+   * from what the team is for. Optional so that a server from before types
+   * is read too; such a team is a `software-engineer`.
+   */
+  agent_type?: string;
 }
 
 /**
@@ -217,6 +223,12 @@ export interface DirectorOrgNode {
    * they were derived from the team above.
    */
   agent_profile: string | null;
+  /**
+   * The type of the team: what its agents are told the team is for and how
+   * its work is reviewed. It changes nothing the runtime enforces. Optional
+   * so that a server from before types is read too.
+   */
+  agent_type?: string;
   /**
    * When the team was set up. Two teams with one id are the same team only
    * when this is the same: an id comes from the directory, so a team that
@@ -991,6 +1003,18 @@ export interface DirectorSettings {
    */
   allowed_profiles: string[];
   /**
+   * For every org that sets none of its own: the agent type of a new team
+   * whose making names none. Optional so that a server from before types is
+   * read.
+   */
+  default_agent_type?: string;
+  /**
+   * For every org that sets none of its own: the agent types a new team may
+   * be. Empty: every type the director finds. Optional so that a server from
+   * before types is read.
+   */
+  allowed_agent_types?: string[];
+  /**
    * Whether an org that was stopped in the middle of its work takes it up
    * again as soon as the server is back, without being asked.
    */
@@ -1064,4 +1088,36 @@ export interface DirectorMemorySync {
    * the remote text is in the team memory's history.
    */
   kept_local: string[];
+}
+
+/**
+ * What one org sets for itself, kept with the org in its repository. What it
+ * leaves out is as the director's settings say for every org.
+ */
+export interface DirectorOrgSettings {
+  /** The agent type of a new team whose making names none. `""` unsets it. */
+  default_agent_type?: string | null;
+  /**
+   * The agent types a new team may be; empty allows every one. A team that
+   * exists keeps its type.
+   */
+  allowed_agent_types?: string[] | null;
+}
+
+/** An agent type, as someone choosing one sees it. */
+export interface DirectorAgentTypeInfo {
+  name: string;
+  description: string;
+  /** Whether a new team of the org may be of it. */
+  allowed: boolean;
+}
+
+/** What holds for new teams of the org, and what it has to choose from. */
+export interface DirectorOrgSettingsState {
+  default_agent_type: string;
+  allowed_agent_types: string[];
+  /** What the org sets for itself. */
+  own: DirectorOrgSettings;
+  /** Every agent type the director finds now. */
+  agent_types: DirectorAgentTypeInfo[];
 }

@@ -242,6 +242,7 @@ async def test_a_briefing_carries_the_teams_whole_context(
         "role": "ic",
         "team_id": node(service, "apps.web").id,
         "team": "Web",
+        "type": "software-engineer",
         "session": "Checkout",
     }
     assert rest["team_above"] == node(service, "root").id

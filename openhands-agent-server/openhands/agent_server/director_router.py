@@ -42,6 +42,8 @@ from openhands.agent_server.director.models import (
     OrgMerge,
     OrgNode,
     OrgNodeDetail,
+    OrgSettings,
+    OrgSettingsState,
     OrgStateEvent,
     OrgSummary,
     OrgSync,
@@ -284,6 +286,34 @@ def get_settings(
 ) -> DirectorSettingsState:
     """Get the limits on new teams, beside how large the org is now."""
     return service.settings_state()
+
+
+@director_router.get("/org/settings", response_model=OrgSettingsState)
+def get_org_settings(
+    service: DirectorService = Depends(get_director_service),
+) -> OrgSettingsState:
+    """Get the agent type of a new team and the types one may be, for this
+    org, beside every agent type the director finds now.
+
+    Without an org these are the ones for every org, which a new org
+    starts with.
+    """
+    return service.org_settings_state()
+
+
+@director_router.patch("/org/settings", response_model=OrgSettingsState)
+def update_org_settings(
+    request: OrgSettings,
+    service: DirectorService = Depends(get_director_service),
+) -> OrgSettingsState:
+    """Set, for this org alone, the agent type of a new team and the types
+    one may be.
+
+    They are kept with the org in its repository. They hold for teams made
+    from now on: a team that exists keeps its type. An empty default goes
+    back to the one for every org.
+    """
+    return service.update_org_settings(request)
 
 
 @director_router.patch("/settings", response_model=DirectorSettingsState)

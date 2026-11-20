@@ -291,6 +291,16 @@ class Config(BaseModel):
             "under the hidden refs `refs/agents/*`. Defaults to `workspace_path`."
         ),
     )
+    director_config_path: Path | None = Field(
+        default=None,
+        description=(
+            "The org's `director.yaml`: the director's settings as a person "
+            "writes them, such as `stall_check_minutes: 30`. The org's own "
+            "agent types are the YAML files in the folder `types` beside it. "
+            "What is changed later through the settings route holds over "
+            "the file."
+        ),
+    )
     director_server_url: str | None = Field(
         default=None,
         description=(
