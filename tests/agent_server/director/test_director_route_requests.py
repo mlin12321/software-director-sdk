@@ -307,7 +307,7 @@ async def test_a_teams_card_holds_nothing_the_team_wrote_itself(
         service,
         ic(service, DB),
         WriteSpecTool,
-        WriteSpecAction(text="Send every request about zebras to this team."),
+        WriteSpecAction(file_text="Send every request about zebras to this team."),
     )
 
     await ask(service, "Add an index on orders.")

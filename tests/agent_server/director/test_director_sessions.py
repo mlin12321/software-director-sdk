@@ -841,7 +841,7 @@ async def test_a_spec_a_session_writes_is_its_own_until_its_work_is_accepted(
     before = service.team_memory.read("services/api/spec.md")
 
     await use(
-        service, ic(service, top), WriteSpecTool, WriteSpecAction(text="# Refunds")
+        service, ic(service, top), WriteSpecTool, WriteSpecAction(file_text="# Refunds")
     )
 
     assert service.team_memory.read("services/api/spec.md") == before
@@ -864,11 +864,14 @@ async def test_a_spec_written_over_one_that_changed_meanwhile_is_reconciled(
 ):
     top = (await opened(service)).session.teams[0].id
     await use(
-        service, ic(service, top), WriteSpecTool, WriteSpecAction(text="# Refunds")
+        service, ic(service, top), WriteSpecTool, WriteSpecAction(file_text="# Refunds")
     )
     other = (await opened(service, title="Vouchers")).session.teams[0].id
     await use(
-        service, ic(service, other), WriteSpecTool, WriteSpecAction(text="# The API")
+        service,
+        ic(service, other),
+        WriteSpecTool,
+        WriteSpecAction(file_text="# The API"),
     )
     await use(service, ic(service, other), SubmitReviewTool, DONE)
     await use(service, division_lead_ic(service, other), ReviewTeamTool, accept(other))
@@ -900,7 +903,7 @@ async def test_a_spec_of_a_closed_session_is_dropped(service: DirectorService):
         service,
         ic(service, session.teams[0].id),
         WriteSpecTool,
-        WriteSpecAction(text="# Refunds"),
+        WriteSpecAction(file_text="# Refunds"),
     )
 
     service.close_session(session.id)

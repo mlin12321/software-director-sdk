@@ -94,7 +94,7 @@ async def test_the_spec_is_changed_in_one_place_as_a_file_editor_changes_a_file(
         service,
         ic(service),
         WriteSpecTool,
-        WriteSpecAction(text="# Lab\n\nBaseline: 0.98\nSeeds: 3\n"),
+        WriteSpecAction(file_text="# Lab\n\nBaseline: 0.98\nSeeds: 3\n"),
     )
 
     changed = await use(
@@ -130,7 +130,10 @@ async def test_the_spec_is_changed_in_one_place_as_a_file_editor_changes_a_file(
         ic(service),
         WriteSpecTool,
         WriteSpecAction(
-            command="str_replace", text="# New", old_str="Seeds: 3", new_str="Seeds: 5"
+            command="str_replace",
+            file_text="# New",
+            old_str="Seeds: 3",
+            new_str="Seeds: 5",
         ),
     )
     assert both.is_error
@@ -211,3 +214,9 @@ async def test_the_contracts_are_changed_by_the_ic_whose_sub_teams_keep_them(
     )
     assert leaf.is_error and "sets no contracts" in leaf.text
     assert division_lead_ic(service) is None
+
+
+def test_the_whole_spec_is_still_read_under_the_name_it_had():
+    action = WriteSpecAction.model_validate({"text": "# Lab"})
+
+    assert (action.command, action.file_text) == ("create", "# Lab")
