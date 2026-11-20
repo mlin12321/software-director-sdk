@@ -34,6 +34,7 @@ from tests.agent_server.director.test_director_review import (
     commit,
     reject,
     requests,
+    split_api,
 )
 from tests.agent_server.director.test_director_tools import (
     APPROVE,
@@ -196,6 +197,24 @@ async def test_a_review_does_not_wait_for_a_team_beside_it_that_stalls(
     assert "Team 'Web'" in told
     # The stall is told of; the review is not asked for again.
     assert requests(service, launcher) == [request]
+
+
+async def test_a_team_that_waits_for_one_below_it_is_not_stalled(
+    service: DirectorService, launcher: FakeLauncher, clock: Clock, repo: Path
+):
+    await split_api(service)
+    await looked(service)
+    clock.passes(120)
+    await looked(service)
+
+    # API waits for Schema: the wait is told of where the work is.
+    assert not any("Team 'API'" in text for text in notices(service, launcher))
+    told = [
+        text
+        for text in launcher.messages_to(ic(service, API))
+        if "has shown no progress" in text
+    ]
+    assert len(told) == 1 and "Team 'Schema'" in told[0]
 
 
 async def test_a_team_in_a_turn_is_not_asked_and_the_check_can_be_turned_off(
