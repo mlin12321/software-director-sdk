@@ -1110,6 +1110,11 @@ export interface DirectorAgentTypeInfo {
   description: string;
   /** Whether a new team of the org may be of it. */
   allowed: boolean;
+  /**
+   * The agent profile a new team of this type runs on when its making names
+   * none. Optional so that a server from before it is read too.
+   */
+  sas_profile?: string | null;
 }
 
 /** What holds for new teams of the org, and what it has to choose from. */
