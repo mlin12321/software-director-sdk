@@ -287,23 +287,23 @@ async def test_an_org_is_not_made_with_a_top_team_of_an_unknown_type(
 async def test_settings_come_from_director_yaml_and_a_change_holds_over_it(
     repo: Path, launcher: FakeLauncher, tmp_path: Path
 ):
-    config = org_config(tmp_path, "stall_check_minutes: 30\nmax_depth: 2\n")
+    config = org_config(tmp_path, "soft_check_in_minutes: 30\nmax_depth: 2\n")
     service = await an_org(repo, launcher, config)
     try:
-        assert service.settings.stall_check_minutes == 30
+        assert service.settings.soft_check_in_minutes == 30
         assert service.settings.max_depth == 2
         # The org page sends every setting with the one that changed: only
         # that one holds over the file, also after a restart.
         service.update_settings(
-            DirectorSettingsUpdate(stall_check_minutes=45, max_depth=2, max_teams=32)
+            DirectorSettingsUpdate(soft_check_in_minutes=45, max_depth=2, max_teams=32)
         )
     finally:
         await service.aclose()
-    config.write_text("stall_check_minutes: 30\nmax_depth: 3\nmax_teams: 5\n")
+    config.write_text("soft_check_in_minutes: 30\nmax_depth: 3\nmax_teams: 5\n")
     again = DirectorService(
         repo, config_file=config, remembered=repo.parent / "director.json"
     )
-    assert again.settings.stall_check_minutes == 45
+    assert again.settings.soft_check_in_minutes == 45
     assert again.settings.max_depth == 3
     assert again.settings.max_teams == 5
 

@@ -43,6 +43,7 @@ from openhands.agent_server.director.split import ProposedTeam
 from openhands.agent_server.event_service import (
     ActionGuard,
     ConversationRunLimitExceeded,
+    ResumeAdapter,
 )
 from openhands.agent_server.models import StartConversationRequest
 from openhands.sdk import LLM, Agent
@@ -279,6 +280,7 @@ class FakeLauncher:
     full_for: int = 0
     root_error: Exception | None = None
     guards: list[ActionGuard] = field(default_factory=list)
+    resume_adapters: list[ResumeAdapter] = field(default_factory=list)
     # What the model answers when asked to summarize a task; None: nothing.
     summary: TeamSummary | None = None
     # Called with the id of each conversation derived, once it runs.
@@ -497,6 +499,10 @@ class FakeLauncher:
     def on_action(self, guard: ActionGuard) -> Callable[[], None]:
         self.guards.append(guard)
         return lambda: self.guards.remove(guard)
+
+    def on_resume(self, adapter: ResumeAdapter) -> Callable[[], None]:
+        self.resume_adapters.append(adapter)
+        return lambda: self.resume_adapters.remove(adapter)
 
     async def summarize(self, conversation_id: UUID, task: str) -> TeamSummary | None:
         if conversation_id not in self.known:

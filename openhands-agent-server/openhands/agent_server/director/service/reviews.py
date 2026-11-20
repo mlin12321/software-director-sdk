@@ -247,7 +247,7 @@ class Reviews(Requests):
         store.set_review(place_id, review)
         self._drop_merge_checkout(place_id)
         self._tell_turns()
-        self.progressed(place_id)
+        self.progressed(place_id, by_above=True)
         self.record_event(
             place.parent_id,
             "sent_back",
@@ -783,7 +783,7 @@ class Reviews(Requests):
         submitted later, so it is asked once more after the time a team
         may show no progress, and after as long again the human is asked:
         their answer lets the org's stand wherever nothing was decided."""
-        limit = self.settings.stall_check_minutes
+        limit = self.settings.soft_check_in_minutes
         if not limit:
             return
         with self._weighing:

@@ -350,7 +350,7 @@ class Teams(Delivery):
         if stopped is not None:
             store.set_stopped(below_id, None)
             self._enqueue(lambda: self._go_on(below_id, stopped.running), below_id)
-        self.progressed(below_id)
+        self.progressed(below_id, by_above=True)
         self.tell_ic(
             below_id,
             f"The IC of the team above ({node.title}) writes:\n{text}"
@@ -504,17 +504,25 @@ class Teams(Delivery):
             if conversation_id in running and conversation_id != own:
                 await self._run_again(conversation_id, None)
 
-    def progressed(self, place_id: str | None) -> None:
+    def progressed(self, place_id: str | None, *, by_above: bool = False) -> None:
         """Note that a team got somewhere just now: the time it may show no
-        progress starts again. Safe from any thread."""
+        progress starts again. Safe from any thread.
+
+        Args:
+            by_above: The IC of the team above turned to it just now (gave
+                it a task, wrote to it, sent its work back), so the time
+                until that IC is next told how it stands starts again too.
+        """
         if place_id is None:
             return
         run = self._runs()
         seen = _progress_of(run.marked(PROGRESS).get(place_id))
+        now = self._clock().isoformat()
+        checked = now if by_above else seen.get("checked") or now
         run.mark(
             PROGRESS,
             place_id,
-            json.dumps({"at": self._clock().isoformat(), "head": seen.get("head")}),
+            json.dumps({"at": now, "head": seen.get("head"), "checked": checked}),
         )
 
     def hand_over(self, team: SessionTeam, notes: str, contracts: str) -> None:
@@ -863,7 +871,7 @@ class Teams(Delivery):
         parent_ic = await self._started_ic(above) or await self._template()
         checkout = intent.payload.get("checkout")
         self._runs().mark(TASK, place_id, task)
-        self.progressed(place_id)
+        self.progressed(place_id, by_above=True)
         started = self.store.place(place_id)
         left: list[str] = []
         # A session starts beside the team's own work: what is uncommitted

@@ -478,6 +478,38 @@ async def test_an_acp_agent_may_lead_an_org(repo: Path):
     await service.aclose()
 
 
+async def test_an_agent_loaded_again_is_given_its_tools_again(repo: Path):
+    launcher = FakeLauncher(root_kind="acp")
+    service = await started(repo, launcher)
+    [again] = launcher.resume_adapters
+    conversation_id = UUID(ic(service))
+    # As a server with no key to keep secrets under saved it.
+    saved = ACPAgent(
+        acp_command=CLAUDE,
+        mcp_config={  # type: ignore[arg-type]
+            MCP_SERVER_NAME: {"command": "python", "args": ["mcp_shim.py"]}
+        },
+    )
+
+    loaded = again(conversation_id, saved)
+
+    assert isinstance(loaded, ACPAgent) and loaded.acp_command == saved.acp_command
+    server = loaded.mcp_config[MCP_SERVER_NAME]
+    assert server.env is not None
+    token = server.env["DIRECTOR_AGENT_TOKEN"].get_secret_value()
+    assert service.agent_of(token) == conversation_id
+    assert (
+        server.env["DIRECTOR_TOOLS_URL"]
+        .get_secret_value()
+        .endswith("/api/director/tools")
+    )
+    # An agent that is not of the org, or runs the server's tools, is kept.
+    other = ACPAgent(acp_command=CLAUDE)
+    assert again(conversation_id, other) is other
+    await service.aclose()
+    assert launcher.resume_adapters == []
+
+
 async def test_the_agent_of_an_org_reaches_the_tools_as_itself(repo: Path):
     launcher = FakeLauncher(root_kind="acp")
     service = await started(repo, launcher)

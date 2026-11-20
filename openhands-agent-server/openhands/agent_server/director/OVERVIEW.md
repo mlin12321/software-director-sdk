@@ -170,12 +170,24 @@ There is no limit on rejections, by decision. What ends a loop:
 ### What is a stall question?
 
 A team stalls when it owes work and shows no progress for
-`stall_check_minutes` (default 120): no commit in its folder, nothing
+`soft_check_in_minutes` (default 120): no commit in its folder, nothing
 submitted, no escalation. Before the IC above is told, the director asks the
 stalled team's own IC, on a copy of its conversation so that nothing is
 added to it: what it is working on, what has kept it from committing or
 submitting, and what it needs. The answer goes into the notice. It is not
 asked while that IC is in a turn.
+
+### What is a check-in?
+
+A team that commits steadily never stalls, however long it takes. So the IC
+above is also told how a team that has not submitted stands every
+`hard_check_in_minutes` (default 360), whether or not it shows progress: whether
+its IC is in a turn, its last commit, and where to look. The time is counted
+from when that IC last turned to the team (gave it its task, wrote to it,
+sent its work back) or was last told of it, and is never shorter than
+`soft_check_in_minutes`. A stall notice counts as being told, so a team is
+never told of twice at once, and teams due at the same time are told of in
+one message. The team itself is not asked or disturbed.
 
 ### What can the human do?
 

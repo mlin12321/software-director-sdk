@@ -26,6 +26,7 @@ from openhands.agent_server.event_service import (
     LEASE_RENEW_INTERVAL_SECONDS,
     ActionGuard,
     EventService,
+    ResumeAdapter,
     RunSlot,
     ServiceInactive,
 )
@@ -704,6 +705,7 @@ class ConversationService:
         default_factory=list, init=False
     )
     _action_guards: list[ActionGuard] = field(default_factory=list, init=False)
+    _resume_adapters: list[ResumeAdapter] = field(default_factory=list, init=False)
 
     def add_execution_status_listener(
         self, listener: ExecutionStatusListener
@@ -739,6 +741,21 @@ class ConversationService:
         def stop() -> None:
             if guard in self._action_guards:
                 self._action_guards.remove(guard)
+
+        return stop
+
+    def add_resume_adapter(self, adapter: ResumeAdapter) -> Callable[[], None]:
+        """Pass the saved agent of every conversation that is loaded again
+        through ``adapter`` before it starts.
+
+        Returns:
+            A function that stops the calls.
+        """
+        self._resume_adapters.append(adapter)
+
+        def stop() -> None:
+            if adapter in self._resume_adapters:
+                self._resume_adapters.remove(adapter)
 
         return stop
 
@@ -2828,6 +2845,7 @@ class ConversationService:
             owner_instance_id=self.owner_instance_id,
             lease_ttl_seconds=self.lease_ttl_seconds,
             action_guards=self._action_guards,
+            resume_adapters=self._resume_adapters,
         )
         # Lease renewal is handled by the centralized
         # _renew_all_leases_loop task on ConversationService.

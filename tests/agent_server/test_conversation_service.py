@@ -166,6 +166,42 @@ async def test_meta_json_has_no_agent_and_reload_uses_base_state(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_a_resume_adapter_changes_the_saved_agent_before_it_starts(tmp_path):
+    conversations_dir = tmp_path / "conversations"
+    workspace_dir = tmp_path / "workspace"
+    workspace_dir.mkdir()
+    request = StartConversationRequest(
+        agent=Agent(llm=LLM(model="gpt-4o", usage_id="test-llm"), tools=[]),
+        workspace=LocalWorkspace(working_dir=str(workspace_dir)),
+        confirmation_policy=NeverConfirm(),
+    )
+    async with ConversationService(conversations_dir=conversations_dir) as service:
+        info, _ = await service.start_conversation(request)
+        conv_id = info.id
+
+    seen = []
+
+    def adapt(conversation_id, agent):
+        seen.append((conversation_id, agent.llm.model))
+        return agent.model_copy(
+            update={"llm": agent.llm.model_copy(update={"model": "gpt-4o-mini"})}
+        )
+
+    async with ConversationService(conversations_dir=conversations_dir) as service2:
+        stop = service2.add_resume_adapter(adapt)
+        assert await service2.resume_conversation(conv_id)
+        event_service = await service2.get_event_service(conv_id)
+        assert event_service is not None
+        state = await event_service.get_state()
+
+        assert seen == [(conv_id, "gpt-4o")]
+        assert state.agent.llm.model == "gpt-4o-mini"
+        assert event_service.get_conversation().agent.llm.model == "gpt-4o-mini"
+        stop()
+        assert service2._resume_adapters == []
+
+
+@pytest.mark.asyncio
 async def test_max_budget_per_run_update_survives_restart_and_fork(tmp_path):
     conversations_dir = tmp_path / "conversations"
     workspace_dir = tmp_path / "workspace"

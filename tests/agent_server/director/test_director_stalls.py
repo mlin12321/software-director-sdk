@@ -8,7 +8,11 @@ from uuid import UUID
 
 import pytest
 
-from openhands.agent_server.director.models import DirectorSettingsUpdate, SplitChild
+from openhands.agent_server.director.models import (
+    DirectorSettings,
+    DirectorSettingsUpdate,
+    SplitChild,
+)
 from openhands.agent_server.director.service import DirectorService
 from openhands.agent_server.director.tools import (
     ApproveTeamsTool,
@@ -233,7 +237,7 @@ async def test_a_team_in_a_turn_is_not_asked_and_the_check_can_be_turned_off(
         asked for asked, _ in launcher.agents_asked
     ]
 
-    service.update_settings(DirectorSettingsUpdate(stall_check_minutes=0))
+    service.update_settings(DirectorSettingsUpdate(soft_check_in_minutes=0))
     clock.passes(1000)
     await looked(service)
     assert len(notices(service, launcher)) == 2
@@ -527,3 +531,132 @@ async def test_the_time_a_team_was_stopped_is_not_time_without_progress(
     await looked(service)
 
     assert stalls() == before
+
+
+def check_ins(service: DirectorService, launcher: FakeLauncher, title: str) -> list:
+    """The check-ins the top team's IC was sent about the team ``title``."""
+    return [
+        text
+        for text in launcher.messages_to(ic(service))
+        if f"Check-in: team {title!r}" in text
+    ]
+
+
+async def working_for(
+    service: DirectorService, clock: Clock, repo: Path, minutes: int
+) -> None:
+    """Have API commit every 100 minutes for ``minutes``, so that it never
+    shows no progress."""
+    for step in range(minutes // 100):
+        clock.passes(100)
+        commit(repo, "services/api/app.py", f"step = {clock.now.isoformat()}{step}\n")
+        await looked(service)
+    clock.passes(minutes % 100)
+    await looked(service)
+
+
+async def test_the_ic_above_is_told_of_a_team_at_work_after_the_check_in_time(
+    service: DirectorService, launcher: FakeLauncher, clock: Clock, repo: Path
+):
+    await looked(service)
+    await working_for(service, clock, repo, 359)
+    assert check_ins(service, launcher, "API") == []
+    assert not any("Team 'API'" in text for text in notices(service, launcher))
+
+    clock.passes(1)
+    await looked(service)
+
+    [told] = check_ins(service, launcher, "API")
+    assert "you last turned to it or were told of it 6 h ago" in told
+    assert "nothing has to be wrong" in told and "again in 6 h" in told
+    assert "git log --oneline -5 -- services/api" in told
+
+    # Once for each such stretch of time.
+    await working_for(service, clock, repo, 359)
+    assert len(check_ins(service, launcher, "API")) == 1
+    clock.passes(1)
+    await looked(service)
+    assert len(check_ins(service, launcher, "API")) == 2
+
+
+async def test_a_team_told_of_as_showing_no_progress_is_not_checked_in_on_too(
+    service: DirectorService, launcher: FakeLauncher, clock: Clock
+):
+    await looked(service)
+    for _ in range(9):
+        clock.passes(120)
+        await looked(service)
+
+    # Eighteen hours without progress: told of every two, and never twice.
+    about_web = [text for text in notices(service, launcher) if "Team 'Web'" in text]
+    assert len(about_web) == 9
+    assert check_ins(service, launcher, "Web") == []
+
+
+async def test_the_check_in_time_starts_again_when_the_ic_above_writes_to_the_team(
+    service: DirectorService, launcher: FakeLauncher, clock: Clock, repo: Path
+):
+    await looked(service)
+    await working_for(service, clock, repo, 300)
+    await use(
+        service,
+        ic(service),
+        MsgTeamTool,
+        MsgTeamAction(team=API, text="Keep the orders table as it is."),
+    )
+    await working_for(service, clock, repo, 359)
+    assert check_ins(service, launcher, "API") == []
+
+    clock.passes(1)
+    await looked(service)
+
+    assert len(check_ins(service, launcher, "API")) == 1
+
+
+async def test_a_check_in_is_never_sooner_than_the_time_without_progress_allowed(
+    service: DirectorService, launcher: FakeLauncher, clock: Clock, repo: Path
+):
+    service.update_settings(DirectorSettingsUpdate(hard_check_in_minutes=60))
+    await looked(service)
+    await working_for(service, clock, repo, 119)
+    assert check_ins(service, launcher, "API") == []
+
+    clock.passes(1)
+    await looked(service)
+    assert len(check_ins(service, launcher, "API")) == 1
+
+    # Turned off, nobody is checked in on; without the other check it
+    # still runs by itself.
+    service.update_settings(DirectorSettingsUpdate(hard_check_in_minutes=0))
+    await working_for(service, clock, repo, 400)
+    assert len(check_ins(service, launcher, "API")) == 1
+    service.update_settings(
+        DirectorSettingsUpdate(hard_check_in_minutes=60, soft_check_in_minutes=0)
+    )
+    await working_for(service, clock, repo, 60)
+    assert len(check_ins(service, launcher, "API")) == 2
+
+
+async def test_teams_checked_in_on_at_once_are_told_of_in_one_message(
+    service: DirectorService, launcher: FakeLauncher, clock: Clock, repo: Path
+):
+    service.update_settings(DirectorSettingsUpdate(soft_check_in_minutes=0))
+    await looked(service)
+    before = len(launcher.messages_to(ic(service)))
+    clock.passes(360)
+    await looked(service)
+
+    [told] = launcher.messages_to(ic(service))[before:]
+    assert "Check-in: team 'API'" in told and "Check-in: team 'Web'" in told
+
+
+def test_the_names_the_two_check_ins_had_before_are_still_read():
+    earlier = DirectorSettings.model_validate(
+        {"stall_check_minutes": 30, "check_in_minutes": 90}
+    )
+    assert (earlier.soft_check_in_minutes, earlier.hard_check_in_minutes) == (30, 90)
+    # Where both are there, the name of now is the one that counts.
+    both = DirectorSettings.model_validate(
+        {"stall_check_minutes": 30, "soft_check_in_minutes": 45}
+    )
+    assert both.soft_check_in_minutes == 45

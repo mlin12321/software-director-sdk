@@ -1029,7 +1029,14 @@ export interface DirectorSettings {
    * with its work sent back, before the IC of the team above is told. 0
    * turns the check off.
    */
-  stall_check_minutes: number;
+  soft_check_in_minutes: number;
+  /**
+   * After how many minutes the IC of the team above is told how a team that
+   * has not submitted stands, whether or not it shows progress. Counted from
+   * when that IC last wrote to the team, sent its work back, or was told of
+   * it, and never shorter than soft_check_in_minutes. 0 turns the check-in off.
+   */
+  hard_check_in_minutes: number;
   /**
    * After how many reviews its IC accepted a Manager is woken to look at its
    * teams, without a message from its IC. 0 turns the check off.

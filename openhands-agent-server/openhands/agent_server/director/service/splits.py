@@ -333,7 +333,7 @@ class Splits(Watch):
                 # Under a new team it starts from now: its time without
                 # progress, and what was held for it while a team above
                 # was stopped.
-                self.progressed(below_id)
+                self.progressed(below_id, by_above=True)
                 if plan.get("was_stopped"):
                     self._enqueue(
                         lambda below_id=below_id: self._go_on(

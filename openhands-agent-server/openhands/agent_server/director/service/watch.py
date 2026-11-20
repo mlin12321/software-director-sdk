@@ -4,6 +4,7 @@ import asyncio
 import json
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Any
 from uuid import UUID
 
 from openhands.agent_server.director.git import (
@@ -22,12 +23,14 @@ from openhands.agent_server.director.org_store import (
 )
 from openhands.agent_server.director.prompts import (
     STALL_QUESTION,
+    check_in_notice,
     stall_notice,
     unstarted_notice,
 )
 from openhands.agent_server.director.run_state import (
     PROGRESS,
     USE,
+    RunState,
 )
 from openhands.agent_server.director.service.reviews import Reviews
 from openhands.agent_server.director.service.state import (
@@ -282,19 +285,40 @@ class Watch(Reviews):
             and not any(above.stopped for above in self.store.above(team.id))
         )
 
+    def _may_be_checked_in_on(self, team: SessionTeam) -> bool:
+        """Whether the IC above is told from time to time how a team stands:
+        it owes work, is not stopped, and an IC stands above it."""
+        store = self.store
+        above = store.place(team.parent_id) if team.parent_id else None
+        return (
+            above is not None
+            and not is_division_lead(above)
+            and agent_conversation(above, "ic") is not None
+            and self._owes_work(team)
+            and team.stopped is None
+            and not any(each.stopped for each in store.above(team.id))
+        )
+
     async def _check_stalls(self) -> None:
         """Tell the IC above of each team that has shown no progress for
-        longer than the org allows, once for every such stretch of time."""
-        limit = self.settings.stall_check_minutes
+        longer than the org allows, once for every such stretch of time, and
+        of each team it has not turned to or been told of for the time
+        between two check-ins. A team is never told of twice at once: being
+        told that it shows no progress is a check-in too."""
+        limit = self.settings.soft_check_in_minutes
+        check_in = self.settings.hard_check_in_minutes
         store = self._store
-        if not limit or store is None or self._paused is not None:
+        if (not limit and not check_in) or store is None or self._paused is not None:
             return
-        await asyncio.to_thread(self._check_managers)
+        if limit:
+            await asyncio.to_thread(self._check_managers)
         run = self._runs()
         marks = run.marked(PROGRESS)
         teams = {team.id: team for team in store.places()}
         for gone in marks.keys() - teams.keys():
             run.unmark(PROGRESS, gone)
+        # What each IC is told of the teams below it, in one message.
+        check_ins: dict[str, list[str]] = {}
         for team in teams.values():
             if team.parent_id is None:
                 continue
@@ -303,42 +327,91 @@ class Watch(Reviews):
             head = await asyncio.to_thread(
                 last_commit_in, Path(team.worktree_path), team.boundary.path
             )
-            if "at" not in seen or head != seen.get("head"):
-                # Seen for the first time, or it has committed since.
-                run.mark(
-                    PROGRESS, team.id, json.dumps({"at": now.isoformat(), "head": head})
+            if "at" not in seen:
+                # Seen for the first time.
+                first = {
+                    "at": now.isoformat(),
+                    "head": head,
+                    "checked": now.isoformat(),
+                }
+                run.mark(PROGRESS, team.id, json.dumps(first))
+                continue
+            if head != seen.get("head"):
+                # It has committed since.
+                seen = {
+                    "at": now.isoformat(),
+                    "head": head,
+                    "checked": seen.get("checked") or now.isoformat(),
+                }
+                run.mark(PROGRESS, team.id, json.dumps(seen))
+            elif limit and self._tell_if_stalled(team, seen, now, limit, run):
+                continue
+            if not check_in or not self._may_be_checked_in_on(team):
+                continue
+            checked = datetime.fromisoformat(seen.get("checked") or seen["at"])
+            if now - checked < timedelta(minutes=max(check_in, limit)):
+                continue
+            # Told of now, so it is not told of as showing no progress
+            # before as long again.
+            told = {"checked": now.isoformat(), "told": now.isoformat()}
+            run.mark(PROGRESS, team.id, json.dumps({**seen, **told}))
+            ic = agent_conversation(team, "ic")
+            check_ins.setdefault(team.parent_id, []).append(
+                check_in_notice(
+                    team,
+                    int((now - checked).total_seconds() // 60),
+                    in_a_turn=ic in self._running,
+                    head=head,
+                    again=max(check_in, limit),
                 )
-                continue
-            unstarted = self._waits_for_a_task(team)
-            if not unstarted and not self._may_stall(team):
-                continue
-            since = datetime.fromisoformat(seen["at"])
-            told = seen.get("told")
-            if unstarted and told is not None:
-                # Said once: a team may be left without a task on purpose.
-                continue
-            if now - datetime.fromisoformat(told or seen["at"]) < timedelta(
-                minutes=limit
-            ):
-                continue
-            run.mark(PROGRESS, team.id, json.dumps({**seen, "told": now.isoformat()}))
-            if unstarted:
-                self.tell_ic(
-                    team.parent_id,
-                    unstarted_notice(team, int((now - since).total_seconds() // 60)),
-                )
-                continue
-            if told is None:
-                # The IC above has this much time to act before it shows
-                # no progress itself.
-                self.progressed(team.parent_id)
-            minutes = int((now - since).total_seconds() // 60)
-            self._enqueue(
-                lambda team_id=team.id, minutes=minutes: self._tell_of_stall(
-                    team_id, minutes
-                ),
-                f"review:{team.id}",
             )
+        for above_id, texts in check_ins.items():
+            self.tell_ic(above_id, "\n\n".join(texts))
+
+    def _tell_if_stalled(
+        self,
+        team: SessionTeam,
+        seen: dict[str, Any],
+        now: datetime,
+        limit: int,
+        run: RunState,
+    ) -> bool:
+        """Have the IC above told of a team that has shown no progress for
+        ``limit`` minutes since it last did, or since that IC was last told.
+
+        Returns:
+            Whether it is told of now.
+        """
+        unstarted = self._waits_for_a_task(team)
+        if not unstarted and not self._may_stall(team):
+            return False
+        since = datetime.fromisoformat(seen["at"])
+        told = seen.get("told")
+        if unstarted and told is not None:
+            # Said once: a team may be left without a task on purpose.
+            return False
+        if now - datetime.fromisoformat(told or seen["at"]) < timedelta(minutes=limit):
+            return False
+        again = {"told": now.isoformat(), "checked": now.isoformat()}
+        run.mark(PROGRESS, team.id, json.dumps({**seen, **again}))
+        if unstarted and team.parent_id is not None:
+            self.tell_ic(
+                team.parent_id,
+                unstarted_notice(team, int((now - since).total_seconds() // 60)),
+            )
+            return True
+        if told is None:
+            # The IC above has this much time to act before it shows
+            # no progress itself.
+            self.progressed(team.parent_id)
+        minutes = int((now - since).total_seconds() // 60)
+        self._enqueue(
+            lambda team_id=team.id, minutes=minutes: self._tell_of_stall(
+                team_id, minutes
+            ),
+            f"review:{team.id}",
+        )
+        return True
 
     async def _tell_of_stall(self, place_id: str, minutes: int) -> None:
         store = self.store

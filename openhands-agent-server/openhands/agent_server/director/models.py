@@ -1,8 +1,8 @@
 """Wire models for the director API."""
 
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from openhands.agent_server.models import StartConversationRequest
 
@@ -822,6 +822,13 @@ class MemorySync(BaseModel):
     )
 
 
+# What a setting was called before, and what it is called now.
+_EARLIER_SETTING_NAMES = {
+    "stall_check_minutes": "soft_check_in_minutes",
+    "check_in_minutes": "hard_check_in_minutes",
+}
+
+
 class DirectorSettings(BaseModel):
     """Limits on the teams an org may still add, and how it starts again.
 
@@ -882,13 +889,26 @@ class DirectorSettings(BaseModel):
             "model rewrites them into one shorter report."
         ),
     )
-    stall_check_minutes: int = Field(
+    soft_check_in_minutes: int = Field(
         default=120,
         ge=0,
         description=(
-            "How many minutes a team may show no progress, with nothing "
-            "submitted or with its work sent back, before the IC of the "
-            "team above is told. 0 turns the check off."
+            "The soft check-in: how many minutes a team may show no "
+            "progress, with nothing submitted or with its work sent back, "
+            "before the IC of the team above is told. A team that shows "
+            "progress is never told of by it. 0 turns it off."
+        ),
+    )
+    hard_check_in_minutes: int = Field(
+        default=360,
+        ge=0,
+        description=(
+            "The hard check-in: after how many minutes the IC of the team "
+            "above is told how a team that has not submitted stands, "
+            "whether or not it shows progress. Counted from when that IC "
+            "last wrote to the team, "
+            "sent its work back, or was told of it, and never shorter than "
+            "soft_check_in_minutes. 0 turns the check-in off."
         ),
     )
     manager_check_accepted_reviews: int = Field(
@@ -933,6 +953,20 @@ class DirectorSettings(BaseModel):
         description="How many sessions may be open at once. 0: no limit.",
     )
 
+    @model_validator(mode="before")
+    @classmethod
+    def _earlier_names(cls, values: Any) -> Any:
+        """Read the names these two settings had before: a ``director.yaml``
+        or kept settings written then still load."""
+        if not isinstance(values, dict):
+            return values
+        values = dict(values)
+        for earlier, name in _EARLIER_SETTING_NAMES.items():
+            if earlier in values:
+                kept = values.pop(earlier)
+                values.setdefault(name, kept)
+        return values
+
 
 class DirectorSettingsUpdate(BaseModel):
     """New values for some of the settings; what is left out stays."""
@@ -944,7 +978,8 @@ class DirectorSettingsUpdate(BaseModel):
     allowed_agent_types: list[str] | None = None
     resume_on_start: bool | None = None
     report_compaction_chars: int | None = Field(default=None, ge=1_000)
-    stall_check_minutes: int | None = Field(default=None, ge=0)
+    soft_check_in_minutes: int | None = Field(default=None, ge=0)
+    hard_check_in_minutes: int | None = Field(default=None, ge=0)
     manager_check_accepted_reviews: int | None = Field(default=None, ge=0)
     manager_check_ic_setbacks: int | None = Field(default=None, ge=0)
     route_requests: bool | None = None
