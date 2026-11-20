@@ -242,16 +242,29 @@ class Watch(Reviews):
             )
         self._save_soon()
 
-    def _may_stall(self, team: SessionTeam) -> bool:
-        """Whether a team owes work nobody waits to give it: it has not
-        submitted, or its work was sent back, and nothing holds it."""
+    def _owes_work(self, team: SessionTeam) -> bool:
+        """Whether a team has yet to submit, or to submit again, and nothing
+        holds it."""
         return (
             team.parent_id is not None
             and team.status != "blocked"
             and not team.waiting_to_start
             and (team.review is None or team.review.state == "changes_requested")
             and agent_conversation(team, "ic") is not None
+        )
+
+    def _may_stall(self, team: SessionTeam) -> bool:
+        """Whether a team owes work nobody waits to give it: it has not
+        submitted, or its work was sent back, and nothing holds it. A team
+        that waits for one below it that owes work is not such a team: the
+        wait is counted where the work is."""
+        return (
+            self._owes_work(team)
             and not any(above.stopped for above in self.store.above(team.id))
+            and not any(
+                below.stopped is None and self._owes_work(below)
+                for below in self.store.below(team.id)
+            )
         )
 
     def _waits_for_a_task(self, team: SessionTeam) -> bool:
