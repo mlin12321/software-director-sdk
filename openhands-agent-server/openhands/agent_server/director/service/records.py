@@ -706,7 +706,14 @@ class Records(ServiceState):
             ),
             "agent_profiles_a_sub_team_may_run_on": self.settings.allowed_profiles,
             "types_a_sub_team_may_be": {
-                kind.name: kind.description for kind in self.types_allowed()
+                kind.name: kind.description
+                + (
+                    f" Runs on the agent profile {kind.sas_profile!r} unless "
+                    "you name another."
+                    if kind.sas_profile
+                    else ""
+                )
+                for kind in self.types_allowed()
             },
             "type_of_a_sub_team_that_names_none": self.default_type(),
             # The proposal itself is in the message that made it.

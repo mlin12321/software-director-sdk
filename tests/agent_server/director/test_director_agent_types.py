@@ -450,3 +450,79 @@ async def test_every_org_starts_with_what_director_yaml_says_of_types(
         assert state.own == OrgSettings()
     finally:
         await service.aclose()
+
+
+def a_type_on(folder: Path, body: str) -> None:
+    (folder / "config" / "types" / "auditor.yaml").write_text(
+        "description: Checks what other teams claim.\n" + body
+    )
+
+
+async def test_a_type_can_name_the_profile_its_teams_run_on(
+    service: DirectorService, launcher: FakeLauncher, tmp_path: Path
+):
+    launcher.profiles = {"checker": "openhands", "other": "openhands"}
+    a_type_on(tmp_path, "sas_profile: checker\n")
+    service.update_settings(DirectorSettingsUpdate(allowed_profiles=["other"]))
+    context = service.context_of(node(service, "root"), "ic")
+    assert "'checker'" in context["types_a_sub_team_may_be"]["auditor"]
+    [info] = [
+        kind
+        for kind in service.org_settings_state().agent_types
+        if kind.name == "auditor"
+    ]
+    assert info.sas_profile == "checker"
+
+    await use(
+        service,
+        ic(service),
+        ProposeTeamsTool,
+        proposing(
+            [
+                # The type's profile, though no IC may choose it itself.
+                SplitChild(title="A", path="a", task="Audit", agent_type="auditor"),
+                # The proposal's own choice holds over the type's.
+                SplitChild(
+                    title="B",
+                    path="b",
+                    task="Audit",
+                    agent_type="auditor",
+                    agent_profile="other",
+                ),
+                # A type that names none says nothing of what runs it.
+                SplitChild(title="C", path="c", task="Tabulate", agent_type="analyst"),
+            ]
+        ),
+    )
+    await use(service, manager(service), ApproveTeamsTool, APPROVE)
+    await tasked(service)
+
+    assert node(service, "a").agent_profile == "checker"
+    assert node(service, "b").agent_profile == "other"
+    assert node(service, "c").agent_profile is None
+
+
+async def test_a_type_whose_profile_the_server_does_not_have_is_refused(
+    service: DirectorService, launcher: FakeLauncher, tmp_path: Path
+):
+    a_type_on(tmp_path, "sas_profile: checker\n")
+
+    answer = await use(
+        service,
+        ic(service),
+        ProposeTeamsTool,
+        proposing(
+            [SplitChild(title="A", path="a", task="Audit", agent_type="auditor")]
+        ),
+    )
+
+    assert answer.is_error
+    assert "'checker'" in answer.text and "has none of that name" in answer.text
+    assert node(service, "root").pending_split is None
+
+
+def test_a_types_profile_is_still_read_under_the_name_it_had(tmp_path: Path):
+    path = tmp_path / "auditor.yaml"
+    path.write_text("description: Checks claims.\nmodel: checker\n")
+
+    assert _read(path, DIRECTOR_TOOL_NAMES).sas_profile == "checker"

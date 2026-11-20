@@ -19,7 +19,14 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+)
 
 from openhands.agent_server.director.models import AgentRole
 
@@ -91,11 +98,15 @@ class AgentType(BaseModel):
         description="What a tool of the director means to this type, by its name.",
     )
     review: ReviewTexts = Field(default_factory=ReviewTexts)
-    model: str | None = Field(
+    sas_profile: str | None = Field(
         default=None,
+        validation_alias=AliasChoices("sas_profile", "model"),
         description=(
-            "The agent profile a team of this type runs on when its proposal "
-            "names none. It must be one the org allows."
+            "The agent profile of the server (a software-agent-sdk profile) "
+            "that a new team of this type runs on when its proposal names "
+            "none. It is the one thing a type says of what runs it: a type "
+            "without it runs on whatever the team above does, and any "
+            "profile can run any type. `model` is read as this too."
         ),
     )
     omit_tools: list[str] = Field(
