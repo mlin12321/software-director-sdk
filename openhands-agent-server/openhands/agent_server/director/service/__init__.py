@@ -205,7 +205,13 @@ class DirectorService(Sync):
         workspace = await asyncio.to_thread(
             Path(conversation.workspace.working_dir).resolve
         )
-        if not await asyncio.to_thread(is_git_repository, workspace):
+        owns_git = await asyncio.to_thread(lambda: (workspace / ".git").exists())
+        if request.at_workspace:
+            if not owns_git:
+                raise Unavailable(
+                    f"An org needs a git repository; {workspace} is not one"
+                )
+        elif not await asyncio.to_thread(is_git_repository, workspace):
             raise Unavailable(f"An org needs a git repository; {workspace} is not one")
         repository = await asyncio.to_thread(_checkout_root, str(workspace))
         if conversation.conversation_runtime == "docker":
@@ -229,7 +235,7 @@ class DirectorService(Sync):
         async with self._create_lock:
             if store.root_id is not None:
                 raise Conflict("The director already has an org")
-            if await asyncio.to_thread(self._join, workspace):
+            if await asyncio.to_thread(self._join, workspace, not request.at_workspace):
                 # The repository holds an org already, which this server
                 # was not pointed at: it is taken up, never written over.
                 await self._came_back()
@@ -322,8 +328,8 @@ class DirectorService(Sync):
         said it, and no further: the human wrote to that team.
 
         Without an org, the message joins the one saved in the repository of
-        the conversation it comes with (or above it), and failing that
-        starts one there and becomes its task.
+        the conversation it comes with (or above it, unless ``at_workspace``),
+        and failing that starts one there and becomes its task.
 
         Raises:
             Unprocessable: The path is outside the org's repository, or there
@@ -344,7 +350,9 @@ class DirectorService(Sync):
                 )
             if store.root_id is None and conversation is not None:
                 joined = await asyncio.to_thread(
-                    self._join, Path(conversation.workspace.working_dir)
+                    self._join,
+                    Path(conversation.workspace.working_dir),
+                    not request.at_workspace,
                 )
                 if not joined:
                     opened = await self.create_org(
@@ -352,6 +360,7 @@ class DirectorService(Sync):
                             task=request.text,
                             agent_type=request.agent_type,
                             conversation=conversation,
+                            at_workspace=request.at_workspace,
                         )
                     )
                     return RoutedMessage(

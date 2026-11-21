@@ -61,6 +61,12 @@ export interface CreateOrgRequest {
    * initial message is ignored: the IC is briefed with `task`.
    */
   conversation: CreateConversationPayload;
+  /**
+   * The org is the git repository of the conversation's workspace itself,
+   * and not one above it. A workspace with no `.git` of its own is not a
+   * repository.
+   */
+  at_workspace?: boolean;
 }
 
 /** Something the human says to the org, from somewhere in the repository. */
@@ -98,6 +104,12 @@ export interface RouteMessageRequest {
    * out, the default one. Ignored when the org exists.
    */
   agent_type?: string;
+  /**
+   * Join or start the org only in the conversation workspace's own checkout,
+   * not in a repository above it. A workspace with no `.git` of its own is
+   * not a repository.
+   */
+  at_workspace?: boolean;
 }
 
 /** A request the human wants worked on, in a session of its own. */

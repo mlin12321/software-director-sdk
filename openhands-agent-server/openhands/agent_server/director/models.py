@@ -1250,6 +1250,14 @@ class CreateOrgRequest(BaseModel):
             "with `task`."
         )
     )
+    at_workspace: bool = Field(
+        default=False,
+        description=(
+            "The org is the git repository of the conversation's workspace "
+            "itself, and not one above it. A workspace with no `.git` of its "
+            "own is not a repository."
+        ),
+    )
 
 
 class RouteMessageRequest(BaseModel):
@@ -1302,6 +1310,14 @@ class RouteMessageRequest(BaseModel):
             "already has a saved org, that org is taken up and the message "
             "routed in it; otherwise the message starts an org there and "
             "becomes its task. See `CreateOrgRequest`."
+        ),
+    )
+    at_workspace: bool = Field(
+        default=False,
+        description=(
+            "Join or start the org only in the conversation workspace's own "
+            "checkout, not in a repository above it. A workspace with no "
+            "`.git` of its own is not a repository."
         ),
     )
 
