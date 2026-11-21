@@ -1289,15 +1289,22 @@ class ServiceState:
             self._enqueue(self._came_back)
         return store
 
-    def _load_from(self, directory: Path, store: OrgStore) -> bool:
-        """Load the org saved in the repository of ``directory``, or failing
-        that in the nearest repository above that has it as a submodule.
+    def _load_from(
+        self, directory: Path, store: OrgStore, *, climb: bool = True
+    ) -> bool:
+        """Load the org saved in the repository of ``directory``.
+
+        With ``climb``, a repository that has none is followed by the nearest
+        one above that has it as a submodule. Without it, only a ``.git`` in
+        ``directory`` itself counts.
 
         Returns:
             Whether one was found. The director then works in its repository.
         """
         repository: Path | None = directory
         while repository is not None and is_git_repository(repository):
+            if not climb and not (repository / ".git").exists():
+                return False
             if load_org(create_org_board(repository), store):
                 self._repo_dir = _checkout_root(str(repository))
                 logger.info("Director loaded %d teams from %s", len(store), repository)
@@ -1310,12 +1317,14 @@ class ServiceState:
                 finally:
                     kept.close()
                 return True
+            if not climb:
+                return False
             repository = enclosing_repository(repository)
         return False
 
-    def _join(self, workspace: Path) -> bool:
-        """Take up the org saved at or above ``workspace``, if there is one."""
-        if not self._load_from(workspace, self.store):
+    def _join(self, workspace: Path, climb: bool = True) -> bool:
+        """Take up the org saved at ``workspace``, or above it when ``climb``."""
+        if not self._load_from(workspace, self.store, climb=climb):
             return False
         self._remember(repo_path=str(self._repo_dir))
         return True

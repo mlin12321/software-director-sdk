@@ -993,6 +993,102 @@ async def test_the_first_message_in_a_submodule_starts_its_org_there_when_none_i
         run_git(repo, "rev-parse", "--verify", "--quiet", ORG_REF)
 
 
+async def test_a_chat_folder_without_its_own_git_does_not_use_the_repository_above(
+    repo: Path, tmp_path: Path, launcher: FakeLauncher
+):
+    nested = repo / "app"
+    nested.mkdir()
+    service = DirectorService(tmp_path, save_delay=0)
+    await service.start(launcher)
+    try:
+        with pytest.raises(Unavailable, match="app"):
+            await service.route_message(
+                RouteMessageRequest(
+                    text="Add refunds",
+                    conversation=root_conversation(nested),
+                    at_workspace=True,
+                )
+            )
+        assert service.store.root_id is None
+    finally:
+        await service.aclose()
+
+
+async def test_a_message_from_a_subdirectory_still_starts_the_org_above(
+    repo: Path, tmp_path: Path, launcher: FakeLauncher
+):
+    nested = repo / "app"
+    nested.mkdir()
+    service = DirectorService(tmp_path, save_delay=0)
+    await service.start(launcher)
+    try:
+        routed = await service.route_message(
+            RouteMessageRequest(
+                text="Add refunds", conversation=root_conversation(nested)
+            )
+        )
+        await service.settled()
+    finally:
+        await service.aclose()
+
+    assert routed.started_org
+    assert service.summary().repo_path == str(repo)
+
+
+async def test_a_chat_folder_that_is_its_own_repository_does_not_join_the_one_above(
+    repo: Path, submodule: Path, tmp_path: Path, launcher: FakeLauncher
+):
+    above = DirectorService(repo, save_delay=0)
+    await above.start(launcher)
+    await above.create_org(org_request(repo))
+    await above.settled()
+    await above.aclose()
+
+    service = DirectorService(tmp_path, save_delay=0)
+    await service.start(launcher)
+    try:
+        routed = await service.route_message(
+            RouteMessageRequest(
+                text="Add refunds",
+                conversation=root_conversation(submodule),
+                at_workspace=True,
+            )
+        )
+        await service.settled()
+    finally:
+        await service.aclose()
+
+    assert routed.started_org
+    assert service.summary().repo_path == str(submodule)
+    assert run_git(submodule, "rev-parse", ORG_REF).strip()
+    assert run_git(repo, "rev-parse", ORG_REF).strip()
+
+
+async def test_a_message_from_a_submodule_still_joins_the_org_above(
+    repo: Path, submodule: Path, tmp_path: Path, launcher: FakeLauncher
+):
+    above = DirectorService(repo, save_delay=0)
+    await above.start(launcher)
+    await above.create_org(org_request(repo))
+    await above.settled()
+    await above.aclose()
+
+    service = DirectorService(tmp_path, save_delay=0)
+    await service.start(launcher)
+    try:
+        routed = await service.route_message(
+            RouteMessageRequest(
+                text="Add refunds", conversation=root_conversation(submodule)
+            )
+        )
+        await service.settled()
+    finally:
+        await service.aclose()
+
+    assert not routed.started_org
+    assert service.summary().repo_path == str(repo)
+
+
 @pytest.fixture
 async def confining(
     repo: Path, launcher: FakeLauncher
