@@ -258,7 +258,12 @@ class Delivery(Records):
             return text, None
         before = self._runs().marked(TOLD).get(conversation_id)
         # An agent briefed before contexts were kept is told all of it once.
-        news = changed(json.loads(before) if before else {}, now, role)
+        news = changed(
+            json.loads(before) if before else {},
+            now,
+            role,
+            works=role == self.team(node).writer,
+        )
         if not news:
             return text, None
         return f"{text}\n\n{update_block(news)}", json.dumps(now)
@@ -526,7 +531,7 @@ class Delivery(Records):
             )
 
         place = store.place(place_id)
-        conversation_id = agent_conversation(place, "ic") if place else None
+        conversation_id = self.writer_conversation(place) if place else None
         if place is None or conversation_id is None or reported():
             return
         if self._paused is not None:
@@ -561,7 +566,7 @@ class Delivery(Records):
         its request. The team it was opened at keeps its own name."""
         store = self.store
         place = store.place(place_id)
-        conversation_id = agent_conversation(place, "ic") if place else None
+        conversation_id = self.writer_conversation(place) if place else None
         if place is None or conversation_id is None or self._paused is not None:
             return
         launcher = self._require_launcher()

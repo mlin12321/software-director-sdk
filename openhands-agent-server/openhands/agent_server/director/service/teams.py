@@ -195,21 +195,6 @@ class Teams(Delivery):
         else:
             self.send(manager_node_id, sender, ic_node_id, writer, text, note)
 
-    def _writer(self, place_id: str) -> AgentRole:
-        """The member of a team that works in its folder."""
-        place = self.store.place(place_id)
-        return self.team(place).writer if place else "ic"
-
-    def _overseer(self, place_id: str) -> AgentRole:
-        """The member of a team that settles what its sub-teams are."""
-        place = self.store.place(place_id)
-        return self.team(place).overseer if place else "manager"
-
-    def _reviewer(self, place_id: str) -> AgentRole:
-        """The member of a team that the teams below turn to."""
-        place = self.store.place(place_id)
-        return self.team(place).reviewer if place else "ic"
-
     def tell(
         self,
         place_id: str,
@@ -329,7 +314,7 @@ class Teams(Delivery):
         lost = any(a.role == role and a.status == AGENT_LOST for a in team.agents)
         self.tell_above(
             team,
-            failure_notice(team, role, reason),
+            failure_notice(team, role, reason, works=role == self.team(team).writer),
             waits=failure_waits(role),
             title=f"The {name} of {team.title!r} failed",
             detail=(
@@ -702,6 +687,7 @@ class Teams(Delivery):
             self.reports_of(place),
             briefing_block(context),
             self.type_of(place).text_for(role),
+            works=role == self.team(place).writer,
         )
         return text, json.dumps(steady(context))
 

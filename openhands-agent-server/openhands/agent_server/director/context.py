@@ -74,7 +74,11 @@ def steady(context: dict[str, Any]) -> dict[str, Any]:
 
 
 def changed(
-    before: dict[str, Any], now: dict[str, Any], role: AgentRole
+    before: dict[str, Any],
+    now: dict[str, Any],
+    role: AgentRole,
+    *,
+    works: bool | None = None,
 ) -> dict[str, Any]:
     """The parts of a steady context that differ from what an agent was
     last told. A list that only grew gives what was added to it, the list
@@ -85,7 +89,7 @@ def changed(
         was = before.get(key)
         if value == was:
             continue
-        if key == "status" and role == "ic" and before:
+        if key == "status" and before and (role == "ic" if works is None else works):
             # Its own doing: it submitted, or raised what it waits on.
             continue
         if not (isinstance(value, list) and isinstance(was, list)):

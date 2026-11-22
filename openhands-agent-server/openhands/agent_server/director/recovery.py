@@ -145,9 +145,11 @@ def describe(
             for agent in (node.agents if node else [])
             if agent.conversation_id == conversation_id
         ]
-        name = ROLE_NAMES[roles[0]] if roles else ROLE_NAMES["ic"]
+        writer = store.writer_of(node) if node else "ic"
+        role = roles[0] if roles else writer
+        name = ROLE_NAMES.get(role, role)
         if store.find_hand_over(conversation_id) is not None:
-            name = f"{ROLE_NAMES['ic']} in hand-over mode"
+            name = f"{ROLE_NAMES.get(writer, writer)} in hand-over mode"
         status = statuses.get(UUID(conversation_id))
         if status is None:
             items.append(
@@ -183,7 +185,10 @@ def describe(
             starting.add(intent.node_id)
         if intent.kind == "start_team" and node is not None:
             # A place whose agents were never set has none to look at.
-            ic = next((a.conversation_id for a in node.agents if a.role == "ic"), None)
+            writer = store.writer_of(node)
+            ic = next(
+                (a.conversation_id for a in node.agents if a.role == writer), None
+            )
             if ic is not None and UUID(ic) in statuses:
                 what = STEP_NAMES["launch_manager"]
         items.append(
@@ -232,7 +237,7 @@ def describe(
             continue
         for agent in node.agents:
             if agent.status == AGENT_LOST:
-                name = ROLE_NAMES[agent.role]
+                name = ROLE_NAMES.get(agent.role, agent.role)
                 items.append(
                     _item(
                         node,

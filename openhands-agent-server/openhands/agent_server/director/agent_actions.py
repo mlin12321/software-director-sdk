@@ -65,7 +65,7 @@ def caller_of(service: DirectorService, conversation_id: UUID) -> Caller:
     node = service.store.find_hand_over(str(conversation_id))
     if node is None:
         raise NotFound("This conversation is not an agent of the org")
-    return Caller(node=node, role="ic", hand_over=True)
+    return Caller(node=node, role=service.team(node).writer, hand_over=True)
 
 
 _ASIDE = (
@@ -180,7 +180,7 @@ def write_spec(
     if caller.hand_over:
         service.note_hand_over(caller.node.id, spec=True)
     else:
-        service.knows(caller.node.id, "ic", "spec")
+        service.knows(caller.node.id, caller.role, "spec")
     return f"Saved the spec of {path or 'the repository'}."
 
 
@@ -268,7 +268,7 @@ def msg_manager(service: DirectorService, caller: Caller, text: str) -> str:
             "proposal: use propose_teams. Raise anything else with "
             "raise_escalation."
         )
-    service.message(node.id, node.id, "ic", text)
+    service.message(node.id, node.id, caller.role, text)
     return "Sent to your Manager."
 
 
@@ -289,7 +289,7 @@ def propose_teams(
     proposal = _checked(service, node, proposed)
     store = service.store
     store.update_place(node.id, pending_split=proposal)
-    service.knows(node.id, "ic", "pending_split")
+    service.knows(node.id, caller.role, "pending_split")
     replaced = [team.title for team in map(store.place, proposal.replaces) if team]
     kept = [team.title for team in map(store.place, proposal.keeps) if team]
     note = (
@@ -314,7 +314,7 @@ def propose_teams(
     service.message(
         node.id,
         node.id,
-        "ic",
+        caller.role,
         f"{said}\n\nProposed sub-teams:\n{as_written(proposed)}",
         note,
     )
@@ -346,7 +346,7 @@ def msg_ic(service: DirectorService, caller: Caller, text: str, team: str) -> st
         if waiting
         else ""
     )
-    service.message(node.id, target.id, "manager", text, note)
+    service.message(node.id, target.id, caller.role, text, note)
     return f"Sent to the IC of {target.title!r}." + (
         " The sub-teams it proposed still wait on you: approve_teams or decline_teams."
         if waiting
@@ -421,7 +421,7 @@ def decline_teams(service: DirectorService, caller: Caller, reason: str) -> str:
     service.message(
         node.id,
         node.id,
-        "manager",
+        caller.role,
         reason,
         f"\n\n[director] Your Manager declined the sub-teams you proposed "
         f"({named}); the above is its reason. Nothing was set up. Propose "
@@ -783,7 +783,7 @@ def msg_team(service: DirectorService, caller: Caller, team: str, text: str) -> 
     if not text:
         raise Invalid("A message cannot be empty")
     target = _team_below(service, caller, team)
-    new = agent_conversation(target, "ic") is None
+    new = service.writer_conversation(target) is None
     left = (
         uncommitted(Path(caller.node.worktree_path), target.boundary.path)
         if new

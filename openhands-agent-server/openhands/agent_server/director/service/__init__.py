@@ -425,11 +425,16 @@ class DirectorService(Sync):
             scope = self.scope_of(*found)
         else:
             aside = store.find_hand_over(str(conversation_id))
-            scope = self.scope_of(aside, "ic", str(conversation_id)) if aside else None
+            scope = (
+                self.scope_of(aside, self.team(aside).writer, str(conversation_id))
+                if aside
+                else None
+            )
         denied = self._confinement().check(scope, event.tool_name, action)
         if denied is None:
             return None
-        if found is not None and denied.relative is not None and found[1] == "ic":
+        works = found is not None and found[1] == self.team(found[0]).writer
+        if found is not None and works and denied.relative is not None:
             # The refusal stands whether or not it could be kept.
             with suppress(Exception):
                 self.record_need(found[0], denied.relative or ".", NEED_WRITE)
@@ -472,7 +477,7 @@ class DirectorService(Sync):
         lost = escalation_id == failure_waits(role) and any(
             a.role == role and a.status == AGENT_LOST for a in place.agents
         )
-        if lost and role == "ic":
+        if lost and role == self.team(place).writer:
             # It has no conversation to answer in: the team starts again
             # with the answer, and is asked of no longer once it has.
             async def again() -> None:

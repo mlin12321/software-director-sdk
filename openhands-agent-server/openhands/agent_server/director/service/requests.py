@@ -34,7 +34,7 @@ def _tracked(checkout: Path) -> list[str]:
     return [path for path in listed.split("\0") if path]
 
 
-def takes_requests(place: SessionTeam) -> bool:
+def takes_requests(place: SessionTeam, writer: str = "ic") -> bool:
     """Whether a request may be sent straight to a team now.
 
     Not to one that was only set up, which has not had its task from the IC
@@ -42,7 +42,7 @@ def takes_requests(place: SessionTeam) -> bool:
     whose work waits for its review, which would otherwise go on changing
     what is being reviewed.
     """
-    ic = next((agent for agent in place.agents if agent.role == "ic"), None)
+    ic = next((agent for agent in place.agents if agent.role == writer), None)
     if ic is None or ic.conversation_id is None or ic.status == AGENT_LOST:
         return False
     if place.stopped is not None:
@@ -108,7 +108,7 @@ class Requests(Teams):
             able = {
                 place.id
                 for place in rebased
-                if takes_requests(place) and at_work(place)
+                if takes_requests(place, self.team(place).writer) and at_work(place)
             }
             # A session's own checkout has the directories of the teams it
             # set up.

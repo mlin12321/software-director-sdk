@@ -73,14 +73,13 @@ from openhands.agent_server.director.service.state import (
     PAUSE_LANE,
     RESTART_NOTE,
     STALL_WAITS,
-    TOOLS_OF,
     _agent_title,
     _lane_for,
     _new_agents,
-    agent_conversation,
     apart,
     failure_waits,
     hand_over_of,
+    tools_of,
 )
 from openhands.sdk.conversation.request import AgentLaunchAdditions
 from openhands.sdk.conversation.state import ConversationExecutionStatus
@@ -381,7 +380,7 @@ class Sync(Sessions):
                     "org or wait for it to finish, then save again."
                 )
         edit = await asyncio.to_thread(write_by_hand, place, sub_teams, path, content)
-        ic = agent_conversation(place, "ic")
+        ic = self.writer_conversation(place)
         if edit.commit is not None and ic is not None and self._loop is not None:
             self.notify(
                 ic,
@@ -426,7 +425,7 @@ class Sync(Sessions):
         leads = is_division_lead(place)
         if place.status == "done":
             raise Conflict(f"Team {place.title} is done")
-        ic = agent_conversation(place, "ic")
+        ic = self.writer_conversation(place)
         if ic is not None and await launcher.started(UUID(ic)) is not None:
             raise Conflict(f"The IC of team {place.title} has a conversation here")
         conversation = request.conversation
@@ -465,7 +464,12 @@ class Sync(Sessions):
                 f"you was lost, and says:\n{said}"
             )
         # The team's other agents stay its own: only the IC is new.
-        agents = [*_new_agents(ic_id), *(a for a in place.agents if a.role != "ic")]
+        writer = self.team(place).writer
+        tools = tools_of(place, writer, kind=self.type_of(place))
+        agents = [
+            *_new_agents(ic_id, writer),
+            *(a for a in place.agents if a.role != writer),
+        ]
         if conversation is None:
             store.update_place(node_id, agents=agents, status="idle")
             self._begin(
@@ -501,24 +505,22 @@ class Sync(Sessions):
                         ),
                     }
                 ),
-                [Tool(name=name) for name in TOOLS_OF["ic"]],
-                title=_agent_title(place.title, "ic", store.session_title(place)),
-                tool_params=await asyncio.to_thread(self._confine, node_id, "ic"),
-                adapt_agent=await asyncio.to_thread(
-                    self._adapter, str(ic_id), TOOLS_OF["ic"]
-                ),
+                [Tool(name=name) for name in tools],
+                title=_agent_title(place.title, writer, store.session_title(place)),
+                tool_params=await asyncio.to_thread(self._confine, node_id, writer),
+                adapt_agent=await asyncio.to_thread(self._adapter, str(ic_id), tools),
             )
         except BaseException:
             store.update_place(node_id, agents=place.agents, status=place.status)
             raise
         store.set_agent(
             node_id,
-            "ic",
+            writer,
             kind=started.kind,
             acp_server=started.acp_server,
             model=started.model,
         )
-        self._begin("brief", node_id, role="ic", task=task)
+        self._begin("brief", node_id, role=writer, task=task)
         return store.place(node_id) or place
 
     async def _after(self, lane: str) -> None:
@@ -793,7 +795,10 @@ class Sync(Sessions):
             if now.status == "blocked" and was != "blocked":
                 # A blocked team is no longer waited for.
                 self.release_reviews(node.parent_id)
-            if role == "ic" and status == ConversationExecutionStatus.RUNNING:
+            if (
+                role == self.team(node).writer
+                and status == ConversationExecutionStatus.RUNNING
+            ):
                 self.release_reviews(node.id)
             if status != ConversationExecutionStatus.RUNNING:
                 self._remind_to_submit(node.session)
@@ -823,7 +828,9 @@ class Sync(Sessions):
 
     def _runs_again(self, team: SessionTeam, role: AgentRole) -> None:
         """An agent that runs is no longer something the human is asked of."""
-        waits = {failure_waits(role)} | ({STALL_WAITS} if role == "ic" else set())
+        waits = {failure_waits(role)} | (
+            {STALL_WAITS} if role == self.team(team).writer else set()
+        )
         settled = [e.id for e in team.escalations if e.id in waits]
         for escalation_id in settled:
             with suppress(NotFound):
@@ -872,7 +879,7 @@ class Sync(Sessions):
         top = places[0] if places else None
         if top is None or top.review is None or top.review.state != "accepted":
             return
-        self.notify(agent_conversation(top, "ic"), CHANGED_SINCE_ACCEPT)
+        self.notify(self.writer_conversation(top), CHANGED_SINCE_ACCEPT)
 
     async def _resync(self) -> None:
         """Read every agent's status back from its conversation."""

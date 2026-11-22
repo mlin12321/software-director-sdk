@@ -39,7 +39,6 @@ from openhands.agent_server.director.service.state import (
     STALL_LANE,
     STALL_WAITS,
     _progress_of,
-    agent_conversation,
 )
 from openhands.sdk.errors import (
     Conflict,
@@ -69,21 +68,26 @@ class Watch(Reviews):
         if holder is None:
             return
         history = "".join(f"\nPassed up by {entry}" for entry in passed_up)
-        if escalation.raised_by == "ic":
+        if escalation.raised_by == self.team(raiser).writer:
             # It is woken now anyway, so it gets what waits for its review too.
             self.release_reviews(holder_id)
             self.count_ic_escalation(holder_id, through.id)
+        raised_by = escalation.raised_by
         text = (
-            f"The {ROLE_NAMES[escalation.raised_by]} of team {raiser.title!r} "
+            f"The {ROLE_NAMES.get(raised_by, raised_by)} of team {raiser.title!r} "
             f"(id {raiser.id}) escalates {escalation.title!r} (escalation "
             f"{escalation.id}):\n{escalation.detail or '(no detail)'}{history}\n"
             "Settle it with resolve_escalation if you can; pass it up only with "
             "the reason you cannot."
         )
-        if escalation.raised_by == "manager":
-            self.tell_manager(holder_id, text)
-        else:
-            self.tell_ic(holder_id, text)
+        # It goes to the member of the same name above, and where the team
+        # above has none, to the one the teams below it turn to.
+        to = self.team(holder)
+        self.tell(
+            holder_id,
+            escalation.raised_by if escalation.raised_by in to.members else to.reviewer,
+            text,
+        )
 
     def stop_team(self, place_id: str, reason: str) -> None:
         """Stop a team for the IC of the team above: its agents and those
@@ -253,7 +257,7 @@ class Watch(Reviews):
             and team.status != "blocked"
             and not team.waiting_to_start
             and (team.review is None or team.review.state == "changes_requested")
-            and agent_conversation(team, "ic") is not None
+            and self.writer_conversation(team) is not None
         )
 
     def _may_stall(self, team: SessionTeam) -> bool:
@@ -293,7 +297,7 @@ class Watch(Reviews):
         return (
             above is not None
             and not is_division_lead(above)
-            and agent_conversation(above, "ic") is not None
+            and self.writer_conversation(above) is not None
             and self._owes_work(team)
             and team.stopped is None
             and not any(each.stopped for each in store.above(team.id))
@@ -355,7 +359,7 @@ class Watch(Reviews):
             # before as long again.
             told = {"checked": now.isoformat(), "told": now.isoformat()}
             run.mark(PROGRESS, team.id, json.dumps({**seen, **told}))
-            ic = agent_conversation(team, "ic")
+            ic = self.writer_conversation(team)
             check_ins.setdefault(team.parent_id, []).append(
                 check_in_notice(
                     team,
@@ -421,7 +425,7 @@ class Watch(Reviews):
             return
         if not self._may_stall(team):
             return
-        ic = agent_conversation(team, "ic")
+        ic = self.writer_conversation(team)
         in_a_turn = ic in self._running
         account = None
         if ic is not None and not in_a_turn:

@@ -58,6 +58,7 @@ from openhands.agent_server.director.headline import provisional_summary
 from openhands.agent_server.director.launch import TeamLauncher
 from openhands.agent_server.director.merge_checkout import MergeCheckout, discard
 from openhands.agent_server.director.models import (
+    AGENT_ROLES,
     ROLE_NAMES,
     AgentKind,
     AgentRef,
@@ -692,9 +693,37 @@ class ServiceState:
             )
         return found
 
+    def member_names(self) -> tuple[AgentRole, ...]:
+        """Every member a team of the org may have, by the types it knows."""
+        named = (name for kind in self.agent_types.values() for name in kind.agents)
+        return tuple(dict.fromkeys((*AGENT_ROLES, *named)))
+
     def team(self, place: SessionTeam) -> Team:
         """A team of the org as the director reads it."""
         return Team(self.store, place, self.type_of)
+
+    def _writer(self, place_id: str) -> AgentRole:
+        """The member of a team that works in its folder."""
+        place = self.store.place(place_id)
+        return self.team(place).writer if place else "ic"
+
+    def _overseer(self, place_id: str) -> AgentRole:
+        """The member of a team that settles what its sub-teams are."""
+        place = self.store.place(place_id)
+        return self.team(place).overseer if place else "manager"
+
+    def _reviewer(self, place_id: str) -> AgentRole:
+        """The member of a team that the teams below turn to."""
+        place = self.store.place(place_id)
+        return self.team(place).reviewer if place else "ic"
+
+    def writer_conversation(self, place: SessionTeam) -> str | None:
+        """The conversation of the member that works in a team's folder."""
+        return agent_conversation(place, self.team(place).writer)
+
+    def reviewer_conversation(self, place: SessionTeam) -> str | None:
+        """The conversation of the member the teams below turn to."""
+        return agent_conversation(place, self.team(place).reviewer)
 
     def tools_for(self, place: SessionTeam, member: AgentRole) -> tuple[str, ...]:
         """The director's tools the member of a team is offered."""
@@ -1187,6 +1216,7 @@ class ServiceState:
 
     def _load_store(self) -> OrgStore:
         store = OrgStore()
+        store.writer_of = lambda node: self.type_of(node).writer
         remembered = self._remembered_repo()
         if remembered is None or not self._load_from(remembered, store):
             self._load_from(self._directory, store)

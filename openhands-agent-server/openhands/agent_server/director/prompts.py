@@ -5,6 +5,7 @@ from typing import Any
 
 from openhands.agent_server.director.git_store import team_key
 from openhands.agent_server.director.models import (
+    ROLE_NAMES,
     AgentRole,
     BoundaryContracts,
     FormerTeam,
@@ -187,7 +188,7 @@ def report_line(report: Report) -> str:
             "Handed over by the IC of the team above, from the teams that "
             f"were here before yours, {report.at}: {report.text}"
         )
-    writer = "IC" if report.role == "ic" else "Manager"
+    writer = ROLE_NAMES.get(report.role, report.role)
     return f"{writer}, {report.at}: {report.text}"
 
 
@@ -603,18 +604,23 @@ def brief(
     reports: list[Report],
     context: str = "",
     kind: str = "",
+    *,
+    works: bool | None = None,
 ) -> str:
     """The first message of an agent: who it is and what it works to.
 
     Args:
+        works: Whether it is the member that works in the team's folder;
+            None for an IC.
         context: The rest of the team's context, as the agent is to read it.
         kind: What a team of its type is for, as the type says it to an
             agent of this role.
     """
     boundary = place.boundary.path or "the repository"
+    works = role == "ic" if works is None else works
     lines = [
         f"{DIRECTOR_PREFIX} You are the {'Division Lead ' * place.division_lead}"
-        f"{'IC' if role == 'ic' else 'Manager'} of the team {place.title!r} "
+        f"{ROLE_NAMES.get(role, role)} of the team {place.title!r} "
         f"(id {place.id}).",
         f"Folder: {boundary}",
         f"Writable: {', '.join(place.boundary.writable) or 'nothing'}",
@@ -627,9 +633,7 @@ def brief(
     lines += _of_the_team(specs, contracts, reports, context)
     lines.append("")
     lines.append(
-        "Start on the task now."
-        if role == "ic"
-        else "Wait until your IC writes to you."
+        "Start on the task now." if works else "Wait until your IC writes to you."
     )
     return "\n".join(lines)
 
@@ -1210,15 +1214,17 @@ def stall_notice(
     return "\n".join(lines)
 
 
-def failure_notice(team: SessionTeam, role: AgentRole, reason: str) -> str:
+def failure_notice(
+    team: SessionTeam, role: AgentRole, reason: str, *, works: bool | None = None
+) -> str:
     """What the IC above is told of a team whose agent failed."""
-    name = "IC" if role == "ic" else "Manager"
+    name = ROLE_NAMES.get(role, role)
     lines = [
         f"The {name} of team {team.title!r} (id {team.id}) failed and is at "
         f"rest: {reason}",
         "",
     ]
-    if role == "ic":
+    if role == "ic" if works is None else works:
         lines.append(
             "Nothing runs it again by itself. A message from you with "
             f"`msg_team` for team {team.id} does. If what failed is not "

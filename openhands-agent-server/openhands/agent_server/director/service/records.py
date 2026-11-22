@@ -542,7 +542,10 @@ class Records(ServiceState):
                 if agent.conversation_id
                 and agent.conversation_id != conversation_id
                 # Below a team, its IC is the one that is written to.
-                and (relation in ("above", "beside") or agent.role == "ic")
+                and (
+                    relation in ("above", "beside")
+                    or agent.role == self.team(team).writer
+                )
             ],
         )
 
@@ -752,9 +755,10 @@ class Records(ServiceState):
                 }
                 for other in others
             ]
-        if role == "ic" and store.below(place.id):
+        works = role == self.team(place).writer
+        if works and store.below(place.id):
             context["asked_directly_of_teams_below"] = self.asked_below(place)
-        if role == "ic":
+        if works:
             # The IC is the one that passes on what removed teams left.
             context["former_teams"] = [
                 {
@@ -865,7 +869,7 @@ class Records(ServiceState):
         team_memory = self._memory()
         reports = [
             report
-            for role in AGENT_ROLES
+            for role in dict.fromkeys((*AGENT_ROLES, *self.type_of(node).agents))
             for report in team_memory.reports(team_id_of(node), role)
             if self.is_orgs(node)
         ]
@@ -1245,6 +1249,7 @@ class Records(ServiceState):
                 forget=forget,
                 events=events,
                 routed=list(routed.values()),
+                members=self.member_names(),
             ),
             f"memory: the accepted work of session {session}",
             tree,
@@ -1303,7 +1308,7 @@ class Records(ServiceState):
         grown: list[tuple[str, AgentRole]] = [
             (team, role)
             for team, kept in reports.items()
-            for role in AGENT_ROLES
+            for role in dict.fromkeys((*AGENT_ROLES, *(report.role for report in kept)))
             if any(report.role == role for report in kept)
         ]
         return Taken(grown, sorted(conflicts))
