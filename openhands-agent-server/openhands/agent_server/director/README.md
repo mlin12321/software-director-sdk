@@ -96,7 +96,7 @@ An agent profile is made in the settings of Canvas and made active there.
 
 ## Agent types and `director.yaml`
 
-Every team has a type, and a type is a YAML file of what its agents are told: what the team is for, what its spec, contracts and reports hold, what the director's tools mean to it, and how its work is reviewed. Three are shipped (`director/types`): `software-engineer` (the default), `researcher` and `research-engineer`. An IC names a type for each sub-team it proposes, so one org can hold all three.
+Every team has a type, and a type is a YAML file: a team template. It says what the team's agents are told (what the team is for, what its spec, contracts and reports hold, what the director's tools mean to it, how its work is reviewed), and it may name the team's members. Three are shipped (`director/types`): `software-engineer` (the default), `researcher` and `research-engineer`. An IC names a type for each sub-team it proposes, so one org can hold all three.
 
 To add one, point the server at a settings file and put the type beside it:
 
@@ -126,6 +126,31 @@ omit_tools: [propose_teams]
 ```
 
 A type cannot change what the runtime enforces: folders, review and landing are the same for every team. Settings changed on the org page hold over `director.yaml`.
+
+A type that says nothing of members has an IC and a Manager. A type may name its own instead, with `agents`:
+
+```yaml
+# types/lab.yaml
+description: A lab that checks what its benches find.
+agents:
+  bench:
+    writes: true
+    text: Runs the experiments.
+    tools: [read_team_context, raise_escalation, report, write_spec,
+            submit_review, propose_teams, msg_team]
+    lead_tools: [read_team_context]
+  referee:
+    like: bench
+    text: Checks what the benches below found.
+    tools: [read_team_context, review_team]
+    lead_tools: [read_team_context, review_team]
+  chair:
+    like: bench
+    tools: [read_team_context, approve_teams, decline_teams]
+    lead_tools: [read_team_context, settle_teams]
+```
+
+A member is whatever the type names it, and what it may do is the tools it is given. The director finds whom to turn to by tool: submitted work goes to the member of the team above that has `review_team`, proposed sub-teams to the one that has `approve_teams`. `lead_tools` are what a member has where its team only reviews a session's work. A type is refused unless exactly one member `writes` (works in the team's folder), and `submit_review`, `review_team`, `propose_teams`, `approve_teams` and (among `lead_tools`) `settle_teams` are each held by exactly one member. The texts the director itself sends still say "IC" and "Manager", so a team with other names is enforced as written but reads those words. No type with its own members has been run with real agents yet.
 
 Every type needs a `description`: the agents and the org page choose a type by it. A type file added while the server runs is found without a restart.
 
