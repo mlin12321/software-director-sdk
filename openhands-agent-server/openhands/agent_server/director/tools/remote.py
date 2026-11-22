@@ -15,7 +15,6 @@ from openhands.agent_server.director.git import GitError
 from openhands.agent_server.director.service import (
     HAND_OVER_TOOLS,
     DirectorService,
-    tools_of,
 )
 from openhands.agent_server.director.tools.definition import DIRECTOR_TOOLS
 from openhands.sdk.errors import DomainError, NotFound
@@ -41,7 +40,7 @@ class ToolAnswer(BaseModel):
 def _offered(service: DirectorService, caller: Caller) -> tuple[str, ...]:
     if caller.hand_over:
         return HAND_OVER_TOOLS
-    return tools_of(caller.node, caller.role, service.type_of(caller.node).omit_tools)
+    return service.tools_for(caller.node, caller.role)
 
 
 def list_tools(service: DirectorService, conversation_id: UUID) -> list[RemoteTool]:

@@ -81,17 +81,42 @@ def _not_aside(caller: Caller) -> None:
         raise Invalid(_ASIDE)
 
 
-def _only(caller: Caller, role: AgentRole, what: str, *, aside: bool = False) -> None:
-    """Refuse an agent that is not in ``role``.
+def _member_name(member: str) -> str:
+    """A member of a team as the agents are told of it."""
+    return ROLE_NAMES.get(member, member)
+
+
+def _has(
+    service: DirectorService,
+    caller: Caller,
+    tool: str,
+    what: str,
+    *,
+    aside: bool = False,
+) -> None:
+    """Refuse an agent whose team's type does not give it ``tool``.
 
     Args:
-        aside: Whether an IC may do this in hand-over mode.
+        what: What the tool does, for the refusal.
+        aside: Whether it may be used in hand-over mode.
     """
-    if caller.hand_over and role == "ic" and aside:
+    kind = service.type_of(caller.node)
+    if kind.has(caller.role, tool):
+        if not (caller.hand_over and aside):
+            _not_aside(caller)
         return
     _not_aside(caller)
-    if caller.role != role:
-        raise Invalid(f"Only the {ROLE_NAMES[role]} of a team can {what}")
+    holder = kind.member_with(tool) or kind.member_with(tool, lead=True)
+    raise Invalid(f"Only the {_member_name(holder or tool)} of a team can {what}")
+
+
+def _writes(service: DirectorService, caller: Caller, what: str) -> None:
+    """Refuse an agent that is not the one that works in its team's
+    folder."""
+    _not_aside(caller)
+    writer = service.type_of(caller.node).writer
+    if caller.role != writer:
+        raise Invalid(f"Only the {_member_name(writer)} of a team can {what}")
 
 
 def node_context(service: DirectorService, caller: Caller) -> str:
@@ -120,7 +145,7 @@ def write_spec(
     Args:
         content: The whole spec, for ``create``.
     """
-    _only(caller, "ic", "write its spec", aside=True)
+    _has(service, caller, "write_spec", "write its spec", aside=True)
     if command != "create":
         if content.strip():
             raise Invalid(
@@ -232,7 +257,7 @@ def _waiting(place: SessionTeam) -> SplitProposal | None:
 
 def msg_manager(service: DirectorService, caller: Caller, text: str) -> str:
     """Send the caller's Manager a message."""
-    _only(caller, "ic", "message its Manager")
+    _has(service, caller, "msg_manager", "message its Manager")
     node = caller.node
     text = text.strip()
     if not text:
@@ -256,7 +281,7 @@ def propose_teams(
     text: str,
 ) -> str:
     """Put the sub-teams the caller proposes before its Manager."""
-    _only(caller, "ic", "propose sub-teams")
+    _has(service, caller, "propose_teams", "propose sub-teams")
     node = caller.node
     if node.pending_split and node.pending_split.status == "approved":
         raise Conflict("The sub-teams your Manager approved are still being set up")
@@ -302,7 +327,7 @@ def propose_teams(
 def msg_ic(service: DirectorService, caller: Caller, text: str, team: str) -> str:
     """Send a message to the caller's own IC, or to the IC of a team
     directly below."""
-    _only(caller, "manager", "message an IC")
+    _has(service, caller, "msg_ic", "message an IC")
     node = caller.node
     text = text.strip()
     if not text:
@@ -331,7 +356,7 @@ def msg_ic(service: DirectorService, caller: Caller, text: str, team: str) -> st
 
 def approve_teams(service: DirectorService, caller: Caller) -> str:
     """Set up the sub-teams the caller's IC proposed, as written."""
-    _only(caller, "manager", "approve sub-teams")
+    _has(service, caller, "approve_teams", "approve sub-teams")
     node = caller.node
     proposal = _waiting(node)
     if proposal is None:
@@ -378,7 +403,7 @@ def approve_teams(service: DirectorService, caller: Caller) -> str:
 
 def decline_teams(service: DirectorService, caller: Caller, reason: str) -> str:
     """Decline the sub-teams the caller's IC proposed, and keep why."""
-    _only(caller, "manager", "decline sub-teams")
+    _has(service, caller, "decline_teams", "decline sub-teams")
     node = caller.node
     reason = reason.strip()
     if not reason:
@@ -424,7 +449,7 @@ def raise_escalation(
     if not title.strip():
         raise Invalid("An escalation needs a title")
     if kind == "misrouted":
-        _only(caller, "ic", "say a request is not its team's")
+        _writes(service, caller, "say a request is not its team's")
         return service.not_ours(
             caller.node, ": ".join(filter(None, (title.strip(), detail.strip())))
         )
@@ -509,7 +534,7 @@ def resolve_escalation(
 def submit_review(service: DirectorService, caller: Caller, summary: str) -> str:
     """Hand the work of the caller's team to the IC of the team above for
     review."""
-    _only(caller, "ic", "submit its team's work")
+    _has(service, caller, "submit_review", "submit its team's work")
     store = service.store
     node = caller.node
     summary = summary.strip()
@@ -613,7 +638,7 @@ def review_team(
         contracts: What the accepted work establishes for every team below
             the caller's, added to the contracts between them.
     """
-    _only(caller, "ic", "review the work of a team")
+    _has(service, caller, "review_team", "review the work of a team")
     team = _team_named(service, caller, place_id)
     if team is None or team.parent_id != caller.node.id:
         raise Invalid(f"{place_id} is not a team directly below yours")
@@ -661,7 +686,7 @@ def settle_teams(
     contracts: list[ContractsChoice] | None = None,
 ) -> str:
     """Settle what waits for the caller of a session's teams."""
-    _only(caller, "manager", "settle the sub-teams of a session")
+    _has(service, caller, "settle_teams", "settle the sub-teams of a session")
     return service.settle_teams(
         caller.node.id,
         [
@@ -690,7 +715,9 @@ def edit_contracts(
 ) -> str:
     """Change one place in the contracts between the caller's sub-teams, or
     add to them, as the file editor's command of that name does."""
-    _only(caller, "ic", "change the contracts between its sub-teams")
+    _has(
+        service, caller, "edit_contracts", "change the contracts between its sub-teams"
+    )
     node = caller.node
     if is_division_lead(node):
         raise Invalid(
@@ -751,7 +778,7 @@ def _team_below(service: DirectorService, caller: Caller, node_id: str) -> Sessi
 
 def msg_team(service: DirectorService, caller: Caller, team: str, text: str) -> str:
     """Send a message to the IC of a team directly below the caller's."""
-    _only(caller, "ic", "message the IC of a team below")
+    _has(service, caller, "msg_team", "message the IC of a team below")
     text = text.strip()
     if not text:
         raise Invalid("A message cannot be empty")
@@ -789,7 +816,7 @@ def hand_over(
     service: DirectorService, caller: Caller, team: str, notes: str, contracts: str
 ) -> str:
     """Pass on to a team directly below what the teams before it left."""
-    _only(caller, "ic", "hand over what removed teams left", aside=True)
+    _has(service, caller, "hand_over", "hand over what removed teams left", aside=True)
     if not notes.strip() and not contracts.strip():
         raise Invalid("Give notes, contracts, or both: there is nothing to hand over")
     target = _team_below(service, caller, team)
@@ -814,7 +841,7 @@ def hand_over(
 
 def stop_team(service: DirectorService, caller: Caller, team: str, reason: str) -> str:
     """Stop a team directly below the caller's."""
-    _only(caller, "ic", "stop a team")
+    _has(service, caller, "stop_team", "stop a team")
     if not reason.strip():
         raise Invalid("Say why the team is stopped; your Manager is told")
     target = _team_below(service, caller, team)
@@ -834,7 +861,7 @@ def prune_team(
     reason: str,
 ) -> str:
     """Remove a team directly below the caller's."""
-    _only(caller, "manager", "prune a team")
+    _has(service, caller, "prune_team", "prune a team")
     if not reason.strip():
         raise Invalid("Say why the team is removed; your team's IC is told")
     team = _team_named(service, caller, place_id)
