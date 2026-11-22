@@ -1,87 +1,32 @@
 """Which team may write where, decided from the directories the teams own."""
 
-import re
-from collections.abc import Iterable, Mapping
-from functools import lru_cache
-from typing import Any
+from collections.abc import Iterable
 
 from openhands.agent_server.director.models import AgentRole, OrgNode
-from openhands.agent_server.director.split import is_inside
-
-
-# Tools that change the file their action names, and the field that names it.
-_PATH_FIELDS: dict[str, str] = {
-    "file_editor": "path",
-    "planning_file_editor": "path",
-    "write_file": "file_path",
-    "edit": "file_path",
-}
-_READ_COMMANDS = frozenset({"view"})
-# Tools that only read the file their action names, and the field that names it.
-_READ_FIELDS: dict[str, str] = {"read_file": "file_path"}
-# Tools that search a folder, and the field that names it; none is the
-# workspace.
-_SEARCH_FIELDS: dict[str, str] = {"grep": "path", "glob": "path"}
-_PATCH_TARGET = re.compile(
-    r"^\*\*\* (?:Add File|Update File|Delete File|Move to): (.+?)\s*$", re.MULTILINE
+from openhands.agent_server.director.scope import (
+    Closed,
+    Denied,
+    Scope,
+    glob_matches,
+    is_inside,
+    named_paths,
+    searched_folder,
+    written_paths,
 )
 
 
-def named_paths(tool_name: str, action: Mapping[str, Any]) -> list[str]:
-    """The files an action of a file tool reads or changes, as the agent
-    named them. Empty for tools that do not name them, such as the terminal."""
-    if tool_name == "apply_patch":
-        return _PATCH_TARGET.findall(str(action.get("patch", "")))
-    path = action.get((_PATH_FIELDS | _READ_FIELDS).get(tool_name, ""))
-    return [path] if isinstance(path, str) and path else []
-
-
-def searched_folder(tool_name: str, action: Mapping[str, Any]) -> str | None:
-    """The folder an action of a search tool looks through, as the agent
-    named it; ``""`` for the workspace, None for a tool that searches none."""
-    if tool_name not in _SEARCH_FIELDS:
-        return None
-    folder = action.get(_SEARCH_FIELDS[tool_name])
-    return folder if isinstance(folder, str) else ""
-
-
-def written_paths(tool_name: str, action: Mapping[str, Any]) -> list[str]:
-    """The files an action of a file tool would change, as the agent named
-    them. Empty for an action that only reads."""
-    if action.get("command") in _READ_COMMANDS or tool_name in _READ_FIELDS:
-        return []
-    return named_paths(tool_name, action)
-
-
-@lru_cache(maxsize=1024)
-def _glob_pattern(glob: str) -> re.Pattern[str]:
-    parts: list[str] = []
-    index = 0
-    while index < len(glob):
-        if glob.startswith("**/", index):
-            parts.append("(?:.*/)?")
-            index += 3
-        elif glob.startswith("**", index):
-            parts.append(".*")
-            index += 2
-        elif glob[index] == "*":
-            parts.append("[^/]*")
-            index += 1
-        elif glob[index] == "?":
-            parts.append("[^/]")
-            index += 1
-        else:
-            parts.append(re.escape(glob[index]))
-            index += 1
-    return re.compile("".join(parts))
-
-
-def glob_matches(glob: str, path: str) -> bool:
-    """Whether a repo-relative path matches a boundary glob.
-
-    ``*`` and ``?`` stay within one path segment; ``**`` crosses segments.
-    """
-    return _glob_pattern(glob).fullmatch(path) is not None
+__all__ = [
+    "glob_matches",
+    "hand_over_refusal",
+    "named_paths",
+    "nearest_team",
+    "owns",
+    "scope_within",
+    "searched_folder",
+    "worded",
+    "write_refusal",
+    "written_paths",
+]
 
 
 def owns(node: OrgNode, path: str) -> bool:
@@ -97,6 +42,94 @@ def hand_over_refusal(path: str) -> str:
     )
 
 
+def scope_within(
+    node: OrgNode,
+    role: AgentRole,
+    sub_teams: Iterable[OrgNode],
+    *,
+    checkout: str = "",
+) -> Scope:
+    """What an agent of ``node`` may write with a file tool.
+
+    Args:
+        sub_teams: The teams below whose folders are closed to it.
+    """
+    return Scope(
+        checkout=checkout,
+        directory=node.boundary.path,
+        edits=role != "manager",
+        writable=tuple(node.boundary.writable),
+        readonly=tuple(node.boundary.readonly),
+        closed=tuple(
+            Closed(team.boundary.path, team.title, team.id) for team in sub_teams
+        ),
+    )
+
+
+def worded(denied: Denied, scope: Scope) -> str:
+    """Why an agent may not do what ``denied`` names, in words for it."""
+    path = denied.named if denied.relative is None else denied.relative
+    match denied.kind:
+        case "private":
+            return f"{path!r} is the director's own, and is not yours to open."
+        case "holds_private":
+            return (
+                f"{path or 'The workspace'!r} holds a file of the "
+                "director's own: search a folder inside it instead."
+            )
+        case "aside":
+            return hand_over_refusal(path)
+        case "reads_only":
+            return (
+                f"A Manager does not edit files, so {path!r} was not changed. Have "
+                "your IC make the change."
+            )
+        case "git":
+            return f"{path!r} belongs to git, so it was not changed."
+        case "outside":
+            return (
+                f"{path!r} is outside your team's boundary "
+                f"({scope.directory or 'the repository'}), so it was "
+                "not changed. Files of another team change through that team: "
+                "raise an escalation."
+            )
+        case "closed":
+            assert denied.closed is not None
+            return (
+                f"{path!r} belongs to your sub-team {denied.closed.title!r} "
+                f"(id {denied.closed.id}), so it was not changed. Tell that team "
+                "what you need instead."
+            )
+        case "readonly":
+            return f"{path!r} is read-only for your team, so it was not changed."
+        case "not_writable":
+            return (
+                f"{path!r} is in your boundary but not among the files your team "
+                f"may write ({', '.join(scope.writable) or 'none'}), so it "
+                "was not changed."
+            )
+        case "merge_of_another":
+            return (
+                f"{path!r} is in a merge another team's reviewer "
+                "finishes, so it was not changed."
+            )
+        case "merged_by_itself":
+            return (
+                f"{path!r} merged by itself, so it was not changed. "
+                f"Yours to edit in that merge: {', '.join(denied.files)}"
+            )
+        case "other_checkout":
+            return (
+                f"{path!r} is in a checkout of the org that is not your "
+                "team's, so it was not changed."
+            )
+        case "git_directory":
+            return (
+                f"{path!r} is in the repository's git directory, so it "
+                "was not changed. Use git."
+            )
+
+
 def write_refusal(
     node: OrgNode, role: AgentRole, sub_teams: Iterable[OrgNode], path: str
 ) -> str | None:
@@ -105,36 +138,9 @@ def write_refusal(
     Returns:
         The reason, worded for the agent, or None when it may.
     """
-    if role == "manager":
-        return (
-            f"A Manager does not edit files, so {path!r} was not changed. Have "
-            "your IC make the change."
-        )
-    if path == ".git" or path.startswith(".git/"):
-        return f"{path!r} belongs to git, so it was not changed."
-    directory = node.boundary.path or "the repository"
-    if not owns(node, path):
-        return (
-            f"{path!r} is outside your team's boundary ({directory}), so it was "
-            "not changed. Files of another team change through that team: "
-            "raise an escalation."
-        )
-    for sub_team in sub_teams:
-        if owns(sub_team, path):
-            return (
-                f"{path!r} belongs to your sub-team {sub_team.title!r} "
-                f"(id {sub_team.id}), so it was not changed. Tell that team "
-                "what you need instead."
-            )
-    if any(glob_matches(glob, path) for glob in node.boundary.readonly):
-        return f"{path!r} is read-only for your team, so it was not changed."
-    if not any(glob_matches(glob, path) for glob in node.boundary.writable):
-        return (
-            f"{path!r} is in your boundary but not among the files your team "
-            f"may write ({', '.join(node.boundary.writable) or 'none'}), so it "
-            "was not changed."
-        )
-    return None
+    scope = scope_within(node, role, sub_teams)
+    denied = scope.refuse(path)
+    return None if denied is None else worded(denied, scope)
 
 
 def _may_take(node: OrgNode, path: str) -> bool:

@@ -3,27 +3,15 @@
 import asyncio
 import json
 import logging
-import os
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from pathlib import Path
 from uuid import UUID
 
-from openhands.agent_server.director.boundary import (
-    hand_over_refusal,
-    named_paths,
-    nearest_team,
-    searched_folder,
-    write_refusal,
-    written_paths,
-)
-from openhands.agent_server.director.git import (
-    common_dir,
-    is_git_repository,
-)
+from openhands.agent_server.director.boundary import nearest_team, worded
+from openhands.agent_server.director.git import is_git_repository
 from openhands.agent_server.director.headline import provisional_summary
 from openhands.agent_server.director.launch import TeamLauncher
-from openhands.agent_server.director.merge_checkout import MergeCheckout
 from openhands.agent_server.director.models import (
     Boundary,
     ChosenBy,
@@ -48,10 +36,10 @@ from openhands.agent_server.director.recovery import (
 )
 from openhands.agent_server.director.run_state import (
     CLEARING,
-    MERGING,
     Intent,
 )
 from openhands.agent_server.director.runtime import bind_director
+from openhands.agent_server.director.scope import Scope, named_paths, searched_folder
 from openhands.agent_server.director.service.state import (
     AGENT_PAUSED,
     DIRECTOR_TOOL_NAMES,
@@ -65,7 +53,6 @@ from openhands.agent_server.director.service.state import (
     TOOLS_OF,
     _checkout_root,
     _instant,
-    _is_in,
     _summary_of,
     agent_conversation,
     failure_waits,
@@ -426,86 +413,27 @@ class DirectorService(Sync):
         store = self._store
         if store is None or event.action is None:
             return None
-        found = store.find_by_conversation(str(conversation_id))
         action = event.action.model_dump()
-        secret = self._remembered and os.path.realpath(self._remembered)
-        workspace = found[0].worktree_path if found else ""
-        for named in named_paths(event.tool_name, action):
-            # Read, the key in it lets an agent act as any other.
-            if os.path.realpath(os.path.join(workspace, named)) == secret:
-                return f"{named!r} is the director's own, and is not yours to open."
-        searched = searched_folder(event.tool_name, action)
-        if secret and searched is not None:
-            folder = os.path.realpath(os.path.join(workspace, searched))
-            # What a search finds in it tells of it, a character at a time.
-            if secret.startswith(folder.rstrip(os.sep) + os.sep):
-                return (
-                    f"{searched or 'The workspace'!r} holds a file of the "
-                    "director's own: search a folder inside it instead."
-                )
-        paths = written_paths(event.tool_name, action)
-        if not paths:
+        if (
+            not named_paths(event.tool_name, action)
+            and searched_folder(event.tool_name, action) is None
+        ):
+            # Nothing a scope is asked about: most actions.
             return None
-        if found is None:
-            in_hand_over = store.find_hand_over(str(conversation_id)) is not None
-            return hand_over_refusal(paths[0]) if in_hand_over else None
-        node, role = found
-        # A team that has not started holds no one out of its directory:
-        # the IC above may finish what it has there.
-        sub_teams = [team for team in store.below(node.id) if team.agents]
-        top = _checkout_root(node.worktree_path)
-        merges = {
-            team_id: MergeCheckout.model_validate_json(kept)
-            for team_id, kept in self._runs().marked(MERGING).items()
-        }
-        for named in paths:
-            target = Path(os.path.realpath(Path(node.worktree_path) / named))
-            merging = next(
-                (
-                    (team_id, merge)
-                    for team_id, merge in merges.items()
-                    if _is_in(target, Path(os.path.realpath(merge.where)))
-                ),
-                None,
-            )
-            if merging is not None:
-                # Only what does not merge is its reviewer's to write.
-                team = store.place(merging[0])
-                if role != "ic" or team is None or team.parent_id != node.id:
-                    return (
-                        f"{named!r} is in a merge another team's reviewer "
-                        "finishes, so it was not changed."
-                    )
-                files = merging[1].files
-                relative = target.relative_to(os.path.realpath(merging[1].where))
-                if relative.as_posix() not in files:
-                    return (
-                        f"{named!r} merged by itself, so it was not changed. "
-                        f"Yours to edit in that merge: {', '.join(files)}"
-                    )
-            elif _is_in(target, top):
-                relative = target.relative_to(top).as_posix()
-                refusal = write_refusal(
-                    node, role, sub_teams, "" if relative == "." else relative
-                )
-                if refusal is not None:
-                    if role == "ic":
-                        # The refusal stands whether or not it could be kept.
-                        with suppress(Exception):
-                            self.record_need(node, relative, NEED_WRITE)
-                    return refusal
-            elif any(_is_in(target, checkout) for checkout in self._checkouts()):
-                return (
-                    f"{named!r} is in a checkout of the org that is not your "
-                    "team's, so it was not changed."
-                )
-            elif _is_in(target, Path(os.path.realpath(common_dir(self._repo_dir)))):
-                # A git directory that is not inside its checkout.
-                return (
-                    f"{named!r} is in the repository's git directory, so it "
-                    "was not changed. Use git."
-                )
-        return None
+        found = store.find_by_conversation(str(conversation_id))
+        if found is not None:
+            scope = self.scope_of(*found)
+        else:
+            aside = store.find_hand_over(str(conversation_id))
+            scope = self.scope_of(aside, "ic", str(conversation_id)) if aside else None
+        denied = self._confinement().check(scope, event.tool_name, action)
+        if denied is None:
+            return None
+        if found is not None and denied.relative is not None and found[1] == "ic":
+            # The refusal stands whether or not it could be kept.
+            with suppress(Exception):
+                self.record_need(found[0], denied.relative or ".", NEED_WRITE)
+        return worded(denied, scope or Scope(checkout="", directory=""))
 
     def answer_escalation(
         self, place_id: str, escalation_id: str, answer: str

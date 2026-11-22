@@ -7,14 +7,13 @@ import logging
 import os
 import re
 import secrets
-import shutil
 import sqlite3
 import threading
 from collections import deque
 from collections.abc import Awaitable, Callable, Iterable, Sequence
 from contextvars import ContextVar
+from dataclasses import replace
 from datetime import UTC, datetime
-from functools import lru_cache
 from pathlib import Path
 from typing import Any, Self
 from uuid import UUID, uuid4
@@ -23,11 +22,7 @@ from openhands.agent_server.config import Config
 from openhands.agent_server.conversation_service import ToolParams
 from openhands.agent_server.director import bugbot
 from openhands.agent_server.director.acp import (
-    MCP_SERVER_NAME,
-    agent_token,
-    as_org_agent,
     conversation_of,
-    tools_server,
 )
 from openhands.agent_server.director.agent_types import (
     DEFAULT_TYPE,
@@ -36,19 +31,18 @@ from openhands.agent_server.director.agent_types import (
     AgentType,
     load_types,
 )
+from openhands.agent_server.director.boundary import scope_within
+from openhands.agent_server.director.confinement import (
+    Confinement,
+    checkout_root as _checkout_root,
+    is_in as _is_in,
+)
 from openhands.agent_server.director.git import (
     GitError,
-    common_dir,
     enclosing_repository,
     git,
     head_of,
     is_git_repository,
-    top_of,
-)
-from openhands.agent_server.director.git_index import (
-    excludes_file,
-    git_script,
-    rcfile,
 )
 from openhands.agent_server.director.git_store import (
     CONTRACTS_FILE,
@@ -111,11 +105,9 @@ from openhands.agent_server.director.run_state import (
     RunStateError,
 )
 from openhands.agent_server.director.sandbox import (
-    command_script,
     find_bwrap,
-    shell_script,
-    write_shell,
 )
+from openhands.agent_server.director.scope import MergeArea, Scope
 from openhands.agent_server.director.session_state import (
     kept_sessions,
     restore_sessions,
@@ -124,7 +116,6 @@ from openhands.agent_server.director.split import (
     child_boundary,
     clean_path,
 )
-from openhands.sdk.agent import ACPAgent
 from openhands.sdk.agent.base import AgentBase
 from openhands.sdk.conversation.state import ConversationExecutionStatus
 from openhands.sdk.errors import (
@@ -135,8 +126,6 @@ from openhands.sdk.errors import (
     Unavailable,
     Unprocessable,
 )
-from openhands.sdk.tool.spec import Tool
-from openhands.sdk.utils.files import atomic_write_text
 
 
 logger = logging.getLogger(__name__)
@@ -266,13 +255,10 @@ _MERGE_ATTEMPTS = 4
 _RUN_STATE = "director/state.db"
 # Where, in the repository's git directory, the director keeps the shells
 # its agents' terminals start, and what those shells need.
-_SHELLS_DIR = "director-shells"
 # In the git directory, and not for an agent's shell to write.
-_PRIVATE = ("director", "hooks")
 # In the repository's git directory: the merges reviewers finish.
 _MERGING_DIR = "director-merging"
 # After a conversation id: the script an ACP agent's process is started by.
-_ACP_LAUNCHER = ".acp.sh"
 _REMEMBERED_FILE = "director.json"
 # In it: the settings changed through the settings route, which hold over
 # the org's ``director.yaml`` field by field.
@@ -380,24 +366,10 @@ def _summary_of(text: str) -> str:
     return first_line[:200]
 
 
-@lru_cache(maxsize=4096)
-def _checkout_root(workspace: str) -> Path:
-    """The top of the git checkout ``workspace`` is in, symlinks resolved."""
-    try:
-        top = top_of(Path(workspace))
-    except (GitError, OSError):
-        top = workspace
-    return Path(os.path.realpath(top))
-
-
 def apart(team: SessionTeam, above: SessionTeam) -> bool:
     """Whether a team works in a checkout of its own, not in the one of
     the team above."""
     return _checkout_root(team.worktree_path) != _checkout_root(above.worktree_path)
-
-
-def _is_in(path: Path, directory: Path) -> bool:
-    return path == directory or directory in path.parents
 
 
 class ServiceState:
@@ -912,77 +884,84 @@ class ServiceState:
                 self._tool_key = kept.encode()
             return self._tool_key
 
+    def _confinement(self) -> Confinement:
+        """What holds the org's agents to their scopes, as the server is
+        now."""
+        return Confinement(
+            repo_dir=self._repo_dir,
+            checkouts=tuple(self._checkouts()),
+            bwrap=self._bwrap,
+            secret=self._remembered,
+            server_url=self._url(),
+            key=self._key,
+        )
+
+    def scope_of(
+        self, place: SessionTeam, role: AgentRole, hand_over: str | None = None
+    ) -> Scope:
+        """What an agent of ``place`` may write: the one place the org
+        decides what its agents are held to.
+
+        Args:
+            hand_over: The IC's hand-over conversation, when the scope is
+                that conversation's and not the IC's own.
+        """
+        children = self.store.below(place.id)
+        # A team that has not started holds no one out of its directory:
+        # the IC above may finish what it has there.
+        started = [child for child in children if child.agents]
+        merges = []
+        for team_id, kept in self._runs().marked(MERGING).items():
+            merge = MergeCheckout.model_validate_json(kept)
+            team = self.store.place(team_id)
+            merges.append(
+                MergeArea(
+                    where=merge.where,
+                    files=tuple(merge.files),
+                    own=role == "ic"
+                    and team is not None
+                    and team.parent_id == place.id,
+                )
+            )
+        within = scope_within(
+            place,
+            role,
+            started,
+            # A hand-over conversation is no agent of the place.
+            checkout="" if hand_over else place.worktree_path,
+        )
+        return replace(
+            within,
+            # An IC writes in its boundary from its main conversation alone;
+            # a Division Lead IC only reviews, in the human's own checkout.
+            writes=role == "ic" and hand_over is None and not is_division_lead(place),
+            aside=hand_over is not None,
+            # Its git commits nothing in a sub-team's directory; it may still
+            # write in that of a team that has not started.
+            hidden=tuple(child.boundary.path for child in children),
+            merges=tuple(merges),
+        )
+
     def with_tools_again(self, conversation_id: UUID, agent: AgentBase) -> AgentBase:
         """The saved agent of a conversation that is loaded again, able to
-        reach the director's tools.
-
-        An agent that runs its own tools reaches them through an MCP server
-        that is given its token in its environment. A server with no key to
-        keep secrets under does not keep that between runs, so it is made
-        again here: the token is worked out from the director's own key,
-        which is kept. Any other agent is returned as it is. Safe from any
-        thread.
-        """
-        if not isinstance(agent, ACPAgent) or MCP_SERVER_NAME not in agent.mcp_config:
-            return agent
-        url = self._url()
-        if url is None:
-            return agent
-        tools = tools_server(url, agent_token(self._key(), str(conversation_id)))
-        return agent.model_copy(
-            update={"mcp_config": {**agent.mcp_config, MCP_SERVER_NAME: tools}}
-        )
+        reach the director's tools. Safe from any thread."""
+        return self._confinement().with_tools_again(str(conversation_id), agent)
 
     def _adapter(
         self, conversation_id: str, offered: Sequence[str]
     ) -> Callable[[AgentBase], AgentBase]:
-        """What is changed on an agent as its conversation starts.
-
-        An agent that runs its own tools gets the director's through an MCP
-        server and is started by the script that holds its process to its
-        team's directory. Any other agent keeps the tools it has and, of
-        the director's, gets the ones in ``offered``: an agent derived from
-        another carries that agent's, which are another role's for a
-        Manager.
-        """
-        launchers = self._shells()
-        launcher = launchers / f"{conversation_id}{_ACP_LAUNCHER}"
-
-        def adapt(agent: AgentBase) -> AgentBase:
-            if not isinstance(agent, ACPAgent):
-                kept = [
-                    tool
-                    for tool in agent.tools
-                    if tool.name not in _SUB_AGENT_TOOLS
-                    and (tool.name not in DIRECTOR_TOOL_NAMES or tool.name in offered)
-                ]
-                has = {tool.name for tool in kept}
-                added = [Tool(name=name) for name in offered if name not in has]
-                return agent.model_copy(update={"tools": [*kept, *added]})
-            url = self._url()
-            if url is None:
-                raise Unavailable(
-                    "The director does not know the address of its own "
-                    "server, which an ACP agent needs to reach its tools"
-                )
-            if self._bwrap is not None and not launcher.exists():
-                logger.warning(
-                    "The ACP agent of conversation %s starts with nothing that "
-                    "holds its process to its team's folder: %s is missing",
-                    conversation_id,
-                    launcher,
-                )
-            return as_org_agent(
-                agent,
-                tools=tools_server(url, agent_token(self._key(), conversation_id)),
-                launcher=launcher if launcher.exists() else None,
-                launchers=launchers,
-            )
-
-        return adapt
+        """What is changed on an agent as its conversation starts: of the
+        director's tools it gets the ones in ``offered``, and the tools
+        that start agents nothing holds are taken from it."""
+        return self._confinement().adapter(
+            conversation_id,
+            offered,
+            known=DIRECTOR_TOOL_NAMES,
+            never=_SUB_AGENT_TOOLS,
+        )
 
     def _shells(self) -> Path:
-        return common_dir(self._repo_dir) / _SHELLS_DIR
+        return self._confinement().shells
 
     def _merging_root(self) -> Path:
         return self._shells().parent / _MERGING_DIR
@@ -999,9 +978,7 @@ class ServiceState:
             self._runs().unmark(MERGING, place_id)
 
     def _enforcement(self, kind: AgentKind) -> TeamEnforcement:
-        if self._bwrap is not None:
-            return "sandbox"
-        return "merge" if kind == "acp" else "checks"
+        return self._confinement().enforcement(kind == "acp")
 
     def search(self, query: str, limit: int) -> list[TeamMatch]:
         """Teams whose title or directory has every word of ``query``."""
@@ -1176,10 +1153,6 @@ class ServiceState:
     ) -> ToolParams | None:
         """Write the shell an agent's terminal starts.
 
-        Where the server can, the shell holds the agent to its team's
-        boundary. An IC's shell also finds a ``git`` that keeps the agent's
-        index apart from those of the agents it shares a checkout with.
-
         Returns:
             What to start the agent's terminal with, or None when it needs
             no shell of its own.
@@ -1190,81 +1163,9 @@ class ServiceState:
         )
         if place is None or conversation_id is None:
             return None
-        # An IC writes in its boundary from its main conversation alone; a
-        # Division Lead IC only reviews, in the human's own checkout.
-        writes = role == "ic" and hand_over is None and not is_division_lead(place)
-        bash, real_git = shutil.which("bash"), shutil.which("git")
-        own_git = writes and os.name != "nt" and bash and real_git
-        if self._bwrap is None and not own_git:
-            return None
-        shells = self._shells()
-        git_dir = str(shells.parent)
-        children = self.store.below(place_id)
-        sub_teams = [child.boundary.path for child in children]
-        # Its git commits nothing in a sub-team's directory; it may still
-        # write in that of a team that has not started.
-        closed = [child.boundary.path for child in children if child.agents]
-        rc: Path | None = None
-        bin_dir: Path | None = None
-        if own_git and real_git:
-            directory = place.boundary.path
-            rc = shells / f"{conversation_id}.rc"
-            bin_dir = shells / f"{conversation_id}.bin"
-            excludes = shells / f"{conversation_id}.exclude"
-            write_shell(
-                bin_dir / "git",
-                git_script(
-                    real_git,
-                    common_dir=git_dir,
-                    conversation_id=conversation_id,
-                    directory=directory,
-                    sub_team_directories=sub_teams,
-                    excludes=excludes,
-                    flock=shutil.which("flock"),
-                    readonly=place.boundary.readonly,
-                    writable=place.boundary.writable,
-                ),
-            )
-            atomic_write_text(
-                excludes, excludes_file(self._repo_dir, directory, sub_teams)
-            )
-            atomic_write_text(rc, rcfile(bin_dir))
-        # An agent's commits need the git directory, but not what the director
-        # keeps there, nor the hooks git runs for everyone.
-        private = [shells, *(shells.parent / name for name in _PRIVATE)]
-        # Made now: one missing would be left for an agent to make.
-        for path in private:
-            path.mkdir(exist_ok=True)
-        script = shells / f"{conversation_id}.sh"
-        write_shell(
-            script,
-            shell_script(
-                self._bwrap,
-                bash or "/bin/sh",
-                checkouts=self._checkouts(),
-                private=private,
-                secret=self._remembered,
-                directory=place.boundary.path if writes else None,
-                sub_team_directories=closed,
-                rcfile=rc,
-            ),
+        return self._confinement().confine(
+            conversation_id, self.scope_of(place, role, hand_over)
         )
-        # An agent that runs its own tools has no terminal of the server's;
-        # its whole process is started by this instead.
-        write_shell(
-            shells / f"{conversation_id}{_ACP_LAUNCHER}",
-            command_script(
-                self._bwrap,
-                checkouts=self._checkouts(),
-                private=private,
-                secret=self._remembered,
-                directory=place.boundary.path if writes else None,
-                sub_team_directories=closed,
-                first_on_path=bin_dir,
-            ),
-        )
-        # Only the subprocess terminal starts the shell it is given.
-        return {"terminal": {"terminal_type": "subprocess", "shell_path": str(script)}}
 
     def _confine_all(self) -> None:
         for node in self.store.places():
@@ -1615,32 +1516,10 @@ class ServiceState:
 
     def _forget_shells(self, team: SessionTeam) -> None:
         """Remove what the shells of a team's agents were made of."""
-        try:
-            common, own = (
-                Path(
-                    git(
-                        directory, ["rev-parse", "--path-format=absolute", kind]
-                    ).strip()
-                )
-                for directory, kind in (
-                    (self._repo_dir, "--git-common-dir"),
-                    (Path(team.worktree_path), "--git-dir"),
-                )
-            )
-        except (GitError, OSError):
-            return
-        for agent in team.agents:
-            name = agent.conversation_id
-            if name is None:
-                continue
-            for left in (
-                *(common / _SHELLS_DIR).glob(f"{name}.*"),
-                *own.glob(f"agent-index-{name}*"),
-            ):
-                if left.is_dir():
-                    shutil.rmtree(left, ignore_errors=True)
-                else:
-                    left.unlink(missing_ok=True)
+        self._confinement().forget(
+            [agent.conversation_id for agent in team.agents if agent.conversation_id],
+            Path(team.worktree_path),
+        )
 
     def _steps(self) -> dict[str, Callable[[Intent], Awaitable[None]]]:
         """What carries out each kind of intent. The service names its own."""
