@@ -26,16 +26,17 @@ from openhands.agent_server.director.org_persistence import (
 from openhands.agent_server.director.org_store import OrgStore
 from openhands.agent_server.director.service import (
     DirectorService,
-    agent_conversation,
 )
 from openhands.sdk.conversation.state import ConversationExecutionStatus
 from openhands.sdk.errors import NotFound
 from tests.agent_server.director.conftest import (
     FakeLauncher,
+    agent_conversation,
     make_team,
     open_session_in,
     root_conversation,
     run_git,
+    shipped_type,
     small_tree,
     take_in,
 )
@@ -62,7 +63,7 @@ def make_client(repo_dir: Path, **config) -> TestClient:
 @pytest.fixture
 def saved_tree(repo: Path) -> Path:
     """A repository whose hidden org ref holds ``small_tree()``."""
-    store = OrgStore()
+    store = OrgStore(shipped_type)
     store.replace_all(small_tree())
     save_org(create_org_board(repo), store)
     return repo
@@ -136,7 +137,7 @@ def test_the_tree_is_empty_without_a_saved_tree_or_a_repository(
 def test_ownership_lists_a_teams_files_by_the_report_that_owns_them(repo: Path):
     (repo / "svc" / "a").mkdir(parents=True)
     (repo / "svc" / "a" / "app.py").write_text("a\n")
-    store = OrgStore()
+    store = OrgStore(shipped_type)
     store.replace_all(
         [make_team("root", None, path=""), make_team("a", "root", path="svc/a")]
     )
@@ -175,7 +176,7 @@ class TestTeamMemory:
     def test_returns_what_applies_to_the_nodes_boundary_and_what_its_agents_reported(
         self, repo: Path
     ):
-        store = OrgStore()
+        store = OrgStore(shipped_type)
         store.replace_all(small_tree())
         save_org(create_org_board(repo), store)
         board = GitStore(repo)
@@ -519,7 +520,7 @@ async def test_an_org_is_paused_asked_what_it_holds_and_resumed(running, repo):
 
     paused = await client.post("/api/director/org/pause")
     asked = await client.post("/api/director/org/messages", json={"text": "Refunds"})
-    service.tell_ic(top["id"], "Add a cart", human=True)
+    service.tell_writer(top["id"], "Add a cart", human=True)
     await service.settled()
     summary = await client.get("/api/director/org")
     recovery = await client.get("/api/director/org/recovery")

@@ -4,9 +4,7 @@ A type is a YAML file, a team template. It names the agents of a team of
 that type (its members), the director's tools each has, and which of them
 works in the team's folder; and it says what each is for, what the team's
 spec, contracts and reports hold, what each of the director's tools means
-to it, and how its work is written up and reviewed. A type that names no
-members has the two every team had before types named them: an IC and a
-Manager.
+to it, and how its work is written up and reviewed.
 
 A member is whatever the type names it. What it may do is the tools it is
 given: the director finds whom to turn to by tool, so the reviewer of a
@@ -26,7 +24,6 @@ from typing import Literal
 
 import yaml
 from pydantic import (
-    AliasChoices,
     BaseModel,
     ConfigDict,
     Field,
@@ -38,8 +35,7 @@ from pydantic import (
 
 logger = logging.getLogger(__name__)
 
-# The type of a team whose proposal names none, and of every team set up
-# before teams had types.
+# The type of a team whose proposal names none.
 DEFAULT_TYPE = "software-engineer"
 SHIPPED_TYPES = Path(__file__).parent / "types"
 # The folder of an org's own types, beside its ``director.yaml``.
@@ -108,51 +104,17 @@ class Member(BaseModel):
         default=False,
         description="Whether it works in the team's folder. One member does.",
     )
-    like: str | None = Field(
-        default=None,
+    title: str = Field(
+        default="",
         description=(
-            "The member it is started like: it runs on what that member "
-            "runs on. None: it is started as the team is."
+            "What it is called in what the director writes to agents and "
+            "people. Empty: its name."
         ),
     )
     text: str = Field(default="", description="What it is for.")
 
 
-def default_agents() -> dict[str, Member]:
-    """The members of a type that names none: an IC and a Manager."""
-    both = ["read_team_context", "raise_escalation", "resolve_escalation", "report"]
-    return {
-        "ic": Member(
-            writes=True,
-            tools=[
-                *both,
-                "write_spec",
-                "edit_contracts",
-                "msg_manager",
-                "propose_teams",
-                "msg_team",
-                "hand_over",
-                "stop_team",
-                "submit_review",
-                "review_team",
-            ],
-            lead_tools=["read_team_context", "report", "review_team"],
-        ),
-        "manager": Member(
-            like="ic",
-            tools=[
-                *both,
-                "msg_ic",
-                "approve_teams",
-                "decline_teams",
-                "prune_team",
-            ],
-            lead_tools=["read_team_context", "report", "settle_teams"],
-        ),
-    }
-
-
-class AgentType(BaseModel):
+class TeamTemplate(BaseModel):
     """A kind of team: its members and what they are told."""
 
     model_config = ConfigDict(extra="forbid")
@@ -166,19 +128,8 @@ class AgentType(BaseModel):
         ),
     )
     agents: dict[str, Member] = Field(
-        default_factory=default_agents,
-        description=(
-            "The members of a team of this type, by the name of each. "
-            "Left out: an IC (`ic`) and a Manager (`manager`)."
-        ),
-    )
-    ic: str = Field(
-        default="",
-        description="What the member `ic` is for: the same as its `text`.",
-    )
-    manager: str = Field(
-        default="",
-        description="What the member `manager` is for: the same as its `text`.",
+        min_length=1,
+        description="The members of a team of this type, by the name of each.",
     )
     primitives: dict[Primitive, str] = Field(
         default_factory=dict,
@@ -191,13 +142,12 @@ class AgentType(BaseModel):
     review: ReviewTexts = Field(default_factory=ReviewTexts)
     sas_profile: str | None = Field(
         default=None,
-        validation_alias=AliasChoices("sas_profile", "model"),
         description=(
             "The agent profile of the server (a software-agent-sdk profile) "
             "that a new team of this type runs on when its proposal names "
             "none. It is the one thing a type says of what runs it: a type "
             "without it runs on whatever the team above does, and any "
-            "profile can run any type. `model` is read as this too."
+            "profile can run any type."
         ),
     )
     omit_tools: list[str] = Field(
@@ -216,33 +166,12 @@ class AgentType(BaseModel):
         return name
 
     @model_validator(mode="after")
-    def _has_whom_the_director_turns_to(self) -> "AgentType":
+    def _has_whom_the_director_turns_to(self) -> "TeamTemplate":
         agents = self.agents
-        for name, said in (("ic", self.ic), ("manager", self.manager)):
-            if not said:
-                continue
-            if name not in agents:
-                raise ValueError(
-                    f"`{name}:` says what the member {name!r} is for, and "
-                    "this type has no member of that name"
-                )
-            if agents[name].text and agents[name].text != said:
-                raise ValueError(
-                    f"the member {name!r} is told two things: give `{name}:` "
-                    "or its `text`, not both"
-                )
-            agents[name] = agents[name].model_copy(update={"text": said})
-        for name, member in agents.items():
+        for name in agents:
             if not _NAME.fullmatch(name):
                 raise ValueError(
                     "a member's name is lower-case letters, digits and hyphens"
-                )
-            if member.like is not None and (
-                member.like == name or member.like not in agents
-            ):
-                raise ValueError(
-                    f"the member {name!r} is started like {member.like!r}, "
-                    "which is no other member of this type"
                 )
         writers = [name for name, member in agents.items() if member.writes]
         if len(writers) != 1:
@@ -288,6 +217,16 @@ class AgentType(BaseModel):
         found = self.agents.get(member)
         return found is not None and (tool in found.tools or tool in found.lead_tools)
 
+    @property
+    def titles(self) -> dict[str, str]:
+        """What each member is called in what the director writes."""
+        return {name: self.title_of(name) for name in self.agents}
+
+    def title_of(self, member: str) -> str:
+        """What ``member`` is called in what the director writes."""
+        found = self.agents.get(member)
+        return (found.title if found else "") or member
+
     def text_for(self, role: str) -> str:
         """What the member ``role`` of a team of this type is told, as one
         block; '' when the type says nothing to it."""
@@ -312,7 +251,7 @@ class AgentType(BaseModel):
         return f'<TEAM_TYPE name="{self.name}">\n{body}\n</TEAM_TYPE>'
 
 
-def _read(path: Path, tools: Iterable[str]) -> AgentType:
+def read_type(path: Path, tools: Iterable[str]) -> TeamTemplate:
     """The type a file defines.
 
     Raises:
@@ -328,7 +267,7 @@ def _read(path: Path, tools: Iterable[str]) -> AgentType:
         raise InvalidAgentType(f"{path}: a type is a mapping")
     loaded.setdefault("name", path.stem)
     try:
-        found = AgentType.model_validate(loaded)
+        found = TeamTemplate.model_validate(loaded)
     except ValidationError as error:
         raise InvalidAgentType(f"{path}: {error}") from error
     if found.name != path.stem:
@@ -348,7 +287,9 @@ def _read(path: Path, tools: Iterable[str]) -> AgentType:
     return found
 
 
-def load_types(folders: Iterable[Path], tools: Iterable[str]) -> dict[str, AgentType]:
+def load_types(
+    folders: Iterable[Path], tools: Iterable[str]
+) -> dict[str, TeamTemplate]:
     """The types of the YAML files in ``folders``, by name; a later folder's
     type takes the place of an earlier one of the same name.
 
@@ -356,16 +297,13 @@ def load_types(folders: Iterable[Path], tools: Iterable[str]) -> dict[str, Agent
     take the others with it.
     """
     known = tuple(tools)
-    found: dict[str, AgentType] = {}
+    found: dict[str, TeamTemplate] = {}
     for folder in folders:
         if not folder.is_dir():
             continue
         for path in sorted([*folder.glob("*.yaml"), *folder.glob("*.yml")]):
             try:
-                found[path.stem] = _read(path, known)
+                found[path.stem] = read_type(path, known)
             except InvalidAgentType:
                 logger.exception("Ignoring the agent type in %s", path)
     return found
-
-
-TeamTemplate = AgentType

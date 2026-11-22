@@ -115,8 +115,22 @@ max_depth: 2
 ```yaml
 # types/analyst.yaml
 description: Reads results and says what they mean.
-ic: |
-  Your team analyses results. It runs no experiments.
+agents:
+  # Copy the `ic` and `manager` of a shipped type, and say what each is for.
+  ic:
+    title: IC
+    writes: true
+    tools: [read_team_context, raise_escalation, resolve_escalation, report,
+            write_spec, edit_contracts, msg_manager, propose_teams, msg_team,
+            hand_over, stop_team, submit_review, review_team]
+    lead_tools: [read_team_context, report, review_team]
+    text: |
+      Your team analyses results. It runs no experiments.
+  manager:
+    title: Manager
+    tools: [read_team_context, raise_escalation, resolve_escalation, report,
+            msg_ic, approve_teams, decline_teams, prune_team]
+    lead_tools: [read_team_context, report, settle_teams]
 actions:
   submit_review: Submit one table and what it shows.
 review:
@@ -127,7 +141,7 @@ omit_tools: [propose_teams]
 
 A type cannot change what the runtime enforces: folders, review and landing are the same for every team. Settings changed on the org page hold over `director.yaml`.
 
-A type that says nothing of members has an IC and a Manager. A type may name its own instead, with `agents`:
+Every type names its members under `agents`. They need not be an IC and a Manager:
 
 ```yaml
 # types/lab.yaml
@@ -140,12 +154,10 @@ agents:
             submit_review, propose_teams, msg_team]
     lead_tools: [read_team_context]
   referee:
-    like: bench
     text: Checks what the benches below found.
     tools: [read_team_context, review_team]
     lead_tools: [read_team_context, review_team]
   chair:
-    like: bench
     tools: [read_team_context, approve_teams, decline_teams]
     lead_tools: [read_team_context, settle_teams]
 ```

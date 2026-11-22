@@ -9,8 +9,8 @@ import pytest
 from openhands.agent_server.director.agent_types import (
     SHIPPED_TYPES,
     InvalidAgentType,
-    _read,
     load_types,
+    read_type,
 )
 from openhands.agent_server.director.models import (
     CreateOrgRequest,
@@ -22,7 +22,6 @@ from openhands.agent_server.director.org_config import InvalidOrgConfig
 from openhands.agent_server.director.service import DirectorService
 from openhands.agent_server.director.service.state import (
     DIRECTOR_TOOL_NAMES,
-    tools_of,
 )
 from openhands.agent_server.director.tools import (
     ApproveTeamsTool,
@@ -35,6 +34,7 @@ from openhands.sdk.errors import Invalid, Unprocessable
 from tests.agent_server.director.conftest import (
     FakeLauncher,
     commit,
+    members_yaml,
     root_conversation,
     tasked,
 )
@@ -49,12 +49,13 @@ from tests.agent_server.director.test_director_tools import (
 
 
 CODE_REVIEW = "Review the diff for bugs."
-ANALYST = """\
+ANALYST = (
+    members_yaml(
+        ic="Your team analyses results. It runs no experiments.\n",
+        manager="Approve a proposal if each sub-team reads one set of results.\n",
+    )
+    + """\
 description: Reads results and says what they mean.
-ic: |
-  Your team analyses results. It runs no experiments.
-manager: |
-  Approve a proposal if each sub-team reads one set of results.
 actions:
   submit_review: Submit one table and what it shows.
 review:
@@ -64,6 +65,7 @@ review:
     Every number in a table is in a committed result file.
 omit_tools: [propose_teams, read_team_context]
 """
+)
 TEAMS = proposing(
     [
         SplitChild(
@@ -143,13 +145,14 @@ def test_the_shipped_default_type_says_something_to_both_roles():
 @pytest.mark.parametrize(
     "body",
     [
-        "description: x\nactions:\n  no_such_tool: do it\n",
-        "description: x\nomit_tools: [no_such_tool]\n",
-        "description: x\nprimitives:\n  blackboard: shared\n",
-        "description: x\ngates:\n  merge: never\n",
-        "name: other\nsummary: x\n",
+        members_yaml() + "description: x\nactions:\n  no_such_tool: do it\n",
+        members_yaml() + "description: x\nomit_tools: [no_such_tool]\n",
+        members_yaml() + "description: x\nprimitives:\n  blackboard: shared\n",
+        members_yaml() + "description: x\ngates:\n  merge: never\n",
+        members_yaml() + "name: other\ndescription: x\n",
         "- not a mapping\n",
-        "ic: A type that does not say what it is for.\n",
+        members_yaml(ic="A type that does not say what it is for."),
+        "description: A type that names no members.\n",
     ],
 )
 def test_a_type_that_says_what_no_type_may_is_refused(tmp_path: Path, body: str):
@@ -157,7 +160,7 @@ def test_a_type_that_says_what_no_type_may_is_refused(tmp_path: Path, body: str)
     path.write_text(body)
 
     with pytest.raises(InvalidAgentType):
-        _read(path, DIRECTOR_TOOL_NAMES)
+        read_type(path, DIRECTOR_TOOL_NAMES)
     assert load_types([tmp_path], DIRECTOR_TOOL_NAMES) == {}
 
 
@@ -189,13 +192,11 @@ async def test_a_type_takes_tools_away_but_not_the_ones_an_agent_needs(
     await split(service)
 
     tables = node(service, "tables")
-    offered = tools_of(tables, "ic", service.type_of(tables).omit_tools)
+    offered = service.tools_for(tables, "ic")
     assert "propose_teams" not in offered
     assert "read_team_context" in offered and "submit_review" in offered
     harness = node(service, "harness")
-    assert "propose_teams" in tools_of(
-        harness, "ic", service.type_of(harness).omit_tools
-    )
+    assert "propose_teams" in service.tools_for(harness, "ic")
 
 
 async def test_a_team_cannot_be_of_a_type_the_director_does_not_find(
@@ -414,7 +415,7 @@ async def test_a_type_added_while_the_server_runs_can_be_given_to_the_next_team(
     assert "auditor" not in service.agent_types
 
     (tmp_path / "config" / "types" / "auditor.yaml").write_text(
-        "description: Checks what other teams claim.\n"
+        members_yaml() + "description: Checks what other teams claim.\n"
     )
 
     assert "auditor" in {kind.name for kind in service.types_allowed()}
@@ -454,7 +455,7 @@ async def test_every_org_starts_with_what_director_yaml_says_of_types(
 
 def a_type_on(folder: Path, body: str) -> None:
     (folder / "config" / "types" / "auditor.yaml").write_text(
-        "description: Checks what other teams claim.\n" + body
+        members_yaml() + "description: Checks what other teams claim.\n" + body
     )
 
 
@@ -519,10 +520,3 @@ async def test_a_type_whose_profile_the_server_does_not_have_is_refused(
     assert answer.is_error
     assert "'checker'" in answer.text and "has none of that name" in answer.text
     assert node(service, "root").pending_split is None
-
-
-def test_a_types_profile_is_still_read_under_the_name_it_had(tmp_path: Path):
-    path = tmp_path / "auditor.yaml"
-    path.write_text("description: Checks claims.\nmodel: checker\n")
-
-    assert _read(path, DIRECTOR_TOOL_NAMES).sas_profile == "checker"

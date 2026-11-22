@@ -20,8 +20,6 @@ from openhands.agent_server.director.git import (
     git_version,
 )
 from openhands.agent_server.director.models import (
-    AGENT_ROLES,
-    AgentRole,
     FormerTeam,
     Report,
     RoutedRequest,
@@ -95,7 +93,7 @@ class Landing(NamedTuple):
     routed: list[RoutedRequest]
     # The members the org's teams may have: a team that goes leaves no
     # reports of any of them.
-    members: tuple[AgentRole, ...] = AGENT_ROLES
+    members: tuple[str, ...]
 
 
 class Staged(NamedTuple):
@@ -165,7 +163,7 @@ def _parse_reports(raw: str | None) -> list[Report]:
     return _REPORTS.validate_json(raw) if raw else []
 
 
-def _reports_file(node_id: str, role: AgentRole) -> str:
+def _reports_file(node_id: str, role: str) -> str:
     return f"{REPORTS_DIR}/{node_id}/{role}.json"
 
 
@@ -323,7 +321,7 @@ class GitStore:
             lambda _read: [StoreChange(path, content)], f"memory: write {path}"
         )
 
-    def reports(self, node_id: str, role: AgentRole) -> list[Report]:
+    def reports(self, node_id: str, role: str) -> list[Report]:
         """What one agent of a team recorded, oldest first. They belong to
         the team's agent, whichever conversation it has."""
         return _parse_reports(self.read(_reports_file(node_id, role)))
@@ -398,7 +396,7 @@ class GitStore:
     def replace_reports(
         self,
         node_id: str,
-        role: AgentRole,
+        role: str,
         read_as: list[Report],
         reports: list[Report],
     ) -> bool:

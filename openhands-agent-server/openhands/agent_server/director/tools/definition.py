@@ -3,7 +3,7 @@
 from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING, ClassVar, Literal, Self
 
-from pydantic import AliasChoices, Field
+from pydantic import Field
 
 from openhands.agent_server.director import agent_actions
 from openhands.agent_server.director.agent_actions import Caller
@@ -59,7 +59,6 @@ class WriteSpecAction(Action):
     )
     file_text: str = Field(
         default="",
-        validation_alias=AliasChoices("file_text", "text"),
         description="For `create`: the whole spec, in Markdown.",
     )
     old_str: str = Field(default="", description=_OLD_STR)

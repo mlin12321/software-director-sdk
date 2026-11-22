@@ -1,22 +1,11 @@
 """Wire models for the director API."""
 
-from typing import Any, Literal
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field
 
 from openhands.agent_server.models import StartConversationRequest
 
-
-# The member of a team an agent is, by the name its team's type gives it. A
-# type that names no members has an IC and a Manager: the IC leads the team,
-# is a report of the team above, and does the code work in its boundary that
-# no sub-team has taken on.
-AgentRole = str
-# The members of a team whose type names none.
-AGENT_ROLES: tuple[AgentRole, ...] = ("ic", "manager")
-# What the agents are told a member of a team is called; any other member
-# is called by its own name.
-ROLE_NAMES: dict[str, str] = {"ic": "IC", "manager": "Manager"}
 
 NodeStatus = Literal["idle", "working", "done", "blocked"]
 
@@ -83,7 +72,7 @@ class HandOverMode(BaseModel):
 class AgentRef(BaseModel):
     """One agent of a team at its place in a session."""
 
-    role: AgentRole
+    role: str
     hand_over: HandOverMode | None = Field(
         default=None,
         description=(
@@ -140,8 +129,7 @@ class Escalation(BaseModel):
 
     id: str = Field(description="Unique within the team that raised it.")
     kind: EscalationKind
-    raised_by: AgentRole = Field(
-        default="ic",
+    raised_by: str = Field(
         description=(
             "Which agent of the team raised it. The agents of that role in "
             "the teams above are the ones that settle it or pass it up."
@@ -384,7 +372,7 @@ class ThreadMessage(BaseModel):
     """One message between a Manager and an IC."""
 
     at: str = Field(description="ISO 8601 timestamp.")
-    sender: AgentRole = Field(description="Which of the two wrote it.")
+    sender: str = Field(description="Which of the two wrote it.")
     text: str = Field(min_length=1)
 
 
@@ -507,7 +495,7 @@ class Report(BaseModel):
     team: a design decision, a setback, a reflection."""
 
     at: str = Field(description="ISO 8601 timestamp.")
-    role: AgentRole = Field(description="Which agent of the team wrote it.")
+    role: str = Field(description="Which agent of the team wrote it.")
     text: str = Field(min_length=1)
     session: str = Field(
         default="",
@@ -826,13 +814,6 @@ class MemorySync(BaseModel):
     )
 
 
-# What a setting was called before, and what it is called now.
-_EARLIER_SETTING_NAMES = {
-    "stall_check_minutes": "soft_check_in_minutes",
-    "check_in_minutes": "hard_check_in_minutes",
-}
-
-
 class DirectorSettings(BaseModel):
     """Limits on the teams an org may still add, and how it starts again.
 
@@ -956,20 +937,6 @@ class DirectorSettings(BaseModel):
         ge=0,
         description="How many sessions may be open at once. 0: no limit.",
     )
-
-    @model_validator(mode="before")
-    @classmethod
-    def _earlier_names(cls, values: Any) -> Any:
-        """Read the names these two settings had before: a ``director.yaml``
-        or kept settings written then still load."""
-        if not isinstance(values, dict):
-            return values
-        values = dict(values)
-        for earlier, name in _EARLIER_SETTING_NAMES.items():
-            if earlier in values:
-                kept = values.pop(earlier)
-                values.setdefault(name, kept)
-        return values
 
 
 class DirectorSettingsUpdate(BaseModel):
@@ -1685,7 +1652,7 @@ class ConversationLink(BaseModel):
     )
     node_id: str = Field(description="The team of the org the agent works for.")
     team: str = Field(description="That team's title.")
-    role: AgentRole
+    role: str
     session_id: str = Field(default="", description="The session the agent works in.")
     session: str = Field(default="", description="That session's title.")
     status: str = Field(default="", description="The agent's status.")
@@ -1698,7 +1665,7 @@ class ConversationPlace(BaseModel):
     conversation_id: str
     node_id: str = Field(description="The team of the org the agent works for.")
     team: str = Field(description="That team's title.")
-    role: AgentRole
+    role: str
     session_id: str = Field(default="", description="The session the agent works in.")
     session: str = Field(default="", description="That session's title.")
     human_joined: bool = Field(

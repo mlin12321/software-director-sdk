@@ -35,7 +35,6 @@ from openhands.agent_server.director.run_state import (
 from openhands.agent_server.director.service.reviews import Reviews
 from openhands.agent_server.director.service.state import (
     LIMIT_WAITS,
-    ROLE_NAMES,
     STALL_LANE,
     STALL_WAITS,
     _progress_of,
@@ -71,10 +70,10 @@ class Watch(Reviews):
         if escalation.raised_by == self.team(raiser).writer:
             # It is woken now anyway, so it gets what waits for its review too.
             self.release_reviews(holder_id)
-            self.count_ic_escalation(holder_id, through.id)
+            self.count_escalation_from_below(holder_id, through.id)
         raised_by = escalation.raised_by
         text = (
-            f"The {ROLE_NAMES.get(raised_by, raised_by)} of team {raiser.title!r} "
+            f"The {self.team(raiser).title(raised_by)} of team {raiser.title!r} "
             f"(id {raiser.id}) escalates {escalation.title!r} (escalation "
             f"{escalation.id}):\n{escalation.detail or '(no detail)'}{history}\n"
             "Settle it with resolve_escalation if you can; pass it up only with "
@@ -119,7 +118,7 @@ class Watch(Reviews):
         # A stopped team is waited for no longer by the reviews beside it.
         self.release_reviews(team.parent_id)
         if team.parent_id is not None:
-            self.tell_manager(
+            self.tell_overseer(
                 team.parent_id,
                 f"Your IC stopped the team {team.title!r} (id {team.id}): "
                 f"{reason}\nIts agents are at rest and nothing is sent to "
@@ -370,7 +369,7 @@ class Watch(Reviews):
                 )
             )
         for above_id, texts in check_ins.items():
-            self.tell_ic(above_id, "\n\n".join(texts))
+            self.tell_writer(above_id, "\n\n".join(texts))
 
     def _tell_if_stalled(
         self,
@@ -399,7 +398,7 @@ class Watch(Reviews):
         again = {"told": now.isoformat(), "checked": now.isoformat()}
         run.mark(PROGRESS, team.id, json.dumps({**seen, **again}))
         if unstarted and team.parent_id is not None:
-            self.tell_ic(
+            self.tell_writer(
                 team.parent_id,
                 unstarted_notice(team, int((now - since).total_seconds() // 60)),
             )

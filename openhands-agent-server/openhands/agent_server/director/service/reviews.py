@@ -94,9 +94,9 @@ from openhands.agent_server.director.service.state import (
     MERGE_WAITS,
     ORG_WAITS,
     _branch_of,
-    _checkout_root,
     _contracts_file,
     _spec_file,
+    checkout_root,
 )
 from openhands.agent_server.director.split import (
     Shape,
@@ -774,7 +774,7 @@ class Reviews(Requests):
                 }
             ),
         )
-        self.tell_manager(
+        self.tell_overseer(
             review.id,
             merge_request(
                 top, self.store.session_title(top), waiting, merge.code_landed
@@ -811,7 +811,7 @@ class Reviews(Requests):
                         update={"reminded": True, "asked_at": now.isoformat()}
                     ),
                 )
-                self.tell_manager(
+                self.tell_overseer(
                     review.id,
                     "This still waits for you, and with it the teams and "
                     "contracts of every session that submitted later.\n\n"
@@ -1174,7 +1174,7 @@ class Reviews(Requests):
         if review is not None and (
             landed.taken or landed.kept or landed.agreed or landed.held
         ):
-            self.tell_ic(
+            self.tell_writer(
                 top.id,
                 teams_settled(
                     review.title,
@@ -1292,7 +1292,7 @@ class Reviews(Requests):
             if merge.asked and any(
                 item.gate == "manager" and item.take is None for item in merge.items
             ):
-                self.tell_manager(
+                self.tell_overseer(
                     review.id,
                     f"The work of {top.title!r} was sent back to its team. "
                     "What waited of it for you waits no longer. What you "
@@ -1333,7 +1333,7 @@ class Reviews(Requests):
         team, checkout = Path(place.worktree_path), Path(above.worktree_path)
         changes = (
             changes_of(checkout, team)
-            if _checkout_root(str(team)) != _checkout_root(str(checkout))
+            if checkout_root(str(team)) != checkout_root(str(checkout))
             else None
         )
         files = []
@@ -1665,7 +1665,7 @@ class Reviews(Requests):
             # Something came into the checkout between the review and now.
             self.notify(reviewer, refusal)
             return
-        if _checkout_root(str(team)) != _checkout_root(str(checkout)):
+        if checkout_root(str(team)) != checkout_root(str(checkout)):
             elsewhere = await asyncio.to_thread(self._elsewhere, place, above)
             if elsewhere is not None:
                 started_on, on = elsewhere
@@ -2004,7 +2004,7 @@ class Reviews(Requests):
                 )
             return
         team, checkout = Path(place.worktree_path), Path(above.worktree_path)
-        if _checkout_root(str(team)) != _checkout_root(str(checkout)):
+        if checkout_root(str(team)) != checkout_root(str(checkout)):
             try:
                 result = await asyncio.to_thread(
                     merge_back, checkout, team, place.boundary, place.title

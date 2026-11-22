@@ -28,15 +28,14 @@ from openhands.agent_server.director.agent_types import (
     DEFAULT_TYPE,
     SHIPPED_TYPES,
     TYPES_FOLDER,
-    AgentType,
-    default_agents,
+    TeamTemplate,
     load_types,
 )
 from openhands.agent_server.director.boundary import scope_within
 from openhands.agent_server.director.confinement import (
     Confinement,
-    checkout_root as _checkout_root,
-    is_in as _is_in,
+    checkout_root,
+    is_in,
 )
 from openhands.agent_server.director.git import (
     GitError,
@@ -58,11 +57,8 @@ from openhands.agent_server.director.headline import provisional_summary
 from openhands.agent_server.director.launch import TeamLauncher
 from openhands.agent_server.director.merge_checkout import MergeCheckout, discard
 from openhands.agent_server.director.models import (
-    AGENT_ROLES,
-    ROLE_NAMES,
     AgentKind,
     AgentRef,
-    AgentRole,
     AgentTypeInfo,
     DirectorSettings,
     DirectorSettingsState,
@@ -135,55 +131,34 @@ from openhands.sdk.errors import (
 logger = logging.getLogger(__name__)
 
 ROOT_ID = "root"
-# The members of a team whose type names none, and the director's tools
-# each is offered; they register in ``director.tools``. `agent_actions`
-# refuses the rest whatever is offered.
-_DEFAULT_AGENTS = default_agents()
-TOOLS_OF: dict[AgentRole, tuple[str, ...]] = {
-    "ic": tuple(_DEFAULT_AGENTS["ic"].tools),
-    "manager": tuple(_DEFAULT_AGENTS["manager"].tools),
-}
 # What no type takes from an agent: without them it could not read its
 # place, hand its work on, or say that it cannot go on.
 _TOOLS_NO_TYPE_REMOVES = ("read_team_context", "raise_escalation", "submit_review")
 HAND_OVER_TOOLS = ("read_team_context", "hand_over", "write_spec")
-# What an IC has of the director's tools where it only reviews the work of
-# a session.
-DIVISION_LEAD_IC_TOOLS = tuple(_DEFAULT_AGENTS["ic"].lead_tools)
-# What a Manager has there: it settles the sub-teams a session and the org
-# each made something else of.
-DIVISION_LEAD_MANAGER_TOOLS = tuple(_DEFAULT_AGENTS["manager"].lead_tools)
 
 
-def tools_of(
-    place: SessionTeam,
-    role: AgentRole,
-    without: Sequence[str] = (),
-    *,
-    kind: AgentType | None = None,
-) -> tuple[str, ...]:
-    """The director's tools an agent of ``node`` is offered.
-
-    Args:
-        role: The member of the team it is.
-        without: The tools the team's type leaves its agents without. What
-            an agent needs to read its place and hand its work on stays.
-        kind: The team's type; None for one that names no members.
-    """
-    member = (kind.agents if kind else _DEFAULT_AGENTS).get(role)
-    if member is None:
-        return ()
-    if is_division_lead(place):
-        return tuple(member.lead_tools)
-    return tuple(
-        name
-        for name in member.tools
-        if name not in without or name in _TOOLS_NO_TYPE_REMOVES
-    )
-
-
-DIRECTOR_TOOL_NAMES = tuple(
-    dict.fromkeys((*TOOLS_OF["ic"], *TOOLS_OF["manager"], *DIVISION_LEAD_MANAGER_TOOLS))
+# Every tool of the director's; they register in ``director.tools``. Which
+# of them an agent is offered is its team's type's to say, and
+# `agent_actions` refuses the rest whatever is offered.
+DIRECTOR_TOOL_NAMES = (
+    "read_team_context",
+    "raise_escalation",
+    "resolve_escalation",
+    "report",
+    "write_spec",
+    "edit_contracts",
+    "msg_manager",
+    "propose_teams",
+    "msg_team",
+    "hand_over",
+    "stop_team",
+    "submit_review",
+    "review_team",
+    "msg_ic",
+    "approve_teams",
+    "decline_teams",
+    "prune_team",
+    "settle_teams",
 )
 # Tools that start agents nothing holds to the team's folder. An org's
 # agent hands work on by proposing sub-teams.
@@ -285,7 +260,7 @@ STALL_WAITS = "stalled"
 MODEL_CALLS_AT_ONCE = 2
 
 
-def failure_waits(role: AgentRole) -> str:
+def failure_waits(role: str) -> str:
     """The id of the escalation that tells the human an agent failed."""
     return f"{role}-failed"
 
@@ -325,14 +300,6 @@ def conversations_of(teams: Iterable[SessionTeam]) -> list[str]:
     ]
 
 
-def agent_conversation(place: SessionTeam, role: AgentRole) -> str | None:
-    """The conversation of the team's agent in ``role``, if it has one."""
-    for agent in place.agents:
-        if agent.role == role:
-            return agent.conversation_id
-    return None
-
-
 def hand_over_of(place: SessionTeam) -> HandOverMode | None:
     """The hand-over mode of the team's IC, if it is or was in it."""
     for agent in place.agents:
@@ -342,13 +309,16 @@ def hand_over_of(place: SessionTeam) -> HandOverMode | None:
 
 
 def _agent_title(
-    team: str, role: AgentRole, session: str = "", *, division_lead: bool = False
+    team: str, name: str, session: str = "", *, division_lead: bool = False
 ) -> str:
     """What an agent's conversation is called. The session is named unless
-    it is called what its team is, and the two agents a session's work is
-    reviewed by are called its Division Leads."""
+    it is called what its team is, and the agents a session's work is
+    reviewed by are called its Division Leads.
+
+    Args:
+        name: What the agent's member is called.
+    """
     where = f"{team} · {session}" if session and session != team else team
-    name = ROLE_NAMES.get(role, role)
     return f"{where} ({'Division Lead ' + name if division_lead else name})"
 
 
@@ -360,7 +330,7 @@ def _summary_of(text: str) -> str:
 def apart(team: SessionTeam, above: SessionTeam) -> bool:
     """Whether a team works in a checkout of its own, not in the one of
     the team above."""
-    return _checkout_root(team.worktree_path) != _checkout_root(above.worktree_path)
+    return checkout_root(team.worktree_path) != checkout_root(above.worktree_path)
 
 
 class ServiceState:
@@ -489,7 +459,7 @@ class ServiceState:
         self._configured: dict[str, Any] = (
             load_org_config(config_file) if config_file else {}
         )
-        self._agent_types: dict[str, AgentType] | None = None
+        self._agent_types: dict[str, TeamTemplate] | None = None
         self._agent_types_seen: tuple[tuple[str, int], ...] = ()
         # What the org sets for itself, by the repository it was read from.
         self._own_settings: tuple[str, OrgSettings] | None = None
@@ -516,7 +486,7 @@ class ServiceState:
         self._sync_lock = asyncio.Lock()
         self._resume_lock = asyncio.Lock()
 
-    def review_instructions(self, kind: AgentType | None = None) -> str:
+    def review_instructions(self, kind: TeamTemplate | None = None) -> str:
         """What an IC reviewing a team below checks its work by: the skill
         the team's type names, then the type's own checklist.
 
@@ -660,7 +630,7 @@ class ServiceState:
             return self._settings
 
     @property
-    def agent_types(self) -> dict[str, AgentType]:
+    def agent_types(self) -> dict[str, TeamTemplate]:
         """The types a team may be, by name: the ones the director ships
         and the ones beside ``director.yaml``. They are read again when a
         file among them is added, removed or changed, so a new type can be
@@ -682,43 +652,22 @@ class ServiceState:
                 self._agent_types_seen = seen
             return self._agent_types
 
-    def type_of(self, node: OrgNodeInput) -> AgentType:
+    def type_of(self, node: OrgNodeInput) -> TeamTemplate:
         """The type of a team. A team whose type the director no longer
-        finds is told as the default type is, and as nothing when that is
-        gone too."""
+        finds is told as the default type is."""
         types = self.agent_types
-        found = types.get(node.agent_type) or types.get(DEFAULT_TYPE)
-        if found is None:
-            return AgentType(
-                name=node.agent_type or DEFAULT_TYPE, description="A team."
-            )
-        return found
+        return types.get(node.agent_type) or types[DEFAULT_TYPE]
 
-    def member_names(self) -> tuple[AgentRole, ...]:
+    def member_names(self) -> tuple[str, ...]:
         """Every member a team of the org may have, by the types it knows."""
         named = (name for kind in self.agent_types.values() for name in kind.agents)
-        return tuple(dict.fromkeys((*AGENT_ROLES, *named)))
+        return tuple(dict.fromkeys(named))
 
     def team(self, place: SessionTeam) -> Team:
         """A team of the org as the director reads it."""
-        return Team(self.store, place, self.type_of)
+        return Team(self.store, place)
 
-    def _writer(self, place_id: str) -> AgentRole:
-        """The member of a team that works in its folder."""
-        place = self.store.place(place_id)
-        return self.team(place).writer if place else "ic"
-
-    def _overseer(self, place_id: str) -> AgentRole:
-        """The member of a team that settles what its sub-teams are."""
-        place = self.store.place(place_id)
-        return self.team(place).overseer if place else "manager"
-
-    def _reviewer(self, place_id: str) -> AgentRole:
-        """The member of a team that the teams below turn to."""
-        place = self.store.place(place_id)
-        return self.team(place).reviewer if place else "ic"
-
-    def role_text(self, place: SessionTeam, member: AgentRole) -> str:
+    def role_text(self, place: SessionTeam, member: str) -> str:
         """How the org works and what the member's part in it is, as its
         briefing says it."""
         return role_text(
@@ -727,16 +676,30 @@ class ServiceState:
 
     def writer_conversation(self, place: SessionTeam) -> str | None:
         """The conversation of the member that works in a team's folder."""
-        return agent_conversation(place, self.team(place).writer)
+        team = self.team(place)
+        return team.conversation(team.writer)
 
     def reviewer_conversation(self, place: SessionTeam) -> str | None:
         """The conversation of the member the teams below turn to."""
-        return agent_conversation(place, self.team(place).reviewer)
+        team = self.team(place)
+        return team.conversation(team.reviewer)
 
-    def tools_for(self, place: SessionTeam, member: AgentRole) -> tuple[str, ...]:
-        """The director's tools the member of a team is offered."""
+    def tools_for(self, place: SessionTeam, member: str) -> tuple[str, ...]:
+        """The director's tools the member of a team is offered: the ones
+        its type gives it, less the ones the type leaves its teams
+        without. What an agent needs to read its place and hand its work
+        on stays."""
         kind = self.type_of(place)
-        return tools_of(place, member, kind.omit_tools, kind=kind)
+        found = kind.agents.get(member)
+        if found is None:
+            return ()
+        if is_division_lead(place):
+            return tuple(found.lead_tools)
+        return tuple(
+            name
+            for name in found.tools
+            if name not in kind.omit_tools or name in _TOOLS_NO_TYPE_REMOVES
+        )
 
     @property
     def own_settings(self) -> OrgSettings:
@@ -757,7 +720,7 @@ class ServiceState:
         own = self.own_settings.allowed_agent_types
         return self.settings.allowed_agent_types if own is None else own
 
-    def types_allowed(self) -> list[AgentType]:
+    def types_allowed(self) -> list[TeamTemplate]:
         """The types a new team may be. A team that exists keeps its type
         whatever this says."""
         allowed = self._allowed_type_names()
@@ -932,7 +895,7 @@ class ServiceState:
         )
 
     def scope_of(
-        self, place: SessionTeam, role: AgentRole, hand_over: str | None = None
+        self, place: SessionTeam, role: str, hand_over: str | None = None
     ) -> Scope:
         """What an agent of ``place`` may write: the one place the org
         decides what its agents are held to.
@@ -962,15 +925,13 @@ class ServiceState:
             )
         within = scope_within(
             place,
-            role,
             started,
             # A hand-over conversation is no agent of the place.
             checkout="" if hand_over else place.worktree_path,
+            edits=role == kind.writer,
         )
         return replace(
             within,
-            # Only the member that works in the folder edits a file in it.
-            edits=role == kind.writer,
             # It writes in its boundary from its main conversation alone;
             # at a Division Lead place it only reviews, in the human's own
             # checkout.
@@ -1002,11 +963,8 @@ class ServiceState:
             never=_SUB_AGENT_TOOLS,
         )
 
-    def _shells(self) -> Path:
-        return self._confinement().shells
-
     def _merging_root(self) -> Path:
-        return self._shells().parent / _MERGING_DIR
+        return self._confinement().shells.parent / _MERGING_DIR
 
     def merge_checkout(self, place_id: str) -> MergeCheckout | None:
         """The merge of a team's work that its reviewer finishes."""
@@ -1089,7 +1047,7 @@ class ServiceState:
             raise Unavailable(
                 f"An org needs a git repository; {self._directory} is not one"
             )
-        return _checkout_root(str(self._directory))
+        return checkout_root(str(self._directory))
 
     def _merging(self) -> dict[str, Any] | None:
         kept = self._runs().get("merge")
@@ -1114,7 +1072,7 @@ class ServiceState:
         if not is_git_repository(self._repo_dir):
             return RunState(None)
         try:
-            return RunState(self._shells().parent / _RUN_STATE)
+            return RunState(self._confinement().shells.parent / _RUN_STATE)
         except (GitError, OSError, RunStateError, sqlite3.Error):
             logger.exception("Run state of %s is kept in memory only", self._repo_dir)
             return RunState(None)
@@ -1169,7 +1127,7 @@ class ServiceState:
         """The directory the server was started for, relative to the org's
         repository; '' when it is not below its root."""
         home = Path(os.path.realpath(self._directory))
-        top = _checkout_root(str(self._repo_dir))
+        top = checkout_root(str(self._repo_dir))
         return home.relative_to(top).as_posix() if top in home.parents else ""
 
     def _repo_relative(self, path: str) -> str:
@@ -1184,26 +1142,32 @@ class ServiceState:
             except DomainError as error:
                 raise Unprocessable(str(error)) from error
         target = Path(os.path.realpath(path))
-        top = _checkout_root(str(self._repo_dir))
-        if not _is_in(target, top):
+        top = checkout_root(str(self._repo_dir))
+        if not is_in(target, top):
             raise Unprocessable(f"{path} is outside the org's repository {top}")
         relative = target.relative_to(top).as_posix()
         return "" if relative == "." else relative
 
     def _confine(
-        self, place_id: str, role: AgentRole, hand_over: str | None = None
+        self, place_id: str, role: str | None = None, hand_over: str | None = None
     ) -> ToolParams | None:
         """Write the shell an agent's terminal starts.
+
+        Args:
+            role: The agent's member; None for the one that works in the
+                team's folder.
 
         Returns:
             What to start the agent's terminal with, or None when it needs
             no shell of its own.
         """
         place = self.store.place(place_id)
-        conversation_id = hand_over or (
-            agent_conversation(place, role) if place else None
-        )
-        if place is None or conversation_id is None:
+        if place is None:
+            return None
+        team = self.team(place)
+        role = role or team.writer
+        conversation_id = hand_over or team.conversation(role)
+        if conversation_id is None:
             return None
         return self._confinement().confine(
             conversation_id, self.scope_of(place, role, hand_over)
@@ -1223,8 +1187,7 @@ class ServiceState:
         return self._launcher
 
     def _load_store(self) -> OrgStore:
-        store = OrgStore()
-        store.writer_of = lambda node: self.type_of(node).writer
+        store = OrgStore(self.type_of)
         remembered = self._remembered_repo()
         if remembered is None or not self._load_from(remembered, store):
             self._load_from(self._directory, store)
@@ -1250,7 +1213,7 @@ class ServiceState:
             if not climb and not (repository / ".git").exists():
                 return False
             if load_org(create_org_board(repository), store):
-                self._repo_dir = _checkout_root(str(repository))
+                self._repo_dir = checkout_root(str(repository))
                 logger.info("Director loaded %d teams from %s", len(store), repository)
                 kept = self._open_run_state()
                 try:
@@ -1630,7 +1593,7 @@ def _lane_for(intent: Intent) -> str:
     return intent.node_id
 
 
-def _new_agents(ic_id: UUID, member: AgentRole = "ic") -> list[AgentRef]:
+def _new_agents(ic_id: UUID, member: str) -> list[AgentRef]:
     """The agents a team starts with: the member that works in its folder.
     Any other joins when something is first sent to it (see
     :meth:`DirectorService.tell`)."""

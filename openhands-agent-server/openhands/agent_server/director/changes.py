@@ -5,7 +5,7 @@ import os
 import re
 from pathlib import Path
 
-from openhands.agent_server.director.boundary import glob_matches, owns
+from openhands.agent_server.director.boundary import owns
 from openhands.agent_server.director.git import (
     DIRECTOR_IDENTITY,
     GitError,
@@ -26,6 +26,7 @@ from openhands.agent_server.director.models import (
     SessionTeam,
     TeamChanges,
 )
+from openhands.agent_server.director.scope import glob_matches
 from openhands.sdk.errors import Forbidden, Invalid, NotFound
 
 

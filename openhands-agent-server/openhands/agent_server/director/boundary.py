@@ -2,31 +2,14 @@
 
 from collections.abc import Iterable
 
-from openhands.agent_server.director.models import AgentRole, OrgNode
+from openhands.agent_server.director.models import OrgNode
 from openhands.agent_server.director.scope import (
     Closed,
     Denied,
     Scope,
     glob_matches,
     is_inside,
-    named_paths,
-    searched_folder,
-    written_paths,
 )
-
-
-__all__ = [
-    "glob_matches",
-    "hand_over_refusal",
-    "named_paths",
-    "nearest_team",
-    "owns",
-    "scope_within",
-    "searched_folder",
-    "worded",
-    "write_refusal",
-    "written_paths",
-]
 
 
 def owns(node: OrgNode, path: str) -> bool:
@@ -34,30 +17,23 @@ def owns(node: OrgNode, path: str) -> bool:
     return path == node.boundary.path or is_inside(path, node.boundary.path)
 
 
-def hand_over_refusal(path: str) -> str:
-    """Why an IC may not write ``path`` from its hand-over conversation."""
-    return (
-        f"In hand-over mode you do not edit files, so {path!r} was not "
-        "changed. Leave changes to your main conversation."
-    )
-
-
 def scope_within(
     node: OrgNode,
-    role: AgentRole,
     sub_teams: Iterable[OrgNode],
     *,
     checkout: str = "",
+    edits: bool = True,
 ) -> Scope:
     """What an agent of ``node`` may write with a file tool.
 
     Args:
         sub_teams: The teams below whose folders are closed to it.
+        edits: Whether it is the member that works in the team's folder.
     """
     return Scope(
         checkout=checkout,
         directory=node.boundary.path,
-        edits=role != "manager",
+        edits=edits,
         writable=tuple(node.boundary.writable),
         readonly=tuple(node.boundary.readonly),
         closed=tuple(
@@ -78,7 +54,10 @@ def worded(denied: Denied, scope: Scope) -> str:
                 "director's own: search a folder inside it instead."
             )
         case "aside":
-            return hand_over_refusal(path)
+            return (
+                f"In hand-over mode you do not edit files, so {path!r} was not "
+                "changed. Leave changes to your main conversation."
+            )
         case "reads_only":
             return (
                 f"A Manager does not edit files, so {path!r} was not changed. Have "
@@ -128,19 +107,6 @@ def worded(denied: Denied, scope: Scope) -> str:
                 f"{path!r} is in the repository's git directory, so it "
                 "was not changed. Use git."
             )
-
-
-def write_refusal(
-    node: OrgNode, role: AgentRole, sub_teams: Iterable[OrgNode], path: str
-) -> str | None:
-    """Why an agent of ``node`` may not write the repo-relative ``path``.
-
-    Returns:
-        The reason, worded for the agent, or None when it may.
-    """
-    scope = scope_within(node, role, sub_teams)
-    denied = scope.refuse(path)
-    return None if denied is None else worded(denied, scope)
 
 
 def _may_take(node: OrgNode, path: str) -> bool:

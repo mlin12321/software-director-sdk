@@ -3,24 +3,61 @@
 # harness, a data pipeline, a baseline, an evaluation.
 name: research-engineer
 description: Builds and runs what experiments need, such as a harness, a baseline or an evaluation.
-ic: |
-    Your team builds what research directions run on: a harness, a data
-    pipeline, a baseline, an evaluation. Other teams' results are only as
-    good as what you deliver, so say exactly what it measures and how it was
-    checked.
-    - Deliver the code, the command that runs it, and one recorded run with
-      its output committed.
-    - Keep the data a result is reported on apart from the data anything is
-      tuned on, and make it hard to mix them up.
-    - Fix seeds and record versions, so that the same command gives the same
-      number.
-    - Commit as you go: a team that commits nothing for a long time is
-      reported as stalled.
-manager: |
-    Approve a proposal only if each sub-team is one clear piece of the
-    machinery with a way to check it.
-    Prune only a team that clearly cannot work: stuck, or repeating what
-    fails.
+agents:
+    ic:
+        writes: true
+        title: IC
+        tools:
+            - read_team_context
+            - raise_escalation
+            - resolve_escalation
+            - report
+            - write_spec
+            - edit_contracts
+            - msg_manager
+            - propose_teams
+            - msg_team
+            - hand_over
+            - stop_team
+            - submit_review
+            - review_team
+        lead_tools:
+            - read_team_context
+            - report
+            - review_team
+        text: |
+            Your team builds what research directions run on: a harness, a data
+            pipeline, a baseline, an evaluation. Other teams' results are only as
+            good as what you deliver, so say exactly what it measures and how it was
+            checked.
+            - Deliver the code, the command that runs it, and one recorded run with
+              its output committed.
+            - Keep the data a result is reported on apart from the data anything is
+              tuned on, and make it hard to mix them up.
+            - Fix seeds and record versions, so that the same command gives the same
+              number.
+            - Commit as you go: a team that commits nothing for a long time is
+              reported as stalled.
+    manager:
+        title: Manager
+        tools:
+            - read_team_context
+            - raise_escalation
+            - resolve_escalation
+            - report
+            - msg_ic
+            - approve_teams
+            - decline_teams
+            - prune_team
+        lead_tools:
+            - read_team_context
+            - report
+            - settle_teams
+        text: |
+            Approve a proposal only if each sub-team is one clear piece of the
+            machinery with a way to check it.
+            Prune only a team that clearly cannot work: stuck, or repeating what
+            fails.
 primitives:
     spec: What the team's code measures or produces, and how to run it.
     contracts: >-

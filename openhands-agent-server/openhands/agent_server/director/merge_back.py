@@ -8,7 +8,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from openhands.agent_server.director.boundary import glob_matches
 from openhands.agent_server.director.git import (
     DIRECTOR_IDENTITY,
     GitError,
@@ -21,6 +20,7 @@ from openhands.agent_server.director.git_index import LOCK_FILE
 from openhands.agent_server.director.models import Boundary
 from openhands.agent_server.director.ownership import can_merge_in_memory, conflicts
 from openhands.agent_server.director.reconcile import MERGE_SUBJECT
+from openhands.agent_server.director.scope import glob_matches
 
 
 if sys.platform != "win32":

@@ -2403,7 +2403,6 @@ class ConversationService:
         request: StartChildConversationRequest,
         *,
         child_id: UUID | None = None,
-        extra_suffixes: Sequence[str] = (),
         worktree_options: ConversationWorktreeOptions | None = None,
         tool_params: ToolParams | None = None,
         extra_tags: Mapping[str, str | None] | None = None,
@@ -2425,8 +2424,6 @@ class ConversationService:
 
         Args:
             child_id: The id the child gets; a new one by default.
-            extra_suffixes: Text appended to the system prompt the child
-                inherits from the parent's agent.
             worktree_options: Where a worktree child starts from; the
                 repository's default branch when not given.
             tool_params: Parameters this server sets on the child's tools, by
@@ -2489,10 +2486,7 @@ class ConversationService:
                     live_launch_runtime(
                         self.acp_skill_sourcing, enable_browser=self.enable_browser
                     ),
-                    extra_suffixes=[
-                        *([worktree.guidance] if worktree else ()),
-                        *extra_suffixes,
-                    ],
+                    extra_suffixes=[worktree.guidance] if worktree else (),
                 )
             )
             launched = _adapted(_with_tool_params(launched, tool_params), adapt_agent)

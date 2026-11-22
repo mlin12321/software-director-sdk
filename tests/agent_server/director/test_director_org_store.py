@@ -6,7 +6,6 @@ import pytest
 
 from openhands.agent_server.director.models import (
     AgentRef,
-    AgentRole,
     Escalation,
     Review,
     ReviewState,
@@ -33,6 +32,7 @@ from tests.agent_server.director.conftest import (
     open_session_in,
     run_git,
     session_places,
+    shipped_type,
     small_tree,
 )
 
@@ -48,7 +48,7 @@ def at(team_id: str) -> str:
 
 @pytest.fixture
 def store() -> OrgStore:
-    store = OrgStore()
+    store = OrgStore(shipped_type)
     for node in small_tree():
         store.upsert(node)
     return store
@@ -303,7 +303,7 @@ class TestEscalations:
         # and kept with them; the saved tree is the org's reference only.
         board = create_org_board(repo)
         save_org(board, store)
-        loaded = OrgStore()
+        loaded = OrgStore(shipped_type)
 
         load_org(board, loaded)
 
@@ -436,7 +436,7 @@ class TestEscalationChain:
         self, store: OrgStore, escalation: Escalation
     ):
         before = store.places()
-        fresh = OrgStore()
+        fresh = OrgStore(shipped_type)
         fresh.replace_all(small_tree())
         session, places = session_places(small_tree(), "root", SESSION)
         places[-1] = places[-1].model_copy(update={"escalations": [escalation]})
@@ -590,7 +590,7 @@ def test_rejects_teams_that_do_not_fit_the_tree(store: OrgStore, node):
 
 class TestReplaceAll:
     def test_loads_nodes_in_any_order(self):
-        store = OrgStore()
+        store = OrgStore(shipped_type)
 
         store.replace_all(reversed(small_tree()))
 
@@ -634,7 +634,7 @@ class TestPersistence:
         save_org(board, store)
         head = board.head()
         save_org(board, store)
-        loaded = OrgStore()
+        loaded = OrgStore(shipped_type)
 
         assert load_org(board, loaded) is True
         assert loaded.teams() == store.teams()
@@ -645,7 +645,7 @@ class TestPersistence:
         assert run_git(repo, "status", "--porcelain") == ""
 
     def test_loading_finds_nothing_before_the_first_save(self, repo: Path):
-        store = OrgStore()
+        store = OrgStore(shipped_type)
 
         assert load_org(create_org_board(repo), store) is False
         assert len(store) == 0
@@ -655,7 +655,7 @@ class TestPersistence:
         board.write("", "org.json", '{"version": 99, "nodes": []}')
 
         with pytest.raises(ValueError, match="99"):
-            load_org(board, OrgStore())
+            load_org(board, OrgStore(shipped_type))
 
 
 def give_agents(store: OrgStore, place_id: str, ic: str, manager: str) -> None:
@@ -745,7 +745,7 @@ def test_a_teams_status_is_worked_out_and_never_declared(
     working: OrgStore,
     agent: str,
     review: ReviewState | None,
-    escalated_by: AgentRole | None,
+    escalated_by: str | None,
     expected: str,
 ):
     if review is not None:
@@ -762,7 +762,7 @@ def test_a_teams_status_is_worked_out_and_never_declared(
     place = working.set_agent(at("a2"), "ic", status=agent)
 
     assert place.status == expected
-    assert status_of(place) == expected
+    assert status_of(place, "ic") == expected
 
 
 def test_a_team_stops_being_blocked_when_its_ics_escalation_is_settled(
@@ -977,7 +977,7 @@ def test_saving_does_not_record_the_sessions_or_their_agents(
     save_org(board, working)
 
     assert run_git(repo, "rev-parse", ORG_REF) == saved
-    loaded = OrgStore()
+    loaded = OrgStore(shipped_type)
     assert load_org(board, loaded)
     assert loaded.find_by_conversation("conv-ic") is None
     assert loaded.sessions() == []
@@ -985,7 +985,7 @@ def test_saving_does_not_record_the_sessions_or_their_agents(
 
 def test_sessions_come_back_whatever_order_their_places_were_kept_in():
     session, places = session_places(small_tree(), "root", "s")
-    store = OrgStore()
+    store = OrgStore(shipped_type)
     store.replace_all(small_tree())
 
     # A place that was made before the one it now hangs under.

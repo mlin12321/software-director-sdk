@@ -13,7 +13,6 @@ from openhands.agent_server.director.models import (
 from openhands.agent_server.director.org_store import team_id_of
 from openhands.agent_server.director.routing import USAGE_ID
 from openhands.agent_server.director.service import DirectorService
-from openhands.agent_server.director.service.state import agent_conversation
 from openhands.agent_server.director.tools import (
     RaiseEscalationTool,
     SubmitReviewTool,
@@ -23,7 +22,12 @@ from openhands.agent_server.director.tools.definition import (
     RaiseEscalationAction,
     WriteSpecAction,
 )
-from tests.agent_server.director.conftest import FakeLauncher, record_of, run_git
+from tests.agent_server.director.conftest import (
+    FakeLauncher,
+    agent_conversation,
+    record_of,
+    run_git,
+)
 from tests.agent_server.director.test_director_landing import landed
 from tests.agent_server.director.test_director_limits import started
 from tests.agent_server.director.test_director_review import DONE

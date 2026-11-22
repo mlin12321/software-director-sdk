@@ -50,14 +50,11 @@ from openhands.agent_server.director.service.state import (
     RESTART_NOTE,
     ROOT_ID,
     STALL_WAITS,
-    TOOLS_OF,
-    _checkout_root,
     _instant,
     _summary_of,
-    agent_conversation,
+    checkout_root,
     failure_waits,
     hand_over_of,
-    tools_of,
 )
 from openhands.agent_server.director.service.sync import Sync
 from openhands.sdk.errors import (
@@ -77,11 +74,8 @@ __all__ = [
     "DIRECTOR_TOOL_NAMES",
     "HAND_OVER_TOOLS",
     "RESTART_NOTE",
-    "TOOLS_OF",
     "DirectorService",
-    "agent_conversation",
     "hand_over_of",
-    "tools_of",
 ]
 
 
@@ -200,7 +194,7 @@ class DirectorService(Sync):
                 )
         elif not await asyncio.to_thread(is_git_repository, workspace):
             raise Unavailable(f"An org needs a git repository; {workspace} is not one")
-        repository = await asyncio.to_thread(_checkout_root, str(workspace))
+        repository = await asyncio.to_thread(checkout_root, str(workspace))
         if conversation.conversation_runtime == "docker":
             raise Unprocessable(
                 "An org's agents run in the server's own process, not in Docker"
@@ -290,7 +284,7 @@ class DirectorService(Sync):
             chosen_by, reason = choice.by, choice.reason
             place = store.instance(choice.node_id, session_id) or top
         conversation_id = await asyncio.to_thread(
-            lambda: self.tell_ic(place.id, text, human=True)
+            lambda: self.tell_writer(place.id, text, human=True)
         )
         if place.id != top.id:
             # Its IC may say it is not the team's own: the IC above has it then.
@@ -502,7 +496,7 @@ class DirectorService(Sync):
             self.go_on_past_limit(place_id)
         if lost:
             # A new Manager starts with the answer; the IC goes on as it was.
-            self.tell_manager(
+            self.tell_overseer(
                 place_id,
                 "The Manager before you could not be started. The human was "
                 f"told, and says:\n{answer}",
@@ -519,13 +513,15 @@ class DirectorService(Sync):
             if escalation_id == LIMIT_WAITS
             else f"The human answered your escalation {escalation.title!r}"
         )
-        self.notify(agent_conversation(place, role), f"{told}:\n{answer}", at_once=True)
+        self.notify(
+            self.team(place).conversation(role), f"{told}:\n{answer}", at_once=True
+        )
         return store.place(place_id) or place
 
     def _steps(self) -> dict[str, Callable[[Intent], Awaitable[None]]]:
         return {
             "brief": self._do_brief,
-            "launch_manager": self._do_launch_manager,
+            "launch_member": self._do_launch_member,
             "split": self._do_split,
             "start_team": self._do_start_team,
             "finish_split": self._do_finish_split,

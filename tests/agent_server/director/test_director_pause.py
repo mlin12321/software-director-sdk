@@ -51,6 +51,7 @@ from tests.agent_server.director.conftest import (
     open_session_in,
     record_of,
     run_git,
+    shipped_type,
     tasked,
 )
 from tests.agent_server.director.test_director_landing import (
@@ -148,7 +149,7 @@ async def test_a_paused_org_holds_messages_and_delivers_them_in_order_on_resume(
     before = len(launcher.sent)
 
     paused = await service.pause()
-    service.tell_ic(place(service), "First", human=True)
+    service.tell_writer(place(service), "First", human=True)
     service.notify(ic(service), "Second")
     await service.settled()
 
@@ -227,7 +228,7 @@ async def test_a_server_stopped_while_teams_wait_starts_them_in_order_once_resum
     await use(first, manager(first), ApproveTeamsTool, APPROVE)
     top = place(first)
     for team in first.store.below(top):
-        first.tell_ic(team.id, "Begin.")
+        first.tell_writer(team.id, "Begin.")
     await eventually(
         lambda: sum(team.waiting_to_start for team in first.store.below(top)) == 3
     )
@@ -272,7 +273,7 @@ async def test_a_team_start_cut_off_by_a_crash_is_finished_without_a_second_of_a
     # The server ends as the first sub-team's IC has just been started.
     ended = end_server_at(launcher, "derived")
     api = place(first, "services.api")
-    first.tell_ic(api, "Begin.")
+    first.tell_writer(api, "Begin.")
     await ended.wait()
     assert len(launcher.derived) <= 2
 
@@ -684,7 +685,7 @@ async def test_a_session_stays_when_the_org_no_longer_has_its_team(
     await first.settled()
     await first.aclose()
     # The tree moves under the run state, as a pull does.
-    board, pulled = create_org_board(repo), OrgStore()
+    board, pulled = create_org_board(repo), OrgStore(shipped_type)
     load_org(board, pulled)
     pulled.remove("services.api")
     save_org(board, pulled)
@@ -718,7 +719,7 @@ async def test_a_sessions_run_state_is_kept_when_its_team_changed_in_the_org(
     first.notify(ic(first), "Carry on")
     await first.settled()
     await first.aclose()
-    board, pulled = create_org_board(repo), OrgStore()
+    board, pulled = create_org_board(repo), OrgStore(shipped_type)
     load_org(board, pulled)
     pulled.update_team("root", headline="Changed elsewhere")
     save_org(board, pulled)
@@ -769,7 +770,7 @@ def test_a_worktree_that_is_gone_is_made_again_from_its_branch(repo: Path):
     run_git(worktree, "add", "api.py")
     run_git(worktree, "commit", "--quiet", "-m", "api")
     run_git(repo, "worktree", "remove", "--force", str(worktree))
-    store = OrgStore()
+    store = OrgStore(shipped_type)
     store.replace_all(
         [
             make_team("root", None, path=""),

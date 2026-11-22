@@ -9,9 +9,9 @@ from collections.abc import Callable, Collection, Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
+from openhands.agent_server.director.agent_types import TeamTemplate
 from openhands.agent_server.director.models import (
     AgentKind,
-    AgentRole,
     Escalation,
     EscalationHandoff,
     EscalationKind,
@@ -42,7 +42,7 @@ AGENT_BLOCKED = "blocked"
 AGENT_LOST = "lost"
 
 
-def status_of(node: SessionTeamInput, writer: AgentRole = "ic") -> NodeStatus:
+def status_of(node: SessionTeamInput, writer: str) -> NodeStatus:
     """The status a team has by what is known of it; no team declares one.
 
     ``writer`` is the member that works in its folder: its IC.
@@ -149,7 +149,13 @@ class OrgStore:
     happened. They must return quickly and must not call back into the store.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, type_of: Callable[[OrgNodeInput], TeamTemplate]) -> None:
+        """
+        Args:
+            type_of: Gives the type of a team. The types are not the
+                store's: it reads from them who a team's members are.
+        """
+        self.type_of = type_of
         self._lock = threading.RLock()
         self._nodes: dict[str, OrgNode] = {}
         self._sessions: dict[str, SessionInput] = {}
@@ -157,12 +163,13 @@ class OrgStore:
         self._root_id: str | None = None
         self._listeners: dict[OrgListener, _Subscription] = {}
         self._change_listeners: list[Callable[[], None]] = []
-        self._agents: dict[str, tuple[str, AgentRole]] = {}
-        # Gives the member of a team that works in its folder. The types
-        # of teams are not the store's: whoever reads them sets this.
-        self.writer_of: Callable[[OrgNodeInput], AgentRole] = lambda _: "ic"
+        self._agents: dict[str, tuple[str, str]] = {}
         # The hand-over conversation of each IC that has one -> its team.
         self._hand_overs: dict[str, str] = {}
+
+    def writer_of(self, node: OrgNodeInput) -> str:
+        """The member of a team that works in its folder."""
+        return self.type_of(node).writer
 
     @property
     def root_id(self) -> str | None:
@@ -433,7 +440,7 @@ class OrgStore:
 
     def find_by_conversation(
         self, conversation_id: str
-    ) -> tuple[SessionTeam, AgentRole] | None:
+    ) -> tuple[SessionTeam, str] | None:
         """The place an agent's conversation belongs to, and the agent's role."""
         with self._lock:
             found = self._agents.get(conversation_id)
@@ -518,7 +525,7 @@ class OrgStore:
     def set_agent(
         self,
         place_id: str,
-        role: AgentRole,
+        role: str,
         *,
         conversation_id: str | None = None,
         status: str | None = None,
@@ -969,7 +976,7 @@ class OrgStore:
         title: str,
         detail: str = "",
         at: str | None = None,
-        raised_by: AgentRole | None = None,
+        raised_by: str | None = None,
     ) -> Escalation:
         """Record something an agent of ``place_id`` cannot settle itself.
 

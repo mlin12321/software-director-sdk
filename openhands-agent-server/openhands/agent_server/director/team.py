@@ -4,10 +4,9 @@ A view over one place of the org and its type. It keeps nothing: the place
 is the org store's, the members are the type's.
 """
 
-from collections.abc import Callable
 from dataclasses import dataclass
 
-from openhands.agent_server.director.agent_types import AgentType
+from openhands.agent_server.director.agent_types import TeamTemplate
 from openhands.agent_server.director.models import AgentRef, SessionTeam
 from openhands.agent_server.director.org_store import OrgStore, is_division_lead
 
@@ -18,16 +17,14 @@ class Team:
 
     Attributes:
         place: The team's place in the org.
-        type_of: Gives the type of a team.
     """
 
     store: OrgStore
     place: SessionTeam
-    type_of: Callable[[SessionTeam], AgentType]
 
     @property
-    def kind(self) -> AgentType:
-        return self.type_of(self.place)
+    def kind(self) -> TeamTemplate:
+        return self.store.type_of(self.place)
 
     @property
     def is_lead(self) -> bool:
@@ -73,6 +70,10 @@ class Team:
             or kind.writer
         )
 
+    def title(self, member: str) -> str:
+        """What ``member`` is called in what the director writes."""
+        return self.kind.title_of(member)
+
     def agent(self, member: str) -> AgentRef | None:
         """The agent that is ``member``, once the team has one."""
         return next((a for a in self.place.agents if a.role == member), None)
@@ -87,12 +88,9 @@ class Team:
         """The team it answers to, along the privileged edge."""
         parent = self.place.parent_id
         place = self.store.place(parent) if parent else None
-        return Team(self.store, place, self.type_of) if place else None
+        return Team(self.store, place) if place else None
 
     @property
     def below(self) -> list["Team"]:
         """The teams that answer to it."""
-        return [
-            Team(self.store, place, self.type_of)
-            for place in self.store.below(self.place.id)
-        ]
+        return [Team(self.store, place) for place in self.store.below(self.place.id)]

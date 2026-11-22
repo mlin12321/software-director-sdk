@@ -16,7 +16,6 @@ from openhands.agent_server.director.git_store import (
     GitStore,
 )
 from openhands.agent_server.director.models import (
-    AgentRole,
     FileEdit,
     MemorySync,
     OrgConflict,
@@ -78,7 +77,6 @@ from openhands.agent_server.director.service.state import (
     apart,
     failure_waits,
     hand_over_of,
-    tools_of,
 )
 from openhands.sdk.conversation.state import ConversationExecutionStatus
 from openhands.sdk.errors import (
@@ -463,7 +461,7 @@ class Sync(Sessions):
             )
         # The team's other agents stay its own: only the IC is new.
         writer = self.team(place).writer
-        tools = tools_of(place, writer, kind=self.type_of(place))
+        tools = self.tools_for(place, writer)
         agents = [
             *_new_agents(ic_id, writer),
             *(a for a in place.agents if a.role != writer),
@@ -495,7 +493,11 @@ class Sync(Sessions):
                     }
                 ),
                 [Tool(name=name) for name in tools],
-                title=_agent_title(place.title, writer, store.session_title(place)),
+                title=_agent_title(
+                    place.title,
+                    self.team(place).title(writer),
+                    store.session_title(place),
+                ),
                 tool_params=await asyncio.to_thread(self._confine, node_id, writer),
                 adapt_agent=await asyncio.to_thread(self._adapter, str(ic_id), tools),
             )
@@ -709,7 +711,7 @@ class Sync(Sessions):
         store = self.store
         run = self._runs()
         launcher = self._require_launcher()
-        agents: list[tuple[str, AgentRole, UUID]] = [
+        agents: list[tuple[str, str, UUID]] = [
             (node.id, agent.role, UUID(agent.conversation_id))
             for node in store.places()
             for agent in node.agents
@@ -795,7 +797,7 @@ class Sync(Sessions):
     async def _failed(
         self,
         place_id: str,
-        role: AgentRole,
+        role: str,
         conversation_id: UUID,
         status: ConversationExecutionStatus,
     ) -> None:
@@ -815,7 +817,7 @@ class Sync(Sessions):
             return
         self.tell_of_failure(place_id, role, said)
 
-    def _runs_again(self, team: SessionTeam, role: AgentRole) -> None:
+    def _runs_again(self, team: SessionTeam, role: str) -> None:
         """An agent that runs is no longer something the human is asked of."""
         waits = {failure_waits(role)} | (
             {STALL_WAITS} if role == self.team(team).writer else set()
@@ -873,7 +875,7 @@ class Sync(Sessions):
     async def _resync(self) -> None:
         """Read every agent's status back from its conversation."""
         store = self.store
-        agents: list[tuple[str, AgentRole, UUID]] = [
+        agents: list[tuple[str, str, UUID]] = [
             (node.id, agent.role, UUID(agent.conversation_id))
             for node in store.places()
             for agent in node.agents
