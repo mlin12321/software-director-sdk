@@ -967,7 +967,8 @@ class Teams(Delivery):
         await self._launch_manager(
             intent.node_id,
             intent.payload["task"],
-            # A step kept before members had names starts a Manager.
+            # A kept step that names no member starts the one that settles
+            # the team's sub-teams.
             intent.payload.get("role") or self._overseer(intent.node_id),
         )
 
