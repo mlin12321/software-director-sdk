@@ -23,7 +23,7 @@ from openhands.agent_server.director.org_store import (
     session_id_of,
     team_id_of,
 )
-from openhands.agent_server.director.prompts import MANAGER_ROLE
+from openhands.agent_server.director.prompts import MANAGER_ROLE, ORG_PROTOCOL
 from openhands.agent_server.director.service import (
     DirectorService,
     agent_conversation,
@@ -624,7 +624,8 @@ async def test_an_approved_split_sets_up_each_sub_team(
     # Each IC continues from the IC above.
     assert str(api_ic.parent_id) == str(web_ic.parent_id) == ic(service)
     assert (api_ic.isolation, web_ic.isolation) == ("shared", "worktree")
-    assert api_ic.suffixes == [] and "Serve the checkout API" in api_ic.task
+    assert "Serve the checkout API" in api_ic.task
+    assert ORG_PROTOCOL.strip() in api_ic.task and MANAGER_ROLE not in api_ic.task
     # A team has no Manager until something is sent to it; the Manager then
     # continues from the team's IC and shares its directory.
     assert manager(service, web.id) is None and len(starts) == 3
@@ -635,7 +636,8 @@ async def test_an_approved_split_sets_up_each_sub_team(
     assert "Build the checkout pages" in web_manager.task
     assert "Look in on your team." in launcher.messages_to(woken_id)[-1]
     assert str(web_manager.parent_id) == ic(service, web.id)
-    assert (web_manager.isolation, web_manager.suffixes) == ("shared", [MANAGER_ROLE])
+    assert web_manager.isolation == "shared"
+    assert MANAGER_ROLE.strip() in web_manager.task
 
     assert node(service, "root").pending_split is None
     assert "API (services/api)" in launcher.messages_to(ic(service))[-1]
@@ -1025,3 +1027,20 @@ async def test_a_message_to_a_team_that_is_gone_is_refused(service: DirectorServ
 
     with pytest.raises(NotFound):
         service.send(top, "ic", "gone@nowhere", "ic", "Anyone?")
+
+
+async def test_an_agent_reads_how_the_org_works_again_with_its_context(
+    service: DirectorService,
+):
+    its_manager = await woken(service)
+
+    def read(conversation_id: str | None) -> str:
+        caller = agent_actions.caller_of(service, UUID(conversation_id or ""))
+        return json.loads(agent_actions.node_context(service, caller))[
+            "how_the_org_works"
+        ]
+
+    # No agent has it in its system prompt, so it can be asked for again.
+    assert read(ic(service)) == ORG_PROTOCOL.strip()
+    assert read(its_manager).startswith(ORG_PROTOCOL.strip())
+    assert MANAGER_ROLE.strip() in read(its_manager)

@@ -291,7 +291,11 @@ async def test_a_team_start_cut_off_by_a_crash_is_finished_without_a_second_of_a
     assert len(set(starts)) == len(starts) == 3
     contracts = memory_of(second, CONTRACTS_FILE) or ""
     assert contracts.count("POST /checkout returns {order_id}") == 1
-    told = [text for text in launcher.messages_to(ic(second)) if "approved" in text]
+    told = [
+        text
+        for text in launcher.messages_to(ic(second))
+        if "Your team was split" in text
+    ]
     assert len(told) == 1
     await second.aclose()
 
@@ -392,7 +396,11 @@ async def test_the_end_of_a_split_cut_off_by_a_crash_is_told_once(
 
     assert node(second, "root").pending_split is None
     assert len(launcher.derived) == 1
-    told = [text for text in launcher.messages_to(ic(second)) if "approved" in text]
+    told = [
+        text
+        for text in launcher.messages_to(ic(second))
+        if "Your team was split" in text
+    ]
     assert len(told) == 1
     await second.aclose()
 
@@ -420,7 +428,11 @@ async def test_the_end_of_a_split_cut_off_before_it_is_told_is_told(
     await second.settled()
 
     assert node(second, "root").pending_split is None
-    told = [text for text in launcher.messages_to(ic(second)) if "approved" in text]
+    told = [
+        text
+        for text in launcher.messages_to(ic(second))
+        if "Your team was split" in text
+    ]
     assert len(told) == 1
     await second.aclose()
 

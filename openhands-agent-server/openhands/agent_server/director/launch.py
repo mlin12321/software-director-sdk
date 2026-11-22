@@ -44,7 +44,6 @@ from openhands.sdk.agent import ACPAgent
 from openhands.sdk.agent.base import AgentBase
 from openhands.sdk.conversation.message_request import SendMessageRequest
 from openhands.sdk.conversation.request import (
-    AgentLaunchAdditions,
     ConversationWorktreeOptions,
 )
 from openhands.sdk.conversation.state import ConversationExecutionStatus
@@ -119,7 +118,6 @@ class TeamLauncher(Protocol):
         title: str,
         task: str,
         isolation: IsolationMode,
-        suffixes: Sequence[str] = (),
         tool_params: ToolParams | None = None,
         adapt_agent: AgentAdapter | None = None,
         checkout: str | None = None,
@@ -153,7 +151,6 @@ class TeamLauncher(Protocol):
         title: str,
         task: str,
         isolation: IsolationMode,
-        suffixes: Sequence[str] = (),
         tool_params: ToolParams | None = None,
         adapt_agent: AgentAdapter | None = None,
         checkout: str | None = None,
@@ -165,7 +162,6 @@ class TeamLauncher(Protocol):
         Args:
             profile: The name of the agent profile.
             tools: The director's tools, as for ``start_root``.
-            suffixes: Text appended to the agent's system prompt.
 
         Raises:
             NotFound: The parent conversation or the profile does not exist.
@@ -378,7 +374,6 @@ class ConversationTeamLauncher:
         title: str,
         task: str,
         isolation: IsolationMode,
-        suffixes: Sequence[str] = (),
         tool_params: ToolParams | None = None,
         adapt_agent: AgentAdapter | None = None,
         checkout: str | None = None,
@@ -388,7 +383,6 @@ class ConversationTeamLauncher:
             parent_id,
             StartChildConversationRequest(task=task, title=title, isolation=isolation),
             child_id=conversation_id,
-            extra_suffixes=suffixes,
             # A sub-team continues from its parent's work, not from the
             # repository's default branch. A session starts from the commit
             # the repository's checkout is at.
@@ -422,7 +416,6 @@ class ConversationTeamLauncher:
         title: str,
         task: str,
         isolation: IsolationMode,
-        suffixes: Sequence[str] = (),
         tool_params: ToolParams | None = None,
         adapt_agent: AgentAdapter | None = None,
         checkout: str | None = None,
@@ -454,9 +447,6 @@ class ConversationTeamLauncher:
             else ConversationWorktreeOptions(base="head"),
             tags=STARTED_BY_DIRECTOR,
             autotitle=False,
-            agent_launch_additions=AgentLaunchAdditions(
-                system_message_suffix_append="\n\n".join(suffixes) or None
-            ),
             # It spends under the same caps as the agent it is started for.
             max_iterations=parent.stored.max_iterations,
             max_budget_per_run=parent.get_conversation().max_budget_per_run,

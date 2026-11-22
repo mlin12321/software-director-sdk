@@ -36,16 +36,12 @@ from openhands.agent_server.director.org_store import (
     utc_now,
 )
 from openhands.agent_server.director.prompts import (
-    DIVISION_LEAD_IC_ROLE,
-    DIVISION_LEAD_MANAGER_ROLE,
-    HAND_OVER_ROLE,
-    MANAGER_ROLE,
-    ORG_PROTOCOL,
     brief,
     failure_notice,
     hand_over_brief,
     left_for_team,
     manager_check,
+    role_text,
 )
 from openhands.agent_server.director.run_state import (
     CHECKS,
@@ -688,6 +684,7 @@ class Teams(Delivery):
             briefing_block(context),
             self.type_of(place).text_for(role),
             works=role == self.team(place).writer,
+            role_said=self.role_text(place, role),
         )
         return text, json.dumps(steady(context))
 
@@ -701,6 +698,7 @@ class Teams(Delivery):
             contracts,
             self.reports_of(place),
             briefing_block(self.context_of(place, self.team(place).writer)),
+            role=role_text(works=True, hand_over=True),
         )
 
     async def _start_hand_over(
@@ -734,7 +732,6 @@ class Teams(Delivery):
                     title=f"{place.title} (IC, hand-over)",
                     task=text,
                     isolation="shared",
-                    suffixes=[HAND_OVER_ROLE],
                     tool_params=tool_params,
                     adapt_agent=adapt,
                 )
@@ -892,10 +889,6 @@ class Teams(Delivery):
                     title=title,
                     task=text,
                     isolation=isolation,
-                    suffixes=[
-                        ORG_PROTOCOL,
-                        *([DIVISION_LEAD_IC_ROLE] if leads else []),
-                    ],
                     tool_params=tool_params,
                     adapt_agent=adapt,
                     checkout=checkout,
@@ -907,13 +900,6 @@ class Teams(Delivery):
                 title=title,
                 task=text,
                 isolation=isolation,
-                suffixes=[
-                    DIVISION_LEAD_IC_ROLE if works else DIVISION_LEAD_MANAGER_ROLE
-                ]
-                if leads
-                else []
-                if works
-                else [MANAGER_ROLE],
                 tool_params=tool_params,
                 adapt_agent=adapt,
                 checkout=checkout,

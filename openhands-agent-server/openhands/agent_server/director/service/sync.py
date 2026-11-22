@@ -50,7 +50,6 @@ from openhands.agent_server.director.org_store import (
 )
 from openhands.agent_server.director.prompts import (
     CHANGED_SINCE_ACCEPT,
-    ORG_PROTOCOL,
 )
 from openhands.agent_server.director.recovery import (
     STARTING,
@@ -81,7 +80,6 @@ from openhands.agent_server.director.service.state import (
     hand_over_of,
     tools_of,
 )
-from openhands.sdk.conversation.request import AgentLaunchAdditions
 from openhands.sdk.conversation.state import ConversationExecutionStatus
 from openhands.sdk.errors import (
     Conflict,
@@ -482,12 +480,6 @@ class Sync(Sessions):
                 else None,
             )
             return store.place(node_id) or place
-        additions = conversation.agent_launch_additions or AgentLaunchAdditions()
-        suffix = "\n\n".join(
-            part
-            for part in (additions.system_message_suffix_append, ORG_PROTOCOL)
-            if part
-        )
         store.update_place(node_id, agents=agents, status="idle")
         try:
             started = await launcher.start_root(
@@ -499,9 +491,6 @@ class Sync(Sessions):
                         "worktree": False,
                         "workspace": conversation.workspace.model_copy(
                             update={"working_dir": place.worktree_path}
-                        ),
-                        "agent_launch_additions": additions.model_copy(
-                            update={"system_message_suffix_append": suffix}
                         ),
                     }
                 ),
