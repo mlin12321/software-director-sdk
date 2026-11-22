@@ -218,8 +218,7 @@ class AgentType(BaseModel):
     @model_validator(mode="after")
     def _has_whom_the_director_turns_to(self) -> "AgentType":
         agents = self.agents
-        for name in ("ic", "manager"):
-            said = getattr(self, name)
+        for name, said in (("ic", self.ic), ("manager", self.manager)):
             if not said:
                 continue
             if name not in agents:
@@ -369,5 +368,4 @@ def load_types(folders: Iterable[Path], tools: Iterable[str]) -> dict[str, Agent
     return found
 
 
-# A type is a team template; the older name stays for what reads it.
 TeamTemplate = AgentType

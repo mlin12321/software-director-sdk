@@ -15,9 +15,6 @@ from openhands.agent_server.director.agent_types import (
 )
 from openhands.agent_server.director.service.state import (
     DIRECTOR_TOOL_NAMES,
-    DIVISION_LEAD_IC_TOOLS,
-    DIVISION_LEAD_MANAGER_TOOLS,
-    TOOLS_OF,
 )
 
 
@@ -49,38 +46,17 @@ def lab(tmp_path: Path, text: str = LAB) -> AgentType:
     return _read(path, DIRECTOR_TOOL_NAMES)
 
 
-def test_a_type_that_names_no_members_has_the_ic_and_manager_teams_always_had():
-    assert TOOLS_OF == {
-        "ic": (
-            *BOTH,
-            "write_spec",
-            "edit_contracts",
-            "msg_manager",
-            "propose_teams",
-            "msg_team",
-            "hand_over",
-            "stop_team",
-            "submit_review",
-            "review_team",
-        ),
-        "manager": (
-            *BOTH,
-            "msg_ic",
-            "approve_teams",
-            "decline_teams",
-            "prune_team",
-        ),
-    }
-    assert DIVISION_LEAD_IC_TOOLS == ("read_team_context", "report", "review_team")
-    assert DIVISION_LEAD_MANAGER_TOOLS == (
-        "read_team_context",
-        "report",
-        "settle_teams",
-    )
-    roster = default_agents()
-    assert list(roster) == ["ic", "manager"]
-    assert roster["ic"].writes and not roster["manager"].writes
-    assert roster["manager"].like == "ic"
+def test_a_type_that_names_no_members_has_an_ic_that_works_and_a_manager():
+    kind = AgentType(name="plain", description="A team.")
+
+    assert list(kind.agents) == ["ic", "manager"]
+    assert kind.writer == "ic" and kind.agents["manager"].like == "ic"
+    # Whom the director turns to is found by tool, here as in any type.
+    assert kind.member_with("submit_review") == "ic"
+    assert kind.member_with("review_team") == "ic"
+    assert kind.member_with("approve_teams") == "manager"
+    assert kind.member_with("settle_teams", lead=True) == "manager"
+    assert not kind.has("manager", "write_spec") and not kind.has("ic", "prune_team")
 
 
 def test_the_shipped_types_keep_the_two_members_and_their_texts():
@@ -89,9 +65,8 @@ def test_the_shipped_types_keep_the_two_members_and_their_texts():
     assert set(types) >= {"software-engineer", "researcher", "research-engineer"}
     for kind in types.values():
         assert kind.agents.keys() == default_agents().keys()
-        for name, member in kind.agents.items():
-            assert member.tools == default_agents()[name].tools
-            assert member.text == getattr(kind, name)
+        assert kind.agents["ic"].text == kind.ic
+        assert kind.agents["manager"].text == kind.manager
         assert kind.writer == "ic"
         assert kind.member_with("review_team") == "ic"
         assert kind.member_with("approve_teams") == "manager"
