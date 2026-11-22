@@ -19,7 +19,7 @@ propose a sub-team for each, review them, submit the whole.
 | 1:00 | IC proposed two sub-teams; its Manager was started by the proposal and approved it |
 | 1:30 | Both sub-team ICs working |
 | 2:00 | Both submitted; reviews pending |
-| 3:00 | Both accepted; top team submitted and was accepted |
+| 3:00 | Both accepted by the IC above. That IC had changed no file itself, so the work went up without another review and no Division Lead agent was started (each change is reviewed once) |
 | 3:45 | Session done; work merged into the checkout |
 
 Result: three merge commits on `main` (`calc`, `text`, the top team),
@@ -42,7 +42,7 @@ score; two directions, one experiment each, standard library only.
 | 2:00 | Both directions working |
 | 3:00 | First direction submitted; second a minute later |
 | 5:00 | Both accepted by the IC above |
-| 5:30 | Top team submitted; the Division Lead IC was started for the review |
+| 5:30 | Top team, which had committed a summary of its own, submitted; the Division Lead IC was started for the review |
 | 7:30 | Division Lead accepted; session done; work merged |
 
 Result: each direction committed its script and its result file, and
