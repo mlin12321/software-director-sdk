@@ -7,10 +7,12 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from openhands.agent_server.models import StartConversationRequest
 
 
-# A team has an IC and a Manager. The IC of a team leads it, is a report of
-# the team above, and does the code work in its boundary that no sub-team
-# has taken on.
-AgentRole = Literal["ic", "manager"]
+# The member of a team an agent is, by the name its team's type gives it. A
+# type that names no members has an IC and a Manager: the IC leads the team,
+# is a report of the team above, and does the code work in its boundary that
+# no sub-team has taken on.
+AgentRole = str
+# The members of a team whose type names none.
 AGENT_ROLES: tuple[AgentRole, ...] = ("ic", "manager")
 # What the agents are told a member of a team is called; any other member
 # is called by its own name.
