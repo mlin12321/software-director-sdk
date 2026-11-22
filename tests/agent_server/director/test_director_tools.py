@@ -63,6 +63,7 @@ from openhands.sdk.conversation.state import (
     ConversationExecutionStatus,
     ConversationState,
 )
+from openhands.sdk.errors import NotFound
 from openhands.sdk.tool.tool import Action, ToolDefinition
 from tests.agent_server.director.conftest import (
     FakeLauncher,
@@ -993,3 +994,34 @@ async def test_a_sub_team_is_told_the_contracts_and_not_the_spec_of_the_team_abo
         "POST /checkout returns {order_id}\n"
     ]
     assert root_context["contracts_with_the_teams_beside_you"] == []
+
+
+async def test_every_message_between_agents_goes_one_way(
+    service: DirectorService, launcher: FakeLauncher
+):
+    top = node(service, "root").id
+
+    stopped = service.send(top, "ic", top, "manager", "Split in two?")
+    await service.settled()
+    service.send(top, "manager", top, "ic", "Not yet.")
+    await service.settled()
+
+    assert stopped is False
+    assert launcher.messages_to(manager(service))[-1].startswith(
+        "[director] Your IC writes:\nSplit in two?"
+    )
+    assert launcher.messages_to(ic(service))[-1].startswith(
+        "[director] Your Manager writes:\nNot yet."
+    )
+    [thread] = service.threads_of(node(service, "root"))
+    assert [(said.sender, said.text) for said in thread.messages] == [
+        ("ic", "Split in two?"),
+        ("manager", "Not yet."),
+    ]
+
+
+async def test_a_message_to_a_team_that_is_gone_is_refused(service: DirectorService):
+    top = node(service, "root").id
+
+    with pytest.raises(NotFound):
+        service.send(top, "ic", "gone@nowhere", "ic", "Anyone?")
