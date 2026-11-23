@@ -66,6 +66,18 @@ def caller_of(service: DirectorService, conversation_id: UUID) -> Caller:
     return Caller(node=node, role=service.team(node).writer, hand_over=True)
 
 
+def acting(service: DirectorService, conversation_id: UUID) -> Caller:
+    """The agent that uses a tool now, known to be at work from here on.
+
+    Raises:
+        NotFound: The conversation is not an agent of the org.
+    """
+    caller = caller_of(service, conversation_id)
+    if not caller.hand_over:
+        service.acts(caller.node.id, caller.role)
+    return caller
+
+
 _ASIDE = (
     "You are in hand-over mode, and this conversation is for the hand-over "
     "alone: of the director's "

@@ -823,6 +823,22 @@ class Sync(Sessions):
             return
         self.tell_of_failure(place_id, role, said)
 
+    def acts(self, place_id: str, role: str) -> None:
+        """An agent that uses one of the director's tools is at work,
+        whatever its conversation last said of itself. Safe from any thread.
+
+        A conversation that fails and is started again by what runs it may
+        never say that it runs: the failure the human was told of would
+        then stay with them after the agent has gone on.
+        """
+        team = self.org.place(place_id)
+        if team is None or all(
+            a.status != AGENT_BLOCKED for a in team.agents if a.role == role
+        ):
+            return
+        with suppress(NotFound):
+            self._runs_again(self.org.set_agent(place_id, role, status="working"), role)
+
     def _runs_again(self, team: SessionTeam, role: str) -> None:
         """An agent that runs is no longer something the human is asked of."""
         waits = {failure_waits(role)} | (
