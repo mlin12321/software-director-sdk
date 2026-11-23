@@ -124,10 +124,11 @@ def _writes(service: DirectorService, caller: Caller, what: str) -> None:
 def node_context(service: DirectorService, caller: Caller) -> str:
     """Who the agent is and everything of the org that concerns its team."""
     context = service.context_of(caller.node, caller.role, in_full=True)
+    names = service.team(caller.node).names
     kind = service.type_of(caller.node).text_for(caller.role)
     # The briefing said these once; they are given again only when asked for.
     context["how_the_org_works"] = (
-        role_text(works=True, hand_over=True)
+        role_text(names, works=True, hand_over=True)
         if caller.hand_over
         else service.role_text(caller.node, caller.role)
     )
@@ -264,19 +265,20 @@ def _waiting(place: SessionTeam) -> SplitProposal | None:
 
 def msg_manager(service: DirectorService, caller: Caller, text: str) -> str:
     """Send the caller's Manager a message."""
-    _has(service, caller, "msg_manager", "message its Manager")
+    names = service.team(caller.node).names
+    _has(service, caller, "msg_manager", f"message its {names.overseer}")
     node = caller.node
     text = text.strip()
     if not text:
         raise Invalid("A message cannot be empty")
     if not service.store.below(node.id):
         raise Invalid(
-            "A team without sub-teams has nothing to tell its Manager but a "
+            f"A team without sub-teams has nothing to tell its {names.overseer} but a "
             "proposal: use propose_teams. Raise anything else with "
             "raise_escalation."
         )
     service.send(node.id, caller.role, node.id, service.team(node).overseer, text)
-    return "Sent to your Manager."
+    return f"Sent to your {names.overseer}."
 
 
 def propose_teams(
@@ -288,10 +290,13 @@ def propose_teams(
     text: str,
 ) -> str:
     """Put the sub-teams the caller proposes before its Manager."""
+    names = service.team(caller.node).names
     _has(service, caller, "propose_teams", "propose sub-teams")
     node = caller.node
     if node.pending_split and node.pending_split.status == "approved":
-        raise Conflict("The sub-teams your Manager approved are still being set up")
+        raise Conflict(
+            f"The sub-teams your {names.overseer} approved are still being set up"
+        )
     proposed = proposed_teams(teams, contracts, keep, text, service.default_type())
     proposal = _checked(service, node, proposed)
     store = service.store
@@ -309,7 +314,7 @@ def propose_teams(
         + (f" Kept as they are: {', '.join(kept)}." if kept else "")
         + " approve_teams sets them up exactly as written; decline_teams "
         "declines them, with your reason. They wait on you until you call "
-        "one of the two; msg_ic asks your IC something first."
+        f"one of the two; msg_ic asks your {names.writer} something first."
     )
     facts = service.facts_of_proposal(node, proposal)
     if facts:
@@ -327,7 +332,7 @@ def propose_teams(
         note,
     )
     return (
-        "Sent to your Manager. Nothing is set up until it approves; you "
+        f"Sent to your {names.overseer}. Nothing is set up until it approves; you "
         "will hear either way."
     )
 
@@ -335,7 +340,8 @@ def propose_teams(
 def msg_ic(service: DirectorService, caller: Caller, text: str, team: str) -> str:
     """Send a message to the caller's own IC, or to the IC of a team
     directly below."""
-    _has(service, caller, "msg_ic", "message an IC")
+    names = service.team(caller.node).names
+    _has(service, caller, "msg_ic", f"message {names.a_writer}")
     node = caller.node
     text = text.strip()
     if not text:
@@ -350,14 +356,14 @@ def msg_ic(service: DirectorService, caller: Caller, text: str, team: str) -> st
     waiting = target.id == node.id and _waiting(node) is not None
     note = (
         "\n\n[director] The sub-teams you proposed still wait on your "
-        "Manager. A new proposal takes their place."
+        f"{names.overseer}. A new proposal takes their place."
         if waiting
         else ""
     )
     service.send(
         node.id, caller.role, target.id, service.team(target).writer, text, note
     )
-    return f"Sent to the IC of {target.title!r}." + (
+    return f"Sent to the {names.writer} of {target.title!r}." + (
         " The sub-teams it proposed still wait on you: approve_teams or decline_teams."
         if waiting
         else ""
@@ -366,11 +372,12 @@ def msg_ic(service: DirectorService, caller: Caller, text: str, team: str) -> st
 
 def approve_teams(service: DirectorService, caller: Caller) -> str:
     """Set up the sub-teams the caller's IC proposed, as written."""
+    names = service.team(caller.node).names
     _has(service, caller, "approve_teams", "approve sub-teams")
     node = caller.node
     proposal = _waiting(node)
     if proposal is None:
-        raise Conflict("Your IC has no proposed sub-teams waiting for you")
+        raise Conflict(f"Your {names.writer} has no proposed sub-teams waiting for you")
     # The org may have changed since they were proposed.
     split = normalize_split(service.store, node, proposal.children)
     check_limits(
@@ -404,7 +411,8 @@ def approve_teams(service: DirectorService, caller: Caller) -> str:
     )
     return (
         f"Approved. {len(proposal.children)} sub-teams are being set up.{waits} "
-        "None of them starts until your IC gives it its task. Your IC is "
+        f"None of them starts until your {names.writer} gives it its task. Your "
+        f"{names.writer} is "
         "told to rewrite the team's spec"
         + (" and to pass on what the replaced teams left" if split.replaces else "")
         + "; write to it with msg_ic if the change needs explaining."
@@ -413,14 +421,15 @@ def approve_teams(service: DirectorService, caller: Caller) -> str:
 
 def decline_teams(service: DirectorService, caller: Caller, reason: str) -> str:
     """Decline the sub-teams the caller's IC proposed, and keep why."""
+    names = service.team(caller.node).names
     _has(service, caller, "decline_teams", "decline sub-teams")
     node = caller.node
     reason = reason.strip()
     if not reason:
-        raise Invalid("Say why: your IC is told, and the reason is kept")
+        raise Invalid(f"Say why: your {names.writer} is told, and the reason is kept")
     proposal = _waiting(node)
     if proposal is None:
-        raise Conflict("Your IC has no proposed sub-teams waiting for you")
+        raise Conflict(f"Your {names.writer} has no proposed sub-teams waiting for you")
     store = service.store
     replaced = [team.title for team in map(store.place, proposal.replaces) if team]
     named = _named(proposal, replaced)
@@ -434,12 +443,15 @@ def decline_teams(service: DirectorService, caller: Caller, reason: str) -> str:
         node.id,
         service.team(node).writer,
         reason,
-        f"\n\n[director] Your Manager declined the sub-teams you proposed "
+        f"\n\n[director] Your {names.overseer} declined the sub-teams you proposed "
         f"({named}); the above is its reason. Nothing was set up. Propose "
         "others if the reason leaves room for it; the same ones only if "
         "something has changed.",
     )
-    return "Declined. Your IC is told your reason, and it is kept in the record."
+    return (
+        f"Declined. Your {names.writer} is told your reason, and it is kept in "
+        "the record."
+    )
 
 
 def raise_escalation(
@@ -511,11 +523,12 @@ def resolve_escalation(
         raise NotFound(f"Team {node_id} has no escalation {escalation_id}")
     if escalation.held_by != caller.node.id:
         raise Invalid(f"Escalation {escalation_id} is not with your team")
-    if escalation.raised_by != caller.role:
+    holder = service.team(caller.node).answers(escalation.raised_by)
+    if holder != caller.role:
         raise Invalid(
-            f"Escalation {escalation_id} was raised by "
-            f"{'an IC' if escalation.raised_by == 'ic' else 'a Manager'}: it is "
-            f"for your team's {_title(service, caller, escalation.raised_by)} to settle"
+            f"Escalation {escalation_id} was raised by the "
+            f"{service.team(raiser).title(escalation.raised_by)} of its team: it "
+            f"is for your team's {_title(service, caller, holder)} to settle"
         )
     mine = _title(service, caller, caller.role)
     if action == "settle":
@@ -543,6 +556,7 @@ def resolve_escalation(
 def submit_review(service: DirectorService, caller: Caller, summary: str) -> str:
     """Hand the work of the caller's team to the IC of the team above for
     review."""
+    names = service.team(caller.node).names
     _has(service, caller, "submit_review", "submit its team's work")
     store = service.store
     node = caller.node
@@ -624,7 +638,7 @@ def submit_review(service: DirectorService, caller: Caller, summary: str) -> str
     service.request_review(node.id)
     service.refresh_headline(node.id, f"it submitted its work. {summary}")
     return (
-        "Submitted. The IC of the team above reviews it. Your turn ends "
+        f"Submitted. The {names.reviewer} of the team above reviews it. Your turn ends "
         "here: you are woken when it is accepted or sent back, or when "
         "something else is sent to you."
     )
@@ -647,6 +661,7 @@ def review_team(
         contracts: What the accepted work establishes for every team below
             the caller's, added to the contracts between them.
     """
+    names = service.team(caller.node).names
     _has(service, caller, "review_team", "review the work of a team")
     team = _team_named(service, caller, place_id)
     if team is None or team.parent_id != caller.node.id:
@@ -662,8 +677,9 @@ def review_team(
         )
     if contracts and is_division_lead(caller.node):
         raise Invalid(
-            "Contracts are not yours as the Division Lead IC: the Division "
-            "Lead Manager settles them"
+            f"Contracts are not yours as the Division Lead {names.reviewer}: the "
+            "Division "
+            f"Lead {names.overseer} settles them"
         )
     if decision == "reject":
         if not findings:
@@ -724,14 +740,16 @@ def edit_contracts(
 ) -> str:
     """Change one place in the contracts between the caller's sub-teams, or
     add to them, as the file editor's command of that name does."""
+    names = service.team(caller.node).names
     _has(
         service, caller, "edit_contracts", "change the contracts between its sub-teams"
     )
     node = caller.node
     if is_division_lead(node):
         raise Invalid(
-            "Contracts are not yours as the Division Lead IC: the Division "
-            "Lead Manager settles them"
+            f"Contracts are not yours as the Division Lead {names.reviewer}: the "
+            "Division "
+            f"Lead {names.overseer} settles them"
         )
     if not service.store.below(node.id):
         raise Invalid(
@@ -787,7 +805,8 @@ def _team_below(service: DirectorService, caller: Caller, node_id: str) -> Sessi
 
 def msg_team(service: DirectorService, caller: Caller, team: str, text: str) -> str:
     """Send a message to the IC of a team directly below the caller's."""
-    _has(service, caller, "msg_team", "message the IC of a team below")
+    names = service.team(caller.node).names
+    _has(service, caller, "msg_team", f"message the {names.writer} of a team below")
     text = text.strip()
     if not text:
         raise Invalid("A message cannot be empty")
@@ -802,11 +821,13 @@ def msg_team(service: DirectorService, caller: Caller, team: str, text: str) -> 
         caller.node.id, caller.role, target.id, service.team(target).writer, text
     ):
         return (
-            f"Sent to the IC of {target.title!r}. Its team was stopped and goes on now."
+            f"Sent to the {names.writer} of {target.title!r}. Its team was stopped "
+            "and goes on now."
         )
     if new:
         return (
-            f"{target.title!r} starts with what you wrote as its task. Its IC "
+            f"{target.title!r} starts with what you wrote as its task. Its "
+            f"{names.writer} "
             "does not answer in a message: it submits its work for your "
             "review, or raises an escalation."
             + (
@@ -818,7 +839,7 @@ def msg_team(service: DirectorService, caller: Caller, team: str, text: str) -> 
             )
         )
     return (
-        f"Sent to the IC of {target.title!r}. It does not answer in a "
+        f"Sent to the {names.writer} of {target.title!r}. It does not answer in a "
         "message: it acts on what you wrote, or raises an escalation."
     )
 
@@ -852,16 +873,17 @@ def hand_over(
 
 def stop_team(service: DirectorService, caller: Caller, team: str, reason: str) -> str:
     """Stop a team directly below the caller's."""
+    names = service.team(caller.node).names
     _has(service, caller, "stop_team", "stop a team")
     if not reason.strip():
-        raise Invalid("Say why the team is stopped; your Manager is told")
+        raise Invalid(f"Say why the team is stopped; your {names.overseer} is told")
     target = _team_below(service, caller, team)
     service.stop_team(target.id, reason.strip())
     return (
         f"Stopped {target.title!r} and every team below it: their agents "
-        "end the step they are in and are sent nothing. Your Manager is "
+        f"end the step they are in and are sent nothing. Your {names.overseer} is "
         "told. The team goes on when you write to it with msg_team; only "
-        "your Manager can remove it."
+        f"your {names.overseer} can remove it."
     )
 
 
@@ -872,17 +894,20 @@ def prune_team(
     reason: str,
 ) -> str:
     """Remove a team directly below the caller's."""
+    names = service.team(caller.node).names
     _has(service, caller, "prune_team", "prune a team")
     if not reason.strip():
-        raise Invalid("Say why the team is removed; your team's IC is told")
+        raise Invalid(
+            f"Say why the team is removed; your team's {names.writer} is told"
+        )
     team = _team_named(service, caller, place_id)
     if team is None or team.parent_id != caller.node.id:
         raise Invalid(f"{place_id} is not a team directly below yours")
     place_id = team.id
     service.prune(place_id, reason.strip())
     return (
-        f"Pruning {team.title!r}. Its folder goes back to your team's IC "
-        "when it is gone. Your IC is given what the team left and told to "
+        f"Pruning {team.title!r}. Its folder goes back to your team's {names.writer} "
+        f"when it is gone. Your {names.writer} is given what the team left and told to "
         "rewrite the team's spec; write to it with msg_ic if the change "
         "needs explaining."
     )

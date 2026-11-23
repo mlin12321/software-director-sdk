@@ -28,6 +28,7 @@ from openhands.agent_server.director.agent_types import (
     DEFAULT_TYPE,
     SHIPPED_TYPES,
     TYPES_FOLDER,
+    Names,
     TeamTemplate,
     load_types,
 )
@@ -663,6 +664,14 @@ class ServiceState:
         named = (name for kind in self.agent_types.values() for name in kind.agents)
         return tuple(dict.fromkeys(named))
 
+    def names_at(self, place_id: str) -> Names:
+        """What the members the director turns to are called in a team; in
+        one that is gone, what they are called in a team of the default
+        type."""
+        place = self.store.place(place_id)
+        kind = self.type_of(place) if place else self.agent_types[DEFAULT_TYPE]
+        return kind.names
+
     def team(self, place: SessionTeam) -> Team:
         """A team of the org as the director reads it."""
         return Team(self.store, place)
@@ -670,8 +679,15 @@ class ServiceState:
     def role_text(self, place: SessionTeam, member: str) -> str:
         """How the org works and what the member's part in it is, as its
         briefing says it."""
+        team = self.team(place)
+        found = team.kind.agents.get(member)
         return role_text(
-            works=member == self.team(place).writer, lead=is_division_lead(place)
+            team.names,
+            works=member == team.writer,
+            tools=self.tools_for(place, member),
+            title=team.title(member),
+            lead=team.is_lead,
+            own=found.protocol if found else "",
         )
 
     def writer_conversation(self, place: SessionTeam) -> str | None:

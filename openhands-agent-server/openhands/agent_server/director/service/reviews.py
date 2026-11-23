@@ -234,6 +234,7 @@ class Reviews(Requests):
             NotFound: The team does not exist.
             Conflict: None of its work waits for a review.
         """
+        names = self.names_at(place_id)
         store = self.store
         place = store.place(place_id)
         if place is None:
@@ -265,7 +266,7 @@ class Reviews(Requests):
                 counted = self._counted(place.parent_id)
             self._wake_manager(
                 place.parent_id,
-                f"your IC has sent the work of {place.title!r} back "
+                f"your {names.reviewer} has sent the work of {place.title!r} back "
                 f"{review.round} times.",
                 counted,
                 team=place,
@@ -273,7 +274,10 @@ class Reviews(Requests):
         self.notify(
             self.writer_conversation(place),
             changes_requested(
-                above or place, findings, of_a_session=store.opens_session(place)
+                above or place,
+                findings,
+                of_a_session=store.opens_session(place),
+                names=names,
             ),
         )
         if store.opens_session(place):
@@ -327,6 +331,7 @@ class Reviews(Requests):
                             store.session_title(team),
                             self._asked_for(team),
                             self._contracts_written(team),
+                            names=self.team(team).names,
                         )
                         if store.opens_session(team)
                         else ""
@@ -476,6 +481,7 @@ class Reviews(Requests):
         Returns:
             Whether the org has it now.
         """
+        names = self.names_at(team_id)
         store = self.store
         place = places.get(team_id)
         above = store.place(place.parent_id or "") if place else None
@@ -546,7 +552,7 @@ class Reviews(Requests):
                 above_id,
                 "moved",
                 place,
-                "its Manager put it here"
+                f"its {names.overseer} put it here"
                 if under is not None
                 else "the team it was set up under is gone",
             )
@@ -777,7 +783,11 @@ class Reviews(Requests):
         self.tell_overseer(
             review.id,
             merge_request(
-                top, self.store.session_title(top), waiting, merge.code_landed
+                top,
+                self.store.session_title(top),
+                waiting,
+                merge.code_landed,
+                names=self.team(top).names,
             ),
             division_lead=True,
         )
@@ -816,7 +826,11 @@ class Reviews(Requests):
                     "This still waits for you, and with it the teams and "
                     "contracts of every session that submitted later.\n\n"
                     + merge_request(
-                        top, self.store.session_title(top), waiting, merge.code_landed
+                        top,
+                        self.store.session_title(top),
+                        waiting,
+                        merge.code_landed,
+                        names=self.team(top).names,
                     ),
                     division_lead=True,
                 )
@@ -827,14 +841,17 @@ class Reviews(Requests):
                 top.id,
                 ORG_WAITS,
                 kind="critical_issue",
-                title="A Manager has not settled the teams of accepted work",
+                title=f"{self.team(top).names.A_overseer} has not settled the teams "
+                "of accepted work",
                 detail=(
                     f"The code of {top.title!r} is accepted and merged. What "
                     "it makes of the org's teams and contracts waits for the "
-                    "Manager that reviews it, which has not answered, and the "
+                    f"{self.team(top).names.overseer} that reviews it, which has "
+                    "not answered, and the "
                     "teams and contracts of sessions that submitted later "
                     "wait behind it. Answer this to go on without the "
-                    "Manager: the org's stay wherever it has not decided, and "
+                    f"{self.team(top).names.overseer}: the org's stay wherever it "
+                    "has not decided, and "
                     "what the session wrote for a team that is not taken is "
                     "kept in that team's record."
                 ),
@@ -864,6 +881,7 @@ class Reviews(Requests):
             Invalid: A team or a directory named does not wait, or a team
                 cannot be put where it was asked to.
         """
+        names = self.names_at(review_id)
         store = self.store
         with self._weighing:
             review = store.place(review_id)
@@ -907,7 +925,11 @@ class Reviews(Requests):
                     "What waits changed since you were shown it. Nothing is "
                     "settled yet.\n\n"
                     + merge_request(
-                        top, store.session_title(top), now, merge.code_landed
+                        top,
+                        store.session_title(top),
+                        now,
+                        merge.code_landed,
+                        names=names,
                     )
                 )
             settled = []
@@ -939,7 +961,8 @@ class Reviews(Requests):
         return "Settled. " + (
             "It is the org's as soon as it is its turn."
             if landed
-            else "It becomes the org's when the IC that reviews the session's "
+            else f"It becomes the org's when the {names.reviewer} that reviews the "
+            "session's "
             "work has accepted it."
         )
 
@@ -1183,6 +1206,7 @@ class Reviews(Requests):
                     landed.agreed,
                     landed.held,
                     landed.others,
+                    names=self.team(top).names,
                 )
                 + (f"\n\n{note}" if note else ""),
             )
@@ -1362,6 +1386,7 @@ class Reviews(Requests):
             list(changes.landed) if changes else [],
             specs,
             inherited,
+            names=self.team(place).names,
         )
         there = git(checkout, ["ls-tree", "HEAD", "--", *files]) if files else ""
         compared = json.dumps(
@@ -1480,7 +1505,10 @@ class Reviews(Requests):
                 self._runs().mark(TURN, place.id)
             raise Conflict(
                 accept_in_order(
-                    place, first, store.session_title(first) if theirs else ""
+                    place,
+                    first,
+                    store.session_title(first) if theirs else "",
+                    names=self.names_at(place_id),
                 )
             )
         try:
@@ -1622,6 +1650,7 @@ class Reviews(Requests):
         reconciled: str = "",
         specs: list[dict[str, str]] | None = None,
     ) -> None:
+        names = self.names_at(place_id)
         store = self.store
         place = store.place(place_id)
         above = store.place(place.parent_id) if place and place.parent_id else None
@@ -1648,7 +1677,8 @@ class Reviews(Requests):
             # since this one was checked, and left that work waiting.
             self._runs().mark(TURN, place.id)
             self.notify(
-                reviewer, accept_in_order(place, first, store.session_title(first))
+                reviewer,
+                accept_in_order(place, first, store.session_title(first), names=names),
             )
             return
         where = place.boundary.path or "the repository"
@@ -1772,7 +1802,8 @@ class Reviews(Requests):
             if resolved:
                 self.notify(
                     self.writer_conversation(place),
-                    "Your team's work did not merge by itself. The IC that "
+                    f"Your team's work did not merge by itself. The {names.reviewer} "
+                    "that "
                     "reviewed it finished the merge in these files, which are "
                     f"now as it left them: {', '.join(resolved)}",
                 )
@@ -1814,7 +1845,7 @@ class Reviews(Requests):
             self.count_accepted_review(above.id)
         self.notify(
             self.writer_conversation(place),
-            f"The IC of {above.title!r} accepted your team's work"
+            f"The {names.reviewer} of {above.title!r} accepted your team's work"
             + (" and it is merged into that team's checkout." if merged else "."),
         )
         if merged:
@@ -1947,6 +1978,7 @@ class Reviews(Requests):
             acted: Whether the team's IC has just accepted the last of its
                 sub-teams itself; otherwise their work came up on its own.
         """
+        names = self.names_at(place_id)
         store = self.store
         place = store.place(place_id)
         # A Division Lead place reviews; it has no work to hand on.
@@ -2022,7 +2054,8 @@ class Reviews(Requests):
                     "The work of all your sub-teams is accepted, but your "
                     "team's checkout does not merge into the checkout of "
                     f"{above.title!r} ({problem}). Call `submit_review`: "
-                    f"the IC of {above.title!r} is given the merge to finish "
+                    f"the {names.reviewer} of {above.title!r} is given the merge to "
+                    "finish "
                     "when it accepts the work.",
                 )
                 return

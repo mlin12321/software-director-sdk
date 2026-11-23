@@ -19,6 +19,7 @@ of the same name takes the place of a shipped one.
 import logging
 import re
 from collections.abc import Iterable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
@@ -53,6 +54,43 @@ _LEAD_HELD_BY_ONE = ("settle_teams",)
 
 class InvalidAgentType(ValueError):
     """A type's file does not say what a type may say."""
+
+
+def several(name: str) -> str:
+    """More than one of what a member is called."""
+    return name + ("es" if name.endswith(("s", "x", "ch", "sh")) else "s")
+
+
+def _a(name: str) -> str:
+    return f"{'an' if name[:1].lower() in 'aeiou' else 'a'} {name}"
+
+
+@dataclass(frozen=True)
+class Names:
+    """What the members the director turns to are called in a team, for
+    what it writes to that team's agents.
+
+    Attributes:
+        writer: The member that works in the team's folder.
+        reviewer: The member that reviews the work of the teams below.
+        overseer: The member that settles what the team's sub-teams are.
+    """
+
+    writer: str
+    reviewer: str
+    overseer: str
+
+    @property
+    def a_writer(self) -> str:
+        return _a(self.writer)
+
+    @property
+    def a_overseer(self) -> str:
+        return _a(self.overseer)
+
+    @property
+    def A_overseer(self) -> str:  # noqa: N802
+        return "A" + _a(self.overseer)[1:]
 
 
 class ReviewTexts(BaseModel):
@@ -112,6 +150,13 @@ class Member(BaseModel):
         ),
     )
     text: str = Field(default="", description="What it is for.")
+    protocol: str = Field(
+        default="",
+        description=(
+            "What it is told of its part in how the org works, after what "
+            "the director itself says of that."
+        ),
+    )
 
 
 class TeamTemplate(BaseModel):
@@ -216,6 +261,23 @@ class TeamTemplate(BaseModel):
         reviews the work of a session."""
         found = self.agents.get(member)
         return found is not None and (tool in found.tools or tool in found.lead_tools)
+
+    @property
+    def names(self) -> Names:
+        """What the members the director turns to are called."""
+        return Names(
+            writer=self.title_of(self.writer),
+            reviewer=self.title_of(
+                self.member_with("review_team")
+                or self.member_with("review_team", lead=True)
+                or self.writer
+            ),
+            overseer=self.title_of(
+                self.member_with("approve_teams")
+                or self.member_with("settle_teams", lead=True)
+                or self.writer
+            ),
+        )
 
     @property
     def titles(self) -> dict[str, str]:

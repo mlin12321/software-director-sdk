@@ -406,6 +406,7 @@ class Sync(Sessions):
                 to start it like.
             Unavailable: The director is not running.
         """
+        names = self.names_at(node_id)
         launcher = self._require_launcher()
         store = await asyncio.to_thread(lambda: self.store)
         place = store.place(node_id)
@@ -423,7 +424,9 @@ class Sync(Sessions):
             raise Conflict(f"Team {place.title} is done")
         ic = self.writer_conversation(place)
         if ic is not None and await launcher.started(UUID(ic)) is not None:
-            raise Conflict(f"The IC of team {place.title} has a conversation here")
+            raise Conflict(
+                f"The {names.writer} of team {place.title} has a conversation here"
+            )
         conversation = request.conversation
         like = self._derived_from(place) if leads else place.parent_id
         above = store.place(like) if like else None
@@ -444,7 +447,7 @@ class Sync(Sessions):
         ):
             raise Conflict(
                 "No conversation of the org runs on this server to start "
-                f"the IC of {place.title!r} from. Start it again with a "
+                f"the {names.writer} of {place.title!r} from. Start it again with a "
                 "conversation."
             )
         await asyncio.to_thread(
@@ -456,7 +459,8 @@ class Sync(Sessions):
         )
         if said:
             task = (
-                f"{task}{_STARTED_WITH}The human was told that the IC before "
+                f"{task}{_STARTED_WITH}The human was told that the {names.writer} "
+                "before "
                 f"you was lost, and says:\n{said}"
             )
         # The team's other agents stay its own: only the IC is new.

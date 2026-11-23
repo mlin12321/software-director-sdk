@@ -2,6 +2,7 @@
 
 import pytest
 
+from openhands.agent_server.director.agent_types import Names
 from openhands.agent_server.director.boundary import (
     nearest_team,
     scope_within,
@@ -11,13 +12,16 @@ from openhands.agent_server.director.models import Boundary, OrgNode
 from openhands.agent_server.director.scope import glob_matches, written_paths
 
 
+NAMES = Names(writer="IC", reviewer="IC", overseer="Manager")
+
+
 def write_refusal(
     node: OrgNode, sub_teams: list[OrgNode], path: str, *, edits: bool = True
 ) -> str | None:
     """Why an agent of ``node`` may not write ``path``, as it is told."""
     scope = scope_within(node, sub_teams, edits=edits)
     denied = scope.refuse(path)
-    return None if denied is None else worded(denied, scope)
+    return None if denied is None else worded(denied, scope, names=NAMES)
 
 
 def team(

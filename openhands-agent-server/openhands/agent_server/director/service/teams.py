@@ -291,7 +291,13 @@ class Teams(Delivery):
         lost = any(a.role == role and a.status == AGENT_LOST for a in team.agents)
         self.tell_above(
             team,
-            failure_notice(team, name, reason, works=role == self.team(team).writer),
+            failure_notice(
+                team,
+                name,
+                reason,
+                works=role == self.team(team).writer,
+                names=self.team(team).names,
+            ),
             waits=failure_waits(role),
             title=f"The {name} of {team.title!r} failed",
             detail=(
@@ -427,6 +433,7 @@ class Teams(Delivery):
         """Count a review a team's IC accepted, and wake the team's Manager
         to look at its teams when that makes as many as the org set. Safe
         from any thread."""
+        names = self.names_at(place_id)
         limit = self.settings.manager_check_accepted_reviews
         if not limit:
             return
@@ -440,7 +447,8 @@ class Teams(Delivery):
         if due:
             self._wake_manager(
                 place_id,
-                f"your IC has accepted {limit} reviews since the last look "
+                f"your {names.reviewer} has accepted {limit} reviews since the "
+                "last look "
                 "of this kind.",
                 counted,
                 after_successes=True,
@@ -451,6 +459,7 @@ class Teams(Delivery):
         team's IC, and wake the team's Manager when that team has raised as
         many, on the work it has in hand, as the org set. Safe from any
         thread."""
+        names = self.names_at(place_id)
         limit = self.settings.manager_check_ic_setbacks
         team = self.store.place(below_id)
         if not limit or team is None:
@@ -465,8 +474,8 @@ class Teams(Delivery):
         if due:
             self._wake_manager(
                 place_id,
-                f"the IC of {team.title!r} has escalated {limit} times to "
-                "your IC on the work it has in hand.",
+                f"the {names.writer} of {team.title!r} has escalated {limit} times to "
+                f"your {names.writer} on the work it has in hand.",
                 {**counted, "escalations": told},
                 team=team,
             )
@@ -515,6 +524,7 @@ class Teams(Delivery):
                 self.history_of(place_id),
                 after_successes=after_successes,
                 escalation_limit=self.settings.manager_check_ic_setbacks,
+                names=self.names_at(place_id),
             ),
         )
 
@@ -656,6 +666,7 @@ class Teams(Delivery):
             works=role == self.team(place).writer,
             titles=self.type_of(place).titles,
             role_said=self.role_text(place, role),
+            names=self.team(place).names,
         )
         return text, json.dumps(steady(context))
 
@@ -670,7 +681,8 @@ class Teams(Delivery):
             self.reports_of(place),
             briefing_block(self.context_of(place, self.team(place).writer)),
             titles=self.type_of(place).titles,
-            role=role_text(works=True, hand_over=True),
+            role=role_text(self.team(place).names, works=True, hand_over=True),
+            names=self.team(place).names,
         )
 
     async def _start_hand_over(
@@ -682,13 +694,14 @@ class Teams(Delivery):
         Returns:
             Whether it runs.
         """
+        names = self.team(place).names
         launcher = self._require_launcher()
         try:
             if await launcher.started(UUID(conversation_id)) is not None:
                 return True
             parent = await self._started_ic(place)
             if parent is None:
-                raise NotFound(f"Team {place.id} has no IC to hand over")
+                raise NotFound(f"Team {place.id} has no {names.writer} to hand over")
             text = await asyncio.to_thread(self._hand_over_briefing, place, job)
             tool_params = await asyncio.to_thread(
                 self._confine, place.id, self.team(place).writer, conversation_id
@@ -701,7 +714,7 @@ class Teams(Delivery):
                 return await launcher.start_derived(
                     UUID(parent),
                     UUID(conversation_id),
-                    title=f"{place.title} (IC, hand-over)",
+                    title=f"{place.title} ({names.writer}, hand-over)",
                     task=text,
                     isolation="shared",
                     tool_params=tool_params,
@@ -910,7 +923,18 @@ class Teams(Delivery):
                 if is_division_lead(place)
                 else place
             )
-            await self._start_agent(place_id, member, derived_from, task)
+            # A member that reviews a session's work without being the one
+            # that works there still does it in the place's own checkout.
+            reviews_here = (
+                is_division_lead(place) and member == self.team(place).reviewer
+            )
+            await self._start_agent(
+                place_id,
+                member,
+                derived_from,
+                task,
+                place.worktree_path if reviews_here else None,
+            )
 
     async def _do_brief(self, intent: Intent) -> None:
         place = self.store.place(intent.node_id)
@@ -955,7 +979,9 @@ class Teams(Delivery):
             place_id,
             self.team(started).writer,
             parent_ic,
-            f"{task}\n\n{left_for_team(left)}" if left else task,
+            f"{task}\n\n{left_for_team(left, names=self.names_at(place_id))}"
+            if left
+            else task,
             checkout,
         )
         if above is not None and not opens:

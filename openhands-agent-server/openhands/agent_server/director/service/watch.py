@@ -24,6 +24,7 @@ from openhands.agent_server.director.org_store import (
 from openhands.agent_server.director.prompts import (
     STALL_QUESTION,
     check_in_notice,
+    in_words,
     stall_notice,
     unstarted_notice,
 )
@@ -79,14 +80,7 @@ class Watch(Reviews):
             "Settle it with resolve_escalation if you can; pass it up only with "
             "the reason you cannot."
         )
-        # It goes to the member of the same name above, and where the team
-        # above has none, to the one the teams below it turn to.
-        to = self.team(holder)
-        self.tell(
-            holder_id,
-            escalation.raised_by if escalation.raised_by in to.members else to.reviewer,
-            text,
-        )
+        self.tell(holder_id, self.team(holder).answers(escalation.raised_by), text)
 
     def stop_team(self, place_id: str, reason: str) -> None:
         """Stop a team for the IC of the team above: its agents and those
@@ -97,6 +91,7 @@ class Watch(Reviews):
             NotFound: The team does not exist.
             Conflict: It is stopped already.
         """
+        names = self.names_at(place_id)
         store = self.store
         team = store.place(place_id)
         if team is None:
@@ -120,11 +115,12 @@ class Watch(Reviews):
         if team.parent_id is not None:
             self.tell_overseer(
                 team.parent_id,
-                f"Your IC stopped the team {team.title!r} (id {team.id}): "
+                f"Your {names.writer} stopped the team {team.title!r} (id {team.id}): "
                 f"{reason}\nIts agents are at rest and nothing is sent to "
-                "them. It goes on when your IC writes to it with msg_team. "
+                f"them. It goes on when your {names.writer} writes to it with "
+                "msg_team. "
                 "Nothing is asked of you. If it should not go on at all, you "
-                "may remove it with prune_team, or have your IC propose "
+                f"may remove it with prune_team, or have your {names.writer} propose "
                 "teams that take its place.",
             )
 
@@ -222,7 +218,8 @@ class Watch(Reviews):
                     f"({used.input_tokens:,} tokens in, "
                     f"{used.output_tokens:,} out) and are at rest.\nAnswer "
                     "this to let it go on for as much again; your answer is "
-                    "sent to its IC. Close the session to end it."
+                    f"sent to its {self.team(top).names.writer}. Close the session "
+                    "to end it."
                 ),
                 at=utc_now(),
             )
@@ -366,6 +363,7 @@ class Watch(Reviews):
                     in_a_turn=ic in self._running,
                     head=head,
                     again=max(check_in, limit),
+                    names=self.team(team).names,
                 )
             )
         for above_id, texts in check_ins.items():
@@ -400,7 +398,11 @@ class Watch(Reviews):
         if unstarted and team.parent_id is not None:
             self.tell_writer(
                 team.parent_id,
-                unstarted_notice(team, int((now - since).total_seconds() // 60)),
+                unstarted_notice(
+                    team,
+                    int((now - since).total_seconds() // 60),
+                    names=self.team(team).names,
+                ),
             )
             return True
         if told is None:
@@ -417,6 +419,7 @@ class Watch(Reviews):
         return True
 
     async def _tell_of_stall(self, place_id: str, minutes: int) -> None:
+        names = self.names_at(place_id)
         store = self.store
         team = store.place(place_id)
         above = store.place(team.parent_id) if team and team.parent_id else None
@@ -428,25 +431,28 @@ class Watch(Reviews):
         in_a_turn = ic in self._running
         account = None
         if ic is not None and not in_a_turn:
-            account = await self._ask_agent(ic, STALL_QUESTION)
+            account = await self._ask_agent(ic, in_words(STALL_QUESTION, names))
         self.record_event(above.id, "stalled", team, f"{minutes} min")
         # Its reviewer is woken now anyway, and no longer waits for it.
         self._release_reviews(above.id)
         said = (
-            "Its IC is in a turn right now, so it was not asked what it is doing."
+            f"Its {names.writer} is in a turn right now, so it was not asked what "
+            "it is doing."
             if in_a_turn
-            else f"Asked just now, its IC says:\n{account.strip()}"
+            else f"Asked just now, its {names.writer} says:\n{account.strip()}"
             if account
-            else "Asked just now what it is doing, its IC gave no answer."
+            else f"Asked just now what it is doing, its {names.writer} gave no answer."
         )
         self.tell_above(
             team,
-            stall_notice(team, minutes, in_a_turn=in_a_turn, account=account),
+            stall_notice(
+                team, minutes, in_a_turn=in_a_turn, account=account, names=names
+            ),
             waits=STALL_WAITS,
             title=f"{team.title!r} has shown no progress for {minutes} min",
             detail=(
                 f"No commit in {team.boundary.path or 'the repository'}, "
                 f"nothing submitted, no escalation.\n{said}\nAnswer this to "
-                "tell its IC what to do: your answer is sent to it."
+                f"tell its {names.writer} what to do: your answer is sent to it."
             ),
         )
