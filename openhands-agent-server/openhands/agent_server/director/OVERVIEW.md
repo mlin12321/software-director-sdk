@@ -73,6 +73,11 @@ flowchart TB
   sub-teams and reviews the teams directly below.
 - **Manager.** One per team, derived from its IC. It writes no files: it
   approves, declines and prunes teams.
+- **Type.** The team's template, a YAML file. It says what the team's
+  agents are told, and it may name the team's members and the tools each
+  has. A type that names none has an IC and a Manager, as described here;
+  whom the director turns to (who reviews, who approves) is found by the
+  tool a member has, not by its name.
 - **Division Lead place.** One more place above the place a session was
   opened at. Its IC reviews the session's code and specs; its Manager
   settles where the session's teams and contracts meet the org's.

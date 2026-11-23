@@ -96,7 +96,7 @@ An agent profile is made in the settings of Canvas and made active there.
 
 ## Agent types and `director.yaml`
 
-Every team has a type, and a type is a YAML file of what its agents are told: what the team is for, what its spec, contracts and reports hold, what the director's tools mean to it, and how its work is reviewed. Three are shipped (`director/types`): `software-engineer` (the default), `researcher` and `research-engineer`. An IC names a type for each sub-team it proposes, so one org can hold all three.
+Every team has a type, and a type is a YAML file: a team template. It says what the team's agents are told (what the team is for, what its spec, contracts and reports hold, what the director's tools mean to it, how its work is reviewed), and it may name the team's members. Three are shipped (`director/types`): `software-engineer` (the default), `researcher` and `research-engineer`. An IC names a type for each sub-team it proposes, so one org can hold all three.
 
 To add one, point the server at a settings file and put the type beside it:
 
@@ -127,6 +127,31 @@ omit_tools: [propose_teams]
 
 A type cannot change what the runtime enforces: folders, review and landing are the same for every team. Settings changed on the org page hold over `director.yaml`.
 
+A type that says nothing of members has an IC and a Manager. A type may name its own instead, with `agents`:
+
+```yaml
+# types/lab.yaml
+description: A lab that checks what its benches find.
+agents:
+  bench:
+    writes: true
+    text: Runs the experiments.
+    tools: [read_team_context, raise_escalation, report, write_spec,
+            submit_review, propose_teams, msg_team]
+    lead_tools: [read_team_context]
+  referee:
+    like: bench
+    text: Checks what the benches below found.
+    tools: [read_team_context, review_team]
+    lead_tools: [read_team_context, review_team]
+  chair:
+    like: bench
+    tools: [read_team_context, approve_teams, decline_teams]
+    lead_tools: [read_team_context, settle_teams]
+```
+
+A member is whatever the type names it, and what it may do is the tools it is given. The director finds whom to turn to by tool: submitted work goes to the member of the team above that has `review_team`, proposed sub-teams to the one that has `approve_teams`. `lead_tools` are what a member has where its team only reviews a session's work. A type is refused unless exactly one member `writes` (works in the team's folder), and `submit_review`, `review_team`, `propose_teams`, `approve_teams` and (among `lead_tools`) `settle_teams` are each held by exactly one member. The texts the director itself sends still say "IC" and "Manager", so a team with other names is enforced as written but reads those words. No type with its own members has been run with real agents yet.
+
 Every type needs a `description`: the agents and the org page choose a type by it. A type file added while the server runs is found without a restart.
 
 Which type a team gets:
@@ -147,6 +172,7 @@ Small sessions on a toy data set (400 rows, four columns), two directions under 
 - **A whole session lands.** Split by hypothesis, a finding with its command and committed result from each direction, `Checked:` lines added to the contracts on accept, the top team's submit, the Division Lead's accept, and the merge into the checkout.
 - **A direction that waits on a long run** (minutes in one command) is told of to the IC above after the stall time and is not disturbed. The IC above is not itself reported as stalled while it waits.
 - **A server stopped in the middle of an experiment** comes back paused; after the resume the direction ran its experiment again and submitted, and nothing was reviewed twice. That run had `OH_SECRET_KEY` set; without it the agents used to come back without the director's tools, which they are now given again on load.
+- **With the protocol in the briefing.** After the org's protocol moved from the agents' system prompts into their first message, a software session with one split and the research session above each landed again on Cursor (seven minutes for the research one). Neither was long enough for a conversation to be condensed.
 - **What it cost.** The same task on Claude Code (five agents, no review sent back) cost $7.57 in nine minutes for 2.1 million tokens. The top team submitted twice, once before and once after it wrote down what was established, so the Division Lead reviewed twice. Cursor reports no use, so a session on Cursor shows no cost and no cost limit holds it.
 
 What a type does not do, since it is text: nothing but the reviewing IC checks that held-out data was left alone or that a claim has a committed result. Directions can read each other's folders. Contracts are never shortened by the director; the IC that owns them trims them with `edit_contracts`. Only trees one or two levels deep have been run.
