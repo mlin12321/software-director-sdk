@@ -1,12 +1,24 @@
 """A team whose type names its own members runs as any team does."""
 
+import re
 from collections.abc import AsyncIterator
 from pathlib import Path
 from uuid import UUID
 
 import pytest
 
+from openhands.agent_server.director.agent_types import Names
 from openhands.agent_server.director.models import SplitChild
+from openhands.agent_server.director.prompts import (
+    DIVISION_LEAD_IC_ROLE,
+    DIVISION_LEAD_MANAGER_ROLE,
+    HAND_OVER_ROLE,
+    MANAGER_ROLE,
+    STALL_QUESTION,
+    WITH_SUB_TEAMS,
+    in_words,
+    org_protocol,
+)
 from openhands.agent_server.director.service import DirectorService
 from openhands.agent_server.director.tools import (
     ApproveTeamsTool,
@@ -177,3 +189,45 @@ async def test_an_escalation_from_below_reaches_the_member_of_the_same_name(
     assert "It is with the bench of the team above" in raised.text
     told = "\n".join(launcher.messages_to(member(service, "bench")))
     assert "The bench of team 'Rig'" in told and "Which frame?" in told
+
+
+def test_the_team_above_is_named_as_its_own_type_names_it():
+    crew = Names(writer="Engineer", reviewer="Checker", overseer="Lead")
+    software = Names(writer="IC", reviewer="IC", overseer="Manager")
+
+    told = org_protocol(crew.under(software))
+
+    # Its own members by its own names, the one that reviews it by theirs.
+    assert "If you are the Engineer" in told and "If you are the Checker" in told
+    assert "The IC one team up reviews it" in told
+    assert "Propose sub-teams to your Lead" in told
+
+
+def test_a_text_of_the_directors_own_names_no_member_by_itself():
+    """Every name in what the director says of the org comes from the
+    reader's type: said to a team that calls its members otherwise, none
+    of the shipped names is left."""
+    names = Names(
+        writer="Engineer",
+        reviewer="Checker",
+        overseer="Lead",
+        members=("an Engineer", "a Checker", "a Lead"),
+    )
+    texts = [
+        org_protocol(names),
+        *(
+            in_words(text, names)
+            for text in (
+                MANAGER_ROLE,
+                DIVISION_LEAD_IC_ROLE,
+                DIVISION_LEAD_MANAGER_ROLE,
+                HAND_OVER_ROLE,
+                STALL_QUESTION,
+                *WITH_SUB_TEAMS,
+            )
+        ),
+    ]
+
+    for text in texts:
+        assert not re.search(r"\b(ICs?|Managers?)\b", text), text
+        assert "{" not in text

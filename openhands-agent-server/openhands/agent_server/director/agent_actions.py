@@ -638,7 +638,8 @@ def submit_review(service: DirectorService, caller: Caller, summary: str) -> str
     service.request_review(node.id)
     service.refresh_headline(node.id, f"it submitted its work. {summary}")
     return (
-        f"Submitted. The {names.reviewer} of the team above reviews it. Your turn ends "
+        f"Submitted. The {names.above_reviewer} of the team above reviews it. "
+        "Your turn ends "
         "here: you are woken when it is accepted or sent back, or when "
         "something else is sent to you."
     )
