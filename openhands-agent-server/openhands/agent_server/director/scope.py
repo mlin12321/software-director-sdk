@@ -173,9 +173,14 @@ class Scope:
             the shell and the agent's git open nothing for writing.
         edits: Whether its file tools may change a file at all.
         aside: A side conversation, which changes no file anywhere.
+        branch: The branch its work is taken from, in a checkout the
+            director made for it; '' where the checkout is someone else's
+            and may be on any branch.
         closed: Folders inside its own that are closed to it.
         hidden: Folders inside its own that its git leaves alone.
         merges: The merges being finished in the repository.
+        merge_root: Where merges are laid out for it to finish; '' when it
+            finishes none.
     """
 
     checkout: str
@@ -185,9 +190,11 @@ class Scope:
     aside: bool = False
     writable: tuple[str, ...] = ()
     readonly: tuple[str, ...] = ()
+    branch: str = ""
     closed: tuple[Closed, ...] = ()
     hidden: tuple[str, ...] = ()
     merges: tuple[MergeArea, ...] = ()
+    merge_root: str = ""
 
     def refuse(self, path: str, named: str | None = None) -> Denied | None:
         """Why the agent may not write ``path`` of its checkout, if it may

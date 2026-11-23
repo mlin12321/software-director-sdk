@@ -10,7 +10,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, ValidationError
 
-from openhands.agent_server.director.agent_actions import Caller, caller_of
+from openhands.agent_server.director.agent_actions import Caller, acting, caller_of
 from openhands.agent_server.director.git import GitError
 from openhands.agent_server.director.service import (
     HAND_OVER_TOOLS,
@@ -77,7 +77,7 @@ def call_tool(
     except ValidationError as error:
         return ToolAnswer(text=str(error), is_error=True)
     try:
-        caller = caller_of(service, conversation_id)
+        caller = acting(service, conversation_id)
         if name not in _offered(service, caller):
             return ToolAnswer(text=f"{name} is not one of your tools.", is_error=True)
         return ToolAnswer(text=tool.act()(service, caller, action), is_error=False)

@@ -44,6 +44,7 @@ def shell_script(
     secret: Path | None = None,
     directory: str | None,
     sub_team_directories: Sequence[str] = (),
+    merges: Path | None = None,
     rcfile: Path | None = None,
 ) -> str:
     """A script that runs ``shell`` confined to one team's directory.
@@ -66,6 +67,10 @@ def shell_script(
             it. It is created if missing, and the shell starts in it.
         sub_team_directories: Repo-relative directories inside ``directory``
             that sub-teams own and this shell may not write.
+        merges: Where merges are laid out for this agent to finish, which
+            it may write whatever else it may; None when it finishes none.
+            The folder is there before the shell starts: what is mounted
+            is fixed for as long as an agent's process runs.
     """
     quote = shlex.quote
     start = f"{quote(shell)} --rcfile {quote(str(rcfile))}" if rcfile else quote(shell)
@@ -77,6 +82,7 @@ def shell_script(
         secret=secret,
         directory=directory,
         sub_team_directories=sub_team_directories,
+        merges=merges,
     )
 
 
@@ -88,6 +94,7 @@ def command_script(
     secret: Path | None = None,
     directory: str | None,
     sub_team_directories: Sequence[str] = (),
+    merges: Path | None = None,
     first_on_path: Path | None = None,
 ) -> str:
     """A script that runs the command it is given confined like a shell of
@@ -108,6 +115,7 @@ def command_script(
         secret=secret,
         directory=directory,
         sub_team_directories=sub_team_directories,
+        merges=merges,
         stay=True,
         die_with_parent=True,
     )
@@ -122,6 +130,7 @@ def _confined(
     secret: Path | None = None,
     directory: str | None,
     sub_team_directories: Sequence[str],
+    merges: Path | None = None,
     stay: bool = False,
     die_with_parent: bool = False,
 ) -> str:
@@ -206,6 +215,10 @@ def _confined(
         ]
         if not stay:
             mounts.append('--chdir "$own"')
+    if merges is not None:
+        # The files of a merge that does not go through by itself. What it
+        # may change of them is checked when the merge is committed.
+        mounts.append(f"--bind {quote(str(merges))} {quote(str(merges))}")
     mounts += map(read_only, private)
     # Last, so that no mount of a folder it is in uncovers it.
     if secret is not None:

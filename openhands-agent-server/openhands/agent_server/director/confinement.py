@@ -147,6 +147,8 @@ class Confinement:
                     flock=shutil.which("flock"),
                     readonly=list(scope.readonly),
                     writable=list(scope.writable),
+                    checkout=str(checkout_root(scope.checkout)),
+                    branch=scope.branch,
                 ),
             )
             atomic_write_text(
@@ -161,6 +163,9 @@ class Confinement:
             path.mkdir(exist_ok=True)
         script = shells / f"{conversation_id}.sh"
         checkouts = list(self.checkouts)
+        merges = Path(scope.merge_root) if scope.merge_root else None
+        if merges is not None:
+            merges.mkdir(parents=True, exist_ok=True)
         directory = scope.directory if scope.writes else None
         write_shell(
             script,
@@ -172,6 +177,7 @@ class Confinement:
                 secret=self.secret,
                 directory=directory,
                 sub_team_directories=closed,
+                merges=merges,
                 rcfile=rc,
             ),
         )
@@ -186,6 +192,7 @@ class Confinement:
                 secret=self.secret,
                 directory=directory,
                 sub_team_directories=closed,
+                merges=merges,
                 first_on_path=bin_dir,
             ),
         )

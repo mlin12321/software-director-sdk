@@ -12,7 +12,7 @@ from typing import Literal
 from uuid import UUID, uuid4
 
 from openhands.agent_server.director.boundary import owns
-from openhands.agent_server.director.git import uncommitted
+from openhands.agent_server.director.git import head_of, uncommitted
 from openhands.agent_server.director.git_store import team_key
 from openhands.agent_server.director.memory_edit import EditCommand, edited
 from openhands.agent_server.director.models import (
@@ -64,6 +64,18 @@ def caller_of(service: DirectorService, conversation_id: UUID) -> Caller:
     if node is None:
         raise NotFound("This conversation is not an agent of the org")
     return Caller(node=node, role=service.team(node).writer, hand_over=True)
+
+
+def acting(service: DirectorService, conversation_id: UUID) -> Caller:
+    """The agent that uses a tool now, known to be at work from here on.
+
+    Raises:
+        NotFound: The conversation is not an agent of the org.
+    """
+    caller = caller_of(service, conversation_id)
+    if not caller.hand_over:
+        service.acts(caller.node.id, caller.role)
+    return caller
 
 
 _ASIDE = (
@@ -622,6 +634,9 @@ def submit_review(service: DirectorService, caller: Caller, summary: str) -> str
             f"committed: {', '.join(left[:10])}"
             + (f" and {len(left) - 10} more" if len(left) > 10 else "")
         )
+    astray = service.work_astray(node)
+    if astray is not None:
+        raise Conflict(astray)
     again = review is not None and review.state == "changes_requested"
     store.set_review(
         node.id,
@@ -631,6 +646,7 @@ def submit_review(service: DirectorService, caller: Caller, summary: str) -> str
             summary=summary,
             at=utc_now(),
             seq=service.next_submission(),
+            commit=head_of(Path(node.worktree_path)) or "",
         ),
     )
     service.progressed(node.id)
@@ -638,7 +654,8 @@ def submit_review(service: DirectorService, caller: Caller, summary: str) -> str
     service.request_review(node.id)
     service.refresh_headline(node.id, f"it submitted its work. {summary}")
     return (
-        f"Submitted. The {names.reviewer} of the team above reviews it. Your turn ends "
+        f"Submitted. The {names.above_reviewer} of the team above reviews it. "
+        "Your turn ends "
         "here: you are woken when it is accepted or sent back, or when "
         "something else is sent to you."
     )

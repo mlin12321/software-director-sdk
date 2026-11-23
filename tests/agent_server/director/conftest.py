@@ -53,6 +53,7 @@ from openhands.agent_server.director.org_store import (
     session_team_id,
     team_id_of,
 )
+from openhands.agent_server.director.prompts import in_words, org_protocol
 from openhands.agent_server.director.service import (
     DIRECTOR_TOOL_NAMES,
     DirectorService,
@@ -1305,6 +1306,7 @@ description: A lab.
 agents:
   bench:
     writes: true
+    plural: benches
     text: Runs the experiments.
     tools: [{", ".join(BENCH)}]
     lead_tools: [read_team_context]
@@ -1316,3 +1318,11 @@ agents:
     tools: [read_team_context, approve_teams, decline_teams]
     lead_tools: [read_team_context, settle_teams]
 """
+
+
+def shipped(text: str) -> str:
+    """A text of the director's own as a team of the default type reads it."""
+    return in_words(text.strip(), SHIPPED[DEFAULT_TYPE].names)
+
+
+ORG_PROTOCOL = org_protocol(SHIPPED[DEFAULT_TYPE].names)

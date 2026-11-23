@@ -1,10 +1,10 @@
 """What the director tells the agents of an org."""
 
-import re
+import textwrap
 from collections.abc import Mapping, Sequence
-from typing import Any
+from typing import Any, Literal
 
-from openhands.agent_server.director.agent_types import Names, several
+from openhands.agent_server.director.agent_types import Names
 from openhands.agent_server.director.git_store import team_key
 from openhands.agent_server.director.models import (
     BoundaryContracts,
@@ -22,13 +22,11 @@ from openhands.agent_server.director.models import (
 from openhands.agent_server.director.split import is_inside
 
 
-ORG_PROTOCOL = """\
-<ORG_PROTOCOL>
-You are one agent among teams of agents that work in one repository.
-
-Basics
-- A team owns one folder. It has two agents: an IC, who does the work, and a
-  Manager, who decides which sub-teams exist.
+# The director's own texts name a member as `{writer}`, `{reviewer}` or
+# `{overseer}`, and :func:`in_words` puts in what the reader's team calls it.
+_BASICS = (
+    "- A team owns one folder. It has {count} agents: {members}.",
+    """\
 - Your first message says which team and which agent you are, and gives your
   team's context. Later changes arrive under `[director] context update` on
   the next message you get. `read_team_context` returns all of it again.
@@ -40,50 +38,103 @@ Basics
   A rare event (a review, a stalled team, replaced teams) is explained in
   the message that brings it.
 - Spec: how your team works inside its folder. Contracts: what teams promise
-  each other. Promises go only in contracts; do not repeat them in a spec.
-- `report` what the team must remember. Only your team's two agents read
-  reports.
+  each other. Promises go only in contracts; do not repeat them in a spec.""",
+    "- `report` what the team must remember. Only your team's {count} agents "
+    "read reports.",
+    """\
 - What you cannot settle, raise with `raise_escalation`. It goes to the same
   role one team up, and from the team your session started at, to the human.
-  Settle what you can; pass up the rest with the reason.
+  Settle what you can; pass up the rest with the reason.""",
+)
 
-If you are the IC
+# What the member that works in the folder does, and what the member that
+# reviews the teams below does. In most types they are one member, and the
+# two read as one part, in this order.
+_PARTS: tuple[tuple[Literal["writer", "reviewer"], str], ...] = (
+    (
+        "writer",
+        """\
 - Write the spec with `write_spec`. Do your team's work yourself.
 - Write only inside your folder; the runtime refuses anything else. To get
-  another team's files changed, raise an escalation: the IC above both
+  another team's files changed, raise an escalation: the {above_writer} above both
   teams decides.
 - Do what the human asks your team directly, inside your folder.
 - When the work is done: commit, then call `submit_review`. Your turn ends.
-  The IC one team up reviews it (for the team your session started at, that
-  is the Division Lead IC) and you are woken with the result.
+  The {above_reviewer} one team up reviews it (for the team your session started at, that
+  is the Division Lead {above_reviewer}) and you are woken with the result.
 - If you cannot go on, raise an escalation. That shows your team as blocked.
-- Propose sub-teams to your Manager with `propose_teams`. Each gets a
+- Propose sub-teams to your {overseer} with `propose_teams`. Each gets a
   folder inside yours, a type, an instruction, and the contracts it must
   keep; a `reason` is optional. A sub-team is told nothing else of your
   team. You keep whatever no sub-team takes.
 - An approved sub-team starts only when you give it a task with `msg_team`.
-  It answers through its work or an escalation, not a message.
+  It answers through its work or an escalation, not a message.""",  # noqa: E501
+    ),
+    (
+        "reviewer",
+        """\
 - Review what sub-teams submit with `review_team`. When you accept, its
   `contracts` adds to the contracts between your sub-teams what all of them
   may rely on from now; they are told with their next message.
 - You are asked to review a sub-team's work as soon as it submits, while
   the teams beside it may still work. You may end your turn without
   deciding, to compare it with what another sub-team will submit: the next
-  request names what still waits for you.
+  request names what still waits for you.""",
+    ),
+    (
+        "writer",
+        """\
 - Your own `submit_review` is refused while a sub-team of yours works,
-  waits for your review, or was sent back and has not submitted again.
-- Settle what their ICs escalate with `resolve_escalation`, or pass it up
-  with the reason.
-</ORG_PROTOCOL>"""
+  waits for {review_of_yours}, or was sent back and has not submitted again.""",
+    ),
+    (
+        "reviewer",
+        """\
+- Settle what their {writers} escalate with `resolve_escalation`, or pass it up
+  with the reason.""",
+    ),
+)
 
-# What an IC is told once it has sub-teams, with the notice that they are
+
+def _bullet(line: str) -> str:
+    """A point of one line, wrapped as the points written out here are."""
+    return textwrap.fill(line, width=76, subsequent_indent="  ")
+
+
+def org_protocol(names: Names) -> str:
+    """How the org works, for every agent of a team whose members are
+    called by ``names``: one part for each member that has one."""
+    words = names.words()
+    basics = [
+        _bullet(text.format_map(words)) if "\n" not in text else text
+        for text in _BASICS
+    ]
+    parts = (
+        [(names.writer, ("writer", "reviewer"))]
+        if names.reviews_own
+        else [(names.writer, ("writer",)), (names.reviewer, ("reviewer",))]
+    )
+    lines = [
+        "<ORG_PROTOCOL>",
+        "You are one agent among teams of agents that work in one repository.",
+        "",
+        "Basics",
+        *basics,
+    ]
+    for called, theirs in parts:
+        lines += ["", f"If you are the {called}"]
+        lines += [text.format_map(words) for part, text in _PARTS if part in theirs]
+    return "\n".join([*lines, "</ORG_PROTOCOL>"])
+
+
+# What a writer is told once it has sub-teams, with the notice that they are
 # set up: none of it concerns a team that never splits.
 WITH_SUB_TEAMS = (
-    "- Each change is reviewed once, by the IC directly above the team that "
+    "- Each change is reviewed once, by the {reviewer} directly above the team that "
     "made it. If you change nothing yourself, your sub-teams' accepted work "
     "goes on up without another review. If you do, call `submit_review` "
     "when your own part is complete, and the accepted work goes up with it.",
-    "- Tell your Manager with `msg_manager`, at your own discretion, how "
+    "- Tell your {overseer} with `msg_manager`, at your own discretion, how "
     "your teams are doing: when one struggles and you cannot fix it, when "
     "two are at odds, when the make-up of the teams no longer fits the work.",
     "- To change the teams, propose again. The block must say what becomes "
@@ -102,7 +153,7 @@ WITH_SUB_TEAMS = (
 
 DIVISION_LEAD_IC_ROLE = """\
 <ORG_ROLE>
-You are the Division Lead IC: the IC of the team above the one a session
+You are the Division Lead {reviewer}: the {reviewer} of the team above the one a session
 worked at. You only review that session's work. You give no tasks and
 change no teams.
 - Judge the work by the human's request and by your team's spec, contracts
@@ -117,15 +168,15 @@ change no teams.
   write files. The session's team is not sent back for a merge.
 - With `specs` you may choose, per folder, the org's spec, the session's, or
   a text you write. Keep promises between teams out of a spec.
-- Teams and contracts are not yours: the Division Lead Manager settles them.
+- Teams and contracts are not yours: the Division Lead {overseer} settles them.
 - `report` what the team must remember.
 </ORG_ROLE>"""
 
 DIVISION_LEAD_MANAGER_ROLE = """\
 <ORG_ROLE>
-You are the Division Lead Manager: the Manager of the team above the one a
-session worked at. Ignore the IC part above. You write no files and review
-no code; the Division Lead IC does that, and neither of you waits for the
+You are the Division Lead {overseer}: the {overseer} of the team above the one a
+session worked at. Ignore {other_parts} above. You write no files and review
+no code; the Division Lead {reviewer} does that, and neither of you waits for the
 other.
 - You are asked only when the session and other accepted work both changed
   the same team or the same contracts. The message lists each one with the
@@ -135,7 +186,7 @@ other.
   another name. Per contracts: the org's, the session's, or a text you write
   that keeps what both sides need.
 - Taking one side's contracts whole often breaks the other side's code. If
-  you do not take the session's, its IC is told to follow up.
+  you do not take the session's, its {writer} is told to follow up.
 - Decide by your team's spec, contracts and records; `read_team_context`
   returns them.
 - Decide soon: later sessions' teams and contracts wait for you. Their code
@@ -145,34 +196,34 @@ other.
 
 MANAGER_ROLE = """\
 <ORG_ROLE>
-You are your team's Manager, not its IC. Ignore the IC part above.
+You are your team's {overseer}, not its {writer}. Ignore {other_parts} above.
 You never edit files or run commands that change the repository; the runtime
 refuses it.
 
 Your job: the right sub-teams, working well together. The aim is that the
 org as a whole works well, not that every team is busy.
-- Your IC proposes sub-teams. `approve_teams` if they do not overlap, each
+- Your {writer} proposes sub-teams. `approve_teams` if they do not overlap, each
   instruction is clear, and each is a team your team's type says to have;
   they are then set up
-  as written and start when your IC gives each a task. Otherwise
+  as written and start when your {writer} gives each a task. Otherwise
   `decline_teams` with the reason and what to change. A proposal waits until
   you call one of the two; a message decides nothing.
-- `msg_ic` writes to your IC, or to the IC of a team directly below.
+- `msg_ic` writes to your {writer}, or to the {writer} of a team directly below.
 - `read_team_context` shows how every team below has done, also removed
-  ones, and what your IC proposed before. Weigh a proposal by it.
-- After you approve or prune, your IC passes on what removed teams left and
+  ones, and what your {writer} proposed before. Weigh a proposal by it.
+- After you approve or prune, your {writer} passes on what removed teams left and
   rewrites the spec. Write to it if the change needs explaining.
-- Settle what Managers directly below escalate with `resolve_escalation`,
+- Settle what {overseers} directly below escalate with `resolve_escalation`,
   or pass it up with the reason.
 - `prune_team` removes a team directly below; your team's type says when.
-  Write to a slow team first. Its folder goes back to your IC.
-- You are woken when your IC writes, a Manager below escalates, or the
+  Write to a slow team first. Its folder goes back to your {writer}.
+- You are woken when your {writer} writes, {a_overseer} below escalates, or the
   runtime asks you to look at your teams and says what it counted.
 </ORG_ROLE>"""
 
 HAND_OVER_ROLE = """\
 <ORG_ROLE>
-You are your team's IC in hand-over mode: a side conversation started for
+You are your team's {writer} in hand-over mode: a side conversation started for
 one hand-over. It does not carry on the team's work. Do not edit files or
 run commands that change the repository. Only `read_team_context`,
 `hand_over` and `write_spec` work here.
@@ -189,7 +240,8 @@ def report_line(report: Report, titles: Mapping[str, str], *, names: Names) -> s
     """
     if report.handed_over:
         return (
-            f"Handed over by the {names.writer} of the team above, from the teams that "
+            f"Handed over by the {names.above_writer} of the team above, from the "
+            "teams that "
             f"were here before yours, {report.at}: {report.text}"
         )
     writer = titles.get(report.role, report.role)
@@ -320,7 +372,8 @@ def left_for_team(files: list[str], *, names: Names) -> str:
     """What a team is told, with its task, of the changes the IC above left
     uncommitted in its directory."""
     return (
-        f"The {names.writer} of the team above changed these files in your folder "
+        f"The {names.above_writer} of the team above changed these files in your "
+        "folder "
         f"before your team started and did not commit them: {_named(files)}. "
         "They are yours now. Check them, change what is wrong, and commit "
         "them with your work before you submit it."
@@ -580,30 +633,11 @@ def _of_the_team(
     return lines
 
 
-_ROLE_WORD = re.compile(r"\b(?:(an|An|a|A)( ))?(Division Lead )?(ICs?|Managers?)\b")
-# Where the director's own texts mean the member that reviews.
-_REVIEWS = re.compile(r"\bIC(?= one team up| directly above)")
-
-
 def in_words(text: str, names: Names) -> str:
-    """A text of the director's own, with the members named as a team's
-    type names them. Only for text that holds nothing an agent or a person
-    wrote: their words are not rewritten."""
-
-    def named(found: re.Match[str]) -> str:
-        article, gap, lead, word = found.groups()
-        if word.startswith("IC"):
-            name = names.reviewer if lead else names.writer
-            with_article = names.a_writer
-        else:
-            name, with_article = names.overseer, names.a_overseer
-        if word in ("ICs", "Managers"):
-            name = several(name)
-        elif article and not lead:
-            return ("A" if article[0] == "A" else "a") + with_article[1:]
-        return f"{article or ''}{gap or ''}{lead or ''}{name}"
-
-    return _ROLE_WORD.sub(named, _REVIEWS.sub(names.reviewer, text))
+    """A text of the director's own, with the members named as the reader's
+    team names them. Only for text that holds nothing an agent or a person
+    wrote: their words are never passed through here."""
+    return text.format_map(names.words())
 
 
 def role_text(
@@ -632,7 +666,7 @@ def role_text(
         hand_over: Whether it is a hand-over conversation.
         own: What its type says of its part, in the type's own words.
     """
-    texts = [ORG_PROTOCOL]
+    texts = []
     if hand_over:
         texts.append(HAND_OVER_ROLE)
     elif lead and "review_team" in tools:
@@ -641,8 +675,9 @@ def role_text(
         texts.append(DIVISION_LEAD_MANAGER_ROLE)
     elif not lead and "approve_teams" in tools:
         texts.append(MANAGER_ROLE)
-    said = [in_words(text.strip(), names) for text in texts]
-    if not works and not hand_over and len(texts) == 1:
+    said = [org_protocol(names)]
+    said += [in_words(text.strip(), names) for text in texts]
+    if not works and not hand_over and not texts:
         said.append(
             f"You are the {title} of your team. You write no files. What you "
             "do, you do with these tools of the director: "
@@ -1118,7 +1153,8 @@ def session_brief(
         "- The sub-teams you see are not started. One starts when you give "
         "it a task with `msg_team`.\n"
         "- When the request is done, commit and call `submit_review`. The "
-        f"Division Lead {names.reviewer} (the {names.reviewer} one team up) reviews "
+        f"Division Lead {names.above_reviewer} (the {names.above_reviewer} one team "
+        "up) reviews "
         "it. Accepted work is "
         "merged into the repository's checkout, in the order work was "
         "submitted.\n"
@@ -1220,9 +1256,10 @@ def misrouted_notice(team: SessionTeam, text: str, why: str, *, names: Names) ->
 
 
 STALL_QUESTION = (
-    "The IC of the team above is about to be told that your team has shown "
+    "The {above_writer} of the team above is about to be told that your team has "
+    "shown "
     "no progress for some time: nothing committed in your folder, "
-    "nothing submitted, no escalation. In a few sentences, for that IC: "
+    "nothing submitted, no escalation. In a few sentences, for that {above_writer}: "
     "what are you working on, what has kept you from committing or "
     "submitting, and what do you need to go on? Answer in plain text and "
     "do nothing else."

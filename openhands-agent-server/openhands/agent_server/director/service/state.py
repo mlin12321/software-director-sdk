@@ -674,8 +674,9 @@ class ServiceState:
         one that is gone, what they are called in a team of the default
         type."""
         place = self.org.place(place_id)
-        kind = self.type_of(place) if place else self.agent_types[DEFAULT_TYPE]
-        return kind.names
+        if place is None:
+            return self.agent_types[DEFAULT_TYPE].names
+        return self.team(place).names
 
     def team(self, place: SessionTeam) -> Team:
         """A team of the org as the director reads it."""
@@ -970,10 +971,19 @@ class ServiceState:
             and hand_over is None
             and not is_division_lead(place),
             aside=hand_over is not None,
+            # The repository's own checkout is the human's, on whatever
+            # branch they have it.
+            branch=place.branch or ""
+            if place.worktree_path
+            and checkout_root(place.worktree_path) != checkout_root(str(self._repo_dir))
+            else "",
             # Its git commits nothing in a sub-team's directory; it may still
             # write in that of a team that has not started.
             hidden=tuple(child.boundary.path for child in children),
             merges=tuple(merges),
+            merge_root=str(self._merges_for(place.id))
+            if role == reviewer and hand_over is None
+            else "",
         )
 
     def with_tools_again(self, conversation_id: UUID, agent: AgentBase) -> AgentBase:
@@ -996,6 +1006,11 @@ class ServiceState:
 
     def _merging_root(self) -> Path:
         return self._confinement().shells.parent / _MERGING_DIR
+
+    def _merges_for(self, place_id: str) -> Path:
+        """Where the merges the reviewer of a team finishes are laid out:
+        one folder for each reviewer, which its shell alone may write."""
+        return self._merging_root() / place_id.replace("@", "-")
 
     def merge_checkout(self, place_id: str) -> MergeCheckout | None:
         """The merge of a team's work that its reviewer finishes."""

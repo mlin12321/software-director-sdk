@@ -16,7 +16,6 @@ from openhands.agent_server.director.models import OldSpec, SplitChild
 from openhands.agent_server.director.org_store import team_id_of
 from openhands.agent_server.director.prompts import (
     HAND_OVER_ROLE,
-    ORG_PROTOCOL,
     left_behind,
 )
 from openhands.agent_server.director.run_state import TASK
@@ -52,6 +51,7 @@ from openhands.agent_server.director_router import get_node_memory
 from openhands.sdk.conversation.state import ConversationExecutionStatus
 from tests.agent_server.director.conftest import (
     APPROVE,
+    ORG_PROTOCOL,
     PRUNE_API,
     FakeLauncher,
     ServerEnded,
@@ -67,6 +67,7 @@ from tests.agent_server.director.conftest import (
     memory_of,
     node,
     proposing,
+    shipped,
     started,
     sub_teams,
     tasked,
@@ -520,7 +521,7 @@ async def test_a_hand_over_is_a_side_conversation_of_the_ic_with_its_own_briefin
     assert str(start.parent_id) == ic(service)
     assert start.title.endswith("(IC, hand-over)")
     # What a hand-over is for is part of what it is told, as the org's ways are.
-    assert HAND_OVER_ROLE.strip() in start.task and ORG_PROTOCOL.strip() in start.task
+    assert shipped(HAND_OVER_ROLE) in start.task and ORG_PROTOCOL in start.task
     assert node(service, API).agents == []
     # It is told who it is, what changed, what was left and what its team
     # works to; none of it depends on what the IC's own conversation holds.
@@ -895,6 +896,6 @@ async def test_a_split_finished_again_after_a_restart_hands_over_once(
     await second.resume()
     await second.settled()
 
-    asides = [s for s in launcher.derived if HAND_OVER_ROLE.strip() in s.task]
+    asides = [s for s in launcher.derived if shipped(HAND_OVER_ROLE) in s.task]
     assert len(asides) == 1
     await second.aclose()

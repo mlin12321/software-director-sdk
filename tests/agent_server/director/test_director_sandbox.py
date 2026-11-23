@@ -103,6 +103,44 @@ def test_the_shell_writes_its_teams_directory_and_nothing_else_in_the_checkout(
     assert not (repo / "svc" / "web" / "page.tsx").exists()
 
 
+def test_a_shell_that_writes_no_folder_still_writes_the_merges_it_finishes(
+    repo: Path,
+):
+    """The member that reviews need not be the one that works: where a
+    team only reviews a session's work, no member works at all."""
+    bwrap = find_bwrap()
+    if bwrap is None:
+        pytest.skip("bubblewrap cannot make a sandbox on this machine")
+    merges = repo / ".git" / "director-merging" / "root"
+    others = repo / ".git" / "director-merging" / "other"
+    for folder in (merges, others):
+        folder.mkdir(parents=True)
+        (folder / "page.tsx").write_text("<<<<<<< ours\n")
+    script = repo / SHELLS / "reviewer.sh"
+    write_shell(
+        script,
+        shell_script(
+            bwrap,
+            "/bin/sh",
+            checkouts=[repo],
+            private=[repo / SHELLS],
+            directory=None,
+            merges=merges,
+        ),
+    )
+
+    def run(command: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [str(script), "-c", command], cwd=repo, capture_output=True, text=True
+        )
+
+    assert run(f"echo merged > {merges}/page.tsx").returncode == 0
+    assert (merges / "page.tsx").read_text() == "merged\n"
+    for target in (others / "page.tsx", repo / "README.md", repo / ".git" / "HEAD"):
+        refused = run(f"echo x > {target}")
+        assert refused.returncode != 0 and "Read-only file system" in refused.stderr
+
+
 def test_the_shell_can_commit_but_not_change_its_own_confinement(repo: Path):
     run = confined(repo, "svc/api")
 

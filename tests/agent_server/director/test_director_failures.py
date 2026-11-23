@@ -164,6 +164,23 @@ async def test_an_agent_that_runs_again_by_itself_is_no_longer_asked_about(
     assert node(service, "root").escalations == []
 
 
+async def test_an_agent_that_uses_a_tool_after_it_failed_is_no_longer_asked_about(
+    service: DirectorService, launcher: FakeLauncher
+):
+    """A conversation that is started again by what runs it need not say
+    that it runs; that it acts is enough."""
+    top = ic(service)
+    await fails(service, launcher, top)
+    assert [e.id for e in node(service, "root").escalations] == [failure_waits("ic")]
+
+    await use(service, top, MsgTeamTool, MsgTeamAction(team=API, text="Go on."))
+    await service.settled()
+
+    assert node(service, "root").escalations == []
+    [agent] = [a for a in node(service, "root").agents if a.role == "ic"]
+    assert agent.status == "working"
+
+
 async def test_a_manager_that_failed_is_told_of_as_a_manager(
     service: DirectorService, launcher: FakeLauncher
 ):
