@@ -171,13 +171,21 @@ A type says what documents its teams keep under `documents`:
 documents:
   spec:
     holds: The question, the method, and how a result is measured.
-  findings:
-    path: findings.md
-    readers: [above, beside]
-    holds: One claim to a line, with the command that reproduces it.
+  baseline:
+    path: baseline.md
+    readers: [team, below]
+    holds: What every sub-team compares against.
 ```
 
-`spec`, `contracts` and `report` are the director's own, for every team: a type says only what each `holds`. Any other name is a document of the type's own. It is a file at `path` in the team's folder, which the member that works there writes and commits like any other file, and the teams named in `readers` (`above`, `below`, `beside`, seen from the team that keeps it) are given it with their context: the team above and the teams beside once the work that holds it was accepted, the teams below as soon as it is committed. Other teams only read it. No shipped type has a document of its own, and none has been run with real agents yet.
+Every document says what it `holds`, who its `readers` are, and either the tool of the director's it is `written_with` or its `path` in the team's folder. The spec, the contracts and the reports are documents like any other, and the shipped defaults state them in full:
+
+| Document | Written with | Readers |
+|---|---|---|
+| `spec` | `write_spec` | `team` |
+| `contracts` | `edit_contracts` | `team`, `below` |
+| `report` | `report` | `team` |
+
+The director keeps those three in team memory, and what they are written with and who reads them is what its code does, so a type changes only what each holds; a type that says otherwise is refused. Any other name is a document of the type's own: a file at `path`, which the member that works in the folder writes and commits like any other file. Its readers are the `team` (the default), the teams `below`, or both, and they are given it with their context as the team last committed it. A document goes to no team above or beside: what goes up goes by `submit_review`. No shipped type has a document of its own.
 
 Every type starts from `_defaults.yaml`: the shipped one (`director/types/_defaults.yaml`, which holds the three documents as a team that builds software keeps them), then the one in the org's own `types` folder if there is one. A type file says only what it changes. Mappings are merged key by key; a list or a plain value takes the place of the default.
 

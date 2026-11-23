@@ -94,7 +94,7 @@ from openhands.sdk.logger import get_logger
 
 
 logger = get_logger(__name__)
-# How much of one document of another team a context carries.
+# How much of one document kept as a file a context carries.
 DOCUMENT_TOLD = 20_000
 _REPORTS = TypeAdapter(list[Report])
 _EVENTS = TypeAdapter(list[TeamEvent])
@@ -761,8 +761,8 @@ class Records(ServiceState):
                 }
                 for other in others
             ]
-        if documents := self.documents_for(place):
-            context["documents_of_other_teams"] = documents
+        if documents := self.documents_for(place, role):
+            context["documents_kept_as_files"] = documents
         works = role == self.team(place).writer
         if works and store.below(place.id):
             context["asked_directly_of_teams_below"] = self.asked_below(place)
@@ -800,48 +800,34 @@ class Records(ServiceState):
             ]
         return context
 
-    def documents_for(self, place: SessionTeam) -> list[dict[str, Any]]:
-        """The documents other teams keep by their types that the team at
-        ``place`` reads: of the team above, the teams below and the teams
-        beside it, each where its type names that reader.
+    def documents_for(self, place: SessionTeam, role: str) -> list[dict[str, Any]]:
+        """The documents kept as files that the member ``role`` of the
+        team at ``place`` is given: its own team's, where the type names
+        the `team` a reader and the member is not the one that writes
+        them, and those of the team above, where that team's type names
+        the teams `below`.
 
-        What goes up or beside is given as the checkout of the team above
-        its keeper has it committed, which is where accepted work is
-        merged, so what a team wrote and nobody accepted yet is not passed
-        on. A team that works in the directory of the team above
-        (`shared`) commits into that checkout, so there it is what was
-        committed. What a team keeps for its sub-teams is its own to say,
-        as contracts are: it is given as the team's own checkout has it.
-        Nobody works at a session's Division Lead place, so it keeps none.
+        A document goes down and never up or to a team beside, as the
+        contracts do, and it waits for no review: each is given as the
+        checkout of the team that keeps it has it committed. Nobody works
+        at a session's Division Lead place, so it keeps none.
         """
-        store = self.org
-        above = store.place(place.parent_id) if place.parent_id else None
-        kept_by: list[tuple[SessionTeam, str]] = [
-            (child, "above") for child in store.below(place.id)
-        ]
-        if above is not None:
+        above = self.org.place(place.parent_id) if place.parent_id else None
+        kept_by: list[tuple[SessionTeam, str]] = []
+        if role != self.team(place).writer:
+            kept_by.append((place, "team"))
+        if above is not None and not is_division_lead(above):
             kept_by.append((above, "below"))
-            kept_by += [
-                (other, "beside")
-                for other in store.below(above.id)
-                if other.id != place.id
-            ]
         found: list[dict[str, Any]] = []
         for keeper, reader in kept_by:
-            if is_division_lead(keeper):
+            if not keeper.worktree_path:
                 continue
-            over = store.place(keeper.parent_id) if keeper.parent_id else None
-            checkout = (
-                over.worktree_path
-                if over is not None and reader != "below"
-                else keeper.worktree_path
-            )
             folder = normalize_store_path(keeper.boundary.path)
             for name, document in self.type_of(keeper).own_documents.items():
-                if reader not in document.readers or not checkout:
+                if reader not in document.readers:
                     continue
                 path = f"{folder}/{document.path}" if folder else document.path
-                text = committed_text(Path(checkout), path)
+                text = committed_text(Path(keeper.worktree_path), path)
                 if text is None:
                     continue
                 found.append(

@@ -52,16 +52,17 @@ _NAME = re.compile(r"[a-z0-9][a-z0-9-]*")
 # What every type of the folder starts from.
 DEFAULTS_FILE = "_defaults.yaml"
 
-# The documents the director keeps itself, for every team of every type:
-# where each is kept, who writes it and who reads it are the director's.
-DIRECTOR_DOCUMENTS = ("spec", "contracts", "report")
-# Which other teams read a document of a type's own, seen from the team
-# that keeps it.
-Reader = Literal["above", "below", "beside"]
-_READERS: dict[Reader, str] = {
-    "above": "the team above",
-    "below": "your sub-teams",
-    "beside": "the teams beside yours",
+# Who reads a document, seen from the team that keeps it: the team itself
+# and the teams below it. Nothing a type says sends a document up or to a
+# team beside it; what goes up goes by `submit_review`.
+Reader = Literal["team", "below"]
+# The documents the director keeps itself for every team, each with the
+# tool it is written with and who reads it. Both are what the director
+# does, so a type that says either says the same.
+DIRECTOR_DOCUMENTS: dict[str, tuple[str, tuple[Reader, ...]]] = {
+    "spec": ("write_spec", ("team",)),
+    "contracts": ("edit_contracts", ("team", "below")),
+    "report": ("report", ("team",)),
 }
 
 # Tools the director finds one agent of a team by: a type gives each to
@@ -199,7 +200,8 @@ class ReviewTexts(BaseModel):
 
 
 class Document(BaseModel):
-    """One document a team of a type keeps."""
+    """One document a team of a type keeps. The spec, the contracts and
+    the reports are documents as any other a type names."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -207,18 +209,26 @@ class Document(BaseModel):
     path: str = Field(
         default="",
         description=(
-            "Where a document of the type's own is, in the team's folder. "
-            "The member that works there writes and commits it as any file. "
-            "Not said of a document the director keeps."
+            "Where it is in the team's folder, for a document that is a "
+            "file there. The member that works in the folder writes and "
+            "commits it as any file."
+        ),
+    )
+    written_with: str = Field(
+        default="",
+        description=(
+            "The director's tool it is written with, for a document the "
+            "director keeps in team memory: `write_spec`, `edit_contracts`, "
+            "`report`."
         ),
     )
     readers: list[Reader] = Field(
-        default_factory=list,
+        default_factory=lambda: ["team"],
+        min_length=1,
         description=(
-            "Which other teams are given a document of the type's own with "
-            "their context: the team `above` and the teams `beside` it, as "
-            "it was last accepted, and the teams `below`, as it was last "
-            "committed."
+            "Who is given it with their context: the `team` that keeps it, "
+            "the teams `below`, or both. A document goes to no team above "
+            "or beside."
         ),
     )
 
@@ -241,16 +251,15 @@ class Document(BaseModel):
 
     @property
     def read_by(self) -> str:
-        """Who reads it and when, as said to the team that keeps it. What
-        goes up or beside a team waits for its work to be accepted; what
-        it says to its own sub-teams does not."""
-        later = " and ".join(
-            _READERS[reader] for reader in ("above", "beside") if reader in self.readers
+        """Who else reads it, as said to the member that writes it."""
+        return " and ".join(
+            said
+            for reader, said in (
+                ("team", "the others of your team"),
+                ("below", "your sub-teams"),
+            )
+            if reader in self.readers
         )
-        parts = [f"{later} read what of it was accepted"] if later else []
-        if "below" in self.readers:
-            parts.append(f"{_READERS['below']} read it as you last committed it")
-        return ", and ".join(parts)
 
 
 class Member(BaseModel):
@@ -318,9 +327,10 @@ class TeamTemplate(BaseModel):
         default_factory=dict,
         description=(
             "The documents a team of this type keeps, by name. `spec`, "
-            "`contracts` and `report` are the director's own, and a type "
-            "says only what each holds. Any other is the type's own: a "
-            "file in the team's folder that the teams it names read."
+            "`contracts` and `report` are kept by the director in team "
+            "memory, and a type says only what each holds. Any other is "
+            "the type's own: a file in the team's folder that the team "
+            "and, if the type says so, the teams below read."
         ),
     )
     actions: dict[str, str] = Field(
@@ -368,16 +378,28 @@ class TeamTemplate(BaseModel):
                     "a document's name is lower-case letters, digits and hyphens"
                 )
             if name in DIRECTOR_DOCUMENTS:
-                if document.path or document.readers:
+                tool, readers = DIRECTOR_DOCUMENTS[name]
+                said = document.model_fields_set
+                if (
+                    document.path
+                    or document.written_with not in ("", tool)
+                    or ("readers" in said and set(document.readers) != set(readers))
+                ):
                     raise ValueError(
-                        f"`{name}` is a document the director keeps: a type "
-                        "says what it holds, not where it is or who reads it"
+                        f"`{name}` is a document the director keeps: it is "
+                        f"written with `{tool}` and read by "
+                        f"{' and '.join(readers)}, and a type says only "
+                        "what it holds"
                     )
+                self.documents[name] = Document(
+                    holds=document.holds, written_with=tool, readers=list(readers)
+                )
                 continue
-            if not document.path or not document.readers:
+            if document.written_with or not document.path:
                 raise ValueError(
                     f"the document `{name}` is the type's own: say its "
-                    "`path` in the team's folder and its `readers`"
+                    "`path` in the team's folder; the director has no tool "
+                    "to write it with"
                 )
             if document.path in paths:
                 raise ValueError(f"two documents are kept in {document.path!r}")
@@ -487,11 +509,9 @@ class TeamTemplate(BaseModel):
 
     @property
     def own_documents(self) -> dict[str, Document]:
-        """The documents of the type's own, by name."""
+        """The documents that are files in the team's folder, by name."""
         return {
-            name: document
-            for name, document in self.documents.items()
-            if name not in DIRECTOR_DOCUMENTS
+            name: document for name, document in self.documents.items() if document.path
         }
 
     @property
@@ -530,13 +550,13 @@ class TeamTemplate(BaseModel):
 
 
 def _kept(document: Document) -> str:
-    """Where a document of a type's own is and who reads it; '' for one
-    the director keeps."""
+    """Where a document that is a file is and who reads it; '' for one
+    the director keeps in team memory."""
     if not document.path:
         return ""
     return (
         f" (`{document.path}` in your team's folder; commit it with your "
-        f"work, and {document.read_by})"
+        f"work, and {document.read_by} read it as you last committed it)"
     )
 
 

@@ -45,9 +45,9 @@ FINDINGS = """\
 documents:
   findings:
     path: notes/findings.md
-    readers: [above, beside]
     holds: One claim to a line.
 """
+# A team whose own members read what its IC keeps.
 LAB = members_yaml() + "description: Runs experiments.\n" + FINDINGS
 # A team whose sub-teams read what it keeps.
 BOARD = (
@@ -99,12 +99,12 @@ async def service(
     await service.aclose()
 
 
-def documents(service: DirectorService, team: str) -> dict[str, str]:
-    """The documents of other teams a team's IC is given, by their ids."""
-    context = service.context_of(node(service, team), "ic")
+def documents(service: DirectorService, team: str, role: str = "ic") -> dict[str, str]:
+    """The documents kept as files a member of a team is given, by their ids."""
+    context = service.context_of(node(service, team), role)
     return {
         document["document_id"]: document["text"]
-        for document in context.get("documents_of_other_teams", [])
+        for document in context.get("documents_kept_as_files", [])
     }
 
 
@@ -113,8 +113,14 @@ def test_every_shipped_type_keeps_the_directors_documents_and_none_of_its_own():
 
     assert "_defaults" not in types
     for kind in types.values():
-        assert tuple(kind.documents) == DIRECTOR_DOCUMENTS
+        assert tuple(kind.documents) == tuple(DIRECTOR_DOCUMENTS)
         assert kind.own_documents == {}
+        # The spec, the contracts and the reports are documents as any other:
+        # each says what it is written with and who reads it.
+        assert {
+            name: (document.written_with, tuple(document.readers))
+            for name, document in kind.documents.items()
+        } == DIRECTOR_DOCUMENTS
     # The default wording is the one of a team that builds software, and a
     # type says only what it changes.
     assert "- spec: How your team works inside its folder." in types[
@@ -163,12 +169,13 @@ def test_a_team_is_told_where_a_document_of_its_types_own_is_and_who_reads_it(
 ):
     lab = read_type(a_type(tmp_path, "lab", LAB), DIRECTOR_TOOL_NAMES)
 
+    # A document that names no reader is the team's own.
+    assert lab.documents["findings"].readers == ["team"]
     assert (
         "- findings (`notes/findings.md` in your team's folder; commit it with "
-        "your work, and the team above and the teams beside yours read what of "
-        "it was accepted): One claim to a line."
+        "your work, and the others of your team read it as you last committed "
+        "it): One claim to a line."
     ) in lab.text_for("ic")
-    # What a team keeps for its own sub-teams waits for no review.
     board = read_type(a_type(tmp_path, "board", BOARD), DIRECTOR_TOOL_NAMES)
     assert (
         "work, and your sub-teams read it as you last committed it): What every"
@@ -176,24 +183,42 @@ def test_a_team_is_told_where_a_document_of_its_types_own_is_and_who_reads_it(
     )
 
 
+def test_a_type_that_says_of_the_directors_documents_what_the_director_does_is_read(
+    tmp_path: Path,
+):
+    said = (
+        "documents:\n  contracts:\n    holds: x\n"
+        "    written_with: edit_contracts\n    readers: [below, team]\n"
+    )
+    path = a_type(tmp_path, "lab", members_yaml() + "description: x\n" + said)
+
+    lab = read_type(path, DIRECTOR_TOOL_NAMES)
+
+    assert lab.documents["contracts"].readers == ["team", "below"]
+
+
 @pytest.mark.parametrize(
     "said",
     [
-        # Where the director's own are kept and who reads them is not a type's.
+        # What the director's own are written with and who reads them is
+        # what the director does: a type cannot say otherwise.
         "  spec:\n    holds: x\n    path: spec.md\n",
-        "  contracts:\n    holds: x\n    readers: [beside]\n",
-        # A document of the type's own says where it is and who reads it.
-        "  findings:\n    holds: x\n    readers: [above]\n",
-        "  findings:\n    holds: x\n    path: findings.md\n",
-        "  findings:\n    path: findings.md\n    readers: [above]\n",
-        # It stays in the team's folder.
-        "  findings:\n    holds: x\n    path: ../findings.md\n    readers: [above]\n",
-        "  findings:\n    holds: x\n    path: /findings.md\n    readers: [above]\n",
-        "  findings:\n    holds: x\n    path: .git/config\n    readers: [above]\n",
-        "  findings:\n    holds: x\n    path: f.md\n    readers: [everyone]\n",
-        "  Findings:\n    holds: x\n    path: f.md\n    readers: [above]\n",
-        "  one:\n    holds: x\n    path: f.md\n    readers: [above]\n"
-        "  two:\n    holds: x\n    path: f.md\n    readers: [above]\n",
+        "  spec:\n    holds: x\n    readers: [team, below]\n",
+        "  contracts:\n    holds: x\n    readers: [team]\n",
+        "  report:\n    holds: x\n    written_with: write_spec\n",
+        # A document of the type's own is a file in the team's folder.
+        "  findings:\n    holds: x\n",
+        "  findings:\n    holds: x\n    written_with: report\n",
+        "  findings:\n    path: findings.md\n",
+        "  findings:\n    holds: x\n    path: ../findings.md\n",
+        "  findings:\n    holds: x\n    path: /findings.md\n",
+        "  findings:\n    holds: x\n    path: .git/config\n",
+        "  Findings:\n    holds: x\n    path: f.md\n",
+        "  one:\n    holds: x\n    path: f.md\n  two:\n    holds: x\n    path: f.md\n",
+        # It goes to the team and the teams below, never up or beside.
+        "  findings:\n    holds: x\n    path: f.md\n    readers: [above]\n",
+        "  findings:\n    holds: x\n    path: f.md\n    readers: [beside]\n",
+        "  findings:\n    holds: x\n    path: f.md\n    readers: []\n",
     ],
 )
 def test_a_document_no_type_may_keep_is_refused(tmp_path: Path, said: str):
@@ -205,58 +230,54 @@ def test_a_document_no_type_may_keep_is_refused(tmp_path: Path, said: str):
         read_type(path, DIRECTOR_TOOL_NAMES)
 
 
-async def test_a_document_reaches_its_readers_once_the_work_is_accepted(
+async def test_a_document_goes_to_the_teams_below_and_to_no_other(
     service: DirectorService, repo: Path, tmp_path: Path
 ):
-    runs = node(service, "runs")
-    # The worktree its conversation would have made.
+    root, runs = node(service, "root"), node(service, "runs")
+    # The worktree the conversation of Runs would have made.
     worktree = tmp_path / "runs"
     run_git(repo, "worktree", "add", "--quiet", "-b", "runs", str(worktree))
     service.org.update_place(runs.id, worktree_path=str(worktree), branch="runs")
-    before = steady(service.context_of(node(service, "probe"), "ic"))
+    before = steady(service.context_of(runs, "ic"))
+
+    commit(repo, "baseline.md", "Compare against v1.\n")
     commit(worktree, "runs/notes/findings.md", "Checked: it holds.\n")
 
-    # What Runs wrote in its own checkout is nobody else's yet.
-    assert documents(service, "root") == {}
-    assert documents(service, "probe") == {}
-
+    baseline = {f"{root.id}/baseline": "Compare against v1.\n"}
+    # The top team's document goes to every team below, of whatever type,
+    # as soon as it is committed.
+    for team in ("runs", "probe", "tools"):
+        assert documents(service, team) == baseline
+    # What Runs keeps goes neither up nor to the teams beside it, also once
+    # its work is accepted.
     await use(service, ic(service, "runs"), SubmitReviewTool, DONE)
     await use(service, ic(service), ReviewTeamTool, accept("runs"))
     await service.settled()
-
-    found = {f"{runs.id}/findings": "Checked: it holds.\n"}
-    # The team above and the team beside it read it; a team reads none of its own.
-    assert documents(service, "root") == found
-    assert documents(service, "probe") == found | documents(service, "probe")
-    assert f"{runs.id}/findings" not in documents(service, "runs")
-    # A team is told of it with the next message it gets, and only of it.
-    now = steady(service.context_of(node(service, "probe"), "ic"))
-    [told] = changed(before, now, "ic", works=True)["documents_of_other_teams"]
-    assert (told["document"], told["path"]) == ("findings", "runs/notes/findings.md")
-    # When it changes, only the document that did is told again.
-    commit(repo, "runs/notes/findings.md", "Checked: it holds twice.\n")
-    later = steady(service.context_of(node(service, "probe"), "ic"))
-    again = changed(now, later, "ic", works=True)["documents_of_other_teams"]
+    assert documents(service, "root") == {}
+    assert documents(service, "probe") == baseline
+    # A team is told of it with the next message it gets, and when it
+    # changes only the document that did is told again.
+    now = steady(service.context_of(runs, "ic"))
+    [told] = changed(before, now, "ic", works=True)["documents_kept_as_files"]
+    assert (told["document"], told["path"]) == ("baseline", "baseline.md")
+    commit(repo, "baseline.md", "Compare against v2.\n")
+    later = steady(service.context_of(runs, "ic"))
+    again = changed(now, later, "ic", works=True)["documents_kept_as_files"]
     assert [document["text"] for document in again["changed"]] == [
-        "Checked: it holds twice.\n"
+        "Compare against v2.\n"
     ]
 
 
-async def test_a_document_is_read_only_by_the_teams_its_type_names(
+async def test_a_teams_own_document_is_given_to_its_members_that_do_not_write_it(
     service: DirectorService, repo: Path
 ):
-    root = node(service, "root")
-    commit(repo, "baseline.md", "Compare against v1.\n")
+    probe = node(service, "probe")
     commit(repo, "probe/notes/findings.md", "Unchecked: maybe.\n")
 
-    baseline = {f"{root.id}/baseline": "Compare against v1.\n"}
-    # The top team's document goes to the teams below it, of whatever type.
-    assert baseline.items() <= documents(service, "tools").items()
-    assert baseline.items() <= documents(service, "runs").items()
-    assert f"{root.id}/baseline" not in documents(service, "root")
-    # Probe works in the top team's directory, so what it commits is there.
-    probe = node(service, "probe")
-    assert documents(service, "root") == {f"{probe.id}/findings": "Unchecked: maybe.\n"}
-    # Tools is beside Probe, and its own type keeps no document for it to
-    # give; it reads Probe's as any team beside it does.
-    assert f"{probe.id}/findings" in documents(service, "tools")
+    found = {f"{probe.id}/findings": "Unchecked: maybe.\n"}
+    assert found.items() <= documents(service, "probe", "manager").items()
+    # The IC wrote it and has the file.
+    assert f"{probe.id}/findings" not in documents(service, "probe")
+    # Its type names no reader but the team: the top team's Manager has none
+    # of it, and the top team's own is for the teams below only.
+    assert documents(service, "root", "manager") == {}

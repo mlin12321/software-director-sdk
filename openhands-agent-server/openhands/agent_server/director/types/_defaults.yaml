@@ -3,20 +3,29 @@
 # mappings are merged key by key, a list or a plain value takes the place
 # of what is here. An org's own `types/_defaults.yaml` goes over this one.
 documents:
-    # The documents the director keeps for every team. A type says what
-    # each holds; where it is kept and who reads it are the director's.
+    # The documents the director keeps in team memory for every team. Each
+    # is written with a tool of the director's and read by whom it says
+    # here; both are what the director does, so a type changes only what a
+    # document holds.
     spec:
+        written_with: write_spec
+        readers: [team]
         holds: How your team works inside its folder.
     contracts:
+        written_with: edit_contracts
+        readers: [team, below]
         holds: >-
             What teams promise each other: types, endpoints, file formats.
     report:
+        written_with: report
+        readers: [team]
         holds: A decision and why, a setback, what failed.
-    # A type may add documents of its own, each a file in the team's folder
-    # that the teams it names read: the team above and the teams beside once
-    # the work is accepted, the teams below as soon as it is committed.
+    # A type may add documents of its own. Each is a file in the team's
+    # folder that the member working there writes and commits. Its readers
+    # are the team, the teams below, or both; a document goes to no team
+    # above or beside.
     #
-    # findings:
-    #     path: findings.md
-    #     readers: [above, beside]  # above, below, beside
-    #     holds: One claim to a line, with the command that reproduces it.
+    # baseline:
+    #     path: baseline.md
+    #     readers: [team, below]
+    #     holds: What every sub-team compares against.
