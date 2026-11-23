@@ -28,7 +28,6 @@ from openhands.agent_server.director.org_store import (
     session_team_id,
 )
 from openhands.agent_server.director.prompts import (
-    ORG_PROTOCOL,
     handed_up,
     session_brief,
 )
@@ -52,7 +51,6 @@ from openhands.agent_server.director.service.state import (
 )
 from openhands.agent_server.director.split import shape_of
 from openhands.sdk.conversation.request import (
-    AgentLaunchAdditions,
     ConversationWorktreeOptions,
     StartConversationRequest,
 )
@@ -271,12 +269,6 @@ class Sessions(Splits):
         ic_id = conversation.conversation_id or uuid4()
         writer = self.team(top).writer
         store.update_place(top.id, agents=_new_agents(ic_id, writer))
-        additions = conversation.agent_launch_additions or AgentLaunchAdditions()
-        suffix = "\n\n".join(
-            part
-            for part in (additions.system_message_suffix_append, ORG_PROTOCOL)
-            if part
-        )
         apart = top.isolation == "worktree"
         tools = tools_of(top, writer, kind=self.type_of(top))
         tool_params = await asyncio.to_thread(self._confine, top.id, writer)
@@ -287,9 +279,6 @@ class Sessions(Splits):
                     "initial_message": None,
                     # Named like every other agent of the org.
                     "autotitle": False,
-                    "agent_launch_additions": additions.model_copy(
-                        update={"system_message_suffix_append": suffix}
-                    ),
                     **(
                         {
                             "worktree": True,

@@ -28,6 +28,7 @@ from openhands.agent_server.director.models import (
     TeamChoice,
 )
 from openhands.agent_server.director.org_store import is_division_lead, utc_now
+from openhands.agent_server.director.prompts import role_text
 from openhands.agent_server.director.service import (
     DirectorService,
     agent_conversation,
@@ -123,8 +124,13 @@ def node_context(service: DirectorService, caller: Caller) -> str:
     """Who the agent is and everything of the org that concerns its team."""
     context = service.context_of(caller.node, caller.role, in_full=True)
     kind = service.type_of(caller.node).text_for(caller.role)
+    # The briefing said these once; they are given again only when asked for.
+    context["how_the_org_works"] = (
+        role_text(works=True, hand_over=True)
+        if caller.hand_over
+        else service.role_text(caller.node, caller.role)
+    )
     if kind:
-        # The briefing said it once; it is given again only when asked for.
         context["what_your_teams_type_says"] = kind
     return json.dumps(context, indent=2)
 

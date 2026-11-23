@@ -108,13 +108,15 @@ async def test_starting_an_org_runs_a_root_team_briefed_with_the_task(
         manager,
     )
     assert manager_start.isolation == "shared"
-    assert manager_start.suffixes == [MANAGER_ROLE]
+    # Its part in the org is in its briefing, not in its system prompt.
+    assert MANAGER_ROLE.strip() in manager_start.task
+    assert ORG_PROTOCOL.strip() in manager_start.task
     assert "Manager" in manager_start.task
     assert "Build the checkout flow\nwith tests" in manager_start.task
     assert "Look in on your team." in launcher.messages_to(manager)[-1]
 
 
-async def test_the_org_protocol_is_added_to_what_the_caller_appends(
+async def test_what_the_caller_appends_to_the_system_prompt_is_left_as_it_is(
     service: DirectorService, launcher: FakeLauncher, repo: Path
 ):
     await service.create_org(
@@ -128,7 +130,12 @@ async def test_the_org_protocol_is_added_to_what_the_caller_appends(
 
     assert launcher.root is not None and launcher.root.agent_launch_additions
     suffix = launcher.root.agent_launch_additions.system_message_suffix_append
-    assert suffix == f"Prefer small commits.\n\n{ORG_PROTOCOL}"
+    # The org adds nothing to an agent's system prompt: how the org works
+    # is said in the briefing.
+    assert suffix == "Prefer small commits."
+    await service.settled()
+    briefing = launcher.messages_to(str(launcher.root.conversation_id))[0]
+    assert ORG_PROTOCOL.strip() in briefing
 
 
 def test_every_director_tool_is_offered_to_the_role_that_may_use_it():

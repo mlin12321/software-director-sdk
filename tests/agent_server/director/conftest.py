@@ -253,7 +253,6 @@ class DerivedStart:
     title: str
     task: str
     isolation: IsolationMode
-    suffixes: list[str]
     tool_params: ToolParams | None = None
     adapt_agent: AgentAdapter | None = None
     # The agent profile it was started from, when it was not derived.
@@ -356,7 +355,6 @@ class FakeLauncher:
         title: str,
         task: str,
         isolation: IsolationMode,
-        suffixes: Sequence[str] = (),
         tool_params: ToolParams | None = None,
         adapt_agent: AgentAdapter | None = None,
         profile: str | None = None,
@@ -378,7 +376,6 @@ class FakeLauncher:
                 title,
                 task,
                 isolation,
-                list(suffixes),
                 tool_params,
                 adapt_agent,
                 profile,
@@ -409,7 +406,6 @@ class FakeLauncher:
         title: str,
         task: str,
         isolation: IsolationMode,
-        suffixes: Sequence[str] = (),
         tool_params: ToolParams | None = None,
         adapt_agent: AgentAdapter | None = None,
         checkout: str | None = None,
@@ -423,7 +419,6 @@ class FakeLauncher:
             title=title,
             task=task,
             isolation=isolation,
-            suffixes=suffixes,
             tool_params=tool_params,
             adapt_agent=adapt_agent,
             profile=profile,

@@ -559,6 +559,27 @@ def _of_the_team(
     return lines
 
 
+def role_text(*, works: bool, lead: bool = False, hand_over: bool = False) -> str:
+    """How the org works and what an agent's part in it is: what every
+    agent of an org is told in its first message, and again when it reads
+    its team's context. It is no part of the agent's system prompt, so an
+    agent carries nothing of the org but what its conversation was told.
+
+    Args:
+        works: Whether it is the member that works in its team's folder.
+        lead: Whether its team only reviews the work of a session.
+        hand_over: Whether it is a hand-over conversation.
+    """
+    texts = [ORG_PROTOCOL]
+    if hand_over:
+        texts.append(HAND_OVER_ROLE)
+    elif lead:
+        texts.append(DIVISION_LEAD_IC_ROLE if works else DIVISION_LEAD_MANAGER_ROLE)
+    elif not works:
+        texts.append(MANAGER_ROLE)
+    return "\n\n".join(text.strip() for text in texts)
+
+
 def hand_over_brief(
     place: SessionTeam,
     job: str,
@@ -566,11 +587,14 @@ def hand_over_brief(
     contracts: list[BoundaryContracts],
     reports: list[Report],
     context: str = "",
+    *,
+    role: str = "",
 ) -> str:
     """The first message of a hand-over conversation: a side conversation
     of a team's IC that knows nothing but what this gives it.
 
     Args:
+        role: How the org works and what this conversation is for.
         job: What changed, what the removed teams left and what to do.
         context: The rest of the team's context, as the agent is to read it.
     """
@@ -583,6 +607,7 @@ def hand_over_brief(
         "sees nothing of this one, and you see nothing of it: what follows "
         "is everything you are given.",
         f"Folder of your team: {place.boundary.path or 'the repository'}",
+        *(["", role] if role else []),
         "",
         job,
         "",
@@ -606,10 +631,12 @@ def brief(
     kind: str = "",
     *,
     works: bool | None = None,
+    role_said: str = "",
 ) -> str:
     """The first message of an agent: who it is and what it works to.
 
     Args:
+        role_said: How the org works and what its part in it is.
         works: Whether it is the member that works in the team's folder;
             None for an IC.
         context: The rest of the team's context, as the agent is to read it.
@@ -627,6 +654,8 @@ def brief(
     ]
     if place.boundary.readonly:
         lines.append(f"Read-only: {', '.join(place.boundary.readonly)}")
+    if role_said:
+        lines += ["", role_said]
     if kind:
         lines += ["", kind]
     lines += ["", "Task of the team:", task]

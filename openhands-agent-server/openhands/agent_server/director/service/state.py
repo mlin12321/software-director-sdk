@@ -97,6 +97,7 @@ from openhands.agent_server.director.org_store import (
     is_division_lead,
     session_team_id,
 )
+from openhands.agent_server.director.prompts import role_text
 from openhands.agent_server.director.run_state import (
     MERGING,
     PROGRESS,
@@ -716,6 +717,13 @@ class ServiceState:
         """The member of a team that the teams below turn to."""
         place = self.store.place(place_id)
         return self.team(place).reviewer if place else "ic"
+
+    def role_text(self, place: SessionTeam, member: AgentRole) -> str:
+        """How the org works and what the member's part in it is, as its
+        briefing says it."""
+        return role_text(
+            works=member == self.team(place).writer, lead=is_division_lead(place)
+        )
 
     def writer_conversation(self, place: SessionTeam) -> str | None:
         """The conversation of the member that works in a team's folder."""

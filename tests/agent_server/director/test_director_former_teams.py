@@ -14,7 +14,11 @@ from openhands.agent_server.director import compaction
 from openhands.agent_server.director.launch import StartedAgent
 from openhands.agent_server.director.models import OldSpec, SplitChild
 from openhands.agent_server.director.org_store import team_id_of
-from openhands.agent_server.director.prompts import HAND_OVER_ROLE, left_behind
+from openhands.agent_server.director.prompts import (
+    HAND_OVER_ROLE,
+    ORG_PROTOCOL,
+    left_behind,
+)
 from openhands.agent_server.director.run_state import TASK
 from openhands.agent_server.director.service import (
     DirectorService,
@@ -518,7 +522,8 @@ async def test_a_hand_over_is_a_side_conversation_of_the_ic_with_its_own_briefin
     assert str(start.conversation_id) == aside(service)
     assert str(start.parent_id) == ic(service)
     assert start.title.endswith("(IC, hand-over)")
-    assert start.suffixes == [HAND_OVER_ROLE]
+    # What a hand-over is for is part of what it is told, as the org's ways are.
+    assert HAND_OVER_ROLE.strip() in start.task and ORG_PROTOCOL.strip() in start.task
     assert node(service, API).agents == []
     # It is told who it is, what changed, what was left and what its team
     # works to; none of it depends on what the IC's own conversation holds.
@@ -893,6 +898,6 @@ async def test_a_split_finished_again_after_a_restart_hands_over_once(
     await second.resume()
     await second.settled()
 
-    asides = [s for s in launcher.derived if s.suffixes == [HAND_OVER_ROLE]]
+    asides = [s for s in launcher.derived if HAND_OVER_ROLE.strip() in s.task]
     assert len(asides) == 1
     await second.aclose()
