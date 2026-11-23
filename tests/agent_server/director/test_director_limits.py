@@ -4,6 +4,8 @@ import asyncio
 import json
 from pathlib import Path
 
+import pytest
+
 from openhands.agent_server.director.models import (
     DirectorSettingsUpdate,
 )
@@ -19,6 +21,7 @@ from openhands.agent_server.director.tools.definition import (
     SubmitReviewAction,
 )
 from openhands.sdk.conversation.state import ConversationExecutionStatus
+from openhands.sdk.errors import Unavailable
 from tests.agent_server.director.conftest import (
     APPROVE,
     FakeLauncher,
@@ -129,6 +132,20 @@ async def test_sub_teams_approved_after_the_limits_were_lowered_go_back_to_the_i
     assert root.child_ids == [] and root.pending_split is not None
     assert root.pending_split.status == "proposed"
     assert launcher.messages_to(manager(service)) == told_the_manager
+
+
+async def test_what_a_newer_director_keeps_between_starts_is_left_as_it_is(
+    repo: Path, launcher: FakeLauncher
+):
+    remembered = repo.parent / "state" / "director.json"
+    remembered.parent.mkdir(parents=True)
+    newer = json.dumps({"schema_version": 99, "tool_key": "k"})
+    remembered.write_text(newer)
+
+    with pytest.raises(Unavailable, match="version 99"):
+        await started(repo, launcher)
+
+    assert remembered.read_text() == newer
 
 
 async def test_settings_are_kept_for_the_next_start_beside_the_repository(

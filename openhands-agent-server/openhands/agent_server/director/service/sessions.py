@@ -8,6 +8,7 @@ from uuid import UUID, uuid4
 
 from openhands.agent_server.director.git import GitError, git, head_of, ref_stamp
 from openhands.agent_server.director.headline import provisional_summary
+from openhands.agent_server.director.intents import Brief, CloseSession
 from openhands.agent_server.director.launch import TeamLauncher
 from openhands.agent_server.director.models import (
     ChosenBy,
@@ -319,7 +320,7 @@ class Sessions(Splits):
         self._enqueue(
             lambda: self._summarize(top.id, text, first=True, rename=rename), top.id
         )
-        self._begin("brief", top.id, role=writer, task=text + brief)
+        self._begin(top.id, Brief(role=writer, task=text + brief))
         return str(ic_id)
 
     def _hand_on(
@@ -485,7 +486,7 @@ class Sessions(Splits):
         teams = self.org.session(session_id)
         if not teams:
             raise NotFound(f"No session {session_id!r} is open")
-        self._begin("close_session", teams[0].id)
+        self._begin(teams[0].id, CloseSession())
 
     async def _do_close_session(self, intent: Intent) -> None:
         store = self.org
@@ -519,10 +520,10 @@ class Sessions(Splits):
                     for event in self.own_events(session.id, session.above_id)
                 ),
             )
-        plan = intent.payload
-        conversations = [UUID(agent) for agent in plan["conversations"]]
+        plan = intent.of(CloseSession)
+        conversations = [UUID(agent) for agent in plan.conversations]
         if "stopped" not in intent.steps:
-            self._wait_until_quiet(intent, plan["teams"])
+            self._wait_until_quiet(intent, plan.teams)
             for conversation_id in conversations:
                 await launcher.stop(conversation_id)
             intent = run.step_done(intent, "stopped")
@@ -530,7 +531,7 @@ class Sessions(Splits):
             # Only teams that started have a checkout with work of theirs.
             started = [
                 team
-                for team in map(store.place, plan["teams"])
+                for team in map(store.place, plan.teams)
                 # A Division Lead place is in the human's own checkout.
                 if team is not None and team.agents and not is_division_lead(team)
             ]
@@ -542,9 +543,9 @@ class Sessions(Splits):
             # what is in the checkout above is not its work.
             if started and top and above and apart(top, above):
                 kept = await asyncio.to_thread(
-                    self._keep_unmerged, top, above, plan["stamp"]
+                    self._keep_unmerged, top, above, plan.stamp
                 )
-                await asyncio.to_thread(self._discard_work, started, plan["stamp"])
+                await asyncio.to_thread(self._discard_work, started, plan.stamp)
             intent = run.step_done(intent, "kept", kept=kept)
         if "deleted" not in intent.steps:
             for conversation_id in conversations:
@@ -554,7 +555,7 @@ class Sessions(Splits):
             intent = run.step_done(intent, "deleted")
         if "removed" not in intent.steps:
             top = store.place(place_id)
-            for team in map(store.place, plan["teams"]):
+            for team in map(store.place, plan.teams):
                 if team is not None:
                     for kind in (TASK, PROGRESS, CHECKS):
                         run.unmark(kind, team.id)
@@ -565,10 +566,10 @@ class Sessions(Splits):
                 )
                 gone = await asyncio.to_thread(self._leave, top)
                 # Once: a step cut off after it would record it again.
-                if plan["known"] and "told" not in intent.steps:
+                if plan.known and "told" not in intent.steps:
                     await asyncio.to_thread(
                         self._land_event,
-                        plan["parent"],
+                        plan.parent,
                         self._event(
                             "session_closed",
                             top,
@@ -576,7 +577,7 @@ class Sessions(Splits):
                                 said
                                 for said in (
                                     "with work that was not merged"
-                                    if intent.payload["kept"]
+                                    if intent.of(CloseSession).kept
                                     else "",
                                     "what it wrote and never had accepted went "
                                     f"with it ({gone})"
@@ -588,7 +589,7 @@ class Sessions(Splits):
                         ),
                     )
                     intent = run.step_done(intent, "told")
-            store.close_session(plan["session"])
+            store.close_session(plan.session)
             await asyncio.to_thread(self._org_turn)
             self._tell_turns()
             await self._save()

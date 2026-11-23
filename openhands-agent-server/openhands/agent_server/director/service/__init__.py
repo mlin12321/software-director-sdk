@@ -10,6 +10,7 @@ from uuid import UUID
 from openhands.agent_server.director.boundary import nearest_team, worded
 from openhands.agent_server.director.git import is_git_repository
 from openhands.agent_server.director.headline import provisional_summary
+from openhands.agent_server.director.intents import LandOrg
 from openhands.agent_server.director.launch import TeamLauncher
 from openhands.agent_server.director.models import (
     Boundary,
@@ -495,7 +496,7 @@ class DirectorService(Sync):
             return store.place(place_id) or place
         if escalation_id == ORG_WAITS:
             # The human goes on without the Manager.
-            self._begin("land_org", place_id, org_holds=True)
+            self._begin(place_id, LandOrg(org_holds=True))
             return store.place(place_id) or place
         if escalation_id == LIMIT_WAITS:
             self.go_on_past_limit(place_id)

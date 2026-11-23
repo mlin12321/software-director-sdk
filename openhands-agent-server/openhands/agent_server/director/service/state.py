@@ -54,6 +54,7 @@ from openhands.agent_server.director.git_store import (
     taking_in,
 )
 from openhands.agent_server.director.headline import provisional_summary
+from openhands.agent_server.director.intents import Accept, IntentPayload, LandOrg
 from openhands.agent_server.director.launch import TeamLauncher
 from openhands.agent_server.director.merge_checkout import MergeCheckout, discard
 from openhands.agent_server.director.models import (
@@ -227,6 +228,9 @@ _RUN_STATE = "director/state.db"
 _MERGING_DIR = "director-merging"
 # After a conversation id: the script an ACP agent's process is started by.
 _REMEMBERED_FILE = "director.json"
+# The shape of that file. A file with no version is of the first.
+REMEMBERED_VERSION = 1
+_REMEMBERED_VERSION_KEY = "schema_version"
 # In it: the settings changed through the settings route, which hold over
 # the org's ``director.yaml`` field by field.
 _CHANGED_SETTINGS = "settings_changed"
@@ -1261,7 +1265,15 @@ class ServiceState:
                 kept = json.loads(self._remembered.read_text())
         except (OSError, ValueError):
             return {}
-        return kept if isinstance(kept, dict) else {}
+        if not isinstance(kept, dict):
+            return {}
+        version = kept.get(_REMEMBERED_VERSION_KEY, REMEMBERED_VERSION)
+        if version != REMEMBERED_VERSION:
+            raise Unavailable(
+                f"{self._remembered} was written by a director of version "
+                f"{version}; this one reads version {REMEMBERED_VERSION}"
+            )
+        return kept
 
     def _remembered_repo(self) -> Path | None:
         repo_path = self._read_remembered().get("repo_path")
@@ -1283,7 +1295,17 @@ class ServiceState:
                     if self._remembered.exists()
                     else {}
                 )
-                kept = json.dumps({**before, **changes}) + "\n"
+                written = before.get(_REMEMBERED_VERSION_KEY, REMEMBERED_VERSION)
+                if written != REMEMBERED_VERSION:
+                    # Left for the director that wrote it.
+                    logger.error(
+                        "%s is of version %s and is not written over",
+                        self._remembered,
+                        written,
+                    )
+                    return
+                versioned = {_REMEMBERED_VERSION_KEY: REMEMBERED_VERSION}
+                kept = json.dumps({**versioned, **before, **changes}) + "\n"
                 self._remembered.touch(mode=0o600)
                 self._remembered.write_text(kept)
             except (OSError, ValueError, TypeError):
@@ -1348,7 +1370,7 @@ class ServiceState:
         self._put(carried_out, BASE_LANE)
         await done
 
-    def _begin(self, kind: str, place_id: str, **payload: object) -> None:
+    def _begin(self, place_id: str, payload: IntentPayload) -> None:
         """Record something of several steps the director does for a team,
         then do it. Safe from any thread.
 
@@ -1357,7 +1379,7 @@ class ServiceState:
         """
         if self._loop is None:
             raise Unavailable("The director is not running agents on this server")
-        intent = self._runs().begin(kind, place_id, payload)
+        intent = self._runs().begin(place_id, payload)
         self._save_soon()
         self._enqueue(lambda: self._carry_out(intent.id), _lane_for(intent))
 
@@ -1602,7 +1624,8 @@ _SAVED_BEFORE_FORGOTTEN = frozenset(
 
 
 def _lane_for(intent: Intent) -> str:
-    if intent.kind == "land_org" or intent.payload.get("base"):
+    payload = intent.payload
+    if isinstance(payload, LandOrg) or (isinstance(payload, Accept) and payload.base):
         return BASE_LANE
     if intent.kind in _REVIEW_STEPS:
         return f"review:{intent.node_id}"

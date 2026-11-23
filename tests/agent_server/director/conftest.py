@@ -1287,3 +1287,32 @@ async def service(repo: Path, launcher: FakeLauncher) -> AsyncIterator[DirectorS
     service = await started(repo, launcher)
     yield service
     await service.aclose()
+
+
+# A type whose members have names of their own, and whose reviewer is not
+# the one that writes.
+BENCH = [
+    "read_team_context",
+    "raise_escalation",
+    "report",
+    "write_spec",
+    "submit_review",
+    "propose_teams",
+    "msg_team",
+]
+LAB = f"""\
+description: A lab.
+agents:
+  bench:
+    writes: true
+    text: Runs the experiments.
+    tools: [{", ".join(BENCH)}]
+    lead_tools: [read_team_context]
+  referee:
+    text: Checks what the benches below found.
+    tools: [read_team_context, review_team]
+    lead_tools: [read_team_context, review_team]
+  chair:
+    tools: [read_team_context, approve_teams, decline_teams]
+    lead_tools: [read_team_context, settle_teams]
+"""

@@ -18,6 +18,7 @@ from openhands.agent_server.director.git import (
     head_of,
     uncommitted,
 )
+from openhands.agent_server.director.intents import Brief, LaunchMember, StartTeam
 from openhands.agent_server.director.launch import StartedAgent
 from openhands.agent_server.director.models import (
     AgentRef,
@@ -234,7 +235,7 @@ class Teams(Delivery):
                 kept = [agent for agent in place.agents if agent not in lost]
                 place = store.update_place(place_id, agents=[*kept, added])
                 task = self._runs().marked(TASK).get(place_id) or place.spec_summary
-                self._begin("launch_member", place_id, task=task, role=member)
+                self._begin(place_id, LaunchMember(task=task, role=member))
         conversation_id = self.team(place).conversation(member)
         self.notify(conversation_id, text)
         return conversation_id
@@ -364,15 +365,12 @@ class Teams(Delivery):
                 store.update_place(place_id, agents=[ic, *place.agents])
                 purpose = self._purpose(place)
                 self._begin(
-                    "start_team",
                     place_id,
-                    task=f"{purpose}{_STARTED_WITH}{text}",
-                    purpose=purpose,
-                    parent=self._derived_from(place),
-                    **(
-                        {"checkout": place.worktree_path}
-                        if self._in_place(place)
-                        else {}
+                    StartTeam(
+                        task=f"{purpose}{_STARTED_WITH}{text}",
+                        purpose=purpose,
+                        parent=self._derived_from(place),
+                        checkout=place.worktree_path if self._in_place(place) else None,
                     ),
                 )
                 if human and ic.conversation_id:
@@ -937,23 +935,22 @@ class Teams(Delivery):
             )
 
     async def _do_brief(self, intent: Intent) -> None:
+        brief = intent.of(Brief)
         place = self.org.place(intent.node_id)
-        if place and intent.payload["role"] == self.team(place).writer:
-            self._runs().mark(TASK, intent.node_id, intent.payload["task"])
-        await self._brief(
-            intent.node_id, intent.payload["role"], intent.payload["task"]
-        )
+        if place and brief.role == self.team(place).writer:
+            self._runs().mark(TASK, intent.node_id, brief.task)
+        await self._brief(intent.node_id, brief.role, brief.task)
 
     async def _do_launch_member(self, intent: Intent) -> None:
-        await self._launch_member(
-            intent.node_id, intent.payload["task"], intent.payload["role"]
-        )
+        launch = intent.of(LaunchMember)
+        await self._launch_member(intent.node_id, launch.task, launch.role)
 
     async def _do_start_team(self, intent: Intent) -> None:
-        place_id, task = intent.node_id, intent.payload["task"]
-        above = self.org.place(intent.payload["parent"] or "")
+        start = intent.of(StartTeam)
+        place_id, task = intent.node_id, start.task
+        above = self.org.place(start.parent or "")
         parent_ic = await self._started_ic(above) or await self._template()
-        checkout = intent.payload.get("checkout")
+        checkout = start.checkout
         self._runs().mark(TASK, place_id, task)
         self.progressed(place_id, by_above=True)
         started = self.org.place(place_id)
@@ -988,7 +985,7 @@ class Teams(Delivery):
             await asyncio.to_thread(self._pass_down, above, place_id)
         if opens and not is_division_lead(started):
             self._checkout_for_session(place_id)
-        purpose = intent.payload.get("purpose", task)
+        purpose = start.purpose or task
         self._enqueue(lambda: self._summarize(place_id, purpose, first=True), place_id)
 
     def _checkout_for_session(self, place_id: str) -> None:

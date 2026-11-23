@@ -7,8 +7,10 @@ from typing import cast
 from uuid import UUID
 
 import pytest
+from pydantic import ValidationError
 
 from openhands.agent_server.director.git_store import CONTRACTS_FILE
+from openhands.agent_server.director.intents import Accept, Prune, Split
 from openhands.agent_server.director.models import (
     DirectorSettingsUpdate,
     OpenSessionRequest,
@@ -743,11 +745,11 @@ def test_a_worktree_that_is_gone_is_made_again_from_its_branch(repo: Path):
 def test_run_state_is_kept_as_it_was_written_and_in_order(tmp_path: Path):
     path = tmp_path / "git" / "director" / "state.db"
     run = RunState(path)
-    split_ = run.begin("split", "root", {"why": "too large"})
-    run.begin("accept", "api", {})
-    done = run.begin("prune", "web", {})
+    split_ = run.begin("root", Split())
+    run.begin("api", Accept(needed_above="The API waits on it."))
+    done = run.begin("web", Prune(reason="Not needed."))
     run.finish(done.id)
-    run.step_done(split_, "planned", teams=["a", "b"])
+    run.step_done(split_, "planned", replaces=["a", "b"], stamp="s1")
     sent = run.hold("c1", "root", "one")
     run.hold("c2", "api", "two")
     run.delivered(sent)
@@ -759,12 +761,9 @@ def test_run_state_is_kept_as_it_was_written_and_in_order(tmp_path: Path):
     kept = RunState(path)
 
     first, second = kept.open_intents()
-    assert (first.kind, first.steps, first.payload) == (
-        "split",
-        frozenset({"planned"}),
-        {"why": "too large", "teams": ["a", "b"]},
-    )
-    assert second.kind == "accept"
+    assert (first.kind, first.steps) == ("split", frozenset({"planned"}))
+    assert first.payload == Split(replaces=["a", "b"], stamp="s1")
+    assert second.payload == Accept(needed_above="The API waits on it.")
     assert [(held.conversation_id, held.text) for held in kept.held()] == [
         ("c2", "two")
     ]
@@ -923,3 +922,26 @@ async def test_two_resumes_at_once_run_an_agent_again_once(
 
     assert launcher.resumed == [(UUID(root_ic), None)]
     await service.aclose()
+
+
+def test_a_step_cannot_record_what_its_kind_does_not_have(tmp_path: Path):
+    run = RunState(tmp_path / "state.db")
+    prune = run.begin("web", Prune(reason="Not needed."))
+
+    with pytest.raises(ValidationError):
+        run.step_done(prune, "planned", tital="Web")
+
+    [kept] = run.open_intents()
+    assert kept.steps == frozenset() and kept.payload == Prune(reason="Not needed.")
+
+
+def test_run_state_that_holds_something_it_cannot_read_is_refused(tmp_path: Path):
+    path = tmp_path / "state.db"
+    run = RunState(path)
+    run.begin("web", Prune(reason="Not needed."))
+    run.close()
+    with sqlite3.connect(path) as db:
+        db.execute("UPDATE intents SET kind = 'unheard_of'")
+
+    with pytest.raises(RunStateError, match="unheard_of"):
+        RunState(path).open_intents()
