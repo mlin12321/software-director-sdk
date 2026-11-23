@@ -970,6 +970,9 @@ class ServiceState:
             # write in that of a team that has not started.
             hidden=tuple(child.boundary.path for child in children),
             merges=tuple(merges),
+            merge_root=str(self._merges_for(place.id))
+            if role == reviewer and hand_over is None
+            else "",
         )
 
     def with_tools_again(self, conversation_id: UUID, agent: AgentBase) -> AgentBase:
@@ -992,6 +995,11 @@ class ServiceState:
 
     def _merging_root(self) -> Path:
         return self._confinement().shells.parent / _MERGING_DIR
+
+    def _merges_for(self, place_id: str) -> Path:
+        """Where the merges the reviewer of a team finishes are laid out:
+        one folder for each reviewer, which its shell alone may write."""
+        return self._merging_root() / place_id.replace("@", "-")
 
     def merge_checkout(self, place_id: str) -> MergeCheckout | None:
         """The merge of a team's work that its reviewer finishes."""

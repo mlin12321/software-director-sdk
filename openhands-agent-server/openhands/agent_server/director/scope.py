@@ -179,6 +179,8 @@ class Scope:
         closed: Folders inside its own that are closed to it.
         hidden: Folders inside its own that its git leaves alone.
         merges: The merges being finished in the repository.
+        merge_root: Where merges are laid out for it to finish; '' when it
+            finishes none.
     """
 
     checkout: str
@@ -192,6 +194,7 @@ class Scope:
     closed: tuple[Closed, ...] = ()
     hidden: tuple[str, ...] = ()
     merges: tuple[MergeArea, ...] = ()
+    merge_root: str = ""
 
     def refuse(self, path: str, named: str | None = None) -> Denied | None:
         """Why the agent may not write ``path`` of its checkout, if it may
