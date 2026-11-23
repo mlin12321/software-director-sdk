@@ -467,7 +467,11 @@ class Records(ServiceState):
             if set(pair["team_ids"]) <= {team_key(r) for r in proposal.replaces}
         ]
         return proposal_facts(
-            sizes, together, before + declined + needed, proposal.reason
+            sizes,
+            together,
+            before + declined + needed,
+            proposal.reason,
+            names=self.team(place).names,
         )
 
     def _work_accepted(self, team: SessionTeam) -> None:

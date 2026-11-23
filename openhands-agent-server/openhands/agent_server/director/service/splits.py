@@ -94,6 +94,7 @@ class Splits(Watch):
     ) -> None:
         """Put approved sub-teams aside, tell the IC that proposed them and
         keep it in the record, where its Manager reads it."""
+        names = self.team(place).names
         proposal = place.pending_split
         self.store.update_place(place.id, pending_split=None)
         self.record_event(
@@ -105,8 +106,10 @@ class Splits(Watch):
         )
         self.notify(
             self.writer_conversation(place),
-            f"The sub-teams your Manager approved could not be set up: {reason} "
-            f"{left} Tell your Manager with msg_manager, with a new proposal if "
+            f"The sub-teams your {names.overseer} approved could not be set up: "
+            f"{reason} "
+            f"{left} Tell your {names.overseer} with msg_manager, with a new "
+            "proposal if "
             "you have one.",
         )
 
@@ -374,6 +377,7 @@ class Splits(Watch):
             approved_notice(
                 proposal.children,
                 former,
+                names=self.team(place).names,
                 contracts_replaced=replaced,
                 unfinished=unfinished,
             ),
@@ -488,7 +492,14 @@ class Splits(Watch):
         ]
         self.notify(
             parent_ic,
-            pruned_notice(plan["title"], where, plan["reason"], saved, former),
+            pruned_notice(
+                plan["title"],
+                where,
+                plan["reason"],
+                saved,
+                former,
+                names=self.names_at(intent.node_id),
+            ),
         )
         if former and parent_ic is not None:
             self._begin(
@@ -534,10 +545,16 @@ class Splits(Watch):
                 former,
                 specs,
                 contracts_replaced=payload["contracts_replaced"],
+                names=self.names_at(intent.node_id),
             )
         else:
             job = pruned_job(
-                payload["title"], payload["where"], payload["reason"], former, specs
+                payload["title"],
+                payload["where"],
+                payload["reason"],
+                former,
+                specs,
+                names=self.names_at(intent.node_id),
             )
         mode = hand_over_of(place)
         before = mode.conversation_id if mode else None

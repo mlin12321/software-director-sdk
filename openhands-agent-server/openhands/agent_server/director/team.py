@@ -6,7 +6,7 @@ is the org store's, the members are the type's.
 
 from dataclasses import dataclass
 
-from openhands.agent_server.director.agent_types import TeamTemplate
+from openhands.agent_server.director.agent_types import Names, TeamTemplate
 from openhands.agent_server.director.models import AgentRef, SessionTeam
 from openhands.agent_server.director.org_store import OrgStore, is_division_lead
 
@@ -70,9 +70,20 @@ class Team:
             or kind.writer
         )
 
+    @property
+    def names(self) -> Names:
+        """What the members the director turns to are called here."""
+        return self.kind.names
+
     def title(self, member: str) -> str:
         """What ``member`` is called in what the director writes."""
         return self.kind.title_of(member)
+
+    def answers(self, raised_by: str) -> str:
+        """The member here that an escalation of a team below is for: the
+        one of the same name as the member that raised it, and where this
+        team has none, the one the teams below turn to."""
+        return raised_by if raised_by in self.members else self.reviewer
 
     def agent(self, member: str) -> AgentRef | None:
         """The agent that is ``member``, once the team has one."""

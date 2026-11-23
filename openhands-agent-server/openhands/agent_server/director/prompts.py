@@ -1,8 +1,10 @@
 """What the director tells the agents of an org."""
 
+import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from openhands.agent_server.director.agent_types import Names, several
 from openhands.agent_server.director.git_store import team_key
 from openhands.agent_server.director.models import (
     BoundaryContracts,
@@ -179,7 +181,7 @@ run commands that change the repository. Only `read_team_context`,
 DIRECTOR_PREFIX = "[director]"
 
 
-def report_line(report: Report, titles: Mapping[str, str]) -> str:
+def report_line(report: Report, titles: Mapping[str, str], *, names: Names) -> str:
     """One report, with which agent of the team wrote it.
 
     Args:
@@ -187,7 +189,7 @@ def report_line(report: Report, titles: Mapping[str, str]) -> str:
     """
     if report.handed_over:
         return (
-            "Handed over by the IC of the team above, from the teams that "
+            f"Handed over by the {names.writer} of the team above, from the teams that "
             f"were here before yours, {report.at}: {report.text}"
         )
     writer = titles.get(report.role, report.role)
@@ -246,10 +248,10 @@ def left_behind(
     return lines
 
 
-def _approved(children: list[SplitChild]) -> str:
+def _approved(children: list[SplitChild], *, names: Names) -> str:
     teams = ", ".join(f"{child.title} ({child.path})" for child in children)
     return (
-        "Your team was split: your Manager approved your sub-teams and they "
+        f"Your team was split: your {names.overseer} approved your sub-teams and they "
         f"now own their folders: {teams}. None of them has started: a "
         "team starts when you give it its task with msg_team."
     )
@@ -314,11 +316,11 @@ def put_aside_notice(team: SessionTeam, files: list[str], ref: str) -> str:
     )
 
 
-def left_for_team(files: list[str]) -> str:
+def left_for_team(files: list[str], *, names: Names) -> str:
     """What a team is told, with its task, of the changes the IC above left
     uncommitted in its directory."""
     return (
-        "The IC of the team above changed these files in your folder "
+        f"The {names.writer} of the team above changed these files in your folder "
         f"before your team started and did not commit them: {_named(files)}. "
         "They are yours now. Check them, change what is wrong, and commit "
         "them with your work before you submit it."
@@ -373,6 +375,7 @@ def approved_notice(
     *,
     contracts_replaced: bool,
     unfinished: dict[str, list[str]],
+    names: Names,
 ) -> str:
     """What an IC is told once the sub-teams it proposed are set up.
 
@@ -384,7 +387,7 @@ def approved_notice(
         contracts_replaced: Whether the proposal's contracts took the place
             of the ones the team had.
     """
-    lines = [_approved(children), "", _split_effects(children, unfinished)]
+    lines = [_approved(children, names=names), "", _split_effects(children, unfinished)]
     todo = []
     if former:
         gone = ", ".join(
@@ -407,7 +410,7 @@ def approved_notice(
             *todo,
             "",
             "What holds while you have sub-teams:",
-            *WITH_SUB_TEAMS,
+            *(in_words(line, names) for line in WITH_SUB_TEAMS),
         ]
     )
 
@@ -419,6 +422,7 @@ def replaced_job(
     specs: dict[str, str],
     *,
     contracts_replaced: bool,
+    names: Names,
 ) -> str:
     """What a hand-over conversation is to do after teams were replaced.
 
@@ -427,7 +431,7 @@ def replaced_job(
         specs: The spec each replaced team wrote, by its directory.
     """
     lines = [
-        "What changed: your Manager approved the sub-teams you proposed, and "
+        f"What changed: your {names.overseer} approved the sub-teams you proposed, and "
         "they now own their folders. None of them has started; each "
         "starts when your main conversation gives it its task.",
         *(
@@ -451,11 +455,17 @@ def replaced_job(
 
 
 def pruned_job(
-    title: str, where: str, reason: str, former: list[FormerTeam], specs: dict[str, str]
+    title: str,
+    where: str,
+    reason: str,
+    former: list[FormerTeam],
+    specs: dict[str, str],
+    *,
+    names: Names,
 ) -> str:
     """What a hand-over conversation is to do after a team was pruned."""
     lines = [
-        f"What changed: your Manager pruned the team {title!r} ({where}): "
+        f"What changed: your {names.overseer} pruned the team {title!r} ({where}): "
         f"{reason} {where} is your team's again.",
         "",
         "What it left is below. It is yours to use or to pass on.",
@@ -505,7 +515,13 @@ def handed_over_notice(given: list[str], spec: bool) -> str:
 
 
 def pruned_notice(
-    title: str, where: str, reason: str, saved: str | None, former: list[FormerTeam]
+    title: str,
+    where: str,
+    reason: str,
+    saved: str | None,
+    former: list[FormerTeam],
+    *,
+    names: Names,
 ) -> str:
     """What the IC above is told once its Manager's prune is carried out.
 
@@ -514,7 +530,7 @@ def pruned_notice(
             passed on in hand-over mode and is not given here.
     """
     pruned = (
-        f"Your Manager pruned the team {title!r} ({where}): {reason} Its "
+        f"Your {names.overseer} pruned the team {title!r} ({where}): {reason} Its "
         "uncommitted changes were discarded"
         + (f" (kept in git as {saved})" if saved else "")
         + f"; {where} is yours again."
@@ -530,6 +546,8 @@ def _of_the_team(
     reports: list[Report],
     context: str,
     titles: Mapping[str, str],
+    *,
+    names: Names,
 ) -> list[str]:
     """The specs, contracts, reports and context a briefing gives."""
     lines: list[str] = []
@@ -556,31 +574,83 @@ def _of_the_team(
         lines += ["", heading, agreed.contracts]
     if reports:
         lines += ["", "What your team has reported so far:"]
-        lines += [f"- {report_line(report, titles)}" for report in reports]
+        lines += [f"- {report_line(report, titles, names=names)}" for report in reports]
     if context:
         lines += ["", context]
     return lines
 
 
-def role_text(*, works: bool, lead: bool = False, hand_over: bool = False) -> str:
+_ROLE_WORD = re.compile(r"\b(?:(an|An|a|A)( ))?(Division Lead )?(ICs?|Managers?)\b")
+# Where the director's own texts mean the member that reviews.
+_REVIEWS = re.compile(r"\bIC(?= one team up| directly above)")
+
+
+def in_words(text: str, names: Names) -> str:
+    """A text of the director's own, with the members named as a team's
+    type names them. Only for text that holds nothing an agent or a person
+    wrote: their words are not rewritten."""
+
+    def named(found: re.Match[str]) -> str:
+        article, gap, lead, word = found.groups()
+        if word.startswith("IC"):
+            name = names.reviewer if lead else names.writer
+            with_article = names.a_writer
+        else:
+            name, with_article = names.overseer, names.a_overseer
+        if word in ("ICs", "Managers"):
+            name = several(name)
+        elif article and not lead:
+            return ("A" if article[0] == "A" else "a") + with_article[1:]
+        return f"{article or ''}{gap or ''}{lead or ''}{name}"
+
+    return _ROLE_WORD.sub(named, _REVIEWS.sub(names.reviewer, text))
+
+
+def role_text(
+    names: Names,
+    *,
+    works: bool,
+    tools: Sequence[str] = (),
+    title: str = "",
+    lead: bool = False,
+    hand_over: bool = False,
+    own: str = "",
+) -> str:
     """How the org works and what an agent's part in it is: what every
     agent of an org is told in its first message, and again when it reads
     its team's context. It is no part of the agent's system prompt, so an
     agent carries nothing of the org but what its conversation was told.
 
+    Its part is told by what it may do, not by what it is called.
+
     Args:
+        names: What the members of its team are called.
         works: Whether it is the member that works in its team's folder.
+        tools: The director's tools it has where it is.
+        title: What it is called itself.
         lead: Whether its team only reviews the work of a session.
         hand_over: Whether it is a hand-over conversation.
+        own: What its type says of its part, in the type's own words.
     """
     texts = [ORG_PROTOCOL]
     if hand_over:
         texts.append(HAND_OVER_ROLE)
-    elif lead:
-        texts.append(DIVISION_LEAD_IC_ROLE if works else DIVISION_LEAD_MANAGER_ROLE)
-    elif not works:
+    elif lead and "review_team" in tools:
+        texts.append(DIVISION_LEAD_IC_ROLE)
+    elif lead and "settle_teams" in tools:
+        texts.append(DIVISION_LEAD_MANAGER_ROLE)
+    elif not lead and "approve_teams" in tools:
         texts.append(MANAGER_ROLE)
-    return "\n\n".join(text.strip() for text in texts)
+    said = [in_words(text.strip(), names) for text in texts]
+    if not works and not hand_over and len(texts) == 1:
+        said.append(
+            f"You are the {title} of your team. You write no files. What you "
+            "do, you do with these tools of the director: "
+            f"{', '.join(f'`{tool}`' for tool in tools) or 'none'}."
+        )
+    if own.strip():
+        said.append(own.strip())
+    return "\n\n".join(said)
 
 
 def hand_over_brief(
@@ -593,6 +663,7 @@ def hand_over_brief(
     *,
     titles: Mapping[str, str],
     role: str = "",
+    names: Names,
 ) -> str:
     """The first message of a hand-over conversation: a side conversation
     of a team's IC that knows nothing but what this gives it.
@@ -604,7 +675,7 @@ def hand_over_brief(
         context: The rest of the team's context, as the agent is to read it.
     """
     lines = [
-        f"{DIRECTOR_PREFIX} You are the IC of the team {place.title!r} (id "
+        f"{DIRECTOR_PREFIX} You are the {names.writer} of the team {place.title!r} (id "
         f"{place.id}), in hand-over mode.",
         "Your team was changed, and this side conversation was started for "
         "one job: to pass on what the removed teams left. It has a context of "
@@ -617,7 +688,7 @@ def hand_over_brief(
         job,
         "",
         "What your team works to, so that you can judge what to pass on:",
-        *_of_the_team(specs, contracts, reports, context, titles),
+        *_of_the_team(specs, contracts, reports, context, titles, names=names),
         "",
         "Do the hand-over now. You may read files; change none. When it is "
         "done, end with a line or two on what you gave to whom.",
@@ -638,6 +709,7 @@ def brief(
     works: bool,
     titles: Mapping[str, str],
     role_said: str = "",
+    names: Names,
 ) -> str:
     """The first message of an agent: who it is and what it works to.
 
@@ -664,11 +736,14 @@ def brief(
     if kind:
         lines += ["", kind]
     lines += ["", "Task of the team:", task]
-    lines += _of_the_team(specs, contracts, reports, context, titles)
+    lines += _of_the_team(specs, contracts, reports, context, titles, names=names)
     lines.append("")
-    lines.append(
-        "Start on the task now." if works else "Wait until your IC writes to you."
-    )
+    if works:
+        lines.append("Start on the task now.")
+    elif titles.get(role) == names.overseer:
+        lines.append(f"Wait until your {names.writer} writes to you.")
+    else:
+        lines.append("Wait until something is sent to you.")
     return "\n".join(lines)
 
 
@@ -687,6 +762,8 @@ def session_work(
     title: str,
     request: str,
     contracts: Sequence[tuple[str, str]] = (),
+    *,
+    names: Names,
 ) -> str:
     """What comes before the review request for the work of the session
     titled ``title``, which was opened for ``request``.
@@ -698,7 +775,7 @@ def session_work(
     written = "".join(
         f"Contracts it wrote for {directory or 'the repository'}, which its "
         "code is written to. They are not the org's yet: the Division Lead "
-        "Manager settles them if other accepted work changed them too. "
+        f"{names.overseer} settles them if other accepted work changed them too. "
         f"Judge the code by these:\n{text or '(none)'}\n\n"
         for directory, text in contracts
     )
@@ -715,7 +792,9 @@ def session_work(
     )
 
 
-def accept_in_order(team: SessionTeam, first: SessionTeam, session: str = "") -> str:
+def accept_in_order(
+    team: SessionTeam, first: SessionTeam, session: str = "", *, names: Names
+) -> str:
     """Why work is not accepted while work submitted before it waits.
 
     Args:
@@ -725,7 +804,8 @@ def accept_in_order(team: SessionTeam, first: SessionTeam, session: str = "") ->
     if session:
         return (
             f"The work of {first.title!r} in the session {session!r} was "
-            f"submitted before that of {team.title!r}, and its Division Lead IC has "
+            f"submitted before that of {team.title!r}, and its Division Lead "
+            f"{names.reviewer} has "
             "not decided on it yet. Work is accepted in the order it was "
             "submitted, so that each is checked against what was merged "
             "before it. There is nothing for you to do until then: you are "
@@ -749,6 +829,8 @@ def reconcile_request(
     landed: list[str],
     specs: list[tuple[str, str, str]],
     inherited: Sequence[tuple[str, str, str, str]] = (),
+    *,
+    names: Names,
 ) -> str:
     """What a reviewing IC is told when work it accepts meets other work.
 
@@ -811,7 +893,8 @@ def reconcile_request(
         "",
         "Decide what holds. If its work must change, reject it with what "
         "must change. If what is already in your checkout must change, "
-        "change it or give that team the task; a Division Lead IC, who does "
+        f"change it or give that team the task; a Division Lead {names.reviewer}, "
+        "who does "
         "neither, records it with `report`. Then accept again with "
         "`review_team` and say in `reconciled` what you decided; without "
         "that it is not merged."
@@ -847,7 +930,12 @@ def merge_prepared(team: SessionTeam, where: str, files: list[str]) -> str:
 
 
 def merge_request(
-    team: SessionTeam, session: str, waiting: list[MergeItem], accepted: bool
+    team: SessionTeam,
+    session: str,
+    waiting: list[MergeItem],
+    accepted: bool,
+    *,
+    names: Names,
 ) -> str:
     """What the Manager of a session's Division Lead place is told
     when teams or contracts of the session wait for it.
@@ -863,7 +951,7 @@ def merge_request(
         + (
             "is accepted and its code is merged."
             if accepted
-            else "is submitted and its IC reviews the code."
+            else f"is submitted and its {names.reviewer} reviews the code."
         )
         + " This of its teams and contracts the org made something else of "
         "while the session worked:",
@@ -953,6 +1041,8 @@ def teams_settled(
     agreed: list[str],
     held: list[str],
     others: Sequence[tuple[str, str]] = (),
+    *,
+    names: Names,
 ) -> str:
     """What a session's IC is told when what waited of its teams is
     settled.
@@ -972,7 +1062,7 @@ def teams_settled(
         for directory, text in others
     )
     return (
-        f"The Manager of {above!r} settled what the org had made something "
+        f"The {names.overseer} of {above!r} settled what the org had made something "
         "else of than your session. "
         + (f"The org has your teams now: {', '.join(taken)}. " if taken else "")
         + (
@@ -991,12 +1081,13 @@ def teams_settled(
     ).strip() + follow_up
 
 
-def handed_up(sent: SessionTeam, text: str, why: str) -> str:
+def handed_up(sent: SessionTeam, text: str, why: str, *, names: Names) -> str:
     """What the IC of the team above is started with when the team a
     request was sent to said it is not its own."""
     return (
         f"{text}\n\n(The director sent this request of the human's to "
-        f"{sent.title!r} (id {sent.id}) first, whose IC said it is not that "
+        f"{sent.title!r} (id {sent.id}) first, whose {names.writer} said it is not "
+        "that "
         f"team's: {why}\nIt is yours now, in the same session and the same "
         f"checkout. {sent.title!r} is a sub-team of yours here and has done "
         "nothing for it: give it a task with `msg_team` if part of it is "
@@ -1004,7 +1095,9 @@ def handed_up(sent: SessionTeam, text: str, why: str) -> str:
     )
 
 
-def session_brief(team: SessionTeam, title: str, others: list[str]) -> str:
+def session_brief(
+    team: SessionTeam, title: str, others: list[str], *, names: Names
+) -> str:
     """What the IC a session starts with is told after the human's request."""
     beside = (
         f" Other sessions at work on this team's folder: {', '.join(others)}."
@@ -1012,7 +1105,7 @@ def session_brief(team: SessionTeam, title: str, others: list[str]) -> str:
         else " No other session works on the team's folder just now."
     )
     return (
-        f"\n\n[director] You are the IC of {team.title!r} in the session "
+        f"\n\n[director] You are the {names.writer} of {team.title!r} in the session "
         f"{title!r}, which was opened for this request.\n"
         "- Every request is worked on in a session like this one, in a "
         f"checkout and on a branch of its own.{beside} "
@@ -1020,21 +1113,22 @@ def session_brief(team: SessionTeam, title: str, others: list[str]) -> str:
         "- You start from the team's spec, contracts and records. The "
         "team's reports are shared with other sessions: `report` what they "
         "must know.\n"
-        "- A spec you write and sub-teams your Manager approves are this "
+        f"- A spec you write and sub-teams your {names.overseer} approves are this "
         "session's alone until your work is accepted.\n"
         "- The sub-teams you see are not started. One starts when you give "
         "it a task with `msg_team`.\n"
         "- When the request is done, commit and call `submit_review`. The "
-        "Division Lead IC (the IC one team up) reviews it. Accepted work is "
+        f"Division Lead {names.reviewer} (the {names.reviewer} one team up) reviews "
+        "it. Accepted work is "
         "merged into the repository's checkout, in the order work was "
         "submitted.\n"
         "- You need not keep up with that checkout while you work. If your "
         "work does not merge with what went in meanwhile, the Division Lead "
-        "IC finishes the merge and you are told which files it changed. "
+        f"{names.reviewer} finishes the merge and you are told which files it changed. "
         "Work comes back to you only if it must change or touches files "
         "outside your folder.\n"
         "- Teams and contracts you changed may become the org's a little "
-        "after your code: the Division Lead Manager settles those that "
+        f"after your code: the Division Lead {names.overseer} settles those that "
         "other accepted work changed too."
     )
 
@@ -1113,12 +1207,12 @@ def review_request(
     return "\n".join(lines)
 
 
-def misrouted_notice(team: SessionTeam, text: str, why: str) -> str:
+def misrouted_notice(team: SessionTeam, text: str, why: str, *, names: Names) -> str:
     """What the IC above is told when a team says a request the human's
     words brought it directly is not its own."""
     return (
         f"The human asked what follows. The runtime sent it straight to "
-        f"team {team.title!r} (id {team.id}), whose IC says it is not that "
+        f"team {team.title!r} (id {team.id}), whose {names.writer} says it is not that "
         f"team's: {why or '(no reason given)'}\nIt is yours now: do it, or "
         "give it to the team it belongs to with `msg_team`.\n\n"
         f"The human wrote:\n{text}"
@@ -1142,21 +1236,27 @@ def _span(minutes: int) -> str:
     return f"{hours} h {rest} min" if rest else f"{hours} h"
 
 
-def unstarted_notice(team: SessionTeam, minutes: int) -> str:
+def unstarted_notice(team: SessionTeam, minutes: int, *, names: Names) -> str:
     """What the IC above is told of a team it set up and gave no task."""
     return (
         f"Team {team.title!r} (id {team.id}, "
         f"{team.boundary.path or 'the repository'}) "
         f"was set up {_span(minutes)} ago and has been given no task. Nobody "
         "works in its folder, and nothing there is committed. Give it its "
-        "task with `msg_team`. If it is not needed, write to your Manager to "
+        f"task with `msg_team`. If it is not needed, write to your {names.overseer} to "
         "have it pruned, or propose your teams again without it. If it waits "
         "on purpose, do nothing: you are not told of it again."
     )
 
 
 def check_in_notice(
-    team: SessionTeam, minutes: int, *, in_a_turn: bool, head: str | None, again: int
+    team: SessionTeam,
+    minutes: int,
+    *,
+    in_a_turn: bool,
+    head: str | None,
+    again: int,
+    names: Names,
 ) -> str:
     """What the IC above is told of a team it has not turned to for the
     time between two check-ins, whether or not the team shows progress.
@@ -1181,9 +1281,9 @@ def check_in_notice(
         )
     lines += [
         "",
-        "Its IC is in a turn right now."
+        f"Its {names.writer} is in a turn right now."
         if in_a_turn
-        else "Its IC is not in a turn right now.",
+        else f"Its {names.writer} is not in a turn right now.",
         f"The last commit in {directory} is {head[:12]}."
         if head
         else f"Nothing is committed in {directory} yet.",
@@ -1193,7 +1293,8 @@ def check_in_notice(
         f"  git status --short -- {directory}",
         "",
         "If it is on course, do nothing. If it is off course or has taken "
-        "too long, write to its IC with `msg_team`. You are told of it again "
+        f"too long, write to its {names.writer} with `msg_team`. You are told of it "
+        "again "
         f"in {_span(again)}; writing to it, or being told that it shows no "
         "progress, starts that time again.",
     ]
@@ -1201,7 +1302,12 @@ def check_in_notice(
 
 
 def stall_notice(
-    team: SessionTeam, minutes: int, *, in_a_turn: bool, account: str | None
+    team: SessionTeam,
+    minutes: int,
+    *,
+    in_a_turn: bool,
+    account: str | None,
+    names: Names,
 ) -> str:
     """What the IC above is told of a team that shows no progress.
 
@@ -1226,29 +1332,34 @@ def stall_notice(
     lines.append("")
     if in_a_turn:
         lines.append(
-            "Its IC is in a turn right now, so it was not asked what it is doing."
+            f"Its {names.writer} is in a turn right now, so it was not asked what "
+            "it is doing."
         )
     elif account:
-        lines += ["Asked just now, its IC says:", account.strip()]
+        lines += [f"Asked just now, its {names.writer} says:", account.strip()]
     else:
-        lines.append("Asked just now what it is doing, its IC gave no answer.")
+        lines.append(
+            f"Asked just now what it is doing, its {names.writer} gave no answer."
+        )
     lines += [
         "",
         "Look for yourself: run these in " + team.worktree_path,
         f"  git log --oneline -5 -- {directory}",
         f"  git status --short -- {directory}",
         "",
-        "Then decide. You can wait; write to its IC with `msg_team`; or "
-        "write to your Manager with `msg_manager` if the teams should be "
+        f"Then decide. You can wait; write to its {names.writer} with `msg_team`; or "
+        f"write to your {names.overseer} with `msg_manager` if the teams should be "
         "made up differently. If it has gone on too long without progress "
         f"and a message did not help, `stop_team` for team {team.id} stops "
         "it. Use that very sparingly: a stopped team does nothing until "
-        "you write to it again or your Manager removes it.",
+        f"you write to it again or your {names.overseer} removes it.",
     ]
     return "\n".join(lines)
 
 
-def failure_notice(team: SessionTeam, name: str, reason: str, *, works: bool) -> str:
+def failure_notice(
+    team: SessionTeam, name: str, reason: str, *, works: bool, names: Names
+) -> str:
     """What the IC above is told of a team whose agent failed.
 
     Args:
@@ -1270,7 +1381,7 @@ def failure_notice(team: SessionTeam, name: str, reason: str, *, works: bool) ->
     else:
         lines.append(
             "It runs again the next time something is sent to it. Nothing is "
-            "asked of you unless that team waits on its Manager; then raise "
+            f"asked of you unless that team waits on its {names.overseer}; then raise "
             "it with `raise_escalation`."
         )
     return "\n".join(lines)
@@ -1377,7 +1488,7 @@ def success_rate(record: dict[str, Any]) -> str:
     )
 
 
-def success_rate_meaning(escalation_limit: int) -> str:
+def success_rate_meaning(escalation_limit: int, *, names: Names) -> str:
     """What a team's success rate counts, for the Manager that reads it.
 
     Args:
@@ -1388,7 +1499,7 @@ def success_rate_meaning(escalation_limit: int) -> str:
         return "A team's success rate is the share of its tasks that were accepted."
     return (
         "A team's success rate is the share of its tasks that were accepted "
-        f"without its IC escalating {escalation_limit} times on them or "
+        f"without its {names.writer} escalating {escalation_limit} times on them or "
         f"its work being sent back {escalation_limit} times, the number "
         "that wakes you. A task on which that number was reached counts "
         "against it, also while it is still in hand."
@@ -1480,6 +1591,7 @@ def manager_check(
     *,
     after_successes: bool = False,
     escalation_limit: int = 0,
+    names: Names,
 ) -> str:
     """What a Manager is told when the director wakes it to look at its
     teams.
@@ -1502,7 +1614,7 @@ def manager_check(
     """
     records = {record["team_id"]: record for record in track_records(events or [])}
     lines = [
-        f"A look at your teams that your IC did not ask for: {reason}",
+        f"A look at your teams that your {names.writer} did not ask for: {reason}",
         "",
         "The teams directly below yours:",
     ]
@@ -1510,11 +1622,11 @@ def manager_check(
         facts = [team.status if team.agents else "not started: given no task yet"]
         if team.id in blocked:
             facts[0] += (
-                f": its IC has waited {_span(blocked[team.id])} on an "
+                f": its {names.writer} has waited {_span(blocked[team.id])} on an "
                 "escalation it raised"
             )
         if team.stopped is not None:
-            facts.append(f"stopped by your IC ({team.stopped.reason})")
+            facts.append(f"stopped by your {names.writer} ({team.stopped.reason})")
         if team.review is not None:
             facts.append(
                 f"review {team.review.state.replace('_', ' ')}, round "
@@ -1524,7 +1636,7 @@ def manager_check(
             facts.append("nothing submitted yet")
         raised = escalations.get(team.id, 0)
         if raised:
-            facts.append(f"{raised} escalated to your IC on this work")
+            facts.append(f"{raised} escalated to your {names.writer} on this work")
         waiting = len(team.escalations)
         if waiting:
             facts.append(f"{waiting} unsettled")
@@ -1551,7 +1663,7 @@ def manager_check(
     if gone:
         lines += ["", "Teams that were here before and are gone:", *gone]
     if any(record.get("tasks") for record in records.values()):
-        lines += ["", success_rate_meaning(escalation_limit)]
+        lines += ["", success_rate_meaning(escalation_limit, names=names)]
     lines += [
         "",
         (
@@ -1561,7 +1673,7 @@ def manager_check(
         )
         + "Nothing is asked of you, and nothing here is a call to prune. If "
         "the make-up of the teams is what holds the work back, write to an "
-        "IC with `msg_ic`. `prune_team` is for a team that is grossly "
+        f"{names.writer} with `msg_ic`. `prune_team` is for a team that is grossly "
         "inefficient, not for one that is slow or had one bad task, and a "
         "success rate over one or two tasks says little: wait until a team "
         "has had enough tasks to judge it by. Otherwise end your turn.",
@@ -1574,6 +1686,8 @@ def proposal_facts(
     together: list[tuple[str, str, int]],
     before: list[str],
     reason: str = "",
+    *,
+    names: Names,
 ) -> str:
     """What the director adds, for the Manager, to the sub-teams its IC
     proposes; empty when it knows nothing worth adding.
@@ -1588,9 +1702,9 @@ def proposal_facts(
     """
     lines = []
     if reason:
-        lines.append(f"The IC's reason for this make-up: {reason}")
+        lines.append(f"The {names.writer}'s reason for this make-up: {reason}")
     for child, files in sizes:
-        why = f" The IC's reason: {child.reason}" if child.reason else ""
+        why = f" The {names.writer}'s reason: {child.reason}" if child.reason else ""
         lines.append(
             f"- {child.title!r} ({child.path}): {files} file"
             f"{'s' if files != 1 else ''} there now.{why}"
@@ -1607,7 +1721,11 @@ def proposal_facts(
 
 
 def changes_requested(
-    reviewer: SessionTeam, findings: list[ReviewFinding], *, of_a_session: bool = False
+    reviewer: SessionTeam,
+    findings: list[ReviewFinding],
+    *,
+    of_a_session: bool = False,
+    names: Names,
 ) -> str:
     """What a team is told when its work was not accepted.
 
@@ -1617,7 +1735,8 @@ def changes_requested(
     """
     return "\n".join(
         [
-            f"The IC of {reviewer.title!r} reviewed your work and asks for "
+            f"The {names.reviewer} of {reviewer.title!r} reviewed your work and "
+            "asks for "
             "changes before it is accepted:",
             *_finding_lines(findings),
             "Make them, commit, and submit the work again with `submit_review`.",

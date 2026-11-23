@@ -242,8 +242,11 @@ class Requests(Teams):
         self, place: SessionTeam, above: SessionTeam, request: RoutedRequest, why: str
     ) -> str:
         """Give a request a team said is not its own to the IC above it."""
-        self.tell_writer(above.id, misrouted_notice(place, request.text, why))
+        names = self.team(place).names
+        self.tell_writer(
+            above.id, misrouted_notice(place, request.text, why, names=names)
+        )
         return (
-            f"Handed to the IC of the team above ({above.title}). It is no "
+            f"Handed to the {names.writer} of the team above ({above.title}). It is no "
             "longer yours; go on with your own work."
         )

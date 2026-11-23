@@ -726,7 +726,10 @@ async def test_what_an_ic_escalates_goes_to_the_ic_above_and_then_to_the_human(
     )
 
     assert by_a_peer.is_error and "not with your team" in by_a_peer.text
-    assert by_the_manager.is_error and "raised by an IC" in by_the_manager.text
+    assert (
+        by_the_manager.is_error
+        and "raised by the IC of its team" in by_the_manager.text
+    )
     assert not passed.is_error and "waits on the human" in passed.text
     [waiting] = service.store.escalations()
     assert waiting.escalation.held_by is None
@@ -801,7 +804,7 @@ async def test_what_a_manager_escalates_goes_to_the_manager_above(
         resolving(raiser, escalation.id, "settle", "Cents."),
     )
 
-    assert by_the_ic.is_error and "raised by a Manager" in by_the_ic.text
+    assert by_the_ic.is_error and "raised by the Manager of its team" in by_the_ic.text
     assert not settled.is_error and node(service, api).escalations == []
     assert "Cents." in launcher.messages_to(await woken(service, api))[-1]
     assert launcher.messages_to(ic(service, api)) == []

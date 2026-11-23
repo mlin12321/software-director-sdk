@@ -135,7 +135,8 @@ class Sessions(Splits):
         if conversation is None and await self._template() is None:
             raise Conflict(
                 "No conversation of the org runs on this server to start the "
-                "session's IC from. Send the request from a new conversation."
+                f"session's {self.type_of(team).names.writer} from. Send the request "
+                "from a new conversation."
             )
         shape = [team]
         for current in shape:
@@ -224,7 +225,7 @@ class Sessions(Splits):
         await asyncio.to_thread(
             self.record_event, above.id, "session_opened", top, text[:ASKED_KEPT]
         )
-        brief = session_brief(top, title, others)
+        brief = session_brief(top, title, others, names=self.team(top).names)
         if conversation is None:
             conversation_id = self.tell_writer(top.id, text + brief, human=True) or ""
         else:
@@ -327,6 +328,7 @@ class Sessions(Splits):
         """Nobody works above the team a session was opened at, so a
         request that team says is not its own goes one team up the org, in
         a session of its own, and to the human only from the top."""
+        names = self.team(place).names
         if not is_division_lead(above):
             return super()._hand_on(place, above, request, why)
         own = self.store.team(place.team_id)
@@ -345,14 +347,14 @@ class Sessions(Splits):
         self.keep_routed("asked", top, request.text, "top", why)
         self.tell_writer(
             top.id,
-            handed_up(place, request.text, why)
-            + session_brief(top, self.store.session_title(top), []),
+            handed_up(place, request.text, why, names=names)
+            + session_brief(top, self.store.session_title(top), [], names=names),
         )
         self._save_soon()
         return (
-            f"Handed to the IC of the team above ({top.title}), which this "
+            f"Handed to the {names.writer} of the team above ({top.title}), which this "
             "session is now opened at. Your team stays in it as a sub-team: "
-            "that IC gives you a task if it has one for you."
+            f"that {names.writer} gives you a task if it has one for you."
         )
 
     def _lift(self, node: SessionTeam, higher: OrgNode) -> SessionTeam:

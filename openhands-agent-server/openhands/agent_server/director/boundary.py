@@ -2,6 +2,7 @@
 
 from collections.abc import Iterable
 
+from openhands.agent_server.director.agent_types import Names
 from openhands.agent_server.director.models import OrgNode
 from openhands.agent_server.director.scope import (
     Closed,
@@ -42,7 +43,7 @@ def scope_within(
     )
 
 
-def worded(denied: Denied, scope: Scope) -> str:
+def worded(denied: Denied, scope: Scope, *, names: Names) -> str:
     """Why an agent may not do what ``denied`` names, in words for it."""
     path = denied.named if denied.relative is None else denied.relative
     match denied.kind:
@@ -60,8 +61,9 @@ def worded(denied: Denied, scope: Scope) -> str:
             )
         case "reads_only":
             return (
-                f"A Manager does not edit files, so {path!r} was not changed. Have "
-                "your IC make the change."
+                f"{names.A_overseer} does not edit files, so {path!r} was not "
+                "changed. Have "
+                f"your {names.writer} make the change."
             )
         case "git":
             return f"{path!r} belongs to git, so it was not changed."

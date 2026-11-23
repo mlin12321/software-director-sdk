@@ -11,9 +11,13 @@ from openhands.agent_server.director.service import DirectorService
 from openhands.agent_server.director.tools import (
     ApproveTeamsTool,
     ProposeTeamsTool,
+    RaiseEscalationTool,
     SubmitReviewTool,
 )
-from openhands.agent_server.director.tools.definition import SubmitReviewAction
+from openhands.agent_server.director.tools.definition import (
+    RaiseEscalationAction,
+    SubmitReviewAction,
+)
 from openhands.agent_server.director.tools.remote import call_tool, list_tools
 from tests.agent_server.director.conftest import (
     FakeLauncher,
@@ -151,3 +155,50 @@ async def test_submitted_work_reaches_the_member_that_reviews_above(
     bench = member(service, "bench")
     assert "Review request" not in "\n".join(launcher.messages_to(bench))
     assert node(service, "rig").review is not None
+
+
+async def test_each_member_is_told_of_the_org_in_the_names_its_type_gives(
+    service: DirectorService, launcher: FakeLauncher, repo: Path
+):
+    await split(service)
+    commit(repo, "rig/frame.md", "A frame.\n")
+    await use(
+        service,
+        member(service, "bench", "rig"),
+        SubmitReviewTool,
+        SubmitReviewAction(summary="The rig stands."),
+    )
+    await service.settled()
+
+    [to_bench, *_] = launcher.messages_to(member(service, "bench"))
+    assert "You are the bench of" in to_bench
+    assert "Propose sub-teams to your chair" in to_bench
+    assert "Manager" not in to_bench and "your IC" not in to_bench
+    # A member is told its part by the tools it has, not as a Manager.
+    [referee] = [start for start in launcher.derived if "(referee)" in start.title]
+    assert "You are the referee of your team" in referee.task
+    assert "`review_team`" in referee.task
+    assert "You are your team's" not in referee.task
+    assert "Wait until something is sent to you." in referee.task
+    [chair] = [start for start in launcher.derived if "(chair)" in start.title]
+    assert "You are your team's chair, not its bench." in chair.task
+
+
+async def test_an_escalation_from_below_reaches_the_member_of_the_same_name(
+    service: DirectorService, launcher: FakeLauncher
+):
+    await split(service)
+
+    raised = await use(
+        service,
+        member(service, "bench", "rig"),
+        RaiseEscalationTool,
+        RaiseEscalationAction(
+            category="design_decision", title="Which frame?", detail="Two would fit."
+        ),
+    )
+
+    assert not raised.is_error
+    assert "It is with the bench of the team above" in raised.text
+    told = "\n".join(launcher.messages_to(member(service, "bench")))
+    assert "The bench of team 'Rig'" in told and "Which frame?" in told

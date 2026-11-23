@@ -432,7 +432,11 @@ class DirectorService(Sync):
             # The refusal stands whether or not it could be kept.
             with suppress(Exception):
                 self.record_need(found[0], denied.relative or ".", NEED_WRITE)
-        return worded(denied, scope or Scope(checkout="", directory=""))
+        return worded(
+            denied,
+            scope or Scope(checkout="", directory=""),
+            names=self.names_at(found[0].id if found else ""),
+        )
 
     def answer_escalation(
         self, place_id: str, escalation_id: str, answer: str
@@ -451,6 +455,7 @@ class DirectorService(Sync):
             Conflict: The escalation is still held by a team.
             Unavailable: The director is not running.
         """
+        names = self.names_at(place_id)
         self._require_launcher()
         store = self.store
         place = store.place(place_id)
@@ -498,7 +503,7 @@ class DirectorService(Sync):
             # A new Manager starts with the answer; the IC goes on as it was.
             self.tell_overseer(
                 place_id,
-                "The Manager before you could not be started. The human was "
+                f"The {names.overseer} before you could not be started. The human was "
                 f"told, and says:\n{answer}",
                 division_lead=is_division_lead(place),
             )
