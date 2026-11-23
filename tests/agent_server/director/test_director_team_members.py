@@ -20,16 +20,14 @@ from openhands.agent_server.director.tools.definition import (
 )
 from openhands.agent_server.director.tools.remote import call_tool, list_tools
 from tests.agent_server.director.conftest import (
+    APPROVE,
     FakeLauncher,
     agent_conversation,
+    an_org,
     commit,
-    tasked,
-)
-from tests.agent_server.director.test_director_agent_types import an_org
-from tests.agent_server.director.test_director_tools import (
-    APPROVE,
     node,
     proposing,
+    tasked,
     use,
 )
 

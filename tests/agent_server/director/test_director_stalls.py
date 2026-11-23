@@ -29,25 +29,25 @@ from openhands.agent_server.director.tools.definition import (
     StopTeamAction,
 )
 from openhands.sdk.conversation.state import ConversationExecutionStatus
-from tests.agent_server.director.conftest import FakeLauncher, record_of, tasked
-from tests.agent_server.director.test_director_acp import started
-from tests.agent_server.director.test_director_review import (
-    DONE,
-    api_submits,
-    commit,
-    reject,
-    requests,
-    split_api,
-)
-from tests.agent_server.director.test_director_tools import (
+from tests.agent_server.director.conftest import (
     APPROVE,
     CENTS,
+    DONE,
     SPLIT,
+    FakeLauncher,
+    api_submits,
+    commit,
     ic,
     manager,
     node,
     proposing,
+    record_of,
+    reject,
+    requests,
+    split_api,
     split_root,
+    started_with_server,
+    tasked,
     use,
 )
 
@@ -80,7 +80,7 @@ def launcher() -> FakeLauncher:
 @pytest.fixture
 async def service(repo: Path, launcher: FakeLauncher, clock: Clock):
     """An org of API and Web whose timer never fires by itself."""
-    service = await started(repo, launcher, clock=clock, stall_poll=3600)
+    service = await started_with_server(repo, launcher, clock=clock, stall_poll=3600)
     await split_root(service)
     yield service
     await service.aclose()
@@ -261,7 +261,7 @@ async def test_the_time_an_org_is_paused_does_not_count(
 async def test_the_time_a_server_was_not_running_does_not_count_either(
     repo: Path, launcher: FakeLauncher, clock: Clock
 ):
-    first = await started(repo, launcher, clock=clock, stall_poll=3600)
+    first = await started_with_server(repo, launcher, clock=clock, stall_poll=3600)
     await split_root(first)
     await looked(first)
     clock.passes(100)
@@ -403,7 +403,7 @@ async def test_teams_that_take_a_stopped_teams_place_replace_it(
 async def test_the_director_looks_by_itself(
     repo: Path, launcher: FakeLauncher, clock: Clock
 ):
-    service = await started(repo, launcher, clock=clock, stall_poll=0.01)
+    service = await started_with_server(repo, launcher, clock=clock, stall_poll=0.01)
     await split_root(service)
     await asyncio.sleep(0.1)
     await service.settled()
@@ -419,7 +419,7 @@ async def test_the_director_looks_by_itself(
 async def test_a_stopped_team_is_still_stopped_after_a_restart(
     repo: Path, launcher: FakeLauncher, clock: Clock
 ):
-    first = await started(repo, launcher, clock=clock, stall_poll=3600)
+    first = await started_with_server(repo, launcher, clock=clock, stall_poll=3600)
     await split_root(first)
     await use(first, ic(first), StopTeamTool, STOP_API)
     api_ic = str(ic(first, API))
@@ -458,7 +458,7 @@ async def test_a_stopped_team_is_still_stopped_after_a_restart(
 async def test_a_team_set_up_and_given_no_task_is_told_to_the_ic_above(
     repo: Path, launcher: FakeLauncher, clock: Clock
 ):
-    service = await started(repo, launcher, clock=clock, stall_poll=3600)
+    service = await started_with_server(repo, launcher, clock=clock, stall_poll=3600)
     await use(service, ic(service), ProposeTeamsTool, SPLIT)
     await use(service, manager(service), ApproveTeamsTool, APPROVE)
     service.tell_writer(node(service, WEB).id, "Begin.")

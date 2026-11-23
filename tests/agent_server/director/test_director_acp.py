@@ -59,44 +59,24 @@ from openhands.sdk.agent import ACPAgent
 from openhands.sdk.conversation.state import ConversationExecutionStatus
 from openhands.sdk.tool.spec import Tool
 from tests.agent_server.director.conftest import (
+    APPROVE,
     DerivedStart,
     FakeLauncher,
-    root_conversation,
-    tasked,
-)
-from tests.agent_server.director.test_director_router import server_config
-from tests.agent_server.director.test_director_tools import (
-    APPROVE,
     division_lead_ic,
     ic,
     manager,
     node,
     proposing,
+    root_conversation,
+    server_config,
+    started_with_server,
+    tasked,
     use,
     woken,
 )
 
 
 CLAUDE = ["npx", "-y", "@agentclientprotocol/claude-agent-acp"]
-
-
-async def started(repo: Path, launcher: FakeLauncher, **options) -> DirectorService:
-    service = DirectorService(
-        repo,
-        save_delay=0,
-        run_limit_retry=0,
-        remembered=repo.parent / "state" / "director.json",
-        server_url="http://127.0.0.1:8000",
-        **options,
-    )
-    await service.start(launcher)
-    await service.create_org(
-        CreateOrgRequest(
-            title="Checkout", task="Build", conversation=root_conversation(repo)
-        )
-    )
-    await service.settled()
-    return service
 
 
 def starts_of(launcher: FakeLauncher) -> dict[str | None, DerivedStart]:
@@ -469,7 +449,7 @@ async def test_the_tool_routes_refuse_whoever_has_no_agents_token(running, repo:
 
 async def test_an_acp_agent_may_lead_an_org(repo: Path):
     launcher = FakeLauncher(root_kind="acp")
-    service = await started(repo, launcher)
+    service = await started_with_server(repo, launcher)
 
     root = node(service, "root")
     assert [(agent.role, agent.kind, agent.acp_server) for agent in root.agents] == [
@@ -487,7 +467,7 @@ async def test_an_acp_agent_may_lead_an_org(repo: Path):
 
 async def test_an_agent_loaded_again_is_given_its_tools_again(repo: Path):
     launcher = FakeLauncher(root_kind="acp")
-    service = await started(repo, launcher)
+    service = await started_with_server(repo, launcher)
     [again] = launcher.resume_adapters
     conversation_id = UUID(ic(service))
     # As a server with no key to keep secrets under saved it.
@@ -519,7 +499,7 @@ async def test_an_agent_loaded_again_is_given_its_tools_again(repo: Path):
 
 async def test_the_agent_of_an_org_reaches_the_tools_as_itself(repo: Path):
     launcher = FakeLauncher(root_kind="acp")
-    service = await started(repo, launcher)
+    service = await started_with_server(repo, launcher)
     assert launcher.root_adapt is not None
 
     adapted = launcher.root_adapt(ACPAgent(acp_command=CLAUDE))
@@ -541,7 +521,7 @@ async def test_the_agent_of_an_org_reaches_the_tools_as_itself(repo: Path):
 
 async def test_an_acp_team_without_a_sandbox_gets_its_own_worktree(repo: Path):
     launcher = FakeLauncher(root_kind="acp")
-    service = await started(repo, launcher)
+    service = await started_with_server(repo, launcher)
 
     await carry_out(service, SplitChild(title="API", path="svc/api", task="Serve"))
 
@@ -556,7 +536,9 @@ async def test_an_acp_team_without_a_sandbox_gets_its_own_worktree(repo: Path):
 
 async def test_an_acp_team_in_a_sandbox_works_where_the_split_put_it(repo: Path):
     launcher = FakeLauncher(root_kind="acp")
-    service = await started(repo, launcher, find_sandbox=lambda: "/usr/bin/bwrap")
+    service = await started_with_server(
+        repo, launcher, find_sandbox=lambda: "/usr/bin/bwrap"
+    )
 
     await carry_out(service, SplitChild(title="API", path="svc/api", task="Serve"))
 
@@ -577,7 +559,7 @@ async def test_a_sub_team_runs_on_another_agent_profile_when_the_org_allows_it(
     repo: Path,
 ):
     launcher = FakeLauncher(profiles={"codex": "acp", "reviewer": "openhands"})
-    service = await started(repo, launcher)
+    service = await started_with_server(repo, launcher)
     codex = SplitChild(title="API", path="svc/api", task="Serve", agent_profile="codex")
 
     refused = await use(service, ic(service), ProposeTeamsTool, split(codex))
@@ -606,7 +588,7 @@ async def test_the_profiles_a_sub_team_may_run_on_are_kept_and_told_to_the_ic(
     repo: Path,
 ):
     launcher = FakeLauncher(profiles={"codex": "acp"})
-    service = await started(repo, launcher)
+    service = await started_with_server(repo, launcher)
 
     service.update_settings(DirectorSettingsUpdate(allowed_profiles=["codex"]))
     other = await use(
@@ -639,7 +621,7 @@ async def test_a_notice_waits_for_the_turn_of_an_agent_that_runs_its_own_tools(
     repo: Path,
 ):
     launcher = FakeLauncher(root_kind="acp")
-    service = await started(repo, launcher)
+    service = await started_with_server(repo, launcher)
     agent = ic(service)
     assert agent is not None
     launcher.report(agent, ConversationExecutionStatus.RUNNING)
@@ -661,7 +643,7 @@ async def test_a_notice_waits_for_the_turn_of_an_agent_that_runs_its_own_tools(
 
 async def test_a_second_notice_waits_for_the_turn_the_first_one_began(repo: Path):
     launcher = FakeLauncher(root_kind="acp")
-    service = await started(repo, launcher)
+    service = await started_with_server(repo, launcher)
     agent = ic(service)
     assert agent is not None
     launcher.report(agent, ConversationExecutionStatus.FINISHED)
@@ -687,7 +669,7 @@ async def test_what_the_human_says_reaches_such_an_agent_in_the_middle_of_a_turn
     repo: Path,
 ):
     launcher = FakeLauncher(root_kind="acp")
-    service = await started(repo, launcher)
+    service = await started_with_server(repo, launcher)
     agent = ic(service)
     assert agent is not None
     top = node(service, "root").id
@@ -710,7 +692,7 @@ async def test_a_notice_does_not_wait_for_an_agent_whose_tools_the_server_runs(
     repo: Path,
 ):
     launcher = FakeLauncher()
-    service = await started(repo, launcher)
+    service = await started_with_server(repo, launcher)
     agent = ic(service)
     assert agent is not None
     launcher.report(agent, ConversationExecutionStatus.RUNNING)
@@ -727,7 +709,7 @@ async def test_an_acp_ic_that_ends_its_turn_after_submitting_is_left_alone(
 ):
     monkeypatch.setattr(reviews_module, "_REST_CHECK_SECONDS", 0.01)
     launcher = FakeLauncher(root_kind="acp")
-    service = await started(repo, launcher)
+    service = await started_with_server(repo, launcher)
     root_ic = ic(service)
     assert root_ic is not None
     launcher.report(root_ic, ConversationExecutionStatus.RUNNING)
@@ -750,7 +732,7 @@ async def test_an_acp_ic_that_carries_on_after_submitting_is_cut_short(
     monkeypatch.setattr(reviews_module, "_REST_CHECKS", 3)
     monkeypatch.setattr(reviews_module, "_REST_CHECK_SECONDS", 0.01)
     launcher = FakeLauncher(root_kind="acp")
-    service = await started(repo, launcher)
+    service = await started_with_server(repo, launcher)
     root_ic = ic(service)
     assert root_ic is not None
     launcher.report(root_ic, ConversationExecutionStatus.RUNNING)
@@ -837,7 +819,7 @@ async def test_an_agent_of_an_org_has_no_tool_that_starts_agents_nothing_holds(
     repo: Path,
 ):
     launcher = FakeLauncher()
-    service = await started(repo, launcher)
+    service = await started_with_server(repo, launcher)
     assert launcher.root_adapt is not None
     agent = Agent(
         llm=LLM(model="gpt-4o", usage_id="test-llm"),
@@ -881,7 +863,9 @@ def test_the_shim_answers_a_request_whose_params_are_no_object():
 
 async def test_a_division_lead_ic_has_no_folder_to_write_from_its_shell(repo: Path):
     launcher = FakeLauncher()
-    service = await started(repo, launcher, find_sandbox=lambda: "/usr/bin/bwrap")
+    service = await started_with_server(
+        repo, launcher, find_sandbox=lambda: "/usr/bin/bwrap"
+    )
     done = SubmitReviewAction(summary="Shipped.")
 
     await use(service, ic(service), SubmitReviewTool, done)

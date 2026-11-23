@@ -44,93 +44,47 @@ from openhands.agent_server.director.tools import (
 from openhands.agent_server.director.tools.definition import SettleTeamsAction
 from openhands.sdk.conversation.state import ConversationExecutionStatus
 from tests.agent_server.director.conftest import (
-    FakeLauncher,
-    former_of,
-    make_team,
-    memory_of,
-    open_session_in,
-    record_of,
-    run_git,
-    shipped_type,
-    tasked,
-)
-from tests.agent_server.director.test_director_landing import (
+    APPROVE,
+    DONE,
     JOBS,
-    accepted,
+    PRUNE_API,
+    SCHEMA,
+    SPLIT,
+    FakeLauncher,
+    ServerEnded,
+    accept,
+    again,
+    api_submits,
     at_api,
+    commit,
+    cut_off,
     division_lead_manager,
+    end_server_at,
+    eventually,
+    former_of,
+    ic,
     landed,
+    make_team,
+    manager,
+    memory_of,
+    node,
+    open_session_in,
     org_gains,
     path_of,
+    record_of,
+    run_git,
+    session_accepted,
     sets_up_jobs,
-    waiting,
-)
-from tests.agent_server.director.test_director_limits import (
-    eventually,
+    shipped_type,
     split,
-    started,
-)
-from tests.agent_server.director.test_director_review import (
-    DONE,
-    SCHEMA,
-    accept,
-    api_submits,
-    commit,
     split_api,
-)
-from tests.agent_server.director.test_director_tools import (
-    APPROVE,
-    PRUNE_API,
-    SPLIT,
-    ic,
-    manager,
-    node,
     split_root,
+    started,
+    tasked,
     use,
+    waiting,
     woken,
 )
-
-
-class ServerEnded(BaseException):
-    """Ends whatever the director was doing, as a killed server does."""
-
-
-async def again(repo: Path, launcher: FakeLauncher, **options) -> DirectorService:
-    """The director of the server's next start, on the same org."""
-    launcher.listeners.clear()
-    launcher.before = lambda _: None
-    launcher.on_derived = lambda _: None
-    service = DirectorService(
-        repo,
-        save_delay=0,
-        run_limit_retry=0,
-        remembered=repo.parent / "state" / "director.json",
-        **options,
-    )
-    await service.start(launcher)
-    await service.settled()
-    return service
-
-
-def end_server_at(launcher: FakeLauncher, call: str, nth: int = 1) -> asyncio.Event:
-    """Have the server end at the ``nth`` time the director makes ``call``.
-
-    Returns:
-        Set once it has ended.
-    """
-    ended = asyncio.Event()
-    seen = 0
-
-    def before(name: str) -> None:
-        nonlocal seen
-        seen += name == call
-        if ended.is_set() or seen >= nth:
-            ended.set()
-            raise ServerEnded
-
-    launcher.before = before
-    launcher.on_derived = lambda _: before("derived")
-    return ended
 
 
 def kinds(recovery) -> list[tuple[str, str]]:
@@ -357,14 +311,6 @@ async def test_a_prune_cut_off_after_it_is_recorded_is_recorded_once(
     pruned = [event for event in record_of(second, "root") if event.kind == "pruned"]
     assert len(pruned) == 1
     await second.aclose()
-
-
-async def cut_off(launcher: FakeLauncher, ended: asyncio.Event, doing) -> None:
-    """Let the server end in the middle of ``doing``."""
-    task = asyncio.create_task(doing)
-    await ended.wait()
-    task.cancel()
-    await asyncio.gather(task, return_exceptions=True)
 
 
 def end_server_at_message(launcher: FakeLauncher, part: str) -> asyncio.Event:
@@ -851,7 +797,7 @@ async def test_teams_that_wait_are_still_there_after_a_restart(
     top, conversation = await at_api(first)
     sets_up_jobs(first, top)
     org_gains(first, JOBS, "services/api/workers")
-    await accepted(first, top, conversation)
+    await session_accepted(first, top, conversation)
     await first.aclose()
 
     second = await again(repo, launcher)

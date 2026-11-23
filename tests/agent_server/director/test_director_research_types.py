@@ -7,9 +7,11 @@ import pytest
 from openhands.agent_server.director.agent_types import SHIPPED_TYPES, load_types
 from openhands.agent_server.director.service import DirectorService
 from openhands.agent_server.director.service.state import DIRECTOR_TOOL_NAMES
-from tests.agent_server.director.conftest import FakeLauncher
-from tests.agent_server.director.test_director_agent_types import an_org
-from tests.agent_server.director.test_director_tools import node
+from tests.agent_server.director.conftest import (
+    FakeLauncher,
+    an_org,
+    node,
+)
 
 
 def test_the_research_types_load_and_say_how_research_is_done_and_reviewed():

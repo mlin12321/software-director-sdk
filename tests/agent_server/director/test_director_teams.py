@@ -33,43 +33,39 @@ from openhands.agent_server.director.tools.definition import (
 )
 from openhands.sdk.conversation.state import ConversationExecutionStatus
 from tests.agent_server.director.conftest import (
-    FakeLauncher,
-    record_of,
-    run_git,
-    tasked,
-)
-from tests.agent_server.director.test_director_landing import landed
-from tests.agent_server.director.test_director_limits import started
-from tests.agent_server.director.test_director_pause import (
-    ServerEnded,
-    again,
-    cut_off,
-    end_server_at,
-)
-from tests.agent_server.director.test_director_review import (
-    DONE,
-    commit,
-    in_own_worktree,
-)
-from tests.agent_server.director.test_director_service import attempt, create
-from tests.agent_server.director.test_director_tools import (
+    API,
     APPROVE,
+    DB,
+    DONE,
     PRUNE_API,
     SPLIT,
+    FakeLauncher,
+    ServerEnded,
+    again,
+    attempt,
+    commit,
+    create,
+    cut_off,
+    end_server_at,
     has_place,
     ic,
+    in_own_worktree,
+    landed,
     manager,
     node,
+    propose_and_approve,
     proposing,
+    record_of,
+    run_git,
     split_root,
+    started,
     sub_teams,
+    tasked,
     use,
     woken,
 )
 
 
-API = "services.api"
-DB = "services.api.db"
 SERVICES = proposing(
     [SplitChild(title="Services", path="services", task="Serve")], keep=["Web"]
 )
@@ -87,18 +83,6 @@ async def service(repo: Path, launcher: FakeLauncher):
     )
     yield service
     await service.aclose()
-
-
-async def propose_and_approve(
-    service: DirectorService,
-    node_id: str,
-    *children: SplitChild,
-    keep: list[str] | None = None,
-) -> None:
-    proposal = proposing(list(children), keep=keep)
-    await use(service, ic(service, node_id), ProposeTeamsTool, proposal)
-    await use(service, manager(service, node_id), ApproveTeamsTool, APPROVE)
-    await tasked(service)
 
 
 def below(service: DirectorService, node_id: str) -> list[str]:

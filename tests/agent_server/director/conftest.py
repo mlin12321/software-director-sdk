@@ -1,13 +1,16 @@
 import asyncio
 import subprocess
-from collections.abc import Callable, Collection, Sequence
+from collections.abc import AsyncIterator, Callable, Collection, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any, cast
 from uuid import UUID
 
 import pytest
 import yaml
 
+from openhands.agent_server.config import Config
 from openhands.agent_server.conversation_service import (
     AgentAdapter,
     ExecutionStatusListener,
@@ -26,13 +29,16 @@ from openhands.agent_server.director.models import (
     AgentKind,
     AgentRef,
     Boundary,
+    CreateOrgRequest,
     Escalation,
     EscalationHandoff,
     EscalationKind,
     FormerTeam,
     IsolationMode,
+    OpenSessionRequest,
     OrgNodeInput,
     Report,
+    ReviewFinding,
     SessionInput,
     SessionTeam,
     SessionTeamInput,
@@ -43,13 +49,31 @@ from openhands.agent_server.director.models import (
 from openhands.agent_server.director.org_store import (
     OrgStore,
     division_lead_id,
+    session_id_of,
     session_team_id,
+    team_id_of,
 )
 from openhands.agent_server.director.service import (
     DIRECTOR_TOOL_NAMES,
     DirectorService,
 )
 from openhands.agent_server.director.split import ProposedTeam
+from openhands.agent_server.director.tools import (
+    ApproveTeamsTool,
+    ProposeTeamsTool,
+    RaiseEscalationTool,
+    ReviewTeamTool,
+    SubmitReviewTool,
+)
+from openhands.agent_server.director.tools.definition import (
+    ApproveTeamsAction,
+    ProposeTeamsAction,
+    PruneTeamAction,
+    RaiseEscalationAction,
+    ReviewTeamAction,
+    SubmitReviewAction,
+)
+from openhands.agent_server.director.tools.impl import DirectorObservation
 from openhands.agent_server.event_service import (
     ActionGuard,
     ConversationRunLimitExceeded,
@@ -57,10 +81,16 @@ from openhands.agent_server.event_service import (
 )
 from openhands.agent_server.models import StartConversationRequest
 from openhands.sdk import LLM, Agent
-from openhands.sdk.conversation.state import ConversationExecutionStatus
+from openhands.sdk.conversation.state import (
+    ConversationExecutionStatus,
+    ConversationState,
+)
 from openhands.sdk.errors import NotFound
+from openhands.sdk.event import ActionEvent
 from openhands.sdk.tool.spec import Tool
+from openhands.sdk.tool.tool import Action, ToolDefinition
 from openhands.sdk.workspace import LocalWorkspace
+from openhands.tools.file_editor.definition import FileEditorAction
 
 
 def run_git(repo: Path, *args: str) -> str:
@@ -676,3 +706,584 @@ def agent_conversation(place: SessionTeam, role: str) -> str | None:
     return next(
         (agent.conversation_id for agent in place.agents if agent.role == role), None
     )
+
+
+async def started_with_server(
+    repo: Path, launcher: FakeLauncher, **options
+) -> DirectorService:
+    service = DirectorService(
+        repo,
+        save_delay=0,
+        run_limit_retry=0,
+        remembered=repo.parent / "state" / "director.json",
+        server_url="http://127.0.0.1:8000",
+        **options,
+    )
+    await service.start(launcher)
+    await service.create_org(
+        CreateOrgRequest(
+            title="Checkout", task="Build", conversation=root_conversation(repo)
+        )
+    )
+    await service.settled()
+    return service
+
+
+async def use(
+    service: DirectorService,
+    conversation_id: str | None,
+    tool: type[ToolDefinition[Any, Any]],
+    action: Action,
+) -> DirectorObservation:
+    """Call ``tool`` as the agent of ``conversation_id`` does: off the loop."""
+    assert conversation_id is not None
+    state = cast(ConversationState, SimpleNamespace(id=UUID(conversation_id)))
+    executor = tool.create(state)[0].executor
+    assert executor is not None
+    observation = await asyncio.to_thread(executor, action)
+    await service.settled()
+    assert isinstance(observation, DirectorObservation)
+    return observation
+
+
+def node(service: DirectorService, node_id: str) -> SessionTeam:
+    """A place by its id, or the place of the session opened first at the
+    team of that id."""
+    found = service.org.place(node_id)
+    if "@" not in node_id:
+        found = next(
+            (
+                place
+                for place in service.org.places()
+                if not place.division_lead and place.team_id == node_id
+            ),
+            None,
+        )
+    assert found is not None
+    return found
+
+
+def division_lead_ic(service: DirectorService, node_id: str = "root") -> str | None:
+    """The IC that reviews the session of the place ``node_id``."""
+    place = service.org.place(division_lead_of(service, node_id))
+    assert place is not None
+    return agent_conversation(place, "ic")
+
+
+def division_lead_of(service: DirectorService, node_id: str = "root") -> str:
+    session = service.org.session_of(node(service, node_id))
+    assert session is not None
+    return division_lead_id(session.above_id, session.id)
+
+
+def ic(service: DirectorService, node_id: str = "root") -> str | None:
+    return agent_conversation(node(service, node_id), "ic")
+
+
+def manager(service: DirectorService, node_id: str = "root") -> str | None:
+    return agent_conversation(node(service, node_id), "manager")
+
+
+async def woken(service: DirectorService, node_id: str = "root") -> str:
+    """The Manager of a team, started as the first message to it does."""
+    if manager(service, node_id) is None:
+        service.tell_overseer(node(service, node_id).id, "Look in on your team.")
+        await service.settled()
+    found = manager(service, node_id)
+    assert found is not None
+    return found
+
+
+def proposing(
+    children: list[SplitChild],
+    contracts: str = "",
+    keep: list[str] | None = None,
+    text: str = "",
+) -> ProposeTeamsAction:
+    return ProposeTeamsAction(
+        teams=as_proposed(children), contracts=contracts, keep=keep or [], text=text
+    )
+
+
+SPLIT = proposing(
+    [
+        SplitChild(title="API", path="services/api", task="Serve the checkout API"),
+        SplitChild(
+            title="Web",
+            path="apps/web",
+            task="Build the checkout pages",
+            isolation="worktree",
+        ),
+    ],
+    "POST /checkout returns {order_id}",
+)
+
+
+APPROVE = ApproveTeamsAction()
+
+
+async def split_root(service: DirectorService) -> None:
+    await use(service, ic(service), ProposeTeamsTool, SPLIT)
+    await use(service, manager(service), ApproveTeamsTool, APPROVE)
+    await tasked(service)
+
+
+def sub_teams(service: DirectorService, node_id: str = "root") -> list[SessionTeam]:
+    """What the session opened first has directly below a team."""
+    return service.org.below(node(service, node_id).id)
+
+
+def has_place(service: DirectorService, team_id: str) -> bool:
+    """Whether a session has the team ``team_id``."""
+    return any(
+        session_id_of(place) and team_id_of(place) == team_id
+        for place in service.org.places()
+    )
+
+
+CENTS = RaiseEscalationAction(
+    category="design_decision", title="Cents or decimals?", detail="For totals."
+)
+
+
+PRUNE_API = PruneTeamAction(
+    team="services.api",
+    reason="Every schema change broke all of them.",
+)
+
+
+CODE_REVIEW = "Review the diff for bugs."
+
+
+ANALYST = (
+    members_yaml(
+        ic="Your team analyses results. It runs no experiments.\n",
+        manager="Approve a proposal if each sub-team reads one set of results.\n",
+    )
+    + """\
+description: Reads results and says what they mean.
+actions:
+  submit_review: Submit one table and what it shows.
+review:
+  write_up: |
+    Write the account of your tables for the reviewer.
+  checklist: |
+    Every number in a table is in a committed result file.
+omit_tools: [propose_teams, read_team_context]
+"""
+)
+
+
+TEAMS = proposing(
+    [
+        SplitChild(
+            title="Tables", path="tables", task="Tabulate", agent_type="analyst"
+        ),
+        SplitChild(title="Harness", path="harness", task="Build the harness"),
+    ],
+    contracts="Tables reads what Harness writes to `out/`.",
+)
+
+
+def org_config(folder: Path, settings: str = "") -> Path:
+    """An org's ``director.yaml`` with the type ``analyst`` beside it."""
+    config = folder / "config" / "director.yaml"
+    (config.parent / "types").mkdir(parents=True, exist_ok=True)
+    config.write_text(settings)
+    (config.parent / "types" / "analyst.yaml").write_text(ANALYST)
+    return config
+
+
+async def an_org(
+    repo: Path,
+    launcher: FakeLauncher,
+    config_file: Path | None = None,
+    agent_type: str | None = None,
+) -> DirectorService:
+    service = DirectorService(
+        repo,
+        save_delay=0,
+        run_limit_retry=0,
+        find_review_instructions=lambda: CODE_REVIEW,
+        config_file=config_file,
+        remembered=repo.parent / "director.json",
+    )
+    await service.start(launcher)
+    await service.create_org(
+        CreateOrgRequest(
+            title="Lab",
+            task="Find out what helps training",
+            agent_type=agent_type,
+            conversation=root_conversation(repo),
+        )
+    )
+    await service.settled()
+    return service
+
+
+async def split_into_typed_teams(service: DirectorService) -> None:
+    await use(service, ic(service), ProposeTeamsTool, TEAMS)
+    await use(service, manager(service), ApproveTeamsTool, APPROVE)
+    await tasked(service)
+
+
+WRITE_UP = "pull request description"
+
+
+FINDING = ReviewFinding(path="services/api/app.py", line=1, issue="Returns a string.")
+
+
+DONE = SubmitReviewAction(summary="Endpoint shipped.")
+
+
+async def api_submits(service: DirectorService, repo: Path) -> DirectorObservation:
+    commit(repo, "services/api/app.py", "order_id = '1'\n")
+    return await use(service, ic(service, "services.api"), SubmitReviewTool, DONE)
+
+
+async def reviewer_wakes(
+    service: DirectorService, launcher: FakeLauncher, node_id: str = "root"
+) -> None:
+    """The IC of a team starts a turn, as when anything is sent to it."""
+    reviewer = ic(service, node_id)
+    assert reviewer is not None
+    launcher.report(reviewer, ConversationExecutionStatus.RUNNING)
+    await service.settled()
+
+
+def requests(service: DirectorService, launcher: FakeLauncher) -> list[str]:
+    """The review requests the top team's IC got."""
+    return [
+        text for text in launcher.messages_to(ic(service)) if "Review request" in text
+    ]
+
+
+def reject(node_id: str = "services.api") -> ReviewTeamAction:
+    return ReviewTeamAction(team=node_id, decision="reject", findings=[FINDING])
+
+
+def accept(node_id: str = "services.api", needed_above: str = "") -> ReviewTeamAction:
+    return ReviewTeamAction(team=node_id, decision="accept", needed_above=needed_above)
+
+
+async def split_api(service: DirectorService) -> None:
+    await use(
+        service,
+        ic(service, "services.api"),
+        ProposeTeamsTool,
+        proposing(
+            [
+                SplitChild(
+                    title="Schema", path="services/api/schema", task="Define orders"
+                )
+            ],
+            "Order has an id.",
+        ),
+    )
+    await use(service, manager(service, "services.api"), ApproveTeamsTool, APPROVE)
+    await tasked(service)
+
+
+def in_own_worktree(
+    service: DirectorService, tmp_path: Path, repo: Path, *teams: str
+) -> Path:
+    """Give teams (the Web team, when none is named) the one worktree a
+    conversation of theirs would have made."""
+    teams = teams or ("apps.web",)
+    name = teams[0].rsplit(".", 1)[-1]
+    worktree = tmp_path / name
+    run_git(repo, "worktree", "add", "--quiet", "-b", name, str(worktree))
+    for team in teams:
+        service.org.update_place(
+            node(service, team).id, worktree_path=str(worktree), branch=name
+        )
+    return worktree
+
+
+SCHEMA = "services.api.schema"
+
+
+async def landed(service: DirectorService) -> None:
+    """Have the work of the session opened first reviewed and accepted."""
+    await use(service, ic(service), SubmitReviewTool, DONE)
+    await use(
+        service,
+        division_lead_ic(service),
+        ReviewTeamTool,
+        accept(node(service, "root").id),
+    )
+
+
+async def at_api(service: DirectorService) -> tuple[str, str]:
+    """A session opened at API once the org has it.
+
+    Returns:
+        The place it was opened at and its IC's conversation.
+    """
+    await split_root(service)
+    await landed(service)
+    opened = await service.open_session(
+        OpenSessionRequest(text="Add refunds.", node_id="services.api")
+    )
+    await service.settled()
+    return opened.session.teams[0].id, opened.conversation_id
+
+
+JOBS = "services.api.jobs"
+
+
+def sets_up_jobs(
+    service: DirectorService,
+    top: str,
+    path: str = "services/api/jobs",
+    team_id: str = JOBS,
+):
+    """Have a session set up a team for a directory under the team it was
+    opened at."""
+    place = service.org.place(top)
+    assert isinstance(place, SessionTeam)
+    service.org.upsert(
+        SessionTeamInput(
+            **place.model_dump(include={"session", "title", "isolation", "status"}),
+            worktree_path=place.worktree_path,
+            branch=place.branch,
+            id=f"{team_id}@{place.session}",
+            team_id=team_id,
+            parent_id=top,
+            agents=[],
+            boundary=place.boundary.model_copy(update={"path": path}),
+            since="set up by the session",
+        )
+    )
+
+
+def org_gains(service: DirectorService, team_id: str, path: str) -> None:
+    """Have other accepted work give the org a team under API."""
+    api = service.org.team("services.api")
+    assert api is not None
+    service.org.upsert(
+        OrgNodeInput(
+            **api.model_dump(include={"title", "isolation"}),
+            id=team_id,
+            parent_id=api.id,
+            boundary=api.boundary.model_copy(update={"path": path}),
+            since="set up by other work",
+        )
+    )
+
+
+def waiting(service: DirectorService, top: str) -> list[str]:
+    """The teams of a session that wait to be settled."""
+    place = service.org.place(division_lead_of(service, top))
+    assert isinstance(place, SessionTeam)
+    return [
+        item.key
+        for item in (place.merge.items if place.merge else [])
+        if item.kind == "team"
+    ]
+
+
+def division_lead_manager(service: DirectorService, top: str) -> str | None:
+    place = service.org.place(division_lead_of(service, top))
+    assert place is not None
+    return agent_conversation(place, "manager")
+
+
+def path_of(service: DirectorService, team_id: str) -> str | None:
+    team = service.org.team(team_id)
+    return team.boundary.path if team else None
+
+
+async def session_accepted(
+    service: DirectorService, top: str, conversation: str
+) -> str:
+    """Have a session's work submitted and accepted.
+
+    Returns:
+        What its reviewer was answered.
+    """
+    await use(service, conversation, SubmitReviewTool, DONE)
+    answer = await use(
+        service, division_lead_ic(service, top), ReviewTeamTool, accept(top)
+    )
+    await service.settled()
+    return answer.text
+
+
+async def started(repo: Path, launcher: FakeLauncher, **options) -> DirectorService:
+    service = DirectorService(
+        repo,
+        save_delay=0,
+        remembered=repo.parent / "state" / "director.json",
+        **{"run_limit_retry": 0, **options},
+    )
+    await service.start(launcher)
+    await service.create_org(
+        CreateOrgRequest(
+            title="Checkout", task="Build", conversation=root_conversation(repo)
+        )
+    )
+    await service.settled()
+    return service
+
+
+def split(below: str, count: int) -> ProposeTeamsAction:
+    return proposing(
+        [
+            SplitChild(title=f"{below} {n}", path=f"{below}/t{n}", task="Work")
+            for n in range(count)
+        ]
+    )
+
+
+async def eventually(condition) -> None:
+    for _ in range(400):
+        if condition():
+            return
+        await asyncio.sleep(0.005)
+    raise AssertionError("It never happened")
+
+
+def looks(service: DirectorService, launcher: FakeLauncher, team: str = "root"):
+    """The looks the director asked the Manager of a team to take."""
+    return [
+        text
+        for text in launcher.messages_to(manager(service, team))
+        if "A look at your teams" in text
+    ]
+
+
+async def team_accepted(
+    service: DirectorService, repo: Path, team: str, times: int = 1
+):
+    """Have a team submit work and the top team's IC accept it."""
+    directory = node(service, team).boundary.path
+    for _ in range(times):
+        count = len(list((repo / directory).glob("*.txt"))) if directory else 0
+        commit(repo, f"{directory}/part{count}.txt", "done\n")
+        await use(service, ic(service, team), SubmitReviewTool, DONE)
+        await use(service, ic(service), ReviewTeamTool, accept(team))
+    await service.settled()
+
+
+async def escalates(service: DirectorService, team: str, times: int = 1) -> None:
+    for number in range(times):
+        await use(
+            service,
+            ic(service, team),
+            RaiseEscalationTool,
+            RaiseEscalationAction(category="design_decision", title=f"Q{number}?"),
+        )
+    await service.settled()
+
+
+async def sent_back(service: DirectorService, repo: Path, team: str, times: int = 1):
+    """Have a team submit work and the top team's IC send it back."""
+    directory = node(service, team).boundary.path
+    for _ in range(times):
+        count = len(list((repo / directory).glob("*.txt")))
+        commit(repo, f"{directory}/try{count}.txt", "again\n")
+        await use(service, ic(service, team), SubmitReviewTool, DONE)
+        await use(service, ic(service), ReviewTeamTool, reject(team))
+    await service.settled()
+
+
+class ServerEnded(BaseException):
+    """Ends whatever the director was doing, as a killed server does."""
+
+
+async def again(repo: Path, launcher: FakeLauncher, **options) -> DirectorService:
+    """The director of the server's next start, on the same org."""
+    launcher.listeners.clear()
+    launcher.before = lambda _: None
+    launcher.on_derived = lambda _: None
+    service = DirectorService(
+        repo,
+        save_delay=0,
+        run_limit_retry=0,
+        remembered=repo.parent / "state" / "director.json",
+        **options,
+    )
+    await service.start(launcher)
+    await service.settled()
+    return service
+
+
+def end_server_at(launcher: FakeLauncher, call: str, nth: int = 1) -> asyncio.Event:
+    """Have the server end at the ``nth`` time the director makes ``call``.
+
+    Returns:
+        Set once it has ended.
+    """
+    ended = asyncio.Event()
+    seen = 0
+
+    def before(name: str) -> None:
+        nonlocal seen
+        seen += name == call
+        if ended.is_set() or seen >= nth:
+            ended.set()
+            raise ServerEnded
+
+    launcher.before = before
+    launcher.on_derived = lambda _: before("derived")
+    return ended
+
+
+async def cut_off(launcher: FakeLauncher, ended: asyncio.Event, doing) -> None:
+    """Let the server end in the middle of ``doing``."""
+    task = asyncio.create_task(doing)
+    await ended.wait()
+    task.cancel()
+    await asyncio.gather(task, return_exceptions=True)
+
+
+def server_config(repo_dir: Path, **config) -> Config:
+    """A server whose director is started for ``repo_dir`` and keeps what it
+    remembers beside it."""
+    return Config(
+        **{
+            "session_api_keys": [],
+            "director_repo_path": repo_dir,
+            "conversations_path": repo_dir.parent / "state" / "conversations",
+            **config,
+        }
+    )
+
+
+def attempt(
+    service: DirectorService, conversation_id: str | None, tool: str, action: Action
+) -> str | None:
+    """What the director says to an agent that is about to use ``tool``."""
+    event = cast(ActionEvent, SimpleNamespace(tool_name=tool, action=action))
+    return service.guard_action(UUID(conversation_id or ""), event)
+
+
+def create(path: Path | str) -> FileEditorAction:
+    return FileEditorAction(command="create", path=str(path), file_text="x")
+
+
+API = "services.api"
+
+
+DB = "services.api.db"
+
+
+async def propose_and_approve(
+    service: DirectorService,
+    node_id: str,
+    *children: SplitChild,
+    keep: list[str] | None = None,
+) -> None:
+    proposal = proposing(list(children), keep=keep)
+    await use(service, ic(service, node_id), ProposeTeamsTool, proposal)
+    await use(service, manager(service, node_id), ApproveTeamsTool, APPROVE)
+    await tasked(service)
+
+
+@pytest.fixture
+async def service(repo: Path, launcher: FakeLauncher) -> AsyncIterator[DirectorService]:
+    """An org that was just created. A module that needs another overrides it."""
+    service = await started(repo, launcher)
+    yield service
+    await service.aclose()
