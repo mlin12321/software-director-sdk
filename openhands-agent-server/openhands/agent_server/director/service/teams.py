@@ -26,6 +26,7 @@ from openhands.agent_server.director.models import (
     OrgNode,
     Report,
     SessionTeam,
+    Stopped,
     ThreadMessage,
 )
 from openhands.agent_server.director.org_store import (
@@ -88,6 +89,89 @@ logger = logging.getLogger(__name__)
 class Teams(Delivery):
     """Starts agents and carries what is said between teams."""
 
+    def send(
+        self,
+        sender_place_id: str,
+        sender: AgentRole,
+        target_place_id: str,
+        target: AgentRole,
+        text: str,
+        note: str = "",
+    ) -> bool:
+        """Keep and deliver what one agent of a session writes to another:
+        the one way every message between agents goes. Safe from any
+        thread.
+
+        A message from the agent that gives the target its work (an IC to
+        the IC of the team directly below) is also a task: see ``_assign``.
+
+        Args:
+            sender_place_id: The team of the agent that writes.
+            target_place_id: The team of the agent written to: the same
+                one, or one directly below.
+            note: What the director adds for the reader; it is not kept.
+
+        Returns:
+            Whether the target's team was stopped and goes on with this.
+
+        Raises:
+            NotFound: One of the two teams is no longer in the org.
+        """
+        store = self.store
+        sender_place = store.place(sender_place_id)
+        if sender_place is None or store.place(target_place_id) is None:
+            raise NotFound("That team is no longer in the org")
+        between_ics = sender == "ic" and target == "ic"
+        # A thread is named by its reader's team when an IC reads it, and
+        # by its writer's when an IC writes to a Manager.
+        if target == "ic":
+            first, second = sender_place_id, target_place_id
+        else:
+            first, second = target_place_id, sender_place_id
+        self._keep_message(
+            first,
+            second,
+            ThreadMessage(at=_instant(), sender=sender, text=text),
+            ic_to_ic=between_ics,
+        )
+        stopped = self._assign(target_place_id) if between_ics else None
+        writer = ROLE_NAMES[sender]
+        heading = (
+            f"Your {writer} writes:"
+            if sender_place_id == target_place_id or target != "ic"
+            else f"The {writer} of the team above ({sender_place.title}) writes:"
+        )
+        if stopped is not None:
+            note += "\n\nIt had stopped your team; with this message your team goes on."
+        if target == "manager":
+            self.tell_manager(target_place_id, f"{heading}\n{text}{note}")
+        else:
+            self.tell_ic(target_place_id, f"{heading}\n{text}{note}")
+        return stopped is not None
+
+    def _assign(self, place_id: str) -> Stopped | None:
+        """What a message does to a team when it comes from the agent that
+        gives the team its work: the team owes a review again, goes on if
+        it was stopped, and its time without progress starts again.
+
+        Returns:
+            How the team was stopped, if it was.
+        """
+        store = self.store
+        team = store.place(place_id)
+        if team is None:
+            return None
+        if team.review is not None and team.review.state == "accepted":
+            # What it does with this is new work, which it submits again:
+            # left accepted, it would go up with a sibling's, unreviewed.
+            store.set_review(place_id, None)
+        stopped = team.stopped
+        if stopped is not None:
+            store.set_stopped(place_id, None)
+            self._enqueue(lambda: self._go_on(place_id, stopped.running), place_id)
+        self.progressed(place_id, by_above=True)
+        return stopped
+
     def message(
         self,
         manager_node_id: str,
@@ -104,24 +188,10 @@ class Teams(Delivery):
             ic_node_id: The IC's team: the same one, or one directly below.
             note: What the director adds for the reader; it is not kept.
         """
-        store = self.store
-        manager_node, ic_node = store.place(manager_node_id), store.place(ic_node_id)
-        if manager_node is None or ic_node is None:
-            raise NotFound("That team is no longer in the org")
-        self._keep_message(
-            manager_node_id,
-            ic_node_id,
-            ThreadMessage(at=_instant(), sender=sender, text=text),
-        )
         if sender == "ic":
-            self.tell_manager(manager_node_id, f"Your IC writes:\n{text}{note}")
-            return
-        heading = (
-            "Your Manager writes:"
-            if manager_node_id == ic_node_id
-            else f"The Manager of the team above ({manager_node.title}) writes:"
-        )
-        self.tell_ic(ic_node_id, f"{heading}\n{text}{note}")
+            self.send(ic_node_id, "ic", manager_node_id, "manager", text, note)
+        else:
+            self.send(manager_node_id, "manager", ic_node_id, "ic", text, note)
 
     def tell_manager(
         self, place_id: str, text: str, *, division_lead: bool = False
@@ -332,35 +402,7 @@ class Teams(Delivery):
         Returns:
             Whether the team was stopped.
         """
-        store = self.store
-        node, team = store.place(place_id), store.place(below_id)
-        if node is None or team is None:
-            raise NotFound("That team is no longer in the org")
-        self._keep_message(
-            place_id,
-            below_id,
-            ThreadMessage(at=_instant(), sender="ic", text=text),
-            ic_to_ic=True,
-        )
-        if team.review is not None and team.review.state == "accepted":
-            # What it does with this is new work, which it submits again:
-            # left accepted, it would go up with a sibling's, unreviewed.
-            store.set_review(below_id, None)
-        stopped = team.stopped
-        if stopped is not None:
-            store.set_stopped(below_id, None)
-            self._enqueue(lambda: self._go_on(below_id, stopped.running), below_id)
-        self.progressed(below_id, by_above=True)
-        self.tell_ic(
-            below_id,
-            f"The IC of the team above ({node.title}) writes:\n{text}"
-            + (
-                "\n\nIt had stopped your team; with this message your team goes on."
-                if stopped is not None
-                else ""
-            ),
-        )
-        return stopped is not None
+        return self.send(place_id, "ic", below_id, "ic", text)
 
     def count_accepted_review(self, place_id: str) -> None:
         """Count a review a team's IC accepted, and wake the team's Manager
