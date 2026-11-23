@@ -44,9 +44,16 @@ def conversation_of(key: bytes, token: str) -> str | None:
 
 def tools_server(server_url: str, token: str) -> MCPServer:
     """The MCP server an agent starts to reach the director's tools."""
+    # A server built into one binary has no interpreter to run a file with:
+    # the binary runs the shim itself.
+    frozen = getattr(sys, "frozen", False)
     return MCPServer(
         command=sys.executable,
-        args=[str(Path(mcp_shim.__file__).resolve())],
+        args=[
+            mcp_shim.SERVER_ARGUMENT
+            if frozen
+            else str(Path(mcp_shim.__file__).resolve())
+        ],
         env={
             mcp_shim.URL_VARIABLE: SecretStr(f"{server_url.rstrip('/')}{TOOLS_PATH}"),
             mcp_shim.TOKEN_VARIABLE: SecretStr(token),

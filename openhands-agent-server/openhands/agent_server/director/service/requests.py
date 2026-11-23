@@ -1,7 +1,6 @@
 """Sending a request straight to the team it concerns."""
 
 import asyncio
-import logging
 from pathlib import Path
 
 from openhands.agent_server.director import routing
@@ -17,9 +16,10 @@ from openhands.agent_server.director.prompts import misrouted_notice
 from openhands.agent_server.director.routing import Card, Choice
 from openhands.agent_server.director.service.teams import Teams
 from openhands.sdk.errors import Invalid
+from openhands.sdk.logger import get_logger
 
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # How many of the requests a team took before are on its card.
 _TOOK_SHOWN = 3
@@ -67,7 +67,7 @@ class Requests(Teams):
             within: The session the human says it in, when it does not
                 begin a new one.
         """
-        store = self.store
+        store = self.org
         started: set[str] = set()
         able: set[str] | None = None
         checkout = self._repo_dir
@@ -164,7 +164,7 @@ class Requests(Teams):
         return choice
 
     def _cards(self, teams: list[OrgNode], tracked: list[str]) -> list[Card]:
-        directories = {node.boundary.path for node in self.store.teams()} | {
+        directories = {node.boundary.path for node in self.org.teams()} | {
             node.boundary.path for node in teams
         }
         took: dict[str, list[str]] = {}
@@ -227,7 +227,7 @@ class Requests(Teams):
         mine = [
             request for request in self.routed_requests() if request.team_id == place.id
         ]
-        above = self.store.place(place.parent_id) if place.parent_id else None
+        above = self.org.place(place.parent_id) if place.parent_id else None
         if above is None or not mine or mine[-1].kind != "asked":
             raise Invalid(
                 "Nothing was sent to your team directly that is still with "

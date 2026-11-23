@@ -10,11 +10,12 @@ from pathlib import Path
 from typing import Annotated, Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Header, Query, Request, status
+from fastapi import APIRouter, Depends, Header, Query, status
 from fastapi.responses import Response, StreamingResponse
 
 # The org's agents get their tools from this server, so it registers them.
 import openhands.agent_server.director.tools  # noqa: F401
+from openhands.agent_server.dependencies import get_director_service
 from openhands.agent_server.director.acp import TOOLS_PATH
 from openhands.agent_server.director.changes import (
     accepted_changes,
@@ -108,16 +109,11 @@ _NO_REMOTE: dict[type[DomainError], str] = {
 }
 
 
-def get_director_service(request: Request) -> DirectorService:
-    return request.app.state.director_service
-
-
 def _calling_agent(
-    request: Request,
+    service: Annotated[DirectorService, Depends(get_director_service)],
     token: Annotated[str | None, Header(alias=TOKEN_HEADER)] = None,
 ) -> UUID:
     """The conversation of the agent that shows its token."""
-    service: DirectorService = request.app.state.director_service
     try:
         return service.agent_of(token or "")
     except NotFound as error:
@@ -126,7 +122,7 @@ def _calling_agent(
 
 def _require_node(service: DirectorService, node_id: str) -> OrgNode:
     """A team of the org tree. What a session has at a team is no team."""
-    node = service.store.team(node_id)
+    node = service.org.team(node_id)
     if node is None:
         raise NotFound(f"Unknown team: {node_id}")
     return node
@@ -134,7 +130,7 @@ def _require_node(service: DirectorService, node_id: str) -> OrgNode:
 
 def _require_any(service: DirectorService, node_id: str) -> OrgNode:
     """A team of the org tree, or a place of a session, by its id."""
-    node = service.store.get(node_id)
+    node = service.org.get(node_id)
     if node is None:
         raise NotFound(f"Unknown team: {node_id}")
     return node
@@ -142,7 +138,7 @@ def _require_any(service: DirectorService, node_id: str) -> OrgNode:
 
 def _require_place(service: DirectorService, node_id: str) -> SessionTeam:
     """A place of a session: where a team is worked on."""
-    node = service.store.place(node_id)
+    node = service.org.place(node_id)
     if node is None:
         raise NotFound(f"Nobody works at {node_id}: name a team of a session")
     return node
@@ -216,7 +212,7 @@ async def stream_org_tree(
     The teams are the teams of the org; the work at them is in `sessions`.
     """
     # The first use reads the tree from git.
-    store = await asyncio.to_thread(lambda: service.store)
+    store = await asyncio.to_thread(lambda: service.org)
     focus_id = node if node is not None else store.root_id
     if focus_id is None:
         raise NotFound("The org tree is empty")
@@ -504,8 +500,8 @@ def get_org_node(
     node = _require_node(service, node_id)
     return OrgNodeDetail(
         node=node,
-        ancestors=service.store.teams_above(node_id),
-        children=service.store.sub_teams(node_id),
+        ancestors=service.org.teams_above(node_id),
+        children=service.org.sub_teams(node_id),
     )
 
 
@@ -734,7 +730,7 @@ def get_node_messages(
     and ICs: its IC and its Manager to each other, its Manager and its IC to
     the ICs directly below, and the Manager and the IC above to its IC.
     Empty for a team of the org tree."""
-    place = service.store.place(node_id)
+    place = service.org.place(node_id)
     if place is None:
         # Nobody works at a team of the org itself, so nothing was said there.
         _require_node(service, node_id)
@@ -759,7 +755,7 @@ def get_node_ownership(
     place below it that works in a git worktree of its own is compared by
     the tip of that worktree.
     """
-    store = service.store
+    store = service.org
     place = store.place(node_id)
     if place is not None:
         return node_ownership(place, store.below(node_id), Path(place.worktree_path))
@@ -1014,11 +1010,11 @@ async def start_team_again(
 
 @director_tools_router.get("")
 def list_agent_tools(
-    request: Request, conversation_id: UUID = Depends(_calling_agent)
+    service: DirectorService = Depends(get_director_service),
+    conversation_id: UUID = Depends(_calling_agent),
 ) -> list[RemoteTool]:
     """The director's tools the calling agent is offered: its role's, or
     the few of a session's Division Lead."""
-    service: DirectorService = request.app.state.director_service
     return list_tools(service, conversation_id)
 
 
@@ -1028,7 +1024,7 @@ def list_agent_tools(
 async def call_agent_tool(
     name: str,
     arguments: dict[str, Any],
-    request: Request,
+    service: DirectorService = Depends(get_director_service),
     conversation_id: UUID = Depends(_calling_agent),
 ) -> ToolAnswer:
     """Run one of the director's tools for the agent that calls it.
@@ -1036,5 +1032,4 @@ async def call_agent_tool(
     What the director refuses comes back in the answer, for the agent to
     read and act on.
     """
-    service: DirectorService = request.app.state.director_service
     return await asyncio.to_thread(call_tool, service, conversation_id, name, arguments)

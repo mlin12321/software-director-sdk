@@ -18,6 +18,9 @@ from typing import Any
 
 
 TOKEN_HEADER = "X-Director-Agent-Token"
+# What the server's own binary is started with to run this instead of the
+# server, where there is no Python to run this file by its path.
+SERVER_ARGUMENT = "director-mcp-shim"
 URL_VARIABLE = "DIRECTOR_TOOLS_URL"
 TOKEN_VARIABLE = "DIRECTOR_AGENT_TOKEN"
 PROTOCOL_VERSION = "2025-06-18"

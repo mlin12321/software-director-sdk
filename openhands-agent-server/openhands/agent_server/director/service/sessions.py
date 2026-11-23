@@ -1,7 +1,6 @@
 """Sessions: the lines of work the human opens at a team. All work is in one."""
 
 import asyncio
-import logging
 from datetime import UTC, datetime
 from itertools import count
 from pathlib import Path
@@ -57,10 +56,11 @@ from openhands.sdk.errors import (
     Conflict,
     NotFound,
 )
+from openhands.sdk.logger import get_logger
 from openhands.sdk.tool.spec import Tool
 
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Where the last commit of a session is kept when the session is closed
 # with work that was not merged.
@@ -73,7 +73,7 @@ class Sessions(Splits):
 
     def sessions(self) -> list[Session]:
         """The sessions that are open, oldest first."""
-        return self.store.sessions()
+        return self.org.sessions()
 
     async def open_session(
         self,
@@ -103,7 +103,7 @@ class Sessions(Splits):
             Unavailable: The director is not running.
         """
         launcher = self._require_launcher()
-        store = await asyncio.to_thread(lambda: self.store)
+        store = await asyncio.to_thread(lambda: self.org)
         root = store.team(store.root_id) if store.root_id else None
         if root is None:
             raise Conflict("There is no org to open a session in")
@@ -265,7 +265,7 @@ class Sessions(Splits):
         Returns:
             Its conversation.
         """
-        store = self.store
+        store = self.org
         ic_id = conversation.conversation_id or uuid4()
         writer = self.team(top).writer
         store.update_place(top.id, agents=_new_agents(ic_id, writer))
@@ -331,8 +331,8 @@ class Sessions(Splits):
         names = self.team(place).names
         if not is_division_lead(above):
             return super()._hand_on(place, above, request, why)
-        own = self.store.team(place.team_id)
-        higher = self.store.team(own.parent_id or "") if own else None
+        own = self.org.team(place.team_id)
+        higher = self.org.team(own.parent_id or "") if own else None
         try:
             top = self._lift(place, higher) if higher else None
         except OrgStoreError:
@@ -348,7 +348,7 @@ class Sessions(Splits):
         self.tell_writer(
             top.id,
             handed_up(place, request.text, why, names=names)
-            + session_brief(top, self.store.session_title(top), [], names=names),
+            + session_brief(top, self.org.session_title(top), [], names=names),
         )
         self._save_soon()
         return (
@@ -364,7 +364,7 @@ class Sessions(Splits):
         Raises:
             OrgStoreError: Its work is in review already.
         """
-        store = self.store
+        store = self.org
         session = store.session_of(node)
         reviewed_from = store.place(node.parent_id or "")
         above = store.team(higher.parent_id) if higher.parent_id else higher
@@ -464,7 +464,7 @@ class Sessions(Splits):
     def _tell_human_misrouted(self, place: SessionTeam, text: str, why: str) -> None:
         """Put a request no team took before the human, who asked."""
         taken = {escalation.id for escalation in place.escalations}
-        self.store.raise_escalation(
+        self.org.raise_escalation(
             place.id,
             next(name for n in count(1) if (name := f"misrouted-{n}") not in taken),
             kind="design_decision",
@@ -482,13 +482,13 @@ class Sessions(Splits):
         Raises:
             NotFound: No such session is open.
         """
-        teams = self.store.session(session_id)
+        teams = self.org.session(session_id)
         if not teams:
             raise NotFound(f"No session {session_id!r} is open")
         self._begin("close_session", teams[0].id)
 
     async def _do_close_session(self, intent: Intent) -> None:
-        store = self.store
+        store = self.org
         run = self._runs()
         place_id = intent.node_id
         launcher = self._require_launcher()

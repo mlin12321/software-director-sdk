@@ -453,9 +453,7 @@ async def api_lifespan(api: FastAPI) -> AsyncIterator[None]:
                     bash_event_service=bash_svc,
                 ),
             )
-            director: DirectorService | None = getattr(
-                api.state, "director_service", None
-            )
+            director = context.director_service
             if director is not None:
                 try:
                     await director.start(ConversationTeamLauncher(service))
@@ -1008,12 +1006,17 @@ def create_app(config: Config | None = None) -> FastAPI:
     if config is None:
         config = load_config()
     app = _create_fastapi_instance(config)
-    install_server_context(app, build_server_context(config))
+    install_server_context(
+        app,
+        replace(
+            build_server_context(config),
+            director_service=DirectorService.from_config(config),
+        ),
+    )
     app.state.canvas_extension_backend_manager = CanvasExtensionBackendManager(
         secrets_store=lambda: server_context_of(app).stores.secrets
     )
     app.state.app_backend_session_store = AppBackendSessionStore()
-    app.state.director_service = DirectorService.from_config(config)
 
     _add_api_routes(app)
     _setup_static_files(app, config)

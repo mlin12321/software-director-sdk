@@ -16,7 +16,6 @@ its own in the ``types`` folder beside its ``director.yaml``, where a file
 of the same name takes the place of a shipped one.
 """
 
-import logging
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -33,8 +32,10 @@ from pydantic import (
     model_validator,
 )
 
+from openhands.sdk.logger import get_logger
 
-logger = logging.getLogger(__name__)
+
+logger = get_logger(__name__)
 
 # The type of a team whose proposal names none.
 DEFAULT_TYPE = "software-engineer"

@@ -3,7 +3,6 @@ agent to be quiet, and the questions put to a model."""
 
 import asyncio
 import json
-import logging
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from uuid import UUID
@@ -54,9 +53,10 @@ from openhands.sdk.errors import (
     NotFound,
     Unavailable,
 )
+from openhands.sdk.logger import get_logger
 
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 # How often a message is sent before it is left held.
@@ -68,7 +68,7 @@ class Delivery(Records):
 
     def refresh_headline(self, place_id: str, report: str) -> None:
         """Have a team's headline rewritten after it reported. Any thread."""
-        place = self.store.place(place_id)
+        place = self.org.place(place_id)
         if place is not None:
             task = f"{place.spec_summary}\n\nLatest report of the team: {report}"
             self._enqueue(
@@ -101,7 +101,7 @@ class Delivery(Records):
             at=_instant(),
             role=role,
             text=text,
-            session=self.store.session_title(place),
+            session=self.org.session_title(place),
             session_id=session_of(place),
         )
         # Its session's alone until the session's work is accepted.
@@ -122,7 +122,7 @@ class Delivery(Records):
         Raises:
             NotFound: No agent of the org has this conversation.
         """
-        found = self.store.find_by_conversation(conversation_id)
+        found = self.org.find_by_conversation(conversation_id)
         if found is None:
             raise NotFound(f"No agent of the org has conversation {conversation_id}")
         run = self._runs()
@@ -151,7 +151,7 @@ class Delivery(Records):
         """
         if self._loop is None:
             raise Unavailable("The director is not running agents on this server")
-        found = self.store.find_by_conversation(conversation_id)
+        found = self.org.find_by_conversation(conversation_id)
         place_id = found[0].id if found else ""
         seq = self._runs().hold(conversation_id, place_id, text)
         if at_once:
@@ -189,7 +189,7 @@ class Delivery(Records):
                 run.mark(CONDENSED, conversation_id, condensed)
             self._turn_begun(conversation_id)
         except NotFound:
-            store = self.store
+            store = self.org
             found = store.find_by_conversation(conversation_id)
             if found is not None:
                 place, role = found
@@ -227,7 +227,7 @@ class Delivery(Records):
         """Take as told to an agent the parts of its context it has just
         written itself, so that they are not sent back to it. Safe from any
         thread."""
-        place = self.store.place(place_id)
+        place = self.org.place(place_id)
         conversation_id = self.team(place).conversation(role) if place else None
         run = self._runs()
         before = run.marked(TOLD).get(conversation_id or "")
@@ -268,7 +268,7 @@ class Delivery(Records):
             The message, and the context to keep as told once it is sent;
             None when it tells nothing new.
         """
-        found = self.store.find_by_conversation(conversation_id)
+        found = self.org.find_by_conversation(conversation_id)
         if found is None:
             return text, None
         node, role = found
@@ -295,7 +295,7 @@ class Delivery(Records):
         moment something is sent to it. Its conversation says so only a
         moment later, and a second notice in between would end the turn the
         first one began."""
-        found = self.store.find_by_conversation(conversation_id)
+        found = self.org.find_by_conversation(conversation_id)
         if found is None:
             return
         node, role = found
@@ -307,7 +307,7 @@ class Delivery(Records):
         runs its own tools."""
         if conversation_id not in self._running:
             return False
-        found = self.store.find_by_conversation(conversation_id)
+        found = self.org.find_by_conversation(conversation_id)
         if found is None:
             return False
         node, role = found
@@ -316,7 +316,7 @@ class Delivery(Records):
     def _settles(self, conversation_id: str) -> bool:
         """Whether the agent's team is about to be changed, so that nothing
         new is started in it."""
-        found = self.store.find_by_conversation(conversation_id)
+        found = self.org.find_by_conversation(conversation_id)
         return found is not None and any(
             found[0].id in teams for teams, _ in self._settling.values()
         )
@@ -330,7 +330,7 @@ class Delivery(Records):
                 up again when it stops.
         """
         self._settling[intent.id] = (set(node_ids), _lane_for(intent))
-        store = self.store
+        store = self.org
         for team in map(store.place, node_ids):
             for agent in team.agents if team else []:
                 if agent.conversation_id in self._running:
@@ -339,7 +339,7 @@ class Delivery(Records):
     def _let_go(self, intent: Intent) -> None:
         """Deliver what waited for the teams a step has now changed."""
         teams, _ = self._settling.pop(intent.id, (set(), ""))
-        store = self.store
+        store = self.org
         for team in map(store.place, teams):
             for agent in team.agents if team else []:
                 if agent.conversation_id is not None:
@@ -393,7 +393,7 @@ class Delivery(Records):
             # Nothing is awaited from here to the gate, so the team is in
             # line at the gate before the next one tries.
             self._leave_line(place_id)
-        store = self.store
+        store = self.org
         run = self._runs()
         run.mark(WAITING, place_id)
         with suppress(NotFound):
@@ -445,7 +445,7 @@ class Delivery(Records):
 
     async def _send(self, conversation_id: str, text: str) -> None:
         """Deliver a message as part of a step, in its place among them."""
-        found = self.store.find_by_conversation(conversation_id)
+        found = self.org.find_by_conversation(conversation_id)
         seq = self._runs().hold(conversation_id, found[0].id if found else "", text)
         await self._deliver(seq, conversation_id, text)
 
@@ -518,7 +518,7 @@ class Delivery(Records):
     async def _name_org(self, top_id: str) -> None:
         """Give the top team the name a model made of the first task. The
         Division Lead of that session is called what its team is."""
-        store = self.store
+        store = self.org
         top = store.place(top_id)
         if top is None or store.root_id is None:
             return
@@ -542,7 +542,7 @@ class Delivery(Records):
                 is dropped once the team has reported, which may happen
                 before the model was asked.
         """
-        store = self.store
+        store = self.org
 
         def reported() -> bool:
             current = store.place(place_id)
@@ -586,7 +586,7 @@ class Delivery(Records):
     async def _name_session(self, place_id: str, request: str) -> None:
         """Call a session the human gave no name by what a model makes of
         its request. The team it was opened at keeps its own name."""
-        store = self.store
+        store = self.org
         place = store.place(place_id)
         conversation_id = self.writer_conversation(place) if place else None
         if place is None or conversation_id is None or self._paused is not None:
@@ -607,7 +607,7 @@ class Delivery(Records):
         await self._rename_agents(place, launcher)
 
     async def _rename_agents(self, place: SessionTeam, launcher: TeamLauncher) -> None:
-        store = self.store
+        store = self.org
         for agent in place.agents:
             if agent.conversation_id is not None:
                 with suppress(NotFound):

@@ -27,6 +27,7 @@ from openhands.agent_server.director.org_store import OrgStore
 from openhands.agent_server.director.service import (
     DirectorService,
 )
+from openhands.agent_server.server_context import server_context_of
 from openhands.sdk.conversation.state import ConversationExecutionStatus
 from openhands.sdk.errors import NotFound
 from tests.agent_server.director.conftest import (
@@ -254,7 +255,7 @@ class TestTreeStream:
     @pytest.fixture
     def service(self, tmp_path: Path) -> DirectorService:
         service = DirectorService(tmp_path)
-        service.store.replace_all(small_tree())
+        service.org.replace_all(small_tree())
         return service
 
     @staticmethod
@@ -294,10 +295,10 @@ class TestTreeStream:
 
         name, snapshot = await self.next_event(body)
         await asyncio.to_thread(
-            service.store.upsert, renamed(make_team("b", "root"), "Billing")
+            service.org.upsert, renamed(make_team("b", "root"), "Billing")
         )
         _, upsert = await self.next_event(body)
-        await asyncio.to_thread(service.store.remove, "b")
+        await asyncio.to_thread(service.org.remove, "b")
         _, removed = await self.next_event(body)
         _, above = await self.next_event(body)
 
@@ -312,8 +313,8 @@ class TestTreeStream:
         body = await self.open_stream(service, "b")
 
         _, snapshot = await self.next_event(body)
-        service.store.upsert(renamed(make_team("a1", "a"), "One"))
-        service.store.upsert(renamed(make_team("b", "root"), "Billing"))
+        service.org.upsert(renamed(make_team("a1", "a"), "One"))
+        service.org.upsert(renamed(make_team("b", "root"), "Billing"))
         _, first_change = await self.next_event(body)
 
         assert [node["id"] for node in snapshot["nodes"]] == ["root", "b"]
@@ -326,7 +327,7 @@ class TestTreeStream:
         body = await self.open_stream(service, expanded=["a", "missing"])
 
         _, snapshot = await self.next_event(body)
-        service.store.upsert(renamed(make_team("a1", "a"), "One"))
+        service.org.upsert(renamed(make_team("a1", "a"), "One"))
         _, change = await self.next_event(body)
 
         assert [node["id"] for node in snapshot["nodes"]] == [
@@ -344,7 +345,7 @@ class TestTreeStream:
         body = await self.open_stream(service, "a", full=True)
 
         _, snapshot = await self.next_event(body)
-        service.store.upsert(make_team("deep", "a1"))
+        service.org.upsert(make_team("deep", "a1"))
         _, change = await self.next_event(body)
 
         assert [node["id"] for node in snapshot["nodes"]] == ["root", "a", "a1", "a2"]
@@ -353,7 +354,7 @@ class TestTreeStream:
     async def test_sends_what_waits_on_the_human_and_each_change_to_it(
         self, service: DirectorService
     ):
-        store = service.store
+        store = service.org
         top = open_session_in(store, "a", "s1")
         store.raise_escalation(top.id, "jwt", kind="design_decision", title="jwt")
         body = await self.open_stream(service)
@@ -405,11 +406,11 @@ class TestTreeStream:
         await self.next_event(other)
 
         await body.aclose()  # type: ignore[attr-defined]
-        service.store.subscribe("root", delivered.append)
-        service.store.upsert(renamed(make_team("b", "root"), "Billing"))
+        service.org.subscribe("root", delivered.append)
+        service.org.upsert(renamed(make_team("b", "root"), "Billing"))
 
         # The store has exactly the open stream and this test's listener left.
-        assert len(service.store._listeners) == 2
+        assert len(service.org._listeners) == 2
         assert (await self.next_event(other))[0] == "node_upsert"
         assert len(delivered) == 1
 
@@ -421,7 +422,7 @@ class TestTreeStream:
         with pytest.raises(NotFound):
             await self.open_stream(service, "missing")
 
-        assert service.store._listeners == {}
+        assert service.org._listeners == {}
 
 
 def org_body(workspace: Path) -> dict:
@@ -439,7 +440,8 @@ async def running(
     """The app with its director running agents through a fake launcher."""
     app = create_app(server_config(repo))
     launcher = FakeLauncher()
-    service: DirectorService = app.state.director_service
+    service = server_context_of(app).director_service
+    assert service is not None
     await service.start(launcher)
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
@@ -586,7 +588,7 @@ async def test_answering_an_escalation_settles_it_and_tells_the_team(running, re
     client, launcher, service = running
     opened = (await client.post("/api/director/org", json=org_body(repo))).json()
     session = opened["session"]
-    service.store.raise_escalation(
+    service.org.raise_escalation(
         session["teams"][0]["id"],
         "jwt",
         kind="design_decision",
@@ -821,9 +823,9 @@ async def test_an_escalation_at_a_division_lead_place_is_answered_there(running,
     session = opened["session"]
     # A session opened at the top team has two places there.
     [lead] = [
-        place for place in service.store.session(session["id"]) if place.division_lead
+        place for place in service.org.session(session["id"]) if place.division_lead
     ]
-    service.store.raise_escalation(
+    service.org.raise_escalation(
         lead.id, "agent-failed", kind="critical_issue", title="Its IC failed"
     )
 
@@ -835,7 +837,7 @@ async def test_an_escalation_at_a_division_lead_place_is_answered_there(running,
     await service.settled()
 
     assert answered.status_code == 200
-    now = service.store.place(lead.id)
+    now = service.org.place(lead.id)
     assert now is not None and now.escalations == []
 
 

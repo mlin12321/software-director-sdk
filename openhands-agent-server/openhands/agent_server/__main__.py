@@ -10,6 +10,7 @@ from types import FrameType
 import uvicorn
 from uvicorn import Config
 
+from openhands.agent_server.director import mcp_shim
 from openhands.agent_server.logging_config import LOGGING_CONFIG
 from openhands.sdk.logger import DEBUG, get_logger
 
@@ -230,6 +231,10 @@ def _setup_crash_diagnostics() -> None:
 
 
 def main() -> None:
+    if sys.argv[1:] == [mcp_shim.SERVER_ARGUMENT]:
+        # Started by an agent of an org to reach the director's tools.
+        mcp_shim.main()
+        return
     # Set up crash diagnostics early, before any other initialization
     _setup_crash_diagnostics()
 

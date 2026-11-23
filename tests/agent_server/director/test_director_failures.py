@@ -301,7 +301,7 @@ async def test_an_answer_about_a_lost_ic_waits_until_the_team_has_started_again(
 ):
     await fails(service, launcher, ic(service))
     top = node(service, "root").id
-    service.store.set_agent(top, "ic", status=AGENT_LOST)
+    service.org.set_agent(top, "ic", status=AGENT_LOST)
     heard: list[str | None] = []
 
     async def start_again(_place: str, _request: object, said: str | None = None):

@@ -110,12 +110,12 @@ async def use(
 def node(service: DirectorService, node_id: str) -> SessionTeam:
     """A place by its id, or the place of the session opened first at the
     team of that id."""
-    found = service.store.place(node_id)
+    found = service.org.place(node_id)
     if "@" not in node_id:
         found = next(
             (
                 place
-                for place in service.store.places()
+                for place in service.org.places()
                 if not place.division_lead and place.team_id == node_id
             ),
             None,
@@ -126,13 +126,13 @@ def node(service: DirectorService, node_id: str) -> SessionTeam:
 
 def division_lead_ic(service: DirectorService, node_id: str = "root") -> str | None:
     """The IC that reviews the session of the place ``node_id``."""
-    place = service.store.place(division_lead_of(service, node_id))
+    place = service.org.place(division_lead_of(service, node_id))
     assert place is not None
     return agent_conversation(place, "ic")
 
 
 def division_lead_of(service: DirectorService, node_id: str = "root") -> str:
-    session = service.store.session_of(node(service, node_id))
+    session = service.org.session_of(node(service, node_id))
     assert session is not None
     return division_lead_id(session.above_id, session.id)
 
@@ -189,14 +189,14 @@ async def split_root(service: DirectorService) -> None:
 
 def sub_teams(service: DirectorService, node_id: str = "root") -> list[SessionTeam]:
     """What the session opened first has directly below a team."""
-    return service.store.below(node(service, node_id).id)
+    return service.org.below(node(service, node_id).id)
 
 
 def has_place(service: DirectorService, team_id: str) -> bool:
     """Whether a session has the team ``team_id``."""
     return any(
         session_id_of(place) and team_id_of(place) == team_id
-        for place in service.store.places()
+        for place in service.org.places()
     )
 
 
@@ -617,7 +617,7 @@ async def test_an_approved_split_sets_up_each_sub_team(
     )
     assert (team_id_of(web), web.isolation) == ("apps.web", "worktree")
     # They are the session's until its work is accepted.
-    assert [team.id for team in service.store.teams()] == ["root"]
+    assert [team.id for team in service.org.teams()] == ["root"]
     starts = {str(start.conversation_id): start for start in launcher.derived}
     api_ic, web_ic = starts[str(ic(service, api.id))], starts[str(ic(service, web.id))]
     # Each IC continues from the IC above.
@@ -695,7 +695,7 @@ async def test_what_an_ic_escalates_goes_to_the_ic_above_and_then_to_the_human(
     told = launcher.messages_to(ic(service))[-1]
     assert "The IC of team 'API'" in told and "Cents or decimals?" in told
     assert len(launcher.messages_to(manager(service))) == to_manager
-    assert service.store.escalations() == []
+    assert service.org.escalations() == []
     seen = {
         role: json.loads((await use(service, agent, ReadTeamContextTool, READ)).text)
         for role, agent in (("ic", ic(service)), ("manager", manager(service)))
@@ -731,7 +731,7 @@ async def test_what_an_ic_escalates_goes_to_the_ic_above_and_then_to_the_human(
         and "raised by the IC of its team" in by_the_manager.text
     )
     assert not passed.is_error and "waits on the human" in passed.text
-    [waiting] = service.store.escalations()
+    [waiting] = service.org.escalations()
     assert waiting.escalation.held_by is None
     assert waiting.escalation.handoffs[0].reason == "Finance has to choose."
 
@@ -824,7 +824,7 @@ async def test_what_the_top_team_escalates_waits_on_the_human(
     raised = await use(service, raiser, RaiseEscalationTool, CENTS)
 
     assert "waits on the human" in raised.text
-    [waiting] = service.store.escalations()
+    [waiting] = service.org.escalations()
     assert waiting.escalation.held_by is None
     assert node(service, "root").status == ("blocked" if role == "ic" else "idle")
 

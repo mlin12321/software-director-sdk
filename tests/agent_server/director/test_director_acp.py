@@ -16,6 +16,7 @@ from uuid import UUID, uuid4
 import httpx
 import pytest
 
+from openhands.agent_server.__main__ import main as server_main
 from openhands.agent_server.api import create_app
 from openhands.agent_server.conversation_service import ConversationService
 from openhands.agent_server.director import mcp_shim
@@ -52,6 +53,7 @@ from openhands.agent_server.director.tools.definition import (
     ProposeTeamsAction,
     SubmitReviewAction,
 )
+from openhands.agent_server.server_context import server_context_of
 from openhands.sdk import LLM, Agent
 from openhands.sdk.agent import ACPAgent
 from openhands.sdk.conversation.state import ConversationExecutionStatus
@@ -316,7 +318,8 @@ async def running(
     repo: Path,
 ) -> AsyncIterator[tuple[httpx.AsyncClient, DirectorService]]:
     app = create_app(server_config(repo, session_api_keys=["secret"]))
-    service: DirectorService = app.state.director_service
+    service = server_context_of(app).director_service
+    assert service is not None
     await service.start(FakeLauncher())
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
@@ -688,7 +691,7 @@ async def test_what_the_human_says_reaches_such_an_agent_in_the_middle_of_a_turn
     agent = ic(service)
     assert agent is not None
     top = node(service, "root").id
-    service.store.raise_escalation(
+    service.org.raise_escalation(
         top, "jwt", kind="design_decision", title="JWT or opaque tokens?"
     )
     launcher.report(agent, ConversationExecutionStatus.RUNNING)
@@ -813,11 +816,11 @@ async def test_an_org_without_a_name_is_named_with_its_division_lead(repo: Path)
     await service.settled()
 
     # Nothing waits for the agent's first turn.
-    top = service.store.team("root")
+    top = service.org.team("root")
     assert top is not None
     assert (top.title, top.headline) == ("Checkout", "Builds the checkout.")
-    assert [session.title for session in service.store.sessions()] == ["Checkout"]
-    leads = [place for place in service.store.places() if place.division_lead]
+    assert [session.title for session in service.org.sessions()] == ["Checkout"]
+    leads = [place for place in service.org.places() if place.division_lead]
     assert [lead.title for lead in leads] == ["Checkout"]
 
     agent = ic(service)
@@ -918,3 +921,18 @@ async def test_the_tools_are_reached_where_the_server_is_bound(
         == "http://127.0.0.1:4321/api/director/tools"
     )
     await service.aclose()
+
+
+def test_a_server_built_into_one_binary_runs_the_tools_shim_itself(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    ran: list[bool] = []
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(mcp_shim, "main", lambda: ran.append(True))
+
+    server = tools_server("http://127.0.0.1:8000", "token-3")
+    monkeypatch.setattr(sys, "argv", [server.command, *(server.args or [])])
+    server_main()
+
+    assert server.args == [mcp_shim.SERVER_ARGUMENT]
+    assert ran == [True]

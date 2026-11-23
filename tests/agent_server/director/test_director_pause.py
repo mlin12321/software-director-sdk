@@ -227,10 +227,10 @@ async def test_a_server_stopped_while_teams_wait_starts_them_in_order_once_resum
     await use(first, ic(first), ProposeTeamsTool, split("a", 3))
     await use(first, manager(first), ApproveTeamsTool, APPROVE)
     top = place(first)
-    for team in first.store.below(top):
+    for team in first.org.below(top):
         first.tell_writer(team.id, "Begin.")
     await eventually(
-        lambda: sum(team.waiting_to_start for team in first.store.below(top)) == 3
+        lambda: sum(team.waiting_to_start for team in first.org.below(top)) == 3
     )
     await first.aclose()
 
@@ -248,13 +248,13 @@ async def test_a_server_stopped_while_teams_wait_starts_them_in_order_once_resum
     # A team that has not been started yet has lost nothing.
     assert {kind for _, kind in kinds(left)} == {"start"}
     assert {
-        agent.status for team in second.store.below(top) for agent in team.agents
+        agent.status for team in second.org.below(top) for agent in team.agents
     } == {"idle"}
 
     await second.resume()
     await second.settled()
 
-    teams = second.store.below(top)
+    teams = second.org.below(top)
     assert [team_id_of(team) for team in teams] == ["a.t0", "a.t1", "a.t2"]
     assert node(second, "root").pending_split is None
     starts = [str(start.conversation_id) for start in launcher.derived[1:]]
@@ -322,7 +322,7 @@ async def test_a_prune_cut_off_by_a_crash_is_finished_and_recorded_once(
     await second.resume()
     await second.settled()
 
-    assert second.store.place(api) is None
+    assert second.org.place(api) is None
     assert len(set(launcher.deleted)) == 2
     kept = run_git(repo, "for-each-ref", "--format=%(refname)", "refs/agents/pruned")
     assert len(kept.split()) == 1
@@ -353,7 +353,7 @@ async def test_a_prune_cut_off_after_it_is_recorded_is_recorded_once(
     await second.resume()
     await second.settled()
 
-    assert second.store.place(api) is None
+    assert second.org.place(api) is None
     pruned = [event for event in record_of(second, "root") if event.kind == "pruned"]
     assert len(pruned) == 1
     await second.aclose()
@@ -415,7 +415,7 @@ async def test_the_end_of_a_split_cut_off_before_it_is_told_is_told(
 
     def server_ends(*_: object) -> None:
         # The session is kept as it is now, before the IC is told.
-        first._runs().replace_marks(SESSION, kept_sessions(first.store))
+        first._runs().replace_marks(SESSION, kept_sessions(first.org))
         ended.set()
         raise ServerEnded
 
@@ -696,8 +696,8 @@ async def test_a_session_stays_when_the_org_no_longer_has_its_team(
 
     # A session is not dropped with its team: what becomes of the team is
     # decided when the session's work is reviewed.
-    assert second.store.team("services.api") is None
-    open_now = [session.id for session in second.store.sessions()]
+    assert second.org.team("services.api") is None
+    open_now = [session.id for session in second.org.sessions()]
     assert at_api.session.id in open_now and at_web.session.id in open_now
     assert [item for item in left.items if item.kind == "dropped"] == []
     assert left.messages_held == 2
@@ -753,7 +753,7 @@ async def test_run_state_written_by_another_server_is_not_used(
         repo, save_delay=0, remembered=repo.parent / "elsewhere" / "director.json"
     )
     await other.start(launcher)
-    assert other.store.root_id == "root"
+    assert other.org.root_id == "root"
     await other.settled()
 
     assert other.summary().paused is None
@@ -837,7 +837,7 @@ def test_run_state_of_a_newer_director_is_refused(tmp_path: Path):
 
 def test_run_state_stays_out_of_the_repository(repo: Path):
     service = DirectorService(repo)
-    service.store.replace_all([make_team("root", None)])
+    service.org.replace_all([make_team("root", None)])
 
     assert service.summary().paused is None
     assert run_git(repo, "status", "--porcelain") == ""
@@ -879,7 +879,7 @@ async def test_another_servers_run_state_brings_back_none_of_its_sessions(
     await other.settled()
 
     # Their drafts, reports and place in the order are not used either.
-    assert other.store.sessions() == []
+    assert other.org.sessions() == []
     await other.aclose()
 
 

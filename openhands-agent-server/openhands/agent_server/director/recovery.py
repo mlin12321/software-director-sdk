@@ -6,7 +6,6 @@ or the repository is copied to another machine. What no longer fits is put
 aside and named, never applied.
 """
 
-import logging
 from collections.abc import Iterable, Mapping
 from pathlib import Path
 from uuid import UUID
@@ -26,9 +25,10 @@ from openhands.agent_server.director.run_state import (
     RunState,
 )
 from openhands.sdk.conversation.state import ConversationExecutionStatus
+from openhands.sdk.logger import get_logger
 
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 _STARTS = ("start_team", "launch_member")
 # The steps that start agents of their team: until they are finished, an

@@ -108,7 +108,7 @@ async def test_the_org_has_a_sessions_sub_teams_once_its_work_is_accepted(
 ):
     await split_root(service)
 
-    assert [team.id for team in service.store.teams()] == ["root"]
+    assert [team.id for team in service.org.teams()] == ["root"]
     assert division_lead_ic(service) is None
 
     await use(service, ic(service), SubmitReviewTool, DONE)
@@ -124,14 +124,14 @@ async def test_the_org_has_a_sessions_sub_teams_once_its_work_is_accepted(
 
     await use(service, asked, ReviewTeamTool, accept(node(service, "root").id))
 
-    assert [team.id for team in service.store.teams()] == [
+    assert [team.id for team in service.org.teams()] == [
         "root",
         "services.api",
         "apps.web",
     ]
     review = node(service, "root").review
     assert review is not None and review.state == "accepted"
-    assert service.store.place(division_lead_of(service)) is not None
+    assert service.org.place(division_lead_of(service)) is not None
 
 
 async def test_what_a_session_records_is_the_teams_once_its_work_is_accepted(
@@ -248,9 +248,9 @@ def own_worktree(service: DirectorService, repo: Path, tmp_path: Path) -> Path:
     have made."""
     worktree = tmp_path / "session"
     run_git(repo, "worktree", "add", "--quiet", "-b", "session", str(worktree))
-    for place in service.store.session(session_id_of(node(service, "root"))):
+    for place in service.org.session(session_id_of(node(service, "root"))):
         if not place.division_lead:
-            service.store.update_place(
+            service.org.update_place(
                 place.id, worktree_path=str(worktree), branch="session"
             )
     return worktree
@@ -375,7 +375,7 @@ async def test_a_new_request_cannot_go_to_a_team_only_a_session_has(
     launcher.answers[USAGE_ID] = "Teams: apps.web\nReason: The cart page is Web's."
 
     # The org does not have Web yet; the session that set it up does.
-    assert service.store.team("apps.web") is None
+    assert service.org.team("apps.web") is None
     sent = await service.route_message(
         RouteMessageRequest(text="Make the cart page faster.", auto=True)
     )
@@ -387,7 +387,7 @@ async def test_what_the_human_says_in_a_session_is_routed_among_its_own_teams(
 ):
     await split_root(service)
     launcher.answers[USAGE_ID] = "Teams: apps.web\nReason: The cart page is Web's."
-    [session] = service.store.sessions()
+    [session] = service.org.sessions()
 
     said = await service.route_message(
         RouteMessageRequest(text="Make the cart page faster.", session_id=session.id)
@@ -395,7 +395,7 @@ async def test_what_the_human_says_in_a_session_is_routed_among_its_own_teams(
     await service.settled()
 
     # Web is a team only this session has. No session was opened for it.
-    assert [open_now.id for open_now in service.store.sessions()] == [session.id]
+    assert [open_now.id for open_now in service.org.sessions()] == [session.id]
     assert (said.node_id, said.chosen_by) == (node(service, "apps.web").id, "model")
     assert said.conversation_id == ic(service, "apps.web")
     assert launcher.messages_to(said.conversation_id)[-1] == (
@@ -450,7 +450,7 @@ async def test_work_is_accepted_and_a_team_the_org_lost_meanwhile_stays_gone(
         ReportTool,
         ReportAction(text="Refunds are in."),
     )
-    service.store.remove("services.api")
+    service.org.remove("services.api")
 
     await use(service, conversation, SubmitReviewTool, DONE)
     accepted = await use(
@@ -460,8 +460,8 @@ async def test_work_is_accepted_and_a_team_the_org_lost_meanwhile_stays_gone(
     # The session set up no teams of its own, so nothing is asked and the
     # team stays gone; its code is merged all the same.
     assert "Accepting the work of 'API'" in accepted.text
-    assert service.store.team("services.api") is None
-    place = service.store.place(top)
+    assert service.org.team("services.api") is None
+    place = service.org.place(top)
     assert place is not None and place.review is not None
     assert place.review.state == "accepted"
     assert service.own_reports(place) == []
@@ -485,9 +485,9 @@ def sets_up_jobs(
 ):
     """Have a session set up a team for a directory under the team it was
     opened at."""
-    place = service.store.place(top)
+    place = service.org.place(top)
     assert isinstance(place, SessionTeam)
-    service.store.upsert(
+    service.org.upsert(
         SessionTeamInput(
             **place.model_dump(include={"session", "title", "isolation", "status"}),
             worktree_path=place.worktree_path,
@@ -504,9 +504,9 @@ def sets_up_jobs(
 
 def org_gains(service: DirectorService, team_id: str, path: str) -> None:
     """Have other accepted work give the org a team under API."""
-    api = service.store.team("services.api")
+    api = service.org.team("services.api")
     assert api is not None
-    service.store.upsert(
+    service.org.upsert(
         OrgNodeInput(
             **api.model_dump(include={"title", "isolation"}),
             id=team_id,
@@ -519,7 +519,7 @@ def org_gains(service: DirectorService, team_id: str, path: str) -> None:
 
 def waiting(service: DirectorService, top: str) -> list[str]:
     """The teams of a session that wait to be settled."""
-    place = service.store.place(division_lead_of(service, top))
+    place = service.org.place(division_lead_of(service, top))
     assert isinstance(place, SessionTeam)
     return [
         item.key
@@ -529,13 +529,13 @@ def waiting(service: DirectorService, top: str) -> list[str]:
 
 
 def division_lead_manager(service: DirectorService, top: str) -> str | None:
-    place = service.store.place(division_lead_of(service, top))
+    place = service.org.place(division_lead_of(service, top))
     assert place is not None
     return agent_conversation(place, "manager")
 
 
 def path_of(service: DirectorService, team_id: str) -> str | None:
-    team = service.store.team(team_id)
+    team = service.org.team(team_id)
     return team.boundary.path if team else None
 
 
@@ -570,12 +570,12 @@ async def test_a_stale_session_adds_its_team_and_keeps_what_the_org_gained(
     assert division_lead_manager(service, top) is None
 
     # What the session did not change is not brought up again either.
-    service.store.remove("services.api.cache")
+    service.org.remove("services.api.cache")
     await use(service, conversation, SubmitReviewTool, DONE)
     await use(service, division_lead_ic(service, top), ReviewTeamTool, accept(top))
     await service.settled()
     assert path_of(service, JOBS) == "services/api/jobs"
-    assert service.store.team("services.api.cache") is None
+    assert service.org.team("services.api.cache") is None
 
 
 @pytest.mark.parametrize("org_holds", [True, False])
@@ -586,7 +586,7 @@ async def test_a_team_both_made_something_else_of_waits_for_the_manager_above(
     sets_up_jobs(service, top)
     org_gains(service, JOBS, "services/api/workers")
     commit(repo, "services/api/refunds.py", "refunds = True\n")
-    place = service.store.place(f"{JOBS}@{top.split('@')[1]}")
+    place = service.org.place(f"{JOBS}@{top.split('@')[1]}")
     assert place is not None
     service.write_spec(place, "Run the refund jobs.")
 
@@ -657,12 +657,12 @@ async def test_a_team_set_up_under_one_the_org_lost_goes_under_the_nearest_team(
     top, conversation = await at_api(service)
     sets_up_jobs(service, top)
     service.hand_over(api_place(service, top), "", IDEMPOTENT)
-    service.store.remove("services.api")
+    service.org.remove("services.api")
 
     answer = await accepted(service, top, conversation)
 
     assert "Accepting the work of 'API'" in answer
-    assert service.store.team("services.api") is None
+    assert service.org.team("services.api") is None
     assert waiting(service, top) == [JOBS]
     asked = division_lead_manager(service, top)
     assert asked is not None
@@ -677,8 +677,8 @@ async def test_a_team_set_up_under_one_the_org_lost_goes_under_the_nearest_team(
     await use(service, asked, SettleTeamsTool, SettleTeamsAction())
 
     # The team the org removed stays removed.
-    assert service.store.team("services.api") is None
-    jobs = service.store.team(JOBS)
+    assert service.org.team("services.api") is None
+    jobs = service.org.team(JOBS)
     assert jobs is not None and jobs.parent_id == "root"
     assert path_of(service, JOBS) == "services/api/jobs"
     assert "moved" in [event.kind for event in record_of(service, "root")]
@@ -694,7 +694,7 @@ IDEMPOTENT = "Jobs are idempotent."
 
 
 def api_place(service: DirectorService, top: str) -> SessionTeam:
-    place = service.store.place(top)
+    place = service.org.place(top)
     assert isinstance(place, SessionTeam)
     return place
 
@@ -801,7 +801,7 @@ async def test_contracts_both_changed_wait_for_the_manager_above(
 
     assert not settled.is_error
     assert service.team_memory.read(API_CONTRACTS) == holds
-    place = service.store.place(division_lead_of(service, top))
+    place = service.org.place(division_lead_of(service, top))
     assert place is not None and place.merge is None
     # The session reads what holds now, not what it wrote.
     contracts = service.contracts_of(api_place(service, top))
@@ -867,7 +867,7 @@ async def test_what_a_session_wrote_for_a_team_that_was_replaced_is_not_the_new_
     await use(service, conversation, ReportTool, ReportAction(text="Chose a ledger."))
     # Other accepted work put another team in the same directory, which has
     # the same id.
-    service.store.update_team("services.api", since="set up by other work")
+    service.org.update_team("services.api", since="set up by other work")
 
     await accepted(service, top, conversation)
 
@@ -886,11 +886,11 @@ async def test_a_team_only_the_session_renamed_is_renamed_in_the_org(
     service: DirectorService,
 ):
     top, conversation = await at_api(service)
-    service.store.update_place(top, title="Payments API")
+    service.org.update_place(top, title="Payments API")
 
     await accepted(service, top, conversation)
 
-    team = service.store.team("services.api")
+    team = service.org.team("services.api")
     assert team is not None and team.title == "Payments API"
     assert waiting(service, top) == []
 
@@ -921,7 +921,7 @@ async def test_closing_a_session_keeps_what_waited_of_its_accepted_work(
     top, conversation = await at_api(service)
     sets_up_jobs(service, top)
     org_gains(service, JOBS, "services/api/workers")
-    jobs = service.store.place(f"{JOBS}@{api_place(service, top).session}")
+    jobs = service.org.place(f"{JOBS}@{api_place(service, top).session}")
     assert jobs is not None
     service.write_spec(jobs, "Run the refund jobs.")
     await accepted(service, top, conversation)
@@ -950,14 +950,14 @@ async def test_a_team_a_session_prunes_is_the_orgs_until_its_work_is_accepted(
     await service.settled()
 
     # Other sessions still have the team and all it recorded.
-    assert service.store.team("services.api") is not None
+    assert service.org.team("services.api") is not None
     assert service.team_memory.reports("services.api", "ic") == [kept]
     assert service.team_memory.former("services.api") == []
 
     await landed(service)
     await service.settled()
 
-    assert service.store.team("services.api") is None
+    assert service.org.team("services.api") is None
     [record] = service.team_memory.former("services.api")
     assert (record.ended, record.reports) == ("pruned", [kept])
     assert service.team_memory.reports("services.api", "ic") == []
@@ -1007,7 +1007,7 @@ async def test_an_ic_is_told_once_that_the_org_lacks_what_changed_after_an_accep
 
 
 def merge_of(service: DirectorService, top: str):
-    place = service.store.place(division_lead_of(service, top))
+    place = service.org.place(division_lead_of(service, top))
     assert isinstance(place, SessionTeam)
     return place.merge
 
@@ -1060,7 +1060,7 @@ async def test_what_later_work_makes_of_the_org_waits_for_earlier_work(
         assert review is not None and review.state == "accepted"
     waits = merge_of(service, second)
     assert waits is not None and waits.code_landed and waits.org_queued
-    assert service.store.team(WORKERS) is None
+    assert service.org.team(WORKERS) is None
     assert division_lead_manager(service, second) is None
     late = await use(
         service, division_lead_ic(service, second), SettleTeamsTool, SettleTeamsAction()
@@ -1129,7 +1129,7 @@ async def test_a_save_that_comes_in_the_middle_of_a_landing_waits_for_it(
     asked = division_lead_manager(service, top)
     await use(service, asked, SettleTeamsTool, SettleTeamsAction())
     before = refs(repo)
-    store = service.store
+    store = service.org
     set_shape = store.set_shape
     saves: list[threading.Thread] = []
 
@@ -1371,7 +1371,7 @@ async def test_a_manager_puts_a_team_it_takes_where_it_fits_the_org(
     await use(service, division_lead_ic(service, top), ReviewTeamTool, accept(top))
     await service.settled()
 
-    jobs = service.store.team(JOBS)
+    jobs = service.org.team(JOBS)
     assert jobs is not None
     assert (jobs.parent_id, jobs.title, jobs.boundary.path) == (
         "services.api",
@@ -1388,7 +1388,7 @@ async def test_a_spec_written_for_a_team_the_org_lost_is_left_to_the_team_that_h
     await use(
         service, conversation, WriteSpecTool, WriteSpecAction(file_text="# Refunds")
     )
-    service.store.remove("services.api")
+    service.org.remove("services.api")
     await use(service, conversation, SubmitReviewTool, DONE)
 
     # Its reviewer is shown it with the spec of the team that holds the
@@ -1413,7 +1413,7 @@ async def test_a_spec_written_for_a_team_the_org_lost_is_left_to_the_team_that_h
     )
     await service.settled()
 
-    root = service.store.team("root")
+    root = service.org.team("root")
     assert root is not None
     assert service.team_memory.read(API_SPEC) == "# Refunds"
     if rewritten:
@@ -1502,9 +1502,7 @@ async def test_closing_a_session_leaves_the_humans_own_checkout_as_it_is(
     # The session works apart; its Division Lead place is in the repository.
     worktree = tmp_path / "apart"
     run_git(repo, "worktree", "add", "--quiet", "-b", "apart", str(worktree))
-    service.store.update_place(
-        top.id, worktree_path=str(worktree), isolation="worktree"
-    )
+    service.org.update_place(top.id, worktree_path=str(worktree), isolation="worktree")
     assert node(service, division_lead_of(service)).agents
     (repo / "notes.txt").write_text("the human's, not committed\n")
 
@@ -1656,7 +1654,7 @@ async def test_contracts_for_a_team_the_org_lost_wait_with_the_rest_of_the_landi
     place = api_place(service, top)
     service.hand_over(place, "", "Refunds go through Jobs.")
     # Other accepted work set the team at that directory up anew meanwhile.
-    service.store.update_team("services.api", since="set up anew")
+    service.org.update_team("services.api", since="set up anew")
 
     await accepted(service, top, opened.conversation_id)
 
@@ -1677,7 +1675,7 @@ async def test_a_team_beside_one_inside_its_directory_waits_for_the_manager_abov
     await accepted(service, top, conversation)
 
     # Side by side, one would hold the other's directory: not the org's yet.
-    assert service.store.team(JOBS) is None
+    assert service.org.team(JOBS) is None
     assert waiting(service, top) == [JOBS]
 
 
@@ -1721,10 +1719,10 @@ async def test_a_landing_that_cannot_be_committed_leaves_the_tree_as_it_was(
 
     # Neither the tree nor what decides how it lands moved without the
     # team memory that goes with it.
-    assert [team.id for team in service.store.teams()] == ["root"]
+    assert [team.id for team in service.org.teams()] == ["root"]
     saved = OrgStore(shipped_type)
     load_org(create_org_board(repo), saved)
     assert [team.id for team in saved.teams()] == ["root"]
-    lead = service.store.place(division_lead_of(service))
+    lead = service.org.place(division_lead_of(service))
     assert lead is not None and lead.merge is not None
     await service.aclose()

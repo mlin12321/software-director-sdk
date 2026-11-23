@@ -6,7 +6,6 @@ every action of a file tool, and, for an agent that runs its own tools, the
 script its whole process is started by. None of them knows what a team is.
 """
 
-import logging
 import os
 import shutil
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
@@ -43,11 +42,12 @@ from openhands.agent_server.director.scope import (
 from openhands.sdk.agent import ACPAgent
 from openhands.sdk.agent.base import AgentBase
 from openhands.sdk.errors import Unavailable
+from openhands.sdk.logger import get_logger
 from openhands.sdk.tool.spec import Tool
 from openhands.sdk.utils.files import atomic_write_text
 
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Where the shells of the agents are kept, in the repository's git directory.
 SHELLS_DIR = "director-shells"

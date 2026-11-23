@@ -834,7 +834,7 @@ async def test_a_pruned_teams_hand_over_goes_with_it(
     await use(service, manager(service), PruneTeamTool, PRUNE_API)
 
     assert [team_id_of(team) for team in sub_teams(service)] == [WEB]
-    assert service.store.find_hand_over(side) is None
+    assert service.org.find_hand_over(side) is None
     late = await use(
         service, side, HandOverTool, HandOverAction(team="services.api.http", notes="x")
     )

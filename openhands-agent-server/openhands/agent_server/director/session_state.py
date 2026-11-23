@@ -9,16 +9,16 @@ written to the team memory like anybody's.
 """
 
 import json
-import logging
 from typing import Any
 
 from pydantic import BaseModel, ValidationError
 
 from openhands.agent_server.director.models import SessionInput, SessionTeamInput
 from openhands.agent_server.director.org_store import OrgStore
+from openhands.sdk.logger import get_logger
 
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class _KeptSession(BaseModel):

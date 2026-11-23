@@ -260,7 +260,7 @@ async def test_the_top_team_is_of_the_type_the_request_or_the_settings_name(
     service = await an_org(repo, launcher, config)
     try:
         assert node(service, "root").agent_type == "analyst"
-        kept = service.store.team("root")
+        kept = service.org.team("root")
         assert kept is not None and kept.agent_type == "analyst"
     finally:
         await service.aclose()
@@ -280,7 +280,7 @@ async def test_an_org_is_not_made_with_a_top_team_of_an_unknown_type(
                     conversation=root_conversation(repo),
                 )
             )
-        assert service.store.root_id is None
+        assert service.org.root_id is None
     finally:
         await service.aclose()
 

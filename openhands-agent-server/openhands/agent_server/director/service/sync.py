@@ -2,7 +2,6 @@
 
 import asyncio
 import json
-import logging
 from collections import deque
 from collections.abc import Collection
 from contextlib import suppress
@@ -84,10 +83,11 @@ from openhands.sdk.errors import (
     NotFound,
     Unprocessable,
 )
+from openhands.sdk.logger import get_logger
 from openhands.sdk.tool.spec import Tool
 
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class Sync(Sessions):
@@ -105,7 +105,7 @@ class Sync(Sessions):
             Unavailable: The director is not running.
         """
         self._require_launcher()
-        store = await asyncio.to_thread(lambda: self.store)
+        store = await asyncio.to_thread(lambda: self.org)
         if store.root_id is None:
             raise Conflict("There is no org to pause")
         if self._paused is None:
@@ -128,7 +128,7 @@ class Sync(Sessions):
             Unavailable: The director is not running.
         """
         launcher = self._require_launcher()
-        store = await asyncio.to_thread(lambda: self.store)
+        store = await asyncio.to_thread(lambda: self.org)
         # One resume at a time: a second would run the same agents again.
         async with self._resume_lock:
             if self._paused is None:
@@ -189,7 +189,7 @@ class Sync(Sessions):
 
     async def recovery(self) -> Recovery:
         """What resuming the org does, and what was put aside as stale."""
-        store = await asyncio.to_thread(lambda: self.store)
+        store = await asyncio.to_thread(lambda: self.org)
         run = self._runs()
         if self._paused is None:
             return Recovery(paused=None, items=[], messages_held=0)
@@ -234,7 +234,7 @@ class Sync(Sessions):
             Unavailable: The director is not running, or has no repository.
         """
         self._require_launcher()
-        store = await asyncio.to_thread(lambda: self.store)
+        store = await asyncio.to_thread(lambda: self.org)
         async with self._sync_lock:
             if self._merging() is not None:
                 raise Conflict(
@@ -270,7 +270,7 @@ class Sync(Sessions):
             NotFound: The repository has no such remote.
             UpstreamFailed: The remote could not be reached or refused.
         """
-        store = await asyncio.to_thread(lambda: self.store)
+        store = await asyncio.to_thread(lambda: self.org)
         if store.root_id is None:
             raise Conflict("There is no org to push")
         async with self._sync_lock:
@@ -357,7 +357,7 @@ class Sync(Sessions):
             Forbidden: The team's agents may not write the file either.
             Invalid: The path does not name a file that can be committed.
         """
-        store = await asyncio.to_thread(lambda: self.store)
+        store = await asyncio.to_thread(lambda: self.org)
         place = store.place(place_id)
         if place is None:
             raise NotFound(f"Unknown team: {place_id}")
@@ -408,7 +408,7 @@ class Sync(Sessions):
         """
         names = self.names_at(node_id)
         launcher = self._require_launcher()
-        store = await asyncio.to_thread(lambda: self.store)
+        store = await asyncio.to_thread(lambda: self.org)
         place = store.place(node_id)
         if place is None:
             team = store.team(node_id)
@@ -572,7 +572,7 @@ class Sync(Sessions):
     def _weigh(self, state: dict[str, Any], land: bool = False) -> OrgSync:
         """Work a merge out and, when ``land`` is set and no conflict is
         open, write it."""
-        store = self.store
+        store = self.org
         repo, remote = self._repo_dir, state["remote"]
         theirs: str | None = state["theirs"]
         choices: dict[str, Side] = state["choices"]
@@ -677,7 +677,7 @@ class Sync(Sessions):
 
     def _put_aside_stale(self) -> None:
         run = self._runs()
-        dropped = put_aside_stale(run, self.store, instance=self._instance())
+        dropped = put_aside_stale(run, self.org, instance=self._instance())
         if run.get("paused") is None:
             # Nothing that was left is this server's to take up.
             self._paused = None
@@ -699,7 +699,7 @@ class Sync(Sessions):
             await self.resume()
 
     def _look_at_what_was_left(self) -> None:
-        if self.store.root_id is None:
+        if self.org.root_id is None:
             return
         run = self._runs()
         self._put_aside_stale()
@@ -712,7 +712,7 @@ class Sync(Sessions):
         self._working()
 
     async def _pause_agents(self) -> None:
-        store = self.store
+        store = self.org
         run = self._runs()
         launcher = self._require_launcher()
         agents: list[tuple[str, str, UUID]] = [
@@ -813,7 +813,7 @@ class Sync(Sessions):
                 if status == ConversationExecutionStatus.STUCK
                 else "Its conversation ended with an error it gave no account of."
             )
-        team = self.store.place(place_id)
+        team = self.org.place(place_id)
         if team is None or all(
             a.status != AGENT_BLOCKED for a in team.agents if a.role == role
         ):
@@ -829,7 +829,7 @@ class Sync(Sessions):
         settled = [e.id for e in team.escalations if e.id in waits]
         for escalation_id in settled:
             with suppress(NotFound):
-                self.store.settle_escalation(team.id, escalation_id)
+                self.org.settle_escalation(team.id, escalation_id)
         if settled:
             self._save_soon()
 
@@ -862,7 +862,7 @@ class Sync(Sessions):
         each accept. Safe from any thread."""
         if self._changed_since_accept.get(session, True) or self._paused is not None:
             return
-        places = self.store.session(session)
+        places = self.org.session(session)
         at_work = ("working", AGENT_PAUSED)
         if any(
             place.status == "working"
@@ -878,7 +878,7 @@ class Sync(Sessions):
 
     async def _resync(self) -> None:
         """Read every agent's status back from its conversation."""
-        store = self.store
+        store = self.org
         agents: list[tuple[str, str, UUID]] = [
             (node.id, agent.role, UUID(agent.conversation_id))
             for node in store.places()
@@ -916,7 +916,7 @@ class Sync(Sessions):
     async def _resync_hand_overs(self) -> None:
         """Read back how each IC's hand-over conversation stands. One that
         ended or was lost while nothing followed it is ended here."""
-        store = self.store
+        store = self.org
         modes = [
             (node.id, mode)
             for node in store.places()

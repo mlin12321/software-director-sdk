@@ -77,7 +77,7 @@ async def test_starting_an_org_runs_a_root_team_briefed_with_the_task(
     opened = await service.create_org(org_request(repo))
     await service.settled()
 
-    root = service.store.team("root")
+    root = service.org.team("root")
     assert root is not None
     assert (root.parent_id, root.title) == (None, "Checkout")
     assert root.boundary.path == ""
@@ -290,7 +290,7 @@ async def test_an_org_started_where_one_is_saved_takes_that_org_up(
     there = DirectorService(other, save_delay=0)
     await there.start(launcher)
     first = await there.create_org(org_request(other))
-    there.store.update_team("root", title="Shop")
+    there.org.update_team("root", title="Shop")
     await there.settled()
     await there.aclose()
 
@@ -299,8 +299,8 @@ async def test_an_org_started_where_one_is_saved_takes_that_org_up(
     try:
         opened = await service.create_org(org_request(other))
         await service.settled()
-        root = service.store.team("root")
-        sessions = [session.id for session in service.store.sessions()]
+        root = service.org.team("root")
+        sessions = [session.id for session in service.org.sessions()]
     finally:
         await service.aclose()
 
@@ -318,7 +318,7 @@ async def test_an_org_is_not_started_outside_a_git_repository(
     with pytest.raises(Unavailable, match="elsewhere"):
         await service.create_org(org_request(elsewhere))
 
-    assert service.store.root_id is None
+    assert service.org.root_id is None
     assert service.summary().repo_path == str(repo)
 
 
@@ -350,7 +350,7 @@ async def test_no_org_is_left_when_its_root_agent_cannot_start(
     with pytest.raises(Unprocessable):
         await service.create_org(org_request(repo))
 
-    assert service.store.root_id is None
+    assert service.org.root_id is None
     assert service.summary().node_count == 0
 
 
@@ -421,7 +421,7 @@ async def test_the_humans_answer_reaches_the_team_that_raised_the_escalation(
 ):
     opened = await service.create_org(org_request(repo))
     top = opened.session.teams[0].id
-    service.store.raise_escalation(
+    service.org.raise_escalation(
         top, "jwt", kind="design_decision", title="JWT or opaque tokens?"
     )
 
@@ -429,7 +429,7 @@ async def test_the_humans_answer_reaches_the_team_that_raised_the_escalation(
     await service.settled()
 
     assert answered.escalations == []
-    assert service.store.escalations() == []
+    assert service.org.escalations() == []
     answer = launcher.messages_to(opened.conversation_id)[-1]
     assert "JWT or opaque tokens?" in answer and "Opaque tokens." in answer
 
@@ -441,7 +441,7 @@ async def test_an_escalation_a_team_still_holds_cannot_be_answered_by_the_human(
     await service.settled()
     await split_root(service, API)
     api = node(service, "services.api").id
-    service.store.raise_escalation(
+    service.org.raise_escalation(
         api, "schema", kind="design_decision", title="Which schema?"
     )
 
@@ -500,7 +500,7 @@ async def test_an_org_without_a_title_is_named_by_a_model_from_its_task(
     await service.settled()
 
     named = ("Checkout Flow", "Builds the shop's checkout.")
-    root = service.store.team("root")
+    root = service.org.team("root")
     assert root is not None and (root.title, root.headline) == named
     top = node(service, "root")
     assert (top.title, top.headline) == named
@@ -578,7 +578,7 @@ async def test_a_report_made_before_the_first_summary_is_not_overwritten_by_it(
     launcher.summary = TeamSummary("API", "Blocked on the session store.")
 
     def report_at_once(conversation_id: UUID) -> None:
-        found = service.store.find_by_conversation(str(conversation_id))
+        found = service.org.find_by_conversation(str(conversation_id))
         if found is not None and found[1] == "ic":
             service.refresh_headline(found[0].id, "it is blocked.")
 
@@ -842,7 +842,7 @@ async def test_the_first_message_cannot_start_an_org_without_a_conversation(
     with pytest.raises(Unprocessable, match="no org yet"):
         await service.route_message(RouteMessageRequest(text="Build it"))
 
-    assert service.store.root_id is None
+    assert service.org.root_id is None
 
 
 async def test_a_message_opens_a_session_at_the_nearest_team_above_where_it_was_sent(
@@ -852,7 +852,7 @@ async def test_a_message_opens_a_session_at_the_nearest_team_above_where_it_was_
     await service.settled()
     await split_root(service, API, WEB)
     await landed(service)
-    first = {place.id for place in service.store.places()}
+    first = {place.id for place in service.org.places()}
 
     async def send(path: str | None) -> tuple[str, bool, str]:
         routed = await service.route_message(
@@ -893,7 +893,7 @@ async def test_a_message_opens_a_session_at_a_team_whose_ic_in_another_is_gone(
     await service.settled()
     await split_root(service, API)
     await landed(service)
-    service.store.set_agent(node(service, "services.api").id, "ic", status=AGENT_LOST)
+    service.org.set_agent(node(service, "services.api").id, "ic", status=AGENT_LOST)
 
     routed = await service.route_message(
         RouteMessageRequest(text="Add a refund endpoint", path="services/api")
@@ -1015,7 +1015,7 @@ async def test_a_chat_folder_without_its_own_git_does_not_use_the_repository_abo
                     at_workspace=True,
                 )
             )
-        assert service.store.root_id is None
+        assert service.org.root_id is None
     finally:
         await service.aclose()
 
