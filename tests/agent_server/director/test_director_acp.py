@@ -34,7 +34,6 @@ from openhands.agent_server.director.models import (
     DirectorSettingsUpdate,
     SplitChild,
 )
-from openhands.agent_server.director.prompts import ORG_PROTOCOL
 from openhands.agent_server.director.sandbox import (
     command_script,
     find_bwrap,
@@ -60,6 +59,7 @@ from openhands.sdk.conversation.state import ConversationExecutionStatus
 from openhands.sdk.tool.spec import Tool
 from tests.agent_server.director.conftest import (
     APPROVE,
+    ORG_PROTOCOL,
     DerivedStart,
     FakeLauncher,
     division_lead_ic,
@@ -571,7 +571,7 @@ async def test_a_sub_team_runs_on_another_agent_profile_when_the_org_allows_it(
     starts = starts_of(launcher)
     api_ic = starts[ic(service, "svc.api")]
     assert api_ic.profile == "codex"
-    assert ORG_PROTOCOL.strip() in api_ic.task
+    assert ORG_PROTOCOL in api_ic.task
     assert api_ic.parent_id == UUID(str(ic(service)))
     # Its Manager is derived from it, so it runs on the same agent.
     assert starts[its_manager].profile is None

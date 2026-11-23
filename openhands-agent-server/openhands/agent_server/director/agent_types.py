@@ -17,8 +17,8 @@ of the same name takes the place of a shipped one.
 """
 
 import re
-from collections.abc import Iterable
-from dataclasses import dataclass
+from collections.abc import Iterable, Sequence
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal
 
@@ -57,29 +57,50 @@ class InvalidAgentType(ValueError):
     """A type's file does not say what a type may say."""
 
 
-def several(name: str) -> str:
-    """More than one of what a member is called."""
-    return name + ("es" if name.endswith(("s", "x", "ch", "sh")) else "s")
-
-
 def _a(name: str) -> str:
     return f"{'an' if name[:1].lower() in 'aeiou' else 'a'} {name}"
 
 
+_COUNTS = ("no", "one", "two", "three", "four", "five", "six", "seven", "eight")
+
+
 @dataclass(frozen=True)
 class Names:
-    """What the members the director turns to are called in a team, for
-    what it writes to that team's agents.
+    """What the members of a team are called, for what the director writes
+    to that team's agents. Every text of the director's own that names a
+    member takes the name from here.
 
     Attributes:
         writer: The member that works in the team's folder.
         reviewer: The member that reviews the work of the teams below.
         overseer: The member that settles what the team's sub-teams are.
+        writers: More than one writer; '' is the name with an s.
+        overseers: More than one overseer; '' is the name with an s.
+        members: Every member with what it does, as in "an IC, who does
+            the work".
+        above_writer: The writer of the team above; '' where that team is
+            of the same type or there is none.
+        above_reviewer: The reviewer of the team above, likewise.
     """
 
     writer: str
     reviewer: str
     overseer: str
+    writers: str = ""
+    overseers: str = ""
+    members: tuple[str, ...] = ()
+    above_writer: str = ""
+    above_reviewer: str = ""
+
+    def __post_init__(self) -> None:
+        for name, default in (
+            ("writers", f"{self.writer}s"),
+            ("overseers", f"{self.overseer}s"),
+            ("above_writer", self.writer),
+            ("above_reviewer", self.reviewer),
+        ):
+            if not getattr(self, name):
+                object.__setattr__(self, name, default)
 
     @property
     def a_writer(self) -> str:
@@ -92,6 +113,45 @@ class Names:
     @property
     def A_overseer(self) -> str:  # noqa: N802
         return "A" + _a(self.overseer)[1:]
+
+    @property
+    def reviews_own(self) -> bool:
+        """Whether the member that works also reviews the teams below."""
+        return self.reviewer == self.writer
+
+    def under(self, above: "Names") -> "Names":
+        """These names in a team whose team above is called by ``above``."""
+        return replace(self, above_writer=above.writer, above_reviewer=above.reviewer)
+
+    def words(self) -> dict[str, str]:
+        """What a text of the director's own may put in for a member."""
+        parts = [self.writer] if self.reviews_own else [self.writer, self.reviewer]
+        count = len(self.members)
+        return {
+            "writer": self.writer,
+            "a_writer": self.a_writer,
+            "writers": self.writers,
+            "reviewer": self.reviewer,
+            "overseer": self.overseer,
+            "a_overseer": self.a_overseer,
+            "overseers": self.overseers,
+            "above_writer": self.above_writer,
+            "above_reviewer": self.above_reviewer,
+            "count": _COUNTS[count] if count < len(_COUNTS) else str(count),
+            "members": _listed(self.members),
+            "other_parts": f"the {' and '.join(parts)} part"
+            + ("" if len(parts) == 1 else "s"),
+            "review_of_yours": "your review"
+            if self.reviews_own
+            else f"the review of your {self.reviewer}",
+        }
+
+
+def _listed(items: Sequence[str]) -> str:
+    """Items that hold commas themselves, as one list in a sentence."""
+    if len(items) < 3:
+        return ", and ".join(items)
+    return "; ".join(items[:-1]) + f"; and {items[-1]}"
 
 
 class ReviewTexts(BaseModel):
@@ -149,6 +209,10 @@ class Member(BaseModel):
             "What it is called in what the director writes to agents and "
             "people. Empty: its name."
         ),
+    )
+    plural: str = Field(
+        default="",
+        description="What several of it are called. Empty: the title with an s.",
     )
     text: str = Field(default="", description="What it is for.")
     protocol: str = Field(
@@ -265,19 +329,43 @@ class TeamTemplate(BaseModel):
 
     @property
     def names(self) -> Names:
-        """What the members the director turns to are called."""
+        """What the members are called, in a team with a team of the same
+        type above it."""
+        writer = self.writer
+        reviewer = (
+            self.member_with("review_team")
+            or self.member_with("review_team", lead=True)
+            or writer
+        )
+        overseer = (
+            self.member_with("approve_teams")
+            or self.member_with("settle_teams", lead=True)
+            or writer
+        )
+
+        def does(name: str) -> str:
+            did = [
+                what
+                for held, what in (
+                    (name == writer, "does the work"),
+                    (
+                        name == reviewer and name != writer,
+                        "reviews what sub-teams submit",
+                    ),
+                    (name == overseer, "decides which sub-teams exist"),
+                )
+                if held
+            ]
+            called = _a(self.title_of(name))
+            return f"{called}, who {' and '.join(did)}" if did else called
+
         return Names(
-            writer=self.title_of(self.writer),
-            reviewer=self.title_of(
-                self.member_with("review_team")
-                or self.member_with("review_team", lead=True)
-                or self.writer
-            ),
-            overseer=self.title_of(
-                self.member_with("approve_teams")
-                or self.member_with("settle_teams", lead=True)
-                or self.writer
-            ),
+            writer=self.title_of(writer),
+            reviewer=self.title_of(reviewer),
+            overseer=self.title_of(overseer),
+            writers=self.agents[writer].plural,
+            overseers=self.agents[overseer].plural,
+            members=tuple(does(name) for name in self.agents),
         )
 
     @property

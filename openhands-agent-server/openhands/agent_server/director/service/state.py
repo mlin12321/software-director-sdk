@@ -673,8 +673,9 @@ class ServiceState:
         one that is gone, what they are called in a team of the default
         type."""
         place = self.org.place(place_id)
-        kind = self.type_of(place) if place else self.agent_types[DEFAULT_TYPE]
-        return kind.names
+        if place is None:
+            return self.agent_types[DEFAULT_TYPE].names
+        return self.team(place).names
 
     def team(self, place: SessionTeam) -> Team:
         """A team of the org as the director reads it."""

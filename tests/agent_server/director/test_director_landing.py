@@ -78,6 +78,7 @@ from tests.agent_server.director.conftest import (
     run_git,
     session_accepted,
     sets_up_jobs,
+    shipped,
     shipped_type,
     split_root,
     started,
@@ -102,7 +103,10 @@ async def test_the_org_has_a_sessions_sub_teams_once_its_work_is_accepted(
     assert asked is not None
     start = launcher.derived[-1]
     assert str(start.conversation_id) == asked
-    assert "submits its work" in start.task and DIVISION_LEAD_IC_ROLE in start.task
+    assert (
+        "submits its work" in start.task
+        and shipped(DIVISION_LEAD_IC_ROLE) in start.task
+    )
     assert start.title == "Checkout (Division Lead IC)"
     assert start.checkout == node(service, division_lead_of(service)).worktree_path
 
@@ -494,7 +498,7 @@ async def test_a_team_both_made_something_else_of_waits_for_the_manager_above(
     assert asked is not None
     # It was asked when the work was submitted, beside the review.
     [start] = [d for d in launcher.derived if str(d.conversation_id) == asked]
-    assert DIVISION_LEAD_MANAGER_ROLE.strip() in start.task
+    assert shipped(DIVISION_LEAD_MANAGER_ROLE) in start.task
     told = launcher.messages_to(asked)[-1]
     assert "the session: 'API' in services/api/jobs, under services.api" in told
     assert "the org now: 'API' in services/api/workers, under services.api" in told

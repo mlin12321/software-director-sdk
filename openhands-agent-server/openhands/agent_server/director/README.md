@@ -149,6 +149,7 @@ description: A lab that checks what its benches find.
 agents:
   bench:
     writes: true
+    plural: benches
     text: Runs the experiments.
     tools: [read_team_context, raise_escalation, report, write_spec,
             submit_review, propose_teams, msg_team]
@@ -162,7 +163,7 @@ agents:
     lead_tools: [read_team_context, settle_teams]
 ```
 
-A member is whatever the type names it, and what it may do is the tools it is given. The director finds whom to turn to by tool: submitted work goes to the member of the team above that has `review_team`, proposed sub-teams to the one that has `approve_teams`. `lead_tools` are what a member has where its team only reviews a session's work. A type is refused unless exactly one member `writes` (works in the team's folder), and `submit_review`, `review_team`, `propose_teams`, `approve_teams` and (among `lead_tools`) `settle_teams` are each held by exactly one member. A member's `title` is what the director calls it when it writes to the team's agents (its name when left out), and a member may be given a `protocol` text of its own, said after what the director says of how the org works. The names of the director's tools (`msg_ic`, `msg_manager`) and their descriptions do not change with the type. No type with its own members has been run with real agents yet.
+A member is whatever the type names it, and what it may do is the tools it is given. The director finds whom to turn to by tool: submitted work goes to the member of the team above that has `review_team`, proposed sub-teams to the one that has `approve_teams`. `lead_tools` are what a member has where its team only reviews a session's work. A type is refused unless exactly one member `writes` (works in the team's folder), and `submit_review`, `review_team`, `propose_teams`, `approve_teams` and (among `lead_tools`) `settle_teams` are each held by exactly one member. A member's `title` is what the director calls it when it writes to the team's agents (its name when left out), its `plural` what it calls several of them (the title with an s when left out), and a member may be given a `protocol` text of its own, said after what the director says of how the org works. The names of the director's tools (`msg_ic`, `msg_manager`) and their descriptions do not change with the type. No type with its own members has been run with real agents yet.
 
 Every type needs a `description`: the agents and the org page choose a type by it. A type file added while the server runs is found without a restart.
 

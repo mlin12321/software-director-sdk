@@ -20,7 +20,7 @@ from openhands.agent_server.director.models import (
 )
 from openhands.agent_server.director.org_persistence import ORG_REF
 from openhands.agent_server.director.org_store import AGENT_LOST, team_id_of
-from openhands.agent_server.director.prompts import MANAGER_ROLE, ORG_PROTOCOL
+from openhands.agent_server.director.prompts import MANAGER_ROLE
 from openhands.agent_server.director.service import (
     DirectorService,
 )
@@ -38,6 +38,7 @@ from openhands.tools.glob.definition import GlobAction
 from openhands.tools.grep.definition import GrepAction
 from openhands.tools.terminal.definition import TerminalAction
 from tests.agent_server.director.conftest import (
+    ORG_PROTOCOL,
     SHIPPED,
     FakeLauncher,
     agent_conversation,
@@ -49,6 +50,7 @@ from tests.agent_server.director.conftest import (
     node,
     root_conversation,
     run_git,
+    shipped,
     shipped_tools,
     tasked,
 )
@@ -107,8 +109,8 @@ async def test_starting_an_org_runs_a_root_team_briefed_with_the_task(
     )
     assert manager_start.isolation == "shared"
     # Its part in the org is in its briefing, not in its system prompt.
-    assert MANAGER_ROLE.strip() in manager_start.task
-    assert ORG_PROTOCOL.strip() in manager_start.task
+    assert shipped(MANAGER_ROLE) in manager_start.task
+    assert ORG_PROTOCOL in manager_start.task
     assert "Manager" in manager_start.task
     assert "Build the checkout flow\nwith tests" in manager_start.task
     assert "Look in on your team." in launcher.messages_to(manager)[-1]
@@ -133,7 +135,7 @@ async def test_what_the_caller_appends_to_the_system_prompt_is_left_as_it_is(
     assert suffix == "Prefer small commits."
     await service.settled()
     briefing = launcher.messages_to(str(launcher.root.conversation_id))[0]
-    assert ORG_PROTOCOL.strip() in briefing
+    assert ORG_PROTOCOL in briefing
 
 
 def test_every_tool_a_shipped_type_gives_a_member_can_be_started_and_called():
@@ -173,7 +175,9 @@ async def test_a_manager_derived_from_its_ic_gets_its_own_tools_in_their_place(
 
 def test_an_ic_is_not_told_what_only_a_manager_does():
     assert "approve_teams" not in ORG_PROTOCOL and "prune_team" not in ORG_PROTOCOL
-    assert "approve_teams" in MANAGER_ROLE and "prune_team" in MANAGER_ROLE
+    assert "approve_teams" in shipped(MANAGER_ROLE) and "prune_team" in shipped(
+        MANAGER_ROLE
+    )
     # What an IC needs before its first event is still there.
     for tool in ("write_spec", "submit_review", "propose_teams", "raise_escalation"):
         assert tool in ORG_PROTOCOL

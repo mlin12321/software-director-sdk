@@ -72,8 +72,11 @@ class Team:
 
     @property
     def names(self) -> Names:
-        """What the members the director turns to are called here."""
-        return self.kind.names
+        """What the members are called here, and what the team above calls
+        the ones this team turns to."""
+        names = self.kind.names
+        above = self.org.place(self.place.parent_id) if self.place.parent_id else None
+        return names if above is None else names.under(self.org.type_of(above).names)
 
     def title(self, member: str) -> str:
         """What ``member`` is called in what the director writes."""
