@@ -231,3 +231,27 @@ def test_a_text_of_the_directors_own_names_no_member_by_itself():
     for text in texts:
         assert not re.search(r"\b(ICs?|Managers?)\b", text), text
         assert "{" not in text
+
+
+async def test_a_page_is_told_who_the_members_of_each_type_are(
+    service: DirectorService,
+):
+    """What shows a team need not know any member by name."""
+    types = {kind.name: kind for kind in service.org_settings_state().agent_types}
+
+    lab = [
+        (m.name, m.title, m.writes, m.reviews, m.oversees) for m in types["lab"].members
+    ]
+    assert lab == [
+        ("bench", "bench", True, False, False),
+        ("referee", "referee", False, True, False),
+        ("chair", "chair", False, False, True),
+    ]
+    shipped = [
+        (m.name, m.title, m.writes, m.reviews, m.oversees)
+        for m in types["software-engineer"].members
+    ]
+    assert shipped == [
+        ("ic", "IC", True, True, False),
+        ("manager", "Manager", False, False, True),
+    ]

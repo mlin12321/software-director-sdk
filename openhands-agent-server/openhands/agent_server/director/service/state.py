@@ -66,6 +66,7 @@ from openhands.agent_server.director.models import (
     DirectorSettingsUpdate,
     FormerTeam,
     HandOverMode,
+    MemberInfo,
     OrgNodeInput,
     OrgSettings,
     OrgSettingsState,
@@ -783,6 +784,16 @@ class ServiceState:
                     description=kind.description,
                     allowed=name in allowed,
                     sas_profile=kind.sas_profile,
+                    members=[
+                        MemberInfo(
+                            name=member,
+                            title=kind.title_of(member),
+                            writes=member == kind.writer,
+                            reviews=member == kind.reviewer,
+                            oversees=member == kind.overseer,
+                        )
+                        for member in kind.agents
+                    ],
                 )
                 for name, kind in self.agent_types.items()
             ],
