@@ -117,23 +117,21 @@ def own_checkout(
     name = node_id.replace("@", "-")
     worktree = tmp_path / name
     run_git(repo, "worktree", "add", "--quiet", "-b", name, str(worktree))
-    for team in service.store.session(session_id_of(node(service, node_id))):
+    for team in service.org.session(session_id_of(node(service, node_id))):
         if not team.division_lead:
-            service.store.update_place(
-                team.id, worktree_path=str(worktree), branch=name
-            )
+            service.org.update_place(team.id, worktree_path=str(worktree), branch=name)
     return worktree
 
 
 async def test_a_session_is_beside_the_org_tree_with_a_place_at_each_of_its_teams(
     service: DirectorService, launcher: FakeLauncher
 ):
-    tree_before = [team.model_dump() for team in service.store.teams()]
+    tree_before = [team.model_dump() for team in service.org.teams()]
     [first] = service.sessions()
-    api = service.store.team(API)
+    api = service.org.team(API)
     assert api is not None
     events: list[str] = []
-    snapshot, unsubscribe = service.store.subscribe(
+    snapshot, unsubscribe = service.org.subscribe(
         "root", lambda event: events.append(event.type), full=True
     )
 
@@ -159,10 +157,10 @@ async def test_a_session_is_beside_the_org_tree_with_a_place_at_each_of_its_team
     assert REFUNDS in start.task and "session 'Refunds'" in start.task
     assert session.conversation_id == found.conversation_id
     # The tree is what it was: no node, no child and no count is the session's.
-    assert [team.model_dump() for team in service.store.teams()] == tree_before
-    assert service.store.team(top.id) is None and len(service.store) == 4
-    assert [team.id for team in service.store.sub_teams("root")] == [API, WEB]
-    now = service.store.snapshot("root", full=True)
+    assert [team.model_dump() for team in service.org.teams()] == tree_before
+    assert service.org.team(top.id) is None and len(service.org) == 4
+    assert [team.id for team in service.org.sub_teams("root")] == [API, WEB]
+    now = service.org.snapshot("root", full=True)
     assert snapshot is not None and now is not None
     assert [team.id for team in now.nodes] == [team.id for team in snapshot.nodes]
     assert [open.id for open in snapshot.sessions] == [first.id]
@@ -214,11 +212,11 @@ async def test_a_session_the_human_gave_no_name_is_called_what_it_is_for(
     unnamed = await opened(service, title="")
     named = await opened(service, title="Refunds")
 
-    titles = {s.id: s.title for s in service.store.sessions()}
+    titles = {s.id: s.title for s in service.org.sessions()}
     assert titles[unnamed.session.id] == "Order Refunds"
     assert titles[named.session.id] == "Refunds"
     # The team keeps its own name; its IC is called by both.
-    found = service.store.find_by_conversation(unnamed.conversation_id)
+    found = service.org.find_by_conversation(unnamed.conversation_id)
     assert found is not None and found[0].title == "API"
     assert launcher.titles[UUID(unnamed.conversation_id)] == "API · Order Refunds (IC)"
 
@@ -291,7 +289,7 @@ async def test_a_session_at_the_top_team_is_reviewed_from_a_place_of_that_team(
         False,
     ]
     # The top team keeps its sub-teams and gains none.
-    assert [team.id for team in service.store.sub_teams("root")] == [API, WEB]
+    assert [team.id for team in service.org.sub_teams("root")] == [API, WEB]
 
 
 async def test_a_session_is_refused_where_it_cannot_be_found_or_started(
@@ -453,16 +451,16 @@ async def test_sub_teams_a_session_changes_are_its_own_until_its_work_is_accepte
         PruneTeamAction(team=top, reason="Not needed"),
     )
 
-    assert [team.title for team in service.store.below(top)] == ["DB", "Routes"]
+    assert [team.title for team in service.org.below(top)] == ["DB", "Routes"]
     assert "not a team directly below yours" in by_another.text
     # Neither the org nor the other session at the team has the new one.
-    assert [team.id for team in service.store.sub_teams(API)] == [DB]
-    assert [team.title for team in service.store.below(node(service, API).id)] == ["DB"]
+    assert [team.id for team in service.org.sub_teams(API)] == [DB]
+    assert [team.title for team in service.org.below(node(service, API).id)] == ["DB"]
 
     await use(service, ic(service, top), SubmitReviewTool, DONE)
     await use(service, division_lead_ic(service, top), ReviewTeamTool, accept(top))
 
-    assert [team.id for team in service.store.sub_teams(API)] == [
+    assert [team.id for team in service.org.sub_teams(API)] == [
         DB,
         "services.api.routes",
     ]
@@ -545,7 +543,7 @@ async def test_a_request_to_the_org_opens_a_session_and_reaches_no_other(
     launcher.answers[USAGE_ID] = f"Teams: {API}\nReason: It is the API's."
     heard = {
         place.id: len(launcher.messages_to(ic(service, place.id)))
-        for place in service.store.places()
+        for place in service.org.places()
         if place.agents
     }
 
@@ -587,11 +585,11 @@ async def test_what_a_session_waits_on_the_human_for_is_told_with_its_team(
     session = await opened(service, "root", "Rename the product everywhere.")
     top = session.session.teams[0].id
     # Nobody stands above the team a session was opened at.
-    raised = service.store.raise_escalation(
+    raised = service.org.raise_escalation(
         top, "name", kind="design_decision", title="Which name?"
     )
 
-    [waiting] = service.store.escalations()
+    [waiting] = service.org.escalations()
 
     assert raised.held_by is None
     # It names the team of the org, which a client can show, and the session.
@@ -668,7 +666,7 @@ async def test_closing_a_session_removes_it_and_keeps_what_was_not_merged(
     await service.settled()
 
     assert [open.title for open in service.sessions()] == ["Checkout"]
-    assert service.store.session(session.session.id) == []
+    assert service.org.session(session.session.id) == []
     assert conversation is not None and UUID(conversation) in launcher.deleted
     kept = run_git(
         repo, "for-each-ref", "--format=%(objectname)", "refs/agents/sessions/"
@@ -781,7 +779,7 @@ async def two_submitted(
         await use(service, ic(service, team), SubmitReviewTool, DONE)
         review = node(service, team).review
         assert review is not None
-        service.store.set_review(team, review.model_copy(update={"at": at}))
+        service.org.set_review(team, review.model_copy(update={"at": at}))
     return first, second
 
 
@@ -855,7 +853,7 @@ async def test_a_spec_a_session_writes_is_its_own_until_its_work_is_accepted(
     await use(service, division_lead_ic(service, top), ReviewTeamTool, accept(top))
 
     assert service.team_memory.read("services/api/spec.md") == "# Refunds"
-    api = service.store.team(API)
+    api = service.org.team(API)
     assert api is not None and api.spec_summary == "Refunds"
 
 
@@ -995,8 +993,8 @@ async def test_no_team_is_set_up_in_a_session_that_is_being_closed(
     launcher.report(root_ic, ConversationExecutionStatus.RUNNING)
     launcher.report(root_manager, ConversationExecutionStatus.RUNNING)
     await service.settled()
-    [session] = service.store.sessions()
-    places = {place.id for place in service.store.session(session.id)}
+    [session] = service.org.sessions()
+    places = {place.id for place in service.org.session(session.id)}
     service.close_session(session.id)
     await service.settled()
 
@@ -1004,7 +1002,7 @@ async def test_no_team_is_set_up_in_a_session_that_is_being_closed(
     await use(service, root_manager, ApproveTeamsTool, APPROVE)
     await service.settled()
 
-    assert {place.id for place in service.store.session(session.id)} == places
+    assert {place.id for place in service.org.session(session.id)} == places
     launcher.report(root_manager, ConversationExecutionStatus.FINISHED)
     launcher.report(root_ic, ConversationExecutionStatus.FINISHED)
     await service.settled()
@@ -1021,20 +1019,20 @@ async def test_a_close_cut_off_records_no_end_of_a_session_the_org_never_knew(
     )
     await first.settled()
     ended = asyncio.Event()
-    real = first.store.close_session
+    real = first.org.close_session
 
     def server_ends(session_id: str) -> bool:
         ended.set()
         raise ServerEnded
 
-    first.store.close_session = server_ends  # type: ignore[method-assign]
+    first.org.close_session = server_ends  # type: ignore[method-assign]
 
     async def closing() -> None:
         first.close_session(opened.session.id)
         await first.settled()
 
     await cut_off(launcher, ended, closing())
-    first.store.close_session = real  # type: ignore[method-assign]
+    first.org.close_session = real  # type: ignore[method-assign]
 
     second = await again(repo, launcher)
     await second.resume()

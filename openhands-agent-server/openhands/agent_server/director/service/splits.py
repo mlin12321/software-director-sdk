@@ -2,7 +2,6 @@
 
 import asyncio
 import json
-import logging
 from contextlib import suppress
 from pathlib import Path
 from typing import Literal
@@ -69,9 +68,10 @@ from openhands.agent_server.director.split import (
 from openhands.sdk.errors import (
     NotFound,
 )
+from openhands.sdk.logger import get_logger
 
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class Splits(Watch):
@@ -96,7 +96,7 @@ class Splits(Watch):
         keep it in the record, where its Manager reads it."""
         names = self.team(place).names
         proposal = place.pending_split
-        self.store.update_place(place.id, pending_split=None)
+        self.org.update_place(place.id, pending_split=None)
         self.record_event(
             place.id,
             "declined",
@@ -163,7 +163,7 @@ class Splits(Watch):
         except Exception as error:
             # Or the proposal stays approved for good: the IC is refused
             # every other one and never told of this.
-            place = self.store.place(intent.node_id)
+            place = self.org.place(intent.node_id)
             if place is not None and place.pending_split is not None:
                 self._decline(
                     place,
@@ -173,7 +173,7 @@ class Splits(Watch):
             raise
 
     async def _split(self, intent: Intent) -> None:
-        store = self.store
+        store = self.org
         run = self._runs()
         place_id = intent.node_id
         place = store.place(place_id)
@@ -350,7 +350,7 @@ class Splits(Watch):
             intent = run.step_done(intent, "handed_over")
 
     async def _finish_split(self, place_id: str) -> None:
-        store = self.store
+        store = self.org
         place = store.place(place_id)
         proposal = place.pending_split if place else None
         if place is None or proposal is None or proposal.status != "approved":
@@ -404,7 +404,7 @@ class Splits(Watch):
         store.update_place(place_id, pending_split=None)
 
     async def _do_prune(self, intent: Intent) -> None:
-        store = self.store
+        store = self.org
         run = self._runs()
         place_id = intent.node_id
         launcher = self._require_launcher()
@@ -517,7 +517,7 @@ class Splits(Watch):
     async def _do_hand_over(self, intent: Intent) -> None:
         """Put a team's IC in hand-over mode: start the side conversation
         in which it passes on what removed teams left."""
-        store, run, payload = self.store, self._runs(), intent.payload
+        store, run, payload = self.org, self._runs(), intent.payload
         place = store.place(intent.node_id)
         if place is None:
             return
@@ -589,7 +589,7 @@ class Splits(Watch):
         conversation did. Safe from any thread."""
         run = self._runs()
         kept = run.marked(HANDING).get(place_id)
-        place = self.store.place(place_id)
+        place = self.org.place(place_id)
         if kept is None or place is None or self._loop is None:
             return
         run.unmark(HANDING, place_id)
@@ -624,7 +624,7 @@ class Splits(Watch):
                 reports=reports,
                 compacted_report=await self._as_one_report(reports),
                 contracts=contracts or "",
-                session=self.store.session_title(team),
+                session=self.org.session_title(team),
                 since=team.since,
                 threads=self._take_threads(team.id),
             )
@@ -647,7 +647,7 @@ class Splits(Watch):
         Returns:
             The ref that keeps what the pruned team itself had uncommitted.
         """
-        store = self.store
+        store = self.org
         kept: str | None = None
         for index, team in enumerate(teams):
             self._forget_shells(team)

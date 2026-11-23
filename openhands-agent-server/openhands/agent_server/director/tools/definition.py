@@ -340,6 +340,9 @@ class _DirectorTool[ActionT: Action](ToolDefinition[ActionT, DirectorObservation
         ]
 
 
+register_tool(_DirectorTool.name, _DirectorTool)
+
+
 class ReadTeamContextTool(_DirectorTool[ReadTeamContextAction]):
     summary = (
         "Read your place in the org: your team, role and folder, your spec, "
@@ -358,6 +361,9 @@ class ReadTeamContextTool(_DirectorTool[ReadTeamContextAction]):
         return lambda service, caller, _action: agent_actions.node_context(
             service, caller
         )
+
+
+register_tool(ReadTeamContextTool.name, ReadTeamContextTool)
 
 
 class WriteSpecTool(_DirectorTool[WriteSpecAction]):
@@ -388,6 +394,9 @@ class WriteSpecTool(_DirectorTool[WriteSpecAction]):
         )
 
 
+register_tool(WriteSpecTool.name, WriteSpecTool)
+
+
 class EditContractsTool(_DirectorTool[EditContractsAction]):
     summary = (
         "IC only, with sub-teams. Change the contracts between your "
@@ -414,6 +423,9 @@ class EditContractsTool(_DirectorTool[EditContractsAction]):
         )
 
 
+register_tool(EditContractsTool.name, EditContractsTool)
+
+
 class MsgManagerTool(_DirectorTool[MsgManagerAction]):
     summary = (
         "IC only, with sub-teams. Write to your team's Manager, in your own "
@@ -431,6 +443,9 @@ class MsgManagerTool(_DirectorTool[MsgManagerAction]):
         return lambda service, caller, action: agent_actions.msg_manager(
             service, caller, action.text
         )
+
+
+register_tool(MsgManagerTool.name, MsgManagerTool)
 
 
 class ProposeTeamsTool(_DirectorTool[ProposeTeamsAction]):
@@ -456,6 +471,9 @@ class ProposeTeamsTool(_DirectorTool[ProposeTeamsAction]):
         )
 
 
+register_tool(ProposeTeamsTool.name, ProposeTeamsTool)
+
+
 class MsgIcTool(_DirectorTool[MsgIcAction]):
     summary = (
         "Manager only. Write to your team's IC, or to the IC of a team "
@@ -473,6 +491,9 @@ class MsgIcTool(_DirectorTool[MsgIcAction]):
         return lambda service, caller, action: agent_actions.msg_ic(
             service, caller, action.text, action.team
         )
+
+
+register_tool(MsgIcTool.name, MsgIcTool)
 
 
 class MsgTeamTool(_DirectorTool[MsgTeamAction]):
@@ -496,6 +517,9 @@ class MsgTeamTool(_DirectorTool[MsgTeamAction]):
         )
 
 
+register_tool(MsgTeamTool.name, MsgTeamTool)
+
+
 class HandOverTool(_DirectorTool[HandOverAction]):
     summary = (
         "IC only. After teams below yours were replaced or pruned, pass on "
@@ -514,6 +538,9 @@ class HandOverTool(_DirectorTool[HandOverAction]):
         return lambda service, caller, action: agent_actions.hand_over(
             service, caller, action.team, action.notes, action.contracts
         )
+
+
+register_tool(HandOverTool.name, HandOverTool)
 
 
 class StopTeamTool(_DirectorTool[StopTeamAction]):
@@ -537,6 +564,9 @@ class StopTeamTool(_DirectorTool[StopTeamAction]):
         )
 
 
+register_tool(StopTeamTool.name, StopTeamTool)
+
+
 class ApproveTeamsTool(_DirectorTool[ApproveTeamsAction]):
     summary = (
         "Manager only. Approve the sub-teams your IC proposed. They are set "
@@ -553,6 +583,9 @@ class ApproveTeamsTool(_DirectorTool[ApproveTeamsAction]):
         return lambda service, caller, _action: agent_actions.approve_teams(
             service, caller
         )
+
+
+register_tool(ApproveTeamsTool.name, ApproveTeamsTool)
 
 
 class SettleTeamsTool(_DirectorTool[SettleTeamsAction]):
@@ -576,6 +609,9 @@ class SettleTeamsTool(_DirectorTool[SettleTeamsAction]):
         )
 
 
+register_tool(SettleTeamsTool.name, SettleTeamsTool)
+
+
 class DeclineTeamsTool(_DirectorTool[DeclineTeamsAction]):
     summary = (
         "Manager only. Decline the sub-teams your IC proposed, saying why. "
@@ -594,6 +630,9 @@ class DeclineTeamsTool(_DirectorTool[DeclineTeamsAction]):
         return lambda service, caller, action: agent_actions.decline_teams(
             service, caller, action.reason
         )
+
+
+register_tool(DeclineTeamsTool.name, DeclineTeamsTool)
 
 
 class RaiseEscalationTool(_DirectorTool[RaiseEscalationAction]):
@@ -619,6 +658,9 @@ class RaiseEscalationTool(_DirectorTool[RaiseEscalationAction]):
         )
 
 
+register_tool(RaiseEscalationTool.name, RaiseEscalationTool)
+
+
 class ResolveEscalationTool(_DirectorTool[ResolveEscalationAction]):
     summary = (
         "Settle an escalation that the agent of your own role in a team "
@@ -642,6 +684,9 @@ class ResolveEscalationTool(_DirectorTool[ResolveEscalationAction]):
         )
 
 
+register_tool(ResolveEscalationTool.name, ResolveEscalationTool)
+
+
 class SubmitReviewTool(_DirectorTool[SubmitReviewAction]):
     summary = (
         "IC only. Submit your team's work when it is complete: commit it "
@@ -659,6 +704,9 @@ class SubmitReviewTool(_DirectorTool[SubmitReviewAction]):
         return lambda service, caller, action: agent_actions.submit_review(
             service, caller, action.summary
         )
+
+
+register_tool(SubmitReviewTool.name, SubmitReviewTool)
 
 
 class ReviewTeamTool(_DirectorTool[ReviewTeamAction]):
@@ -693,6 +741,9 @@ class ReviewTeamTool(_DirectorTool[ReviewTeamAction]):
         )
 
 
+register_tool(ReviewTeamTool.name, ReviewTeamTool)
+
+
 class ReportTool(_DirectorTool[ReportAction]):
     summary = (
         "Record something worth keeping: a design decision and its reason, "
@@ -710,6 +761,9 @@ class ReportTool(_DirectorTool[ReportAction]):
         return lambda service, caller, action: agent_actions.report(
             service, caller, action.text
         )
+
+
+register_tool(ReportTool.name, ReportTool)
 
 
 class PruneTeamTool(_DirectorTool[PruneTeamAction]):
@@ -736,6 +790,9 @@ class PruneTeamTool(_DirectorTool[PruneTeamAction]):
         )
 
 
+register_tool(PruneTeamTool.name, PruneTeamTool)
+
+
 DIRECTOR_TOOLS: dict[str, type[_DirectorTool]] = {
     tool.name: tool
     for tool in (
@@ -759,6 +816,3 @@ DIRECTOR_TOOLS: dict[str, type[_DirectorTool]] = {
         HandOverTool,
     )
 }
-
-for _tool in DIRECTOR_TOOLS.values():
-    register_tool(_tool.name, _tool)

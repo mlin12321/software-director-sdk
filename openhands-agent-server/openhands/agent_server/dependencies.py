@@ -22,6 +22,7 @@ from openhands.agent_server.bash_service import BashEventService
 from openhands.agent_server.config import Config
 from openhands.agent_server.conversation_registry import ConversationRegistry
 from openhands.agent_server.conversation_service import ConversationService
+from openhands.agent_server.director import DirectorService
 from openhands.agent_server.event_service import EventService
 from openhands.agent_server.persistence import (
     FileSecretsStore,
@@ -162,6 +163,20 @@ def get_conversation_service(
     if service is None:
         raise _unavailable(connection, "Conversation service is not available")
     return service
+
+
+def get_director_service(
+    connection: HTTPConnection, context: _Context
+) -> DirectorService:
+    service = context.director_service
+    if service is None:
+        raise _unavailable(connection, "The director is not available")
+    return service
+
+
+def get_optional_director_service(context: _Context) -> DirectorService | None:
+    """The director, for routes that work without one."""
+    return context.director_service
 
 
 def get_server_bash_event_service(

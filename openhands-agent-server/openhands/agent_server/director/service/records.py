@@ -2,7 +2,6 @@
 records and what they needed of each other."""
 
 import json
-import logging
 from collections.abc import Collection, Sequence
 from pathlib import Path
 from typing import Any, NamedTuple
@@ -90,9 +89,10 @@ from openhands.agent_server.director.split import (
     is_inside,
 )
 from openhands.sdk.errors import NotFound
+from openhands.sdk.logger import get_logger
 
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 _REPORTS = TypeAdapter(list[Report])
 _EVENTS = TypeAdapter(list[TeamEvent])
 _MESSAGES = TypeAdapter(list[ThreadMessage])
@@ -150,7 +150,7 @@ class Records(ServiceState):
     def _keep_failure(self, intent: Intent, error: Exception) -> None:
         """Keep a step that failed where the team above and the human read
         what became of a team."""
-        team = self.store.place(intent.node_id)
+        team = self.org.place(intent.node_id)
         if team is None:
             return
         what = STEP_NAMES.get(intent.kind, intent.kind)
@@ -202,9 +202,9 @@ class Records(ServiceState):
     def _note_change(self, session: str) -> None:
         """Remember that a session whose work is accepted has changed
         something since: the org takes it only when it is submitted again."""
-        top = next(iter(self.store.session(session)), None)
+        top = next(iter(self.org.session(session)), None)
         if top is not None and top.review is not None:
-            if top.review.state == "accepted" and self.store.opens_session(top):
+            if top.review.state == "accepted" and self.org.opens_session(top):
                 self._changed_since_accept.setdefault(session, False)
 
     def _event(
@@ -222,7 +222,7 @@ class Records(ServiceState):
             # The team of the org, whatever session it was the work of.
             team_id=team.team_id if team else "",
             team=team.title if team else "",
-            session=self.store.session_title(team) if team else "",
+            session=self.org.session_title(team) if team else "",
             detail=detail,
             paths=list(paths),
             other_id=other.team_id if other else (other_gone or ("", ""))[0],
@@ -256,7 +256,7 @@ class Records(ServiceState):
     def history_of(self, node_id: str) -> list[TeamEvent]:
         """What became of the teams directly below a team, oldest first:
         the org's record, and for a place what its session kept since."""
-        node = self.store.get(node_id)
+        node = self.org.get(node_id)
         org = (
             self._memory().history(node_id)
             if node is None or self.is_orgs(node)
@@ -280,7 +280,7 @@ class Records(ServiceState):
         beside = next(
             (
                 other
-                for other in self.store.below(team.parent_id)
+                for other in self.org.below(team.parent_id)
                 if other.id != team.id and owns(other, path)
             ),
             None,
@@ -356,7 +356,7 @@ class Records(ServiceState):
     def asked_below(self, place: SessionTeam) -> list[dict[str, str]]:
         """The latest of what the human asked directly of the teams below
         a team, oldest first."""
-        store = self.store
+        store = self.org
         below = {
             team.id
             for team in store.places()
@@ -493,7 +493,7 @@ class Records(ServiceState):
             kept = {}
         if not isinstance(kept, dict):
             kept = {}
-        below = {team.id for team in self.store.below(place_id)}
+        below = {team.id for team in self.org.below(place_id)}
         return {
             "accepted": int(kept.get("accepted", 0)),
             "escalations": {
@@ -510,7 +510,7 @@ class Records(ServiceState):
         Raises:
             NotFound: No agent of the org has this conversation.
         """
-        store = self.store
+        store = self.org
         found = store.find_by_conversation(conversation_id)
         if found is None:
             raise NotFound(f"No agent of the org has conversation {conversation_id}")
@@ -557,7 +557,7 @@ class Records(ServiceState):
         two to each other, its Manager and its IC to the ICs directly
         below, and the Manager and the IC above to its IC. Threads nobody
         wrote in are left out."""
-        down = [(place.id, team.id) for team in self.store.below(place.id)]
+        down = [(place.id, team.id) for team in self.org.below(place.id)]
         up = [(place.parent_id, place.id)] if place.parent_id is not None else []
         return [
             Thread(
@@ -620,7 +620,7 @@ class Records(ServiceState):
             in_full: Also what the teams removed from below an IC's team
                 left, which is otherwise only named.
         """
-        store = self.store
+        store = self.org
         contracts = self.contracts_of(place)
         specs = self.specs_of(place)
         own_spec = next((spec for spec in specs if not spec.old), None)
@@ -830,7 +830,7 @@ class Records(ServiceState):
         team_memory = self.team_memory
         # A record is the team's, whichever sessions have a place at it.
         teams: dict[str, str] = {}
-        for node in (*self.store.teams(), *self.store.places()):
+        for node in (*self.org.teams(), *self.org.places()):
             teams.setdefault(team_id_of(node), node.title)
         events = [
             HistoryEvent(**event.model_dump(), above_id=team_id, above=title)
@@ -863,7 +863,7 @@ class Records(ServiceState):
         comes from the directory, so the org may have another team there."""
         if not isinstance(node, SessionTeam):
             return True
-        team = self.store.team(node.team_id)
+        team = self.org.team(node.team_id)
         return team is not None and team.since == node.since
 
     def reports_of(self, node: OrgNode) -> list[Report]:
@@ -936,7 +936,7 @@ class Records(ServiceState):
         """The contracts a team works to: the ones between it and the teams
         beside it, set by the team above, and the ones between its own
         sub-teams."""
-        above = self.store.get(node.parent_id) if node.parent_id else None
+        above = self.org.get(node.parent_id) if node.parent_id else None
         own = normalize_store_path(node.boundary.path)
         paths = [
             normalize_store_path(place.boundary.path)
@@ -1012,7 +1012,7 @@ class Records(ServiceState):
             lost team's directory now, that team's spec, what the lost team
             was called and the spec the session wrote for it.
         """
-        store = self.store
+        store = self.org
         session = store.session_of(top)
         if session is None:
             return []
@@ -1054,9 +1054,9 @@ class Records(ServiceState):
     def _home_of(self, top: SessionTeam, path: str) -> str:
         """The team of the org that has what a session's team the org does
         not have left: the nearest one that holds its directory."""
-        session = self.store.session_of(top)
+        session = self.org.session_of(top)
         return home_of_lost(
-            path, self.store.teams(), session.above_id if session else top.team_id
+            path, self.org.teams(), session.above_id if session else top.team_id
         )
 
     def former_drafts(self, session: str) -> list[FormerTeam]:
@@ -1113,7 +1113,7 @@ class Records(ServiceState):
         Returns:
             The records that grew and the files that were not written.
         """
-        store = self.store
+        store = self.org
         run = self._runs()
         session = top.session
         review = store.place(top.parent_id or "")
@@ -1322,7 +1322,7 @@ class Records(ServiceState):
         Returns:
             What went with the session, in words; '' when nothing did.
         """
-        store = self.store
+        store = self.org
         run = self._runs()
         session = top.session
         places = store.session(session)

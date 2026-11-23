@@ -229,9 +229,7 @@ async def test_a_team_hands_back_what_is_not_its_own_and_the_model_is_told(
     sent = await ask(service, "Make the cart page faster.")
     asked = sent.conversation_id
 
-    [opened] = [
-        session for session in service.store.sessions() if session.team_id == DB
-    ]
+    [opened] = [session for session in service.org.sessions() if session.team_id == DB]
     checkout = node(service, sent.node_id).worktree_path
 
     handed = await use(service, asked, RaiseEscalationTool, NOT_MINE)
@@ -244,9 +242,9 @@ async def test_a_team_hands_back_what_is_not_its_own_and_the_model_is_told(
     # Nobody works above the team a session was opened at, so the session
     # itself goes one team up the org: the human is not asked and no other
     # session is opened.
-    sessions = len(service.store.sessions())
+    sessions = len(service.org.sessions())
     [lifted] = [
-        session for session in service.store.sessions() if session.id == opened.id
+        session for session in service.org.sessions() if session.id == opened.id
     ]
     assert (lifted.team_id, lifted.above_id) == (API, "root")
     top = lifted.teams[0]
@@ -269,13 +267,13 @@ async def test_a_team_hands_back_what_is_not_its_own_and_the_model_is_told(
     await use(service, lifted.conversation_id, RaiseEscalationTool, NOT_MINE)
     await service.settled()
     [at_top] = [
-        session for session in service.store.sessions() if session.id == opened.id
+        session for session in service.org.sessions() if session.id == opened.id
     ]
     assert (at_top.team_id, at_top.above_id) == ("root", "root")
     # The session has the top team's other sub-teams too.
     assert {team_id_of(place) for place in at_top.teams} == {"root", API, DB, WEB}
     assert node(service, f"{WEB}@{opened.id}").parent_id == at_top.teams[0].id
-    assert len(service.store.sessions()) == sessions
+    assert len(service.org.sessions()) == sessions
     last = await use(service, at_top.conversation_id, RaiseEscalationTool, NOT_MINE)
     assert "The human, who asked, is told" in last.text
     [told] = node(service, at_top.teams[0].id).escalations
@@ -298,7 +296,7 @@ async def test_a_session_whose_work_is_in_review_stays_where_it_was_opened(
     # Its reviewer reads the work already: the human, who asked, is told.
     assert "The human, who asked, is told" in handed.text
     at_db = node(service, sent.node_id)
-    assert service.store.opens_session(at_db)
+    assert service.org.opens_session(at_db)
     [told] = at_db.escalations
     assert told.held_by is None
 
@@ -332,7 +330,7 @@ async def test_the_places_a_lifted_session_gains_stand_for_the_orgs_teams(
     await service.settled()
 
     # The team beside the one the session was opened at is the org's own.
-    web, team = service.store.place(f"{WEB}@{session}"), service.store.team(WEB)
+    web, team = service.org.place(f"{WEB}@{session}"), service.org.team(WEB)
     assert web is not None and team is not None
     assert web.since == team.since != ""
 

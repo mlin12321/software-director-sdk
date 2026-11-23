@@ -7,14 +7,14 @@ OpenHands' public code review skill. They go to the IC above, with the
 write-up, and that IC applies them when it reviews.
 """
 
-import logging
 from pathlib import Path
 
 from openhands.agent_server.director.git import GitError, git, pathspec
+from openhands.sdk.logger import get_logger
 from openhands.sdk.skills import KeywordTrigger, Skill, TaskTrigger, load_public_skills
 
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 _SKILL_NAMES = ("codereview", "code-review")
 _SKILL_TRIGGER = "/codereview"

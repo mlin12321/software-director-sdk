@@ -3,7 +3,6 @@ team memory, the settings, the queue of steps and the agents' shells."""
 
 import asyncio
 import json
-import logging
 import os
 import re
 import secrets
@@ -127,9 +126,10 @@ from openhands.sdk.errors import (
     Unavailable,
     Unprocessable,
 )
+from openhands.sdk.logger import get_logger
 
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 ROOT_ID = "root"
 # What no type takes from an agent: without them it could not read its
@@ -529,7 +529,7 @@ class ServiceState:
         )
 
     @property
-    def store(self) -> OrgStore:
+    def org(self) -> OrgStore:
         """The org tree, loaded on first use."""
         with self._lock:
             if self._store is None:
@@ -543,7 +543,7 @@ class ServiceState:
         Raises:
             Unavailable: The director's directory is not a git repository.
         """
-        _ = self.store  # settles which repository the org is in
+        _ = self.org  # settles which repository the org is in
         if not is_git_repository(self._repo_dir):
             raise Unavailable(
                 f"The director has no team memory: {self._repo_dir} is not a git "
@@ -554,7 +554,7 @@ class ServiceState:
     @property
     def repo_dir(self) -> Path:
         """The repository the org is in."""
-        _ = self.store  # settles which repository the org is in
+        _ = self.org  # settles which repository the org is in
         return self._repo_dir
 
     def _memory(self) -> GitStore:
@@ -598,7 +598,7 @@ class ServiceState:
         self._announce_state()
 
     def summary(self) -> OrgSummary:
-        store = self.store
+        store = self.org
         return OrgSummary(
             root_id=store.root_id,
             node_count=len(store),
@@ -668,13 +668,13 @@ class ServiceState:
         """What the members the director turns to are called in a team; in
         one that is gone, what they are called in a team of the default
         type."""
-        place = self.store.place(place_id)
+        place = self.org.place(place_id)
         kind = self.type_of(place) if place else self.agent_types[DEFAULT_TYPE]
         return kind.names
 
     def team(self, place: SessionTeam) -> Team:
         """A team of the org as the director reads it."""
-        return Team(self.store, place)
+        return Team(self.org, place)
 
     def role_text(self, place: SessionTeam, member: str) -> str:
         """How the org works and what the member's part in it is, as its
@@ -726,7 +726,7 @@ class ServiceState:
         if kept is None or kept[0] != repo:
             found = (
                 own_settings(create_org_board(self._repo_dir))
-                if self.store.root_id is not None
+                if self.org.root_id is not None
                 else OrgSettings()
             )
             kept = self._own_settings = (repo, found)
@@ -795,7 +795,7 @@ class ServiceState:
             Invalid: A type is named that the director does not find, or
                 the default is not among the allowed ones.
         """
-        if self.store.root_id is None:
+        if self.org.root_id is None:
             raise NotFound("No org exists")
         named = update.model_dump(exclude_unset=True)
         changed = self.own_settings.model_copy(update=named)
@@ -829,7 +829,7 @@ class ServiceState:
     def settings_state(self) -> DirectorSettingsState:
         """The settings, with how large the org is now."""
         levels: dict[str, int] = {}
-        for node in self.store.teams():
+        for node in self.org.teams():
             levels[node.id] = levels.get(node.parent_id or "", 0) + 1
         return DirectorSettingsState(
             **self.settings.model_dump(),
@@ -920,7 +920,7 @@ class ServiceState:
             hand_over: The IC's hand-over conversation, when the scope is
                 that conversation's and not the IC's own.
         """
-        children = self.store.below(place.id)
+        children = self.org.below(place.id)
         kind = self.type_of(place)
         reviewer = self.team(place).reviewer
         # A team that has not started holds no one out of its directory:
@@ -929,7 +929,7 @@ class ServiceState:
         merges = []
         for team_id, kept in self._runs().marked(MERGING).items():
             merge = MergeCheckout.model_validate_json(kept)
-            team = self.store.place(team_id)
+            team = self.org.place(team_id)
             merges.append(
                 MergeArea(
                     where=merge.where,
@@ -1002,7 +1002,7 @@ class ServiceState:
         found: list[TeamMatch] = []
         if not words:
             return found
-        for node in self.store.teams():
+        for node in self.org.teams():
             text = f"{node.title}\n{node.boundary.path}".lower()
             if all(word in text for word in words):
                 found.append(
@@ -1023,7 +1023,7 @@ class ServiceState:
 
     def _conversations_below(self, team: SessionTeam) -> list[str]:
         """The conversations of a team and of every team below it."""
-        store = self.store
+        store = self.org
         teams = [team]
         for found in teams:
             teams.extend(store.below(found.id))
@@ -1031,7 +1031,7 @@ class ServiceState:
 
     def _is_stopped(self, conversation_id: str) -> bool:
         """Whether the agent's team, or a team above it, is stopped."""
-        store = self.store
+        store = self.org
         found = store.find_by_conversation(conversation_id)
         if found is None:
             return False
@@ -1057,7 +1057,7 @@ class ServiceState:
         Raises:
             Unavailable: The director's directory is not in a git repository.
         """
-        if self.store.root_id is not None:
+        if self.org.root_id is not None:
             return self._repo_dir
         if not is_git_repository(self._directory):
             raise Unavailable(
@@ -1071,7 +1071,7 @@ class ServiceState:
 
     def _runs(self) -> RunState:
         """What the director is in the middle of, in the org's repository."""
-        _ = self.store  # settles which repository the org is in
+        _ = self.org  # settles which repository the org is in
         with self._lock:
             if self._run is None or self._run_of != self._repo_dir:
                 if self._run is not None:
@@ -1177,7 +1177,7 @@ class ServiceState:
             What to start the agent's terminal with, or None when it needs
             no shell of its own.
         """
-        place = self.store.place(place_id)
+        place = self.org.place(place_id)
         if place is None:
             return None
         team = self.team(place)
@@ -1190,7 +1190,7 @@ class ServiceState:
         )
 
     def _confine_all(self) -> None:
-        for node in self.store.places():
+        for node in self.org.places():
             for agent in node.agents:
                 try:
                     self._confine(node.id, agent.role)
@@ -1247,7 +1247,7 @@ class ServiceState:
 
     def _join(self, workspace: Path, climb: bool = True) -> bool:
         """Take up the org saved at ``workspace``, or above it when ``climb``."""
-        if not self._load_from(workspace, self.store, climb=climb):
+        if not self._load_from(workspace, self.org, climb=climb):
             return False
         self._remember(repo_path=str(self._repo_dir))
         return True
@@ -1494,7 +1494,7 @@ class ServiceState:
         memory = self._memory()
         if not tree:
             return memory.take_in(landing, message)
-        store = self.store
+        store = self.org
         with self._saving:
             for _ in range(_LANDING_ATTEMPTS):
                 mutate, left = taking_in(landing)

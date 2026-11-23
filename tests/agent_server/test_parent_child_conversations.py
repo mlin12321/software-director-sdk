@@ -18,7 +18,10 @@ from openhands.agent_server.conversation_service import (
     InvalidParentConversation,
     _to_derive_from,
 )
-from openhands.agent_server.dependencies import get_conversation_service
+from openhands.agent_server.dependencies import (
+    get_conversation_service,
+    get_optional_director_service,
+)
 from openhands.agent_server.event_service import (
     ConversationRunLimitExceeded,
     EventService,
@@ -247,6 +250,7 @@ def test_router_maps_invalid_parent_to_422(tmp_path):
         f"Parent conversation {uuid4()} not found"
     )
     app.dependency_overrides[get_conversation_service] = lambda: service
+    app.dependency_overrides[get_optional_director_service] = lambda: None
     client = TestClient(app)
 
     payload = _start_request(tmp_path, parent_conversation_id=uuid4()).model_dump(
@@ -690,6 +694,7 @@ def _child_client(service: ConversationService) -> TestClient:
     add_domain_error_handler(app)
     app.include_router(conversation_router, prefix="/api")
     app.dependency_overrides[get_conversation_service] = lambda: service
+    app.dependency_overrides[get_optional_director_service] = lambda: None
     return TestClient(app)
 
 

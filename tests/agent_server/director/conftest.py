@@ -574,7 +574,7 @@ def root_conversation(workspace: Path) -> StartConversationRequest:
 
 async def tasked(service: DirectorService) -> None:
     """Give every team that was only set up its first message, which starts it."""
-    for team in service.store.places():
+    for team in service.org.places():
         if not team.agents:
             service.tell_writer(team.id, "Begin.")
     await service.settled()
@@ -585,7 +585,7 @@ def former_of(service: DirectorService, team_id: str) -> list[FormerTeam]:
     sessions keep to themselves until their work is accepted."""
     kept = [
         record
-        for session in service.store.sessions()
+        for session in service.org.sessions()
         for record in service.former_drafts(session.id)
         if record.id == team_key(team_id)
     ]
@@ -597,7 +597,7 @@ def record_of(service: DirectorService, team_id: str) -> list[TeamEvent]:
     the open sessions kept since their work was last accepted."""
     own = [
         event
-        for session in service.store.sessions()
+        for session in service.org.sessions()
         for event in service.own_events(session.id, team_id)
     ]
     return [*service.team_memory.history(team_id), *own]
@@ -628,8 +628,8 @@ def take_in(
 def memory_of(service: DirectorService, file: str) -> str | None:
     """A file of team memory as the first session has it: what it wrote
     there and nobody accepted yet, else the org's."""
-    [session, *_] = service.store.sessions()
-    return service.read_file(service.store.session(session.id)[0], file)
+    [session, *_] = service.org.sessions()
+    return service.read_file(service.org.session(session.id)[0], file)
 
 
 def commit(checkout: Path, path: str, content: str) -> None:

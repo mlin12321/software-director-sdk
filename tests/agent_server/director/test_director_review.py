@@ -466,7 +466,7 @@ def in_own_worktree(
     worktree = tmp_path / name
     run_git(repo, "worktree", "add", "--quiet", "-b", name, str(worktree))
     for team in teams:
-        service.store.update_place(
+        service.org.update_place(
             node(service, team).id, worktree_path=str(worktree), branch=name
         )
     return worktree
@@ -694,7 +694,7 @@ async def test_a_top_team_that_changed_nothing_is_accepted_when_all_below_is(
     assert root.review.passed_up and root.status == "done"
     # Each change was reviewed once already: nobody is asked again.
     assert division_lead_ic(service) is None
-    assert [team.id for team in service.store.teams()] == [
+    assert [team.id for team in service.org.teams()] == [
         "root",
         "services.api",
         "apps.web",

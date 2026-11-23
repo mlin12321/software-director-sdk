@@ -64,7 +64,7 @@ class Watch(Reviews):
             through: The team directly below the holder that it comes from:
                 the one that raised it, or the one that passed it up.
         """
-        holder = self.store.place(holder_id)
+        holder = self.org.place(holder_id)
         if holder is None:
             return
         history = "".join(f"\nPassed up by {entry}" for entry in passed_up)
@@ -92,7 +92,7 @@ class Watch(Reviews):
             Conflict: It is stopped already.
         """
         names = self.names_at(place_id)
-        store = self.store
+        store = self.org
         team = store.place(place_id)
         if team is None:
             raise NotFound(f"Team {place_id} does not exist")
@@ -181,7 +181,7 @@ class Watch(Reviews):
     def _hold_at_limit(self, session: Session) -> None:
         """Put the agents of a session that reached its limit to rest and
         ask the human whether it goes on."""
-        store = self.store
+        store = self.org
         top = store.instance(session.team_id, session.id)
         limit = session.cost_allowance
         if (
@@ -228,7 +228,7 @@ class Watch(Reviews):
     def go_on_past_limit(self, place_id: str) -> None:
         """Let a session that was put to rest at its limit go on for as
         much again, or without a limit when the org has none now."""
-        store = self.store
+        store = self.org
         top = store.place(place_id)
         session = store.session_of(top) if top else None
         if top is None or session is None:
@@ -263,10 +263,10 @@ class Watch(Reviews):
         wait is counted where the work is."""
         return (
             self._owes_work(team)
-            and not any(above.stopped for above in self.store.above(team.id))
+            and not any(above.stopped for above in self.org.above(team.id))
             and not any(
                 below.stopped is None and self._owes_work(below)
-                for below in self.store.below(team.id)
+                for below in self.org.below(team.id)
             )
         )
 
@@ -277,18 +277,18 @@ class Watch(Reviews):
             team.parent_id is not None
             # A team the org already had is there for the session's IC to
             # use or not; one the session set up itself is owed a task.
-            and self.store.team(team.team_id) is None
+            and self.org.team(team.team_id) is None
             and not is_division_lead(team)
             and not team.agents
             and not team.waiting_to_start
             and team.stopped is None
-            and not any(above.stopped for above in self.store.above(team.id))
+            and not any(above.stopped for above in self.org.above(team.id))
         )
 
     def _may_be_checked_in_on(self, team: SessionTeam) -> bool:
         """Whether the IC above is told from time to time how a team stands:
         it owes work, is not stopped, and an IC stands above it."""
-        store = self.store
+        store = self.org
         above = store.place(team.parent_id) if team.parent_id else None
         return (
             above is not None
@@ -420,7 +420,7 @@ class Watch(Reviews):
 
     async def _tell_of_stall(self, place_id: str, minutes: int) -> None:
         names = self.names_at(place_id)
-        store = self.store
+        store = self.org
         team = store.place(place_id)
         above = store.place(team.parent_id) if team and team.parent_id else None
         if team is None or above is None or self._paused is not None:

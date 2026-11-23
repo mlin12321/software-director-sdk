@@ -5,15 +5,15 @@ message of a request is turned into a short title and a headline, the way
 chat clients title a conversation from its first message.
 """
 
-import logging
 import re
 from dataclasses import dataclass
 
 from openhands.sdk.conversation.title_utils import strip_reasoning_blocks
 from openhands.sdk.llm import LLM, Message, TextContent
+from openhands.sdk.logger import get_logger
 
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 MAX_TITLE_LENGTH = 50
 MAX_HEADLINE_LENGTH = 120

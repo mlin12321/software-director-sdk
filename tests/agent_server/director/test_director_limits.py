@@ -156,7 +156,7 @@ async def test_a_lowered_limit_removes_nothing_and_stops_the_next_split(
     state = service.update_settings(DirectorSettingsUpdate(max_teams=1, max_depth=1))
 
     assert (state.teams, state.depth) == (3, 2)
-    assert len(service.store) == 3
+    assert len(service.org) == 3
     refused = await use(service, ic(service), ProposeTeamsTool, split("a", 1))
     assert refused.is_error
 
@@ -206,7 +206,7 @@ async def test_settings_are_kept_for_the_next_start_beside_the_repository(
         "max_open_sessions": 0,
     }
     assert kept["repo_path"] == str(repo)
-    assert again.settings.max_depth == 3 and again.store.root_id == "root"
+    assert again.settings.max_depth == 3 and again.org.root_id == "root"
 
 
 async def test_a_limit_kept_as_agents_is_no_longer_read(
@@ -274,11 +274,11 @@ async def test_teams_wait_for_a_free_run_and_start_when_one_ends(
     await use(service, ic(service), ProposeTeamsTool, split("a", 2))
     await use(service, manager(service), ApproveTeamsTool, APPROVE)
     top = node(service, "root").id
-    for team in service.store.below(top):
+    for team in service.org.below(top):
         service.tell_writer(team.id, "Begin.")
     await eventually(
         lambda: (
-            [team.waiting_to_start for team in service.store.below(top)] == [True, True]
+            [team.waiting_to_start for team in service.org.below(top)] == [True, True]
         )
     )
     assert len(launcher.derived) == 1
@@ -289,7 +289,7 @@ async def test_teams_wait_for_a_free_run_and_start_when_one_ends(
     launcher.report(root_ic, ConversationExecutionStatus.IDLE)
     await service.settled()
 
-    teams = service.store.below(top)
+    teams = service.org.below(top)
     assert [team.waiting_to_start for team in teams] == [False, False]
     assert len(launcher.derived) == 3 and node(service, "root").pending_split is None
     await service.aclose()

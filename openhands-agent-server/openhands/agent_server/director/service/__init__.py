@@ -2,7 +2,6 @@
 
 import asyncio
 import json
-import logging
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from pathlib import Path
@@ -64,9 +63,10 @@ from openhands.sdk.errors import (
     Unprocessable,
 )
 from openhands.sdk.event import ActionEvent
+from openhands.sdk.logger import get_logger
 
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 __all__ = [
@@ -125,7 +125,7 @@ class DirectorService(Sync):
         elif await asyncio.to_thread(self._remembered_repo) is not None:
             # An org that was left in the middle of its work is looked at
             # now, not when somebody first asks for it.
-            await asyncio.to_thread(lambda: self.store)
+            await asyncio.to_thread(lambda: self.org)
 
     async def aclose(self) -> None:
         """Stop running agents and save the tree if a save was pending.
@@ -181,7 +181,7 @@ class DirectorService(Sync):
             Unprocessable: The conversation cannot lead an org.
         """
         self._require_launcher()
-        store = await asyncio.to_thread(lambda: self.store)
+        store = await asyncio.to_thread(lambda: self.org)
         conversation = request.conversation
         workspace = await asyncio.to_thread(
             Path(conversation.workspace.working_dir).resolve
@@ -270,7 +270,7 @@ class DirectorService(Sync):
         Raises:
             NotFound: The session is not open.
         """
-        store = self.store
+        store = self.org
         places = [
             place for place in store.session(session_id) if not is_division_lead(place)
         ]
@@ -319,7 +319,7 @@ class DirectorService(Sync):
             Unavailable: The director is not running.
         """
         self._require_launcher()
-        store = await asyncio.to_thread(lambda: self.store)
+        store = await asyncio.to_thread(lambda: self.org)
         if request.session_id is not None:
             return await self._say_in_session(request.session_id, request.text)
         async with self._first_message_lock:
@@ -457,7 +457,7 @@ class DirectorService(Sync):
         """
         names = self.names_at(place_id)
         self._require_launcher()
-        store = self.store
+        store = self.org
         place = store.place(place_id)
         escalation = next(
             (e for e in place.escalations if e.id == escalation_id)

@@ -75,11 +75,6 @@ STORE_GETTERS = frozenset(
     }
 )
 
-# The director calls its org tree ``store`` (``OrgStore``): it is held in
-# memory, and only shares the name with a file store elsewhere in the package.
-IN_MEMORY_STORE_ROOT = SCAN_ROOT / "director"
-IN_MEMORY_STORE_ATTRIBUTE = "store"
-
 # Methods that only build or inspect an object and touch no file.
 _PURE_METHODS = frozenset({"with_cipher", "manifest_path"})
 
@@ -304,12 +299,7 @@ def main(argv: list[str]) -> int:
     violations: list[Violation] = []
     for path in _targets(argv):
         source = sources.get(path) or path.read_text(encoding="utf-8")
-        attrs = (
-            store_attrs - {IN_MEMORY_STORE_ATTRIBUTE}
-            if path.is_relative_to(IN_MEMORY_STORE_ROOT)
-            else store_attrs
-        )
-        violations.extend(check_source(path, source, attrs))
+        violations.extend(check_source(path, source, store_attrs))
     for violation in violations:
         print(violation)
     if violations:

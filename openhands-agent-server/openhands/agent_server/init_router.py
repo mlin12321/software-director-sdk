@@ -254,7 +254,6 @@ class _PreparedInit:
     root_path: str
     started: AsyncExitStack
     """Stops the services of ``context`` and restores the environment."""
-    director: DirectorService
     """Started on the conversation service of ``context``; ``started`` closes
     it first."""
 
@@ -392,13 +391,13 @@ class InitService:
                 conversation_registry=conversation_registry,
                 conversation_service=service,
                 bash_event_service=bash_svc,
+                director_service=director,
             )
             on_failure.pop_all()
             return _PreparedInit(
                 context=context,
                 root_path=root_path,
                 started=started.pop_all(),
-                director=director,
             )
 
     def _commit(self, prepared: _PreparedInit) -> None:
@@ -410,7 +409,6 @@ class InitService:
         """
         self._started = prepared.started
         install_server_context(self._app, prepared.context)
-        self._app.state.director_service = prepared.director
         # Re-derived from the merged config so Doc URLs are valid.
         self._app.root_path = prepared.root_path
         mark_initialization_complete()

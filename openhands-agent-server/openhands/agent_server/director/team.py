@@ -19,12 +19,12 @@ class Team:
         place: The team's place in the org.
     """
 
-    store: OrgStore
+    org: OrgStore
     place: SessionTeam
 
     @property
     def kind(self) -> TeamTemplate:
-        return self.store.type_of(self.place)
+        return self.org.type_of(self.place)
 
     @property
     def is_lead(self) -> bool:
@@ -98,10 +98,10 @@ class Team:
     def above(self) -> "Team | None":
         """The team it answers to, along the privileged edge."""
         parent = self.place.parent_id
-        place = self.store.place(parent) if parent else None
-        return Team(self.store, place) if place else None
+        place = self.org.place(parent) if parent else None
+        return Team(self.org, place) if place else None
 
     @property
     def below(self) -> list["Team"]:
         """The teams that answer to it."""
-        return [Team(self.store, place) for place in self.store.below(self.place.id)]
+        return [Team(self.org, place) for place in self.org.below(self.place.id)]

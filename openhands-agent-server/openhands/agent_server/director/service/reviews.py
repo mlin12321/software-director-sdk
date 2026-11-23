@@ -3,7 +3,6 @@
 import asyncio
 import hashlib
 import json
-import logging
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import NamedTuple
@@ -110,9 +109,10 @@ from openhands.sdk.errors import (
     Invalid,
     NotFound,
 )
+from openhands.sdk.logger import get_logger
 
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def _in_words(side: Side) -> str:
@@ -187,8 +187,8 @@ class Reviews(Requests):
 
     def request_review(self, place_id: str) -> None:
         """Have the work a team submitted reviewed. Safe from any thread."""
-        place = self.store.place(place_id)
-        if place is not None and self.store.opens_session(place):
+        place = self.org.place(place_id)
+        if place is not None and self.org.opens_session(place):
             self._open_merge(place)
         self._begin("request_review", place_id)
 
@@ -200,7 +200,7 @@ class Reviews(Requests):
             self._enqueue(lambda: self._rest(place_id), place_id)
 
     async def _rest(self, place_id: str) -> None:
-        place = self.store.place(place_id)
+        place = self.org.place(place_id)
         conversation_id = self.writer_conversation(place) if place else None
         if place is None or conversation_id is None or self._paused is not None:
             return
@@ -235,7 +235,7 @@ class Reviews(Requests):
             Conflict: None of its work waits for a review.
         """
         names = self.names_at(place_id)
-        store = self.store
+        store = self.org
         place = store.place(place_id)
         if place is None:
             raise NotFound(f"Team {place_id} does not exist")
@@ -301,7 +301,7 @@ class Reviews(Requests):
         (``agent_actions.submit_review``). The IC may end its turn without
         deciding; the next request names what still waits for it.
         """
-        store = self.store
+        store = self.org
         node = store.place(place_id) if place_id else None
         if node is None or self._paused is not None:
             return
@@ -367,7 +367,7 @@ class Reviews(Requests):
 
     def _asked_for(self, team: SessionTeam) -> str:
         """What the session ``team`` belongs to was opened for."""
-        session = self.store.session_of(team)
+        session = self.org.session_of(team)
         return session.request if session else ""
 
     def spec_choices(
@@ -382,8 +382,8 @@ class Reviews(Requests):
         """
         if not specs:
             return []
-        place = self.store.place(place_id)
-        if place is None or not self.store.opens_session(place):
+        place = self.org.place(place_id)
+        if place is None or not self.org.opens_session(place):
             raise Invalid(
                 "Specs are decided where the work of a session is accepted. "
                 "Leave `specs` empty."
@@ -431,7 +431,7 @@ class Reviews(Requests):
                 in the checkout above; '' when it was asked nothing.
             specs: What it decided about the specs of a session's work.
         """
-        place = self.store.place(place_id)
+        place = self.org.place(place_id)
         self._begin(
             "accept",
             place_id,
@@ -439,7 +439,7 @@ class Reviews(Requests):
             reconciled=reconciled,
             specs=specs or [],
             # The work of a session goes into what the org shares.
-            base=place is not None and self.store.opens_session(place),
+            base=place is not None and self.org.opens_session(place),
         )
 
     def _shapes(
@@ -449,7 +449,7 @@ class Reviews(Requests):
         the order they hang together, what they make, and what the org has
         there now, which is nothing when the org no longer has the team.
         None when the session is gone."""
-        store = self.store
+        store = self.org
         session = store.session_of(top)
         if session is None:
             return None
@@ -482,7 +482,7 @@ class Reviews(Requests):
             Whether the org has it now.
         """
         names = self.names_at(team_id)
-        store = self.store
+        store = self.org
         place = places.get(team_id)
         above = store.place(place.parent_id or "") if place else None
         if place is None or above is None:
@@ -560,7 +560,7 @@ class Reviews(Requests):
 
     def _review_of(self, top: SessionTeam) -> SessionTeam | None:
         """A session's Division Lead place."""
-        review = self.store.place(top.parent_id or "")
+        review = self.org.place(top.parent_id or "")
         return review if review is not None and is_division_lead(review) else None
 
     def _merge_of(self, top: SessionTeam) -> Merge | None:
@@ -570,7 +570,7 @@ class Reviews(Requests):
     def _keep_merge(self, top: SessionTeam, merge: Merge | None) -> None:
         review = self._review_of(top)
         if review is not None:
-            self.store.update_place(review.id, merge=merge)
+            self.org.update_place(review.id, merge=merge)
 
     def _open_merge(self, top: SessionTeam) -> Merge | None:
         """Give the work a session submits its place in the order it goes
@@ -593,7 +593,7 @@ class Reviews(Requests):
     def _in_order(self) -> list[SessionTeam]:
         """The places sessions were opened at whose work is on its way
         into the org, in the order it was submitted."""
-        store = self.store
+        store = self.org
         found: list[tuple[int, SessionTeam]] = []
         for session in store.sessions():
             places = store.session(session.id)
@@ -618,7 +618,7 @@ class Reviews(Requests):
                 The lost team's own record may have landed since, and
                 then this is where its contracts are kept.
         """
-        home = self.store.team(home_id)
+        home = self.org.team(home_id)
         theirs = self.read_file(lost, _contracts_file(lost.boundary.path))
         if before is not None and not (theirs and theirs.strip()):
             theirs = before.session[len(before.org.rstrip()) :]
@@ -653,7 +653,7 @@ class Reviews(Requests):
             one), and what the session and the org each made something
             else of, for the Manager of its Division Lead place.
         """
-        store = self.store
+        store = self.org
         session = store.session_of(top)
         shapes = self._shapes(top)
         if session is None or shapes is None:
@@ -784,7 +784,7 @@ class Reviews(Requests):
             review.id,
             merge_request(
                 top,
-                self.store.session_title(top),
+                self.org.session_title(top),
                 waiting,
                 merge.code_landed,
                 names=self.team(top).names,
@@ -827,7 +827,7 @@ class Reviews(Requests):
                     "contracts of every session that submitted later.\n\n"
                     + merge_request(
                         top,
-                        self.store.session_title(top),
+                        self.org.session_title(top),
                         waiting,
                         merge.code_landed,
                         names=self.team(top).names,
@@ -837,7 +837,7 @@ class Reviews(Requests):
                 return
             if not merge.code_landed or any(e.id == ORG_WAITS for e in top.escalations):
                 return
-            self.store.raise_escalation(
+            self.org.raise_escalation(
                 top.id,
                 ORG_WAITS,
                 kind="critical_issue",
@@ -882,7 +882,7 @@ class Reviews(Requests):
                 cannot be put where it was asked to.
         """
         names = self.names_at(review_id)
-        store = self.store
+        store = self.org
         with self._weighing:
             review = store.place(review_id)
             session = store.session_of(review) if review else None
@@ -973,7 +973,7 @@ class Reviews(Requests):
         Raises:
             Invalid: It cannot be put there or called that.
         """
-        store = self.store
+        store = self.org
         if choice.under is None and choice.title is None:
             return
         if choice.take == "org":
@@ -1063,7 +1063,7 @@ class Reviews(Requests):
         seen: dict[str, str | None] | None,
         org: tuple[dict[str, Side], list[MergeItem]] | None,
     ) -> Landed:
-        store = self.store
+        store = self.org
         session = store.session_of(top)
         shapes = self._shapes(top)
         merge = self._merge_of(top)
@@ -1180,14 +1180,14 @@ class Reviews(Requests):
     def _after_landing(self, top: SessionTeam, landed: Landed, note: str) -> None:
         for team_id, role in landed.records.grown:
             self.reports_grew(team_id, role)
-        now = self.store.place(top.id)
+        now = self.org.place(top.id)
         if (
             self._merge_of(top) is None
             and now is not None
             and any(e.id == ORG_WAITS for e in now.escalations)
         ):
             # Its Manager answered after all.
-            self.store.settle_escalation(top.id, ORG_WAITS)
+            self.org.settle_escalation(top.id, ORG_WAITS)
         review = self._review_of(top)
         if review is not None and landed.records.left:
             self.notify(
@@ -1231,7 +1231,7 @@ class Reviews(Requests):
     async def _do_land_org(self, intent: Intent) -> None:
         """Land what a session's accepted work makes of the org's teams
         and contracts, when it is its turn and all of it is settled."""
-        top = self.store.place(intent.node_id)
+        top = self.org.place(intent.node_id)
         if top is None:
             return
         landed = await asyncio.to_thread(
@@ -1339,7 +1339,7 @@ class Reviews(Requests):
     def _merged_as(self, place: SessionTeam) -> str:
         """What the commit that merges a team's work calls it: the session
         too, for the work of one."""
-        session = self.store.session_title(place)
+        session = self.org.session_title(place)
         return f"{place.title} · {session}" if session else place.title
 
     def _to_reconcile(self, place: SessionTeam, above: SessionTeam) -> Meets | None:
@@ -1373,7 +1373,7 @@ class Reviews(Requests):
             )
             if not unmergeable:
                 files = [path for path in changes.both if owns(place, path)]
-        opens = self.store.opens_session(place)
+        opens = self.org.opens_session(place)
         specs = self.specs_to_reconcile(place) if opens else []
         inherited = self.specs_inherited(place) if opens else []
         if not files and not specs and not inherited:
@@ -1424,7 +1424,7 @@ class Reviews(Requests):
     def _before(self, place: SessionTeam) -> SessionTeam | None:
         """The work submitted first of all that was submitted before that
         of ``node`` and is not decided on yet; None when it is its turn."""
-        store = self.store
+        store = self.org
         above = store.place(place.parent_id) if place.parent_id else None
         if above is None:
             return None
@@ -1459,7 +1459,7 @@ class Reviews(Requests):
         """Tell each reviewer that was made to wait for work submitted
         earlier that it is its turn, once that work is decided on. Safe
         from any thread."""
-        store = self.store
+        store = self.org
         run = self._runs()
         for place_id in run.marked(TURN):
             place = store.place(place_id)
@@ -1487,7 +1487,7 @@ class Reviews(Requests):
             Conflict: Work submitted before it still waits, or it meets
                 work the reviewer has not said it reconciled.
         """
-        store = self.store
+        store = self.org
         place = store.place(place_id)
         above = store.place(place.parent_id) if place and place.parent_id else None
         if place is None or above is None or place.review is None:
@@ -1529,7 +1529,7 @@ class Reviews(Requests):
             What to tell the reviewer when the work meets something it has
             not been shown as it is now; None when it may be accepted.
         """
-        if self.store.opens_session(place):
+        if self.org.opens_session(place):
             self._show_reviewer_items(place, meets)
         if meets is None:
             return None
@@ -1576,13 +1576,13 @@ class Reviews(Requests):
         """Ask the human, once, to clear the way for accepted work into
         their own checkout. Their answer merges it, as its reviewer
         decided."""
-        place = self.store.place(place_id)
+        place = self.org.place(place_id)
         if place is None or any(e.id == MERGE_WAITS for e in place.escalations):
             return
         self._runs().mark(
             CLEARING, place_id, json.dumps({"reconciled": reconciled, "specs": specs})
         )
-        self.store.raise_escalation(
+        self.org.raise_escalation(
             place_id,
             MERGE_WAITS,
             kind="critical_issue",
@@ -1623,7 +1623,7 @@ class Reviews(Requests):
         return description or ""
 
     async def _request_review(self, place_id: str) -> None:
-        store = self.store
+        store = self.org
         place = store.place(place_id)
         asked = place.review if place else None
         if place is None or asked is None:
@@ -1651,7 +1651,7 @@ class Reviews(Requests):
         specs: list[dict[str, str]] | None = None,
     ) -> None:
         names = self.names_at(place_id)
-        store = self.store
+        store = self.org
         place = store.place(place_id)
         above = store.place(place.parent_id) if place and place.parent_id else None
         if place is None or above is None or place.review is None:
@@ -1959,7 +1959,7 @@ class Reviews(Requests):
         """The branch a session started from and the one the human's
         checkout is on now, when they differ: the session's work is not
         merged into that."""
-        session = self.store.session_of(place)
+        session = self.org.session_of(place)
         started_on = session.branch if session else ""
         if not is_division_lead(above) or not started_on:
             return None
@@ -1979,7 +1979,7 @@ class Reviews(Requests):
                 sub-teams itself; otherwise their work came up on its own.
         """
         names = self.names_at(place_id)
-        store = self.store
+        store = self.org
         place = store.place(place_id)
         # A Division Lead place reviews; it has no work to hand on.
         if place is None or is_division_lead(place) or not store.below(place_id):

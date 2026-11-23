@@ -38,6 +38,7 @@ from openhands.agent_server.vscode_service import (
 if TYPE_CHECKING:
     from openhands.agent_server.bash_service import BashEventService
     from openhands.agent_server.conversation_service import ConversationService
+    from openhands.agent_server.director import DirectorService
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,6 +53,9 @@ class ServerContext:
     for as long as a deferred-init server is dormant."""
     bash_event_service: BashEventService | None = None
     """``None`` under the same conditions as ``conversation_service``."""
+    director_service: DirectorService | None = None
+    """The org of this server's repository. ``None`` only for a context built
+    without one, as tests of other parts of the server do."""
     vscode_service: VSCodeService | None = None
     """``None`` when VSCode is disabled. The editor belongs to the app rather
     than to one initialisation: ``POST /api/init`` keeps it and only switches

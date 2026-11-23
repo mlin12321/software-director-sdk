@@ -57,10 +57,10 @@ def caller_of(service: DirectorService, conversation_id: UUID) -> Caller:
     Raises:
         NotFound: The conversation is not an agent of the org.
     """
-    found = service.store.find_by_conversation(str(conversation_id))
+    found = service.org.find_by_conversation(str(conversation_id))
     if found is not None:
         return Caller(node=found[0], role=found[1])
-    node = service.store.find_hand_over(str(conversation_id))
+    node = service.org.find_hand_over(str(conversation_id))
     if node is None:
         raise NotFound("This conversation is not an agent of the org")
     return Caller(node=node, role=service.team(node).writer, hand_over=True)
@@ -184,7 +184,7 @@ def write_spec(
     service.write_spec(caller.node, content)
     summary = content.strip().splitlines()[0].lstrip("# ").strip()[:200]
     # With a spec of its own, what teams before it left is no longer its guide.
-    service.store.update_place(caller.node.id, spec_summary=summary, old_specs=[])
+    service.org.update_place(caller.node.id, spec_summary=summary, old_specs=[])
     if caller.hand_over:
         service.note_hand_over(caller.node.id, spec=True)
     else:
@@ -196,7 +196,7 @@ def _checked(
     service: DirectorService, place: SessionTeam, proposed: Proposed
 ) -> SplitProposal:
     """Proposed sub-teams, held to what the org allows."""
-    store = service.store
+    store = service.org
     allowed = service.settings.allowed_profiles
     for child in proposed.children:
         if child.agent_profile and child.agent_profile not in allowed:
@@ -271,7 +271,7 @@ def msg_manager(service: DirectorService, caller: Caller, text: str) -> str:
     text = text.strip()
     if not text:
         raise Invalid("A message cannot be empty")
-    if not service.store.below(node.id):
+    if not service.org.below(node.id):
         raise Invalid(
             f"A team without sub-teams has nothing to tell its {names.overseer} but a "
             "proposal: use propose_teams. Raise anything else with "
@@ -299,7 +299,7 @@ def propose_teams(
         )
     proposed = proposed_teams(teams, contracts, keep, text, service.default_type())
     proposal = _checked(service, node, proposed)
-    store = service.store
+    store = service.org
     store.update_place(node.id, pending_split=proposal)
     service.knows(node.id, caller.role, "pending_split")
     replaced = [team.title for team in map(store.place, proposal.replaces) if team]
@@ -379,14 +379,14 @@ def approve_teams(service: DirectorService, caller: Caller) -> str:
     if proposal is None:
         raise Conflict(f"Your {names.writer} has no proposed sub-teams waiting for you")
     # The org may have changed since they were proposed.
-    split = normalize_split(service.store, node, proposal.children)
+    split = normalize_split(service.org, node, proposal.children)
     check_limits(
-        service.store,
+        service.org,
         node,
         len(split.children) - len(split.replaces),
         service.settings,
     )
-    service.store.update_place(
+    service.org.update_place(
         node.id,
         pending_split=proposal.model_copy(
             update={
@@ -430,7 +430,7 @@ def decline_teams(service: DirectorService, caller: Caller, reason: str) -> str:
     proposal = _waiting(node)
     if proposal is None:
         raise Conflict(f"Your {names.writer} has no proposed sub-teams waiting for you")
-    store = service.store
+    store = service.org
     replaced = [team.title for team in map(store.place, proposal.replaces) if team]
     named = _named(proposal, replaced)
     store.update_place(node.id, pending_split=None)
@@ -472,7 +472,7 @@ def raise_escalation(
         return service.not_ours(
             caller.node, ": ".join(filter(None, (title.strip(), detail.strip())))
         )
-    store = service.store
+    store = service.org
     node = caller.node
     escalation = store.raise_escalation(
         node.id,
@@ -511,7 +511,7 @@ def resolve_escalation(
     _not_aside(caller)
     if not text.strip():
         raise Invalid("Say what you decided, or why you cannot")
-    store = service.store
+    store = service.org
     raiser = _team_named(service, caller, node_id)
     escalation = next(
         (e for e in raiser.escalations if e.id == escalation_id)
@@ -558,7 +558,7 @@ def submit_review(service: DirectorService, caller: Caller, summary: str) -> str
     review."""
     names = service.team(caller.node).names
     _has(service, caller, "submit_review", "submit its team's work")
-    store = service.store
+    store = service.org
     node = caller.node
     summary = summary.strip()
     if not summary:
@@ -751,7 +751,7 @@ def edit_contracts(
             "Division "
             f"Lead {names.overseer} settles them"
         )
-    if not service.store.below(node.id):
+    if not service.org.below(node.id):
         raise Invalid(
             "Your team has no sub-teams, so it sets no contracts. The ones "
             "you keep are the team's above; raise what must change in them "
@@ -790,7 +790,7 @@ def _team_named(
     session, or by the team's id in the org, which is then its place in
     that session."""
     name = name.strip()
-    store = service.store
+    store = service.org
     if "@" in name:
         return store.place(name)
     return store.instance(name, caller.node.session)

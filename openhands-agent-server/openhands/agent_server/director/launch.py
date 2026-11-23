@@ -1,7 +1,6 @@
 """Starts and reaches the conversations of an org's agents."""
 
 import asyncio
-import logging
 from collections.abc import Callable, Collection, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
@@ -54,6 +53,7 @@ from openhands.sdk.event.conversation_error import ConversationErrorEvent
 from openhands.sdk.launch import AgentLaunchError, LaunchStoreError
 from openhands.sdk.llm import LLM
 from openhands.sdk.llm.utils.metrics import MetricsSnapshot
+from openhands.sdk.logger import get_logger
 from openhands.sdk.profiles.agent_profile import (
     ACPAgentProfile,
     OpenHandsAgentProfile,
@@ -64,7 +64,7 @@ from openhands.sdk.tool.client_tool import ClientToolRegistrationError
 from openhands.sdk.tool.spec import Tool
 
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # On every conversation the director starts itself, so that a client can tell
 # them from the ones a human started. An IC that runs as the conversation a

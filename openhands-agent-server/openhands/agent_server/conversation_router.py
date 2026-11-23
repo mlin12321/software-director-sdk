@@ -10,7 +10,6 @@ from fastapi import (
     Depends,
     Header,
     Query,
-    Request,
     Response,
     status,
 )
@@ -30,7 +29,9 @@ from openhands.agent_server.dependencies import (
     get_conversation_registry,
     get_conversation_service,
     get_llm_profile_store,
+    get_optional_director_service,
 )
+from openhands.agent_server.director import DirectorService
 from openhands.agent_server.errors import error_responses
 from openhands.agent_server.event_service import CondensationUnavailable
 from openhands.agent_server.launch import launch_error
@@ -395,11 +396,13 @@ async def interrupt_conversation(
     return Success()
 
 
-def _not_an_agent_of_the_org(conversation_id: UUID, request: Request) -> None:
+def _not_an_agent_of_the_org(
+    conversation_id: UUID,
+    director: Annotated[DirectorService | None, Depends(get_optional_director_service)],
+) -> None:
     """Refuse to copy, extend or delete an org agent's conversation: a copy
     or a child would act as that agent, in no team, and a session whose
     agent is deleted is left without it."""
-    director = getattr(request.app.state, "director_service", None)
     if director is not None and director.is_agent(conversation_id):
         raise Conflict(
             "This conversation is an agent of the org: it cannot be forked "

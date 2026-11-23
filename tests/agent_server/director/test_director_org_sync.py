@@ -237,13 +237,13 @@ async def an_org_on_two_machines(
 
 def team(service: DirectorService, team_id: str) -> OrgNode:
     """A team as the org has it, whatever a session has there."""
-    found = service.store.team(team_id)
+    found = service.org.team(team_id)
     assert found is not None
     return found
 
 
 def change(service: DirectorService, node_id: str, **fields: object) -> None:
-    service.store.update_team(node_id, **fields)
+    service.org.update_team(node_id, **fields)
 
 
 async def test_a_pushed_org_is_whole_in_another_clone_except_for_its_sessions(
@@ -260,14 +260,14 @@ async def test_a_pushed_org_is_whole_in_another_clone_except_for_its_sessions(
     await there.settled()
 
     assert pushed.result == "pushed" and pulled.result == "fast_forward"
-    assert [found.id for found in there.store.teams()] == ["root", API, WEB]
+    assert [found.id for found in there.org.teams()] == ["root", API, WEB]
     assert team(there, API).title == "API" and team(there, API).spec_summary
     [carried] = there.reports_of(team(there, API))
     assert carried.text == "Never log card numbers"
     assert there.team_memory.read("contracts.md")
     # Who works on it is the first machine's alone.
-    assert there.store.sessions() == [] and len(here.store.sessions()) == 1
-    assert there.store.places() == []
+    assert there.org.sessions() == [] and len(here.org.sessions()) == 1
+    assert there.org.places() == []
     assert there.summary().paused is None and here.summary().paused is None
     await here.aclose()
     await there.aclose()
@@ -499,7 +499,7 @@ async def test_a_session_goes_on_with_a_team_the_pull_removed(
     repo: Path, launcher: FakeLauncher, remote: Path, tmp_path: Path
 ):
     here, there = await an_org_on_two_machines(repo, launcher, remote, tmp_path)
-    there.store.remove(API)
+    there.org.remove(API)
     await there.push_org("origin")
     await here.pause()
     here.notify(ic(here, API), "Use idempotency keys")
@@ -508,7 +508,7 @@ async def test_a_session_goes_on_with_a_team_the_pull_removed(
     pulled = await here.pull_org("origin")
 
     assert pulled.result in ("merged", "fast_forward")
-    assert here.store.team(API) is None
+    assert here.org.team(API) is None
     # The session has the team as it set it up; it is not made to catch up
     # while it works.
     assert team_id_of(node(here, API)) == API and ic(here, API) is not None
@@ -602,7 +602,7 @@ async def test_a_message_with_a_conversation_opens_a_session_in_a_pulled_org(
     await there.settled()
 
     # The team nearest to where it was said, in a session of this machine.
-    [session] = there.store.sessions()
+    [session] = there.org.sessions()
     assert (session.team_id, session.request) == (API, "Add a health check")
     assert routed.node_id == session.teams[0].id
     assert fake.root is not None
@@ -620,7 +620,7 @@ async def test_a_pull_shows_the_tree_again_to_a_page_that_has_it_open(
     change(here, API, title="Payments")
     await here.push_org("origin")
     events: list[OrgChange] = []
-    there.store.subscribe("root", events.append, full=True)
+    there.org.subscribe("root", events.append, full=True)
 
     await there.pull_org("origin")
 

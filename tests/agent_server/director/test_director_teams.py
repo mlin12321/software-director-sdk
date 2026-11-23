@@ -337,7 +337,7 @@ async def test_an_approval_the_kept_session_does_not_have_is_dropped_and_given_a
     first = await started(repo, launcher)
     await split_root(first)
     await use(first, ic(first), ProposeTeamsTool, SERVICES)
-    proposed = kept_sessions(first.store)
+    proposed = kept_sessions(first.org)
     ended = end_server_at(launcher, "stop")
     await cut_off(
         launcher, ended, use(first, manager(first), ApproveTeamsTool, APPROVE)
@@ -620,12 +620,12 @@ async def test_a_team_made_in_place_of_one_is_not_taken_for_it(
     save = first._save
 
     async def server_ends() -> None:
-        made = first.store.place(api)
+        made = first.org.place(api)
         if made is None or made.title != "Orders":
             return await save()
         # The session is kept with the new team in it, and the split is
         # not on record as done.
-        first._runs().replace_marks(SESSION, kept_sessions(first.store))
+        first._runs().replace_marks(SESSION, kept_sessions(first.org))
         ended.set()
         raise ServerEnded
 
@@ -649,8 +649,8 @@ async def test_nothing_is_sent_straight_to_a_team_under_a_stopped_one(
 ):
     await woken(service, DB)
     launcher.answers[USAGE_ID] = "Teams: services.api.db\nReason: The schema is DB's."
-    [session] = service.store.sessions()
-    service.store.update_place(
+    [session] = service.org.sessions()
+    service.org.update_place(
         node(service, API).id,
         stopped=Stopped(at="2026-01-01T00:00:00+00:00", reason="Waits", running=[]),
     )

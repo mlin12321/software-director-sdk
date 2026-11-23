@@ -64,7 +64,7 @@ async def counted(service: DirectorService) -> Session:
     """The director adds up what was used, as its timer does."""
     await service._count_use()
     await service.settled()
-    [session] = service.store.sessions()
+    [session] = service.org.sessions()
     return session
 
 
@@ -133,7 +133,7 @@ async def test_a_session_at_its_limit_rests_until_the_human_lets_it_go_on(
 
     top = node(service, "root")
     assert top.stopped is None and top.escalations == []
-    [session] = service.store.sessions()
+    [session] = service.org.sessions()
     assert session.cost_allowance == 4.25
     assert (UUID(api), None) in launcher.resumed
     assert (
@@ -198,7 +198,7 @@ async def test_no_more_sessions_are_opened_than_the_settings_allow(
     )
     await service.settled()
 
-    assert len(service.store.sessions()) == 2
+    assert len(service.org.sessions()) == 2
     assert opened.session.cost_allowance == 0
 
 
