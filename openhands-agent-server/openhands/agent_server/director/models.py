@@ -12,7 +12,9 @@ from openhands.agent_server.models import StartConversationRequest
 # has taken on.
 AgentRole = Literal["ic", "manager"]
 AGENT_ROLES: tuple[AgentRole, ...] = ("ic", "manager")
-ROLE_NAMES: dict[AgentRole, str] = {"ic": "IC", "manager": "Manager"}
+# What the agents are told a member of a team is called; any other member
+# is called by its own name.
+ROLE_NAMES: dict[str, str] = {"ic": "IC", "manager": "Manager"}
 
 NodeStatus = Literal["idle", "working", "done", "blocked"]
 

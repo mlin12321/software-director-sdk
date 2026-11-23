@@ -73,7 +73,6 @@ from openhands.agent_server.director.service.state import (
     _progress_of,
     agent_conversation,
     failure_waits,
-    tools_of,
 )
 from openhands.sdk.conversation.state import ConversationExecutionStatus
 from openhands.sdk.errors import (
@@ -805,7 +804,7 @@ class Teams(Delivery):
             # Nothing holds its process to the team's directory, so its
             # work is kept apart and checked when it is merged.
             isolation = "worktree"
-        tools = tools_of(place, role, self.type_of(place).omit_tools)
+        tools = self.tools_for(place, role)
         adapt = await asyncio.to_thread(self._adapter, conversation_id, tools)
         # A session starts from where the repository's checkout is.
         base = (

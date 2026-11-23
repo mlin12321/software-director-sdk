@@ -29,6 +29,7 @@ from openhands.agent_server.director.agent_types import (
     SHIPPED_TYPES,
     TYPES_FOLDER,
     AgentType,
+    default_agents,
     load_types,
 )
 from openhands.agent_server.director.boundary import scope_within
@@ -131,34 +132,13 @@ from openhands.sdk.errors import (
 logger = logging.getLogger(__name__)
 
 ROOT_ID = "root"
-_TOOLS_OF_BOTH = (
-    "read_team_context",
-    "raise_escalation",
-    "resolve_escalation",
-    "report",
-)
-# The director's tools an agent is offered, by its role; they register in
-# ``director.tools``. `agent_actions` refuses the rest whatever is offered.
+# The members of a team whose type names none, and the director's tools
+# each is offered; they register in ``director.tools``. `agent_actions`
+# refuses the rest whatever is offered.
+_DEFAULT_AGENTS = default_agents()
 TOOLS_OF: dict[AgentRole, tuple[str, ...]] = {
-    "ic": (
-        *_TOOLS_OF_BOTH,
-        "write_spec",
-        "edit_contracts",
-        "msg_manager",
-        "propose_teams",
-        "msg_team",
-        "hand_over",
-        "stop_team",
-        "submit_review",
-        "review_team",
-    ),
-    "manager": (
-        *_TOOLS_OF_BOTH,
-        "msg_ic",
-        "approve_teams",
-        "decline_teams",
-        "prune_team",
-    ),
+    "ic": tuple(_DEFAULT_AGENTS["ic"].tools),
+    "manager": tuple(_DEFAULT_AGENTS["manager"].tools),
 }
 # What no type takes from an agent: without them it could not read its
 # place, hand its work on, or say that it cannot go on.
@@ -166,27 +146,35 @@ _TOOLS_NO_TYPE_REMOVES = ("read_team_context", "raise_escalation", "submit_revie
 HAND_OVER_TOOLS = ("read_team_context", "hand_over", "write_spec")
 # What an IC has of the director's tools where it only reviews the work of
 # a session.
-DIVISION_LEAD_IC_TOOLS = ("read_team_context", "report", "review_team")
+DIVISION_LEAD_IC_TOOLS = tuple(_DEFAULT_AGENTS["ic"].lead_tools)
 # What a Manager has there: it settles the sub-teams a session and the org
 # each made something else of.
-DIVISION_LEAD_MANAGER_TOOLS = ("read_team_context", "report", "settle_teams")
+DIVISION_LEAD_MANAGER_TOOLS = tuple(_DEFAULT_AGENTS["manager"].lead_tools)
 
 
 def tools_of(
-    place: SessionTeam, role: AgentRole, without: Sequence[str] = ()
+    place: SessionTeam,
+    role: AgentRole,
+    without: Sequence[str] = (),
+    *,
+    kind: AgentType | None = None,
 ) -> tuple[str, ...]:
     """The director's tools an agent of ``node`` is offered.
 
     Args:
-        without: The tools the team's type leaves its agents without. A
-            type takes tools away and never adds one; what an agent needs
-            to read its place and hand its work on stays.
+        role: The member of the team it is.
+        without: The tools the team's type leaves its agents without. What
+            an agent needs to read its place and hand its work on stays.
+        kind: The team's type; None for one that names no members.
     """
+    member = (kind.agents if kind else _DEFAULT_AGENTS).get(role)
+    if member is None:
+        return ()
     if is_division_lead(place):
-        return DIVISION_LEAD_IC_TOOLS if role == "ic" else DIVISION_LEAD_MANAGER_TOOLS
+        return tuple(member.lead_tools)
     return tuple(
         name
-        for name in TOOLS_OF[role]
+        for name in member.tools
         if name not in without or name in _TOOLS_NO_TYPE_REMOVES
     )
 
@@ -702,6 +690,11 @@ class ServiceState:
                 name=node.agent_type or DEFAULT_TYPE, description="A team."
             )
         return found
+
+    def tools_for(self, place: SessionTeam, member: AgentRole) -> tuple[str, ...]:
+        """The director's tools the member of a team is offered."""
+        kind = self.type_of(place)
+        return tools_of(place, member, kind.omit_tools, kind=kind)
 
     @property
     def own_settings(self) -> OrgSettings:
