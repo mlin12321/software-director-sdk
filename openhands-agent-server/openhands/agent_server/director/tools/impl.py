@@ -4,7 +4,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING
 from uuid import UUID
 
-from openhands.agent_server.director.agent_actions import Caller, caller_of
+from openhands.agent_server.director.agent_actions import Caller, acting
 from openhands.agent_server.director.git import GitError
 from openhands.agent_server.director.runtime import current_director
 from openhands.agent_server.director.service import DirectorService
@@ -42,7 +42,7 @@ class DirectorExecutor[ActionT: Action](ToolExecutor[ActionT, DirectorObservatio
     ) -> DirectorObservation:
         try:
             service = current_director()
-            caller = caller_of(service, self.conversation_id)
+            caller = acting(service, self.conversation_id)
             return DirectorObservation.from_text(self._act(service, caller, action))
         except (DomainError, GitError) as error:
             return DirectorObservation.from_text(str(error), is_error=True)
