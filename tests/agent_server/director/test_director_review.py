@@ -473,6 +473,13 @@ async def test_work_that_does_not_merge_is_merged_by_its_reviewer(
     laid_out = Path(merge.where)
     assert "<<<<<<< " in (laid_out / PAGE).read_text()
     assert (laid_out / "apps/web/cart.tsx").read_text() == "cart\n"
+    # It is laid out where the shell of the reviewer may write, and of
+    # the team's agents only the reviewer's.
+    root = node(service, "root")
+    opened = service.scope_of(root, "ic").merge_root
+    assert opened and Path(opened) in laid_out.parents
+    assert service.scope_of(root, "manager").merge_root == ""
+    assert service.scope_of(web, "ic").merge_root != opened
 
     # Only what does not merge is the reviewer's to write there.
     def writing(conversation: str | None, path: Path) -> str | None:

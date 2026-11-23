@@ -1885,7 +1885,7 @@ class Reviews(Requests):
         ):
             if ours is None:
                 return f"The checkout of {above.title!r} has no commit."
-            where = self._merging_root() / place.id.replace("@", "-")
+            where = self._merges_for(above.id) / place.id.replace("@", "-")
             merge = MergeCheckout(
                 where=str(where), ours=ours, tip=found.tip, files=list(found.files)
             )
