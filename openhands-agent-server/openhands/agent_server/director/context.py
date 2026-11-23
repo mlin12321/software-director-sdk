@@ -33,6 +33,7 @@ _KEYED = {
     **dict.fromkeys(_BY_TEAM, "team_id"),
     "escalations_for_you_to_settle": "escalation_id",
     "former_teams": "team_id",
+    "documents_of_other_teams": "document_id",
 }
 # How much of one text an update carries.
 CUT = 2000

@@ -72,14 +72,17 @@ agents:
             Prune a team that repeats what failed, that drifted into another team's
             direction, or whose direction the evidence has closed. This is ordinary,
             not rare; say why.
-primitives:
-    spec: >-
-        The question, the method, how a result is measured, and what would
-        count as refuting the hypothesis.
-    contracts: >-
-        Which direction each sub-team covers, and what is established: one
-        line for each checked finding, with the team it came from.
-    report: Dead ends and why; decisions about method; what you would try next.
+documents:
+    spec:
+        holds: >-
+            The question, the method, how a result is measured, and what would
+            count as refuting the hypothesis.
+    contracts:
+        holds: >-
+            Which direction each sub-team covers, and what is established: one
+            line for each checked finding, with the team it came from.
+    report:
+        holds: Dead ends and why; decisions about method; what you would try next.
 actions:
     propose_teams: >-
         Split by hypothesis, one direction for each team. State each direction

@@ -2,9 +2,9 @@
 
 A type is a YAML file, a team template. It names the agents of a team of
 that type (its members), the director's tools each has, and which of them
-works in the team's folder; and it says what each is for, what the team's
-spec, contracts and reports hold, what each of the director's tools means
-to it, and how its work is written up and reviewed.
+works in the team's folder; and it says what each is for, what documents
+the team keeps and what each holds, what each of the director's tools
+means to it, and how its work is written up and reviewed.
 
 A member is whatever the type names it. What it may do is the tools it is
 given: the director finds whom to turn to by tool, so the reviewer of a
@@ -14,13 +14,18 @@ keeps its folder and lands its work the same way, whatever its type.
 The types shipped with the director are in ``director/types``; an org adds
 its own in the ``types`` folder beside its ``director.yaml``, where a file
 of the same name takes the place of a shipped one.
+
+Every type starts from the ``_defaults.yaml`` of those folders, the
+shipped one first and the org's over it, and says only what it changes:
+mappings are merged key by key, a list or a plain value takes the place of
+the default.
 """
 
 import re
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, replace
-from pathlib import Path
-from typing import Literal
+from pathlib import Path, PurePosixPath
+from typing import Any, Literal
 
 import yaml
 from pydantic import (
@@ -44,7 +49,20 @@ SHIPPED_TYPES = Path(__file__).parent / "types"
 TYPES_FOLDER = "types"
 _NAME = re.compile(r"[a-z0-9][a-z0-9-]*")
 
-Primitive = Literal["spec", "contracts", "report"]
+# What every type of the folder starts from.
+DEFAULTS_FILE = "_defaults.yaml"
+
+# The documents the director keeps itself, for every team of every type:
+# where each is kept, who writes it and who reads it are the director's.
+DIRECTOR_DOCUMENTS = ("spec", "contracts", "report")
+# Which other teams read a document of a type's own, seen from the team
+# that keeps it.
+Reader = Literal["above", "below", "beside"]
+_READERS: dict[Reader, str] = {
+    "above": "the team above",
+    "below": "your sub-teams",
+    "beside": "the teams beside yours",
+}
 
 # Tools the director finds one agent of a team by: a type gives each to
 # exactly one member. The last is found among the tools members have where
@@ -180,6 +198,61 @@ class ReviewTexts(BaseModel):
     )
 
 
+class Document(BaseModel):
+    """One document a team of a type keeps."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    holds: str = Field(min_length=1, description="What is written in it.")
+    path: str = Field(
+        default="",
+        description=(
+            "Where a document of the type's own is, in the team's folder. "
+            "The member that works there writes and commits it as any file. "
+            "Not said of a document the director keeps."
+        ),
+    )
+    readers: list[Reader] = Field(
+        default_factory=list,
+        description=(
+            "Which other teams are given a document of the type's own with "
+            "their context: the team `above` and the teams `beside` it, as "
+            "it was last accepted, and the teams `below`, as it was last "
+            "committed."
+        ),
+    )
+
+    @field_validator("path")
+    @classmethod
+    def _in_the_folder(cls, path: str) -> str:
+        parts = PurePosixPath(path).parts
+        if path and (
+            path.startswith("/")
+            or "\\" in path
+            or ".." in parts
+            or parts[0] == ".git"
+            or str(PurePosixPath(path)) != path
+        ):
+            raise ValueError(
+                "a document's path is a plain one inside the team's folder, "
+                "such as findings.md"
+            )
+        return path
+
+    @property
+    def read_by(self) -> str:
+        """Who reads it and when, as said to the team that keeps it. What
+        goes up or beside a team waits for its work to be accepted; what
+        it says to its own sub-teams does not."""
+        later = " and ".join(
+            _READERS[reader] for reader in ("above", "beside") if reader in self.readers
+        )
+        parts = [f"{later} read what of it was accepted"] if later else []
+        if "below" in self.readers:
+            parts.append(f"{_READERS['below']} read it as you last committed it")
+        return ", and ".join(parts)
+
+
 class Member(BaseModel):
     """One agent of a team of a type, under the name the type gives it."""
 
@@ -241,9 +314,14 @@ class TeamTemplate(BaseModel):
         min_length=1,
         description="The members of a team of this type, by the name of each.",
     )
-    primitives: dict[Primitive, str] = Field(
+    documents: dict[str, Document] = Field(
         default_factory=dict,
-        description="What the team's spec, contracts and reports hold.",
+        description=(
+            "The documents a team of this type keeps, by name. `spec`, "
+            "`contracts` and `report` are the director's own, and a type "
+            "says only what each holds. Any other is the type's own: a "
+            "file in the team's folder that the teams it names read."
+        ),
     )
     actions: dict[str, str] = Field(
         default_factory=dict,
@@ -283,6 +361,27 @@ class TeamTemplate(BaseModel):
                 raise ValueError(
                     "a member's name is lower-case letters, digits and hyphens"
                 )
+        paths: set[str] = set()
+        for name, document in self.documents.items():
+            if not _NAME.fullmatch(name):
+                raise ValueError(
+                    "a document's name is lower-case letters, digits and hyphens"
+                )
+            if name in DIRECTOR_DOCUMENTS:
+                if document.path or document.readers:
+                    raise ValueError(
+                        f"`{name}` is a document the director keeps: a type "
+                        "says what it holds, not where it is or who reads it"
+                    )
+                continue
+            if not document.path or not document.readers:
+                raise ValueError(
+                    f"the document `{name}` is the type's own: say its "
+                    "`path` in the team's folder and its `readers`"
+                )
+            if document.path in paths:
+                raise ValueError(f"two documents are kept in {document.path!r}")
+            paths.add(document.path)
         writers = [name for name, member in agents.items() if member.writes]
         if len(writers) != 1:
             raise ValueError(
@@ -387,6 +486,15 @@ class TeamTemplate(BaseModel):
         )
 
     @property
+    def own_documents(self) -> dict[str, Document]:
+        """The documents of the type's own, by name."""
+        return {
+            name: document
+            for name, document in self.documents.items()
+            if name not in DIRECTOR_DOCUMENTS
+        }
+
+    @property
     def titles(self) -> dict[str, str]:
         """What each member is called in what the director writes."""
         return {name: self.title_of(name) for name in self.agents}
@@ -404,10 +512,11 @@ class TeamTemplate(BaseModel):
         said = member.text.strip() if member else ""
         if said:
             lines.append(said)
-        if self.primitives:
+        if self.documents:
             lines += ["", "What your team keeps:"]
             lines += [
-                f"- {name}: {text.strip()}" for name, text in self.primitives.items()
+                f"- {name}{_kept(document)}: {document.holds.strip()}"
+                for name, document in self.documents.items()
             ]
         if self.actions:
             lines += ["", "What the director's tools mean for your team:"]
@@ -420,20 +529,73 @@ class TeamTemplate(BaseModel):
         return f'<TEAM_TYPE name="{self.name}">\n{body}\n</TEAM_TYPE>'
 
 
-def read_type(path: Path, tools: Iterable[str]) -> TeamTemplate:
-    """The type a file defines.
+def _kept(document: Document) -> str:
+    """Where a document of a type's own is and who reads it; '' for one
+    the director keeps."""
+    if not document.path:
+        return ""
+    return (
+        f" (`{document.path}` in your team's folder; commit it with your "
+        f"work, and {document.read_by})"
+    )
+
+
+def _over(defaults: dict[str, Any], said: dict[str, Any]) -> dict[str, Any]:
+    """What a type says, over what every type starts from: mappings key by
+    key, anything else whole."""
+    merged = dict(defaults)
+    for key, value in said.items():
+        was = merged.get(key)
+        merged[key] = (
+            _over(was, value)
+            if isinstance(was, dict) and isinstance(value, dict)
+            else value
+        )
+    return merged
+
+
+def _mapping(path: Path) -> dict[str, Any]:
+    """The mapping a YAML file holds.
 
     Raises:
-        InvalidAgentType: The file is not a type, names a tool the
-            director does not have, or is not named as its type is.
+        InvalidAgentType: The file cannot be read or holds no mapping.
     """
-    known = set(tools)
     try:
         loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
     except (OSError, yaml.YAMLError) as error:
         raise InvalidAgentType(f"{path}: cannot be read as YAML: {error}") from error
     if not isinstance(loaded, dict):
         raise InvalidAgentType(f"{path}: a type is a mapping")
+    return loaded
+
+
+def read_defaults(folders: Iterable[Path]) -> dict[str, Any]:
+    """What every type starts from: the ``_defaults.yaml`` of ``folders``,
+    a later folder's over an earlier one's. A file that cannot be read is
+    left out and logged."""
+    found: dict[str, Any] = {}
+    for folder in folders:
+        path = folder / DEFAULTS_FILE
+        if not path.is_file():
+            continue
+        try:
+            found = _over(found, _mapping(path))
+        except InvalidAgentType:
+            logger.exception("Ignoring the defaults in %s", path)
+    return found
+
+
+def read_type(
+    path: Path, tools: Iterable[str], defaults: dict[str, Any] | None = None
+) -> TeamTemplate:
+    """The type a file defines, over ``defaults``.
+
+    Raises:
+        InvalidAgentType: The file is not a type, names a tool the
+            director does not have, or is not named as its type is.
+    """
+    known = set(tools)
+    loaded = _over(defaults or {}, _mapping(path))
     loaded.setdefault("name", path.stem)
     try:
         found = TeamTemplate.model_validate(loaded)
@@ -460,19 +622,24 @@ def load_types(
     folders: Iterable[Path], tools: Iterable[str]
 ) -> dict[str, TeamTemplate]:
     """The types of the YAML files in ``folders``, by name; a later folder's
-    type takes the place of an earlier one of the same name.
+    type takes the place of an earlier one of the same name. Each is read
+    over the defaults of all the folders.
 
     A file that is no type is left out and logged: one bad file does not
     take the others with it.
     """
     known = tuple(tools)
+    folders = list(folders)
+    defaults = read_defaults(folders)
     found: dict[str, TeamTemplate] = {}
     for folder in folders:
         if not folder.is_dir():
             continue
         for path in sorted([*folder.glob("*.yaml"), *folder.glob("*.yml")]):
+            if path.name == DEFAULTS_FILE:
+                continue
             try:
-                found[path.stem] = read_type(path, known)
+                found[path.stem] = read_type(path, known, defaults)
             except InvalidAgentType:
                 logger.exception("Ignoring the agent type in %s", path)
     return found

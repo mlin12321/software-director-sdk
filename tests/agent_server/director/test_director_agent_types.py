@@ -78,7 +78,7 @@ def test_the_shipped_default_type_says_something_to_both_roles():
     [
         members_yaml() + "description: x\nactions:\n  no_such_tool: do it\n",
         members_yaml() + "description: x\nomit_tools: [no_such_tool]\n",
-        members_yaml() + "description: x\nprimitives:\n  blackboard: shared\n",
+        members_yaml() + "description: x\nprimitives:\n  spec: shared\n",
         members_yaml() + "description: x\ngates:\n  merge: never\n",
         members_yaml() + "name: other\ndescription: x\n",
         "- not a mapping\n",

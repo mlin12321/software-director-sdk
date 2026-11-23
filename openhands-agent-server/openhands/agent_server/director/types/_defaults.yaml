@@ -1,0 +1,22 @@
+---
+# What every type starts from. A type file says only what it changes:
+# mappings are merged key by key, a list or a plain value takes the place
+# of what is here. An org's own `types/_defaults.yaml` goes over this one.
+documents:
+    # The documents the director keeps for every team. A type says what
+    # each holds; where it is kept and who reads it are the director's.
+    spec:
+        holds: How your team works inside its folder.
+    contracts:
+        holds: >-
+            What teams promise each other: types, endpoints, file formats.
+    report:
+        holds: A decision and why, a setback, what failed.
+    # A type may add documents of its own, each a file in the team's folder
+    # that the teams it names read: the team above and the teams beside once
+    # the work is accepted, the teams below as soon as it is committed.
+    #
+    # findings:
+    #     path: findings.md
+    #     readers: [above, beside]  # above, below, beside
+    #     holds: One claim to a line, with the command that reproduces it.

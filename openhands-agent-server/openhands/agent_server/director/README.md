@@ -165,6 +165,22 @@ agents:
 
 A member is whatever the type names it, and what it may do is the tools it is given. The director finds whom to turn to by tool: submitted work goes to the member of the team above that has `review_team`, proposed sub-teams to the one that has `approve_teams`. `lead_tools` are what a member has where its team only reviews a session's work. A type is refused unless exactly one member `writes` (works in the team's folder), and `submit_review`, `review_team`, `propose_teams`, `approve_teams` and (among `lead_tools`) `settle_teams` are each held by exactly one member. A member's `title` is what the director calls it when it writes to the team's agents (its name when left out), its `plural` what it calls several of them (the title with an s when left out), and a member may be given a `protocol` text of its own, said after what the director says of how the org works. The names of the director's tools (`msg_ic`, `msg_manager`) and their descriptions do not change with the type. No type with its own members has been run with real agents yet.
 
+A type says what documents its teams keep under `documents`:
+
+```yaml
+documents:
+  spec:
+    holds: The question, the method, and how a result is measured.
+  findings:
+    path: findings.md
+    readers: [above, beside]
+    holds: One claim to a line, with the command that reproduces it.
+```
+
+`spec`, `contracts` and `report` are the director's own, for every team: a type says only what each `holds`. Any other name is a document of the type's own. It is a file at `path` in the team's folder, which the member that works there writes and commits like any other file, and the teams named in `readers` (`above`, `below`, `beside`, seen from the team that keeps it) are given it with their context: the team above and the teams beside once the work that holds it was accepted, the teams below as soon as it is committed. Other teams only read it. No shipped type has a document of its own, and none has been run with real agents yet.
+
+Every type starts from `_defaults.yaml`: the shipped one (`director/types/_defaults.yaml`, which holds the three documents as a team that builds software keeps them), then the one in the org's own `types` folder if there is one. A type file says only what it changes. Mappings are merged key by key; a list or a plain value takes the place of the default.
+
 Every type needs a `description`: the agents and the org page choose a type by it. A type file added while the server runs is found without a restart.
 
 Which type a team gets:

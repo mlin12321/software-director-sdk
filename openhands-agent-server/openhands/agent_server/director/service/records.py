@@ -14,6 +14,7 @@ from openhands.agent_server.director.boundary import (
 )
 from openhands.agent_server.director.git import (
     changed_together,
+    committed_text,
     tracked_files,
 )
 from openhands.agent_server.director.git_store import (
@@ -93,6 +94,8 @@ from openhands.sdk.logger import get_logger
 
 
 logger = get_logger(__name__)
+# How much of one document of another team a context carries.
+DOCUMENT_TOLD = 20_000
 _REPORTS = TypeAdapter(list[Report])
 _EVENTS = TypeAdapter(list[TeamEvent])
 _MESSAGES = TypeAdapter(list[ThreadMessage])
@@ -758,6 +761,8 @@ class Records(ServiceState):
                 }
                 for other in others
             ]
+        if documents := self.documents_for(place):
+            context["documents_of_other_teams"] = documents
         works = role == self.team(place).writer
         if works and store.below(place.id):
             context["asked_directly_of_teams_below"] = self.asked_below(place)
@@ -794,6 +799,65 @@ class Records(ServiceState):
                 event_line(event) for event in events[-HISTORY_TOLD:]
             ]
         return context
+
+    def documents_for(self, place: SessionTeam) -> list[dict[str, Any]]:
+        """The documents other teams keep by their types that the team at
+        ``place`` reads: of the team above, the teams below and the teams
+        beside it, each where its type names that reader.
+
+        What goes up or beside is given as the checkout of the team above
+        its keeper has it committed, which is where accepted work is
+        merged, so what a team wrote and nobody accepted yet is not passed
+        on. A team that works in the directory of the team above
+        (`shared`) commits into that checkout, so there it is what was
+        committed. What a team keeps for its sub-teams is its own to say,
+        as contracts are: it is given as the team's own checkout has it.
+        Nobody works at a session's Division Lead place, so it keeps none.
+        """
+        store = self.org
+        above = store.place(place.parent_id) if place.parent_id else None
+        kept_by: list[tuple[SessionTeam, str]] = [
+            (child, "above") for child in store.below(place.id)
+        ]
+        if above is not None:
+            kept_by.append((above, "below"))
+            kept_by += [
+                (other, "beside")
+                for other in store.below(above.id)
+                if other.id != place.id
+            ]
+        found: list[dict[str, Any]] = []
+        for keeper, reader in kept_by:
+            if is_division_lead(keeper):
+                continue
+            over = store.place(keeper.parent_id) if keeper.parent_id else None
+            checkout = (
+                over.worktree_path
+                if over is not None and reader != "below"
+                else keeper.worktree_path
+            )
+            folder = normalize_store_path(keeper.boundary.path)
+            for name, document in self.type_of(keeper).own_documents.items():
+                if reader not in document.readers or not checkout:
+                    continue
+                path = f"{folder}/{document.path}" if folder else document.path
+                text = committed_text(Path(checkout), path)
+                if text is None:
+                    continue
+                found.append(
+                    {
+                        "document_id": f"{keeper.id}/{name}",
+                        "team_id": keeper.id,
+                        "team": keeper.title,
+                        "document": name,
+                        "holds": document.holds.strip(),
+                        "path": path,
+                        "text": text
+                        if len(text) <= DOCUMENT_TOLD
+                        else text[:DOCUMENT_TOLD] + f" … (cut; the rest is in {path})",
+                    }
+                )
+        return found
 
     def _former_below(self, team_memory: GitStore, node_id: str) -> list[FormerTeam]:
         """The records of the teams removed from below a team. They are

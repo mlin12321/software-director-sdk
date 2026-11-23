@@ -47,11 +47,6 @@ agents:
             Prune only a team that clearly cannot work: stuck, or repeating what
             fails. Rare, never a precaution. Write to a slow team first, and judge a
             team only after several tasks.
-primitives:
-    spec: How your team works inside its folder.
-    contracts: >-
-        What teams promise each other: types, endpoints, file formats.
-    report: A decision and why, a setback, what failed.
 actions:
     propose_teams: >-
         Split only by concern. Do not split work that shares files, needs

@@ -202,6 +202,15 @@ def branch_of(checkout: Path) -> str | None:
         return None
 
 
+def committed_text(checkout: Path, path: str) -> str | None:
+    """A file as the commit a checkout is on has it; None when that commit
+    has no such file or it cannot be told."""
+    try:
+        return git(checkout, ["show", f"HEAD:{path}"])
+    except (GitError, OSError):
+        return None
+
+
 def holds_commit(checkout: Path, commit: str) -> bool:
     """Whether what a checkout is on has ``commit`` in its history."""
     try:
