@@ -4,16 +4,17 @@
 # of what is here. An org's own `types/_defaults.yaml` goes over this one.
 documents:
     # The documents the director keeps in team memory for every team. Each
-    # is written with a tool of the director's and read by whom it says
-    # here; both are what the director does, so a type changes only what a
-    # document holds.
+    # is written with a tool of the director's, which is how it is kept and
+    # so not a type's to change. What it holds and who reads it are: the
+    # `team` that keeps it, each `subteam` of it, or both. The member that
+    # writes a document is given it whoever else reads it.
     spec:
         written_with: write_spec
         readers: [team]
         holds: How your team works inside its folder.
     contracts:
         written_with: edit_contracts
-        readers: [team, below]
+        readers: [team, subteam]
         holds: >-
             What teams promise each other: types, endpoints, file formats.
     report:
@@ -22,10 +23,10 @@ documents:
         holds: A decision and why, a setback, what failed.
     # A type may add documents of its own. Each is a file in the team's
     # folder that the member working there writes and commits. Its readers
-    # are the team, the teams below, or both; a document goes to no team
+    # are the team, its sub-teams, or both; a document goes to no team
     # above or beside.
     #
     # baseline:
     #     path: baseline.md
-    #     readers: [team, below]
+    #     readers: [team, subteam]
     #     holds: What every sub-team compares against.

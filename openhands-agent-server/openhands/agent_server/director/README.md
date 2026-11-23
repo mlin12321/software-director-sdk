@@ -173,7 +173,7 @@ documents:
     holds: The question, the method, and how a result is measured.
   baseline:
     path: baseline.md
-    readers: [team, below]
+    readers: [team, subteam]
     holds: What every sub-team compares against.
 ```
 
@@ -182,10 +182,21 @@ Every document says what it `holds`, who its `readers` are, and either the tool 
 | Document | Written with | Readers |
 |---|---|---|
 | `spec` | `write_spec` | `team` |
-| `contracts` | `edit_contracts` | `team`, `below` |
+| `contracts` | `edit_contracts` | `team`, `subteam` |
 | `report` | `report` | `team` |
 
-The director keeps those three in team memory, and what they are written with and who reads them is what its code does, so a type changes only what each holds; a type that says otherwise is refused. Any other name is a document of the type's own: a file at `path`, which the member that works in the folder writes and commits like any other file. Its readers are the `team` (the default), the teams `below`, or both, and they are given it with their context as the team last committed it. A document goes to no team above or beside: what goes up goes by `submit_review`. No shipped type has a document of its own.
+Readers are the `team` that keeps a document (the default), each `subteam` of it, or both, and a type says them for any document. A document goes to no team above or beside: what goes up goes by `submit_review`.
+
+The director keeps those three in team memory. The tool each is written with is how the director keeps it (the spec is replaced whole, the contracts are edited and merged when work lands, reports are only added to), so a type that names another is refused. What each holds and who reads it are the type's:
+
+| A type says | Then |
+|---|---|
+| `spec` read by `subteam` | the members of each sub-team get `spec_of_the_team_above` with their context |
+| `report` read by `subteam` | they get `reports_of_the_team_above` |
+| `contracts` not read by `subteam` | the sub-teams are not given the contracts between them |
+| any of the three not read by `team` | only the member that writes it has it: for reports, each member its own |
+
+Any other name is a document of the type's own: a file at `path`, which the member that works in the folder writes and commits like any other file. Its readers are given it with their context as the team last committed it. No shipped type has a document of its own.
 
 Every type starts from `_defaults.yaml`: the shipped one (`director/types/_defaults.yaml`, which holds the three documents as a team that builds software keeps them), then the one in the org's own `types` folder if there is one. A type file says only what it changes. Mappings are merged key by key; a list or a plain value takes the place of the default.
 

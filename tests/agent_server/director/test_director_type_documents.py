@@ -20,8 +20,14 @@ from openhands.agent_server.director.service.state import DIRECTOR_TOOL_NAMES
 from openhands.agent_server.director.tools import (
     ApproveTeamsTool,
     ProposeTeamsTool,
+    ReportTool,
     ReviewTeamTool,
     SubmitReviewTool,
+    WriteSpecTool,
+)
+from openhands.agent_server.director.tools.definition import (
+    ReportAction,
+    WriteSpecAction,
 )
 from tests.agent_server.director.conftest import (
     APPROVE,
@@ -57,7 +63,7 @@ description: Says what the labs below build on.
 documents:
   baseline:
     path: baseline.md
-    readers: [below]
+    readers: [subteam]
     holds: What every lab compares against.
 """
 )
@@ -188,23 +194,21 @@ def test_a_type_that_says_of_the_directors_documents_what_the_director_does_is_r
 ):
     said = (
         "documents:\n  contracts:\n    holds: x\n"
-        "    written_with: edit_contracts\n    readers: [below, team]\n"
+        "    written_with: edit_contracts\n    readers: [subteam, team]\n"
     )
     path = a_type(tmp_path, "lab", members_yaml() + "description: x\n" + said)
 
     lab = read_type(path, DIRECTOR_TOOL_NAMES)
 
-    assert lab.documents["contracts"].readers == ["team", "below"]
+    assert lab.documents["contracts"].readers == ["subteam", "team"]
 
 
 @pytest.mark.parametrize(
     "said",
     [
-        # What the director's own are written with and who reads them is
-        # what the director does: a type cannot say otherwise.
+        # What the director's own are written with is how the director
+        # keeps them: a type cannot say otherwise.
         "  spec:\n    holds: x\n    path: spec.md\n",
-        "  spec:\n    holds: x\n    readers: [team, below]\n",
-        "  contracts:\n    holds: x\n    readers: [team]\n",
         "  report:\n    holds: x\n    written_with: write_spec\n",
         # A document of the type's own is a file in the team's folder.
         "  findings:\n    holds: x\n",
@@ -215,7 +219,9 @@ def test_a_type_that_says_of_the_directors_documents_what_the_director_does_is_r
         "  findings:\n    holds: x\n    path: .git/config\n",
         "  Findings:\n    holds: x\n    path: f.md\n",
         "  one:\n    holds: x\n    path: f.md\n  two:\n    holds: x\n    path: f.md\n",
-        # It goes to the team and the teams below, never up or beside.
+        # It goes to the team and its sub-teams, never up or beside.
+        "  spec:\n    holds: x\n    readers: [above]\n",
+        "  findings:\n    holds: x\n    path: f.md\n    readers: [below]\n",
         "  findings:\n    holds: x\n    path: f.md\n    readers: [above]\n",
         "  findings:\n    holds: x\n    path: f.md\n    readers: [beside]\n",
         "  findings:\n    holds: x\n    path: f.md\n    readers: []\n",
@@ -228,6 +234,116 @@ def test_a_document_no_type_may_keep_is_refused(tmp_path: Path, said: str):
 
     with pytest.raises(InvalidAgentType):
         read_type(path, DIRECTOR_TOOL_NAMES)
+
+
+def test_who_reads_the_directors_documents_is_the_types_to_say(tmp_path: Path):
+    said = (
+        "documents:\n  spec:\n    holds: The plan.\n    readers: [team, subteam]\n"
+        "  contracts:\n    holds: Promises.\n    readers: [team]\n"
+        "  report:\n    holds: Decisions.\n"
+    )
+    path = a_type(tmp_path, "lab", members_yaml() + "description: x\n" + said)
+
+    lab = read_type(path, DIRECTOR_TOOL_NAMES)
+
+    assert lab.documents["spec"].readers == ["team", "subteam"]
+    assert lab.reads("spec", "subteam") and not lab.reads("contracts", "subteam")
+    # One the type does not say is read as the director has it.
+    assert lab.documents["report"].readers == ["team"]
+    # A member is told who reads one where that is not as the director
+    # has it.
+    told = lab.text_for("ic")
+    assert "- spec (read by your team and your sub-teams): The plan." in told
+    assert "- contracts (read by your team): Promises." in told
+    assert "- report: Decisions." in told
+
+
+# A team whose sub-teams read its spec and its reports and not its
+# contracts, and whose Manager reads none of the three.
+OPEN = (
+    members_yaml()
+    + """description: Works in the open.
+documents:
+  spec:
+    holds: The plan.
+    readers: [subteam]
+  contracts:
+    holds: Promises.
+    readers: [subteam]
+  report:
+    holds: Decisions.
+    readers: [subteam]
+"""
+)
+CLOSED = OPEN.replace("[subteam]", "[team]")
+PROMISED = proposing(
+    [SplitChild(title="Runs", path="runs", task="Run it")], contracts="Runs: v1."
+)
+
+
+async def an_org_of(
+    kind: str, repo: Path, launcher: FakeLauncher, tmp_path: Path
+) -> DirectorService:
+    config = tmp_path / "config" / "director.yaml"
+    a_type(config.parent / "types", "open", kind)
+    config.write_text("")
+    service = await an_org(repo, launcher, config, agent_type="open")
+    await use(service, ic(service), ProposeTeamsTool, PROMISED)
+    await use(service, manager(service), ApproveTeamsTool, APPROVE)
+    await tasked(service)
+    await use(service, ic(service), WriteSpecTool, WriteSpecAction(file_text="Plan A."))
+    await use(service, ic(service), ReportTool, ReportAction(text="Chose A."))
+    return service
+
+
+async def test_the_directors_documents_go_to_the_sub_teams_a_type_names(
+    repo: Path, launcher: FakeLauncher, tmp_path: Path
+):
+    service = await an_org_of(OPEN, repo, launcher, tmp_path)
+    try:
+        root, runs = node(service, "root"), node(service, "runs")
+
+        for role in ("ic", "manager"):
+            below = service.context_of(runs, role)
+            assert below["spec_of_the_team_above"] == "Plan A."
+            assert [r["text"] for r in below["reports_of_the_team_above"]] == [
+                "Chose A."
+            ]
+            assert below["contracts_with_the_teams_beside_you"] == ["Runs: v1.\n"]
+        # The member that writes a document has it whoever else reads it,
+        # and the others of the team have it only where the type names
+        # the team.
+        wrote = service.context_of(root, "ic")
+        assert wrote["spec"] == "Plan A."
+        assert wrote["contracts_between_your_sub_teams"] == ["Runs: v1.\n"]
+        assert [r["text"] for r in wrote["reports_of_your_team"]] == ["Chose A."]
+        other = service.context_of(root, "manager")
+        assert other["spec"] is None
+        assert other["contracts_between_your_sub_teams"] == []
+        assert other["reports_of_your_team"] == []
+        # Nothing of it goes up.
+        assert "spec_of_the_team_above" not in wrote
+    finally:
+        await service.aclose()
+
+
+async def test_the_directors_documents_stay_with_a_team_whose_type_names_no_sub_team(
+    repo: Path, launcher: FakeLauncher, tmp_path: Path
+):
+    service = await an_org_of(CLOSED, repo, launcher, tmp_path)
+    try:
+        root, runs = node(service, "root"), node(service, "runs")
+
+        below = service.context_of(runs, "ic")
+        assert "spec_of_the_team_above" not in below
+        assert "reports_of_the_team_above" not in below
+        assert below["contracts_with_the_teams_beside_you"] == []
+        other = service.context_of(root, "manager")
+        assert other["spec"] == "Plan A."
+        assert other["contracts_between_your_sub_teams"] == ["Runs: v1.\n"]
+        assert [r["text"] for r in other["reports_of_your_team"]] == ["Chose A."]
+    finally:
+        await service.aclose()
 
 
 async def test_a_document_goes_to_the_teams_below_and_to_no_other(

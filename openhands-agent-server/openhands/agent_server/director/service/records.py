@@ -624,8 +624,7 @@ class Records(ServiceState):
                 left, which is otherwise only named.
         """
         store = self.org
-        contracts = self.contracts_of(place)
-        specs = self.specs_of(place)
+        specs, contracts, reports = self.kept_for(place, role)
         own_spec = next((spec for spec in specs if not spec.old), None)
         to_settle = [
             {
@@ -691,7 +690,7 @@ class Records(ServiceState):
                     "at": report.at,
                     "text": report.text,
                 }
-                for report in self.reports_of(place)
+                for report in reports
             ],
             "sub_teams": [
                 {
@@ -761,6 +760,7 @@ class Records(ServiceState):
                 }
                 for other in others
             ]
+        context.update(self.kept_above(place))
         if documents := self.documents_for(place, role):
             context["documents_kept_as_files"] = documents
         works = role == self.team(place).writer
@@ -800,12 +800,67 @@ class Records(ServiceState):
             ]
         return context
 
+    def kept_for(
+        self, place: SessionTeam, role: str
+    ) -> tuple[list[InheritedSpec], list[BoundaryContracts], list[Report]]:
+        """The specs, the contracts and the reports the member ``role`` of
+        the team at ``place`` is given, by who the types say reads them.
+
+        Of its own team's, a member is given what it writes itself, and
+        the rest where the type names the `team` a reader. The contracts
+        the team above keeps reach it where that team's type names each
+        `subteam` one.
+        """
+        kind = self.type_of(place)
+        above = self.org.get(place.parent_id) if place.parent_id else None
+        from_above = above is not None and self.type_of(above).reads(
+            "contracts", "subteam"
+        )
+        return (
+            self.specs_of(place) if kind.given(role, "spec") else [],
+            [
+                agreed
+                for agreed in self.contracts_of(place)
+                if (kind.given(role, "contracts") if agreed.own else from_above)
+            ],
+            [
+                report
+                for report in self.reports_of(place)
+                if report.role == role or kind.reads("report", "team")
+            ],
+        )
+
+    def kept_above(self, place: SessionTeam) -> dict[str, Any]:
+        """The spec and the reports of the team above, for the members of
+        the team at ``place``, where that team's type names each `subteam`
+        a reader of them; no shipped type does. Nobody works at a
+        session's Division Lead place, so it keeps none."""
+        above = self.org.place(place.parent_id) if place.parent_id else None
+        if above is None or is_division_lead(above):
+            return {}
+        kind = self.type_of(above)
+        found: dict[str, Any] = {}
+        if kind.reads("spec", "subteam"):
+            spec = next((s for s in self.specs_of(above) if not s.old), None)
+            if spec is not None:
+                found["spec_of_the_team_above"] = spec.spec
+        if kind.reads("report", "subteam") and (reports := self.reports_of(above)):
+            found["reports_of_the_team_above"] = [
+                {
+                    "by": _written_by(report, session_of(place)),
+                    "at": report.at,
+                    "text": report.text,
+                }
+                for report in reports
+            ]
+        return found
+
     def documents_for(self, place: SessionTeam, role: str) -> list[dict[str, Any]]:
         """The documents kept as files that the member ``role`` of the
         team at ``place`` is given: its own team's, where the type names
         the `team` a reader and the member is not the one that writes
         them, and those of the team above, where that team's type names
-        the teams `below`.
+        each `subteam`.
 
         A document goes down and never up or to a team beside, as the
         contracts do, and it waits for no review: each is given as the
@@ -817,7 +872,7 @@ class Records(ServiceState):
         if role != self.team(place).writer:
             kept_by.append((place, "team"))
         if above is not None and not is_division_lead(above):
-            kept_by.append((above, "below"))
+            kept_by.append((above, "subteam"))
         found: list[dict[str, Any]] = []
         for keeper, reader in kept_by:
             if not keeper.worktree_path:

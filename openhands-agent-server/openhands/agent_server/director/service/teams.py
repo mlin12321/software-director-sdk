@@ -650,15 +650,15 @@ class Teams(Delivery):
     def _briefing(self, place: SessionTeam, role: str, task: str) -> tuple[str, str]:
         """An agent's first message, and the context it tells, as kept to
         find later what changed."""
-        contracts = self.contracts_of(place)
+        specs, contracts, reports = self.kept_for(place, role)
         context = self.context_of(place, role)
         text = brief(
             place,
             role,
             task,
-            self.specs_of(place),
+            specs,
             contracts,
-            self.reports_of(place),
+            reports,
             briefing_block(context),
             self.type_of(place).text_for(role),
             works=role == self.team(place).writer,
