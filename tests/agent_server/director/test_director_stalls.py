@@ -37,6 +37,7 @@ from tests.agent_server.director.conftest import (
     FakeLauncher,
     api_submits,
     commit,
+    eventually,
     ic,
     manager,
     node,
@@ -400,17 +401,19 @@ async def test_teams_that_take_a_stopped_teams_place_replace_it(
     assert replacement.stopped is None and replacement.status != "blocked"
 
 
+@pytest.mark.timeout(60)
 async def test_the_director_looks_by_itself(
     repo: Path, launcher: FakeLauncher, clock: Clock
 ):
-    service = await started_with_server(repo, launcher, clock=clock, stall_poll=0.01)
+    service = await started_with_server(repo, launcher, clock=clock, stall_poll=0.05)
     await split_root(service)
-    await asyncio.sleep(0.1)
-    await service.settled()
+    await asyncio.sleep(0.15)
     clock.passes(120)
 
-    await asyncio.sleep(0.1)
-    await service.settled()
+    # Not `settled`: on a slow machine a timer this fast always has a look
+    # under way, and waiting for none would never end.
+    await eventually(lambda: len(notices(service, launcher)) == 2)
+    await asyncio.sleep(0.15)
 
     assert len(notices(service, launcher)) == 2
     await service.aclose()
