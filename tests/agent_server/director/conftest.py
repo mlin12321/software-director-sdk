@@ -309,6 +309,7 @@ class FakeLauncher:
     used: dict[UUID, Usage] = field(default_factory=dict)
     # What a conversation that failed said of it.
     failures: dict[UUID, str] = field(default_factory=dict)
+    condensations: dict[UUID, str] = field(default_factory=dict)
     # What starting the next derived agent fails with.
     derive_error: Exception | None = None
     joined: list[UUID] = field(default_factory=list)
@@ -497,6 +498,9 @@ class FakeLauncher:
 
     async def failure(self, conversation_id: UUID) -> str | None:
         return self.failures.get(conversation_id)
+
+    async def condensed(self, conversation_id: UUID) -> str | None:
+        return self.condensations.get(conversation_id)
 
     def on_status(self, listener: ExecutionStatusListener) -> Callable[[], None]:
         self.listeners.append(listener)

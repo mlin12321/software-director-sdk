@@ -165,6 +165,17 @@ def briefing_block(context: dict[str, Any]) -> str:
     )
 
 
+def again_block(role_said: str, now: dict[str, Any]) -> str:
+    """What an agent is told again once its history was shortened: what
+    its first message said of the org, and its team's context as it is."""
+    return (
+        f"{UPDATE_HEADING} (your conversation's history was shortened to fit "
+        "your model, so this is said again; it asks nothing of you by "
+        f"itself):\n\n{role_said}\n\nYour team's context now:\n"
+        + json.dumps(_cut(now), indent=2)
+    )
+
+
 def update_block(found: dict[str, Any]) -> str:
     """What changed, for the end of a message the agent gets anyway."""
     return (

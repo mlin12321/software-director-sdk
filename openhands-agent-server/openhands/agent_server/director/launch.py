@@ -49,6 +49,7 @@ from openhands.sdk.conversation.request import (
 from openhands.sdk.conversation.state import ConversationExecutionStatus
 from openhands.sdk.conversation.title_utils import strip_reasoning_blocks
 from openhands.sdk.errors import Conflict, Invalid, NotFound, Unprocessable
+from openhands.sdk.event.condenser import Condensation
 from openhands.sdk.event.conversation_error import ConversationErrorEvent
 from openhands.sdk.launch import AgentLaunchError, LaunchStoreError
 from openhands.sdk.llm import LLM
@@ -226,6 +227,12 @@ class TeamLauncher(Protocol):
     async def failure(self, conversation_id: UUID) -> str | None:
         """What a conversation that failed last said of it; None when it
         said nothing or does not exist."""
+        ...
+
+    async def condensed(self, conversation_id: UUID) -> str | None:
+        """The last time a conversation's history was shortened to fit its
+        model, as an id that differs each time; None when it never was, or
+        when its agent keeps its own history and does not say."""
         ...
 
     async def usage(self, conversation_ids: Collection[UUID]) -> dict[UUID, Usage]:
@@ -563,6 +570,17 @@ class ConversationTeamLauncher:
             if isinstance(event, ConversationErrorEvent):
                 return f"{event.code}: {event.detail}"[:_FAILURE_KEPT]
         return None
+
+    async def condensed(self, conversation_id: UUID) -> str | None:
+        event_service = await self._conversations.get_event_service(conversation_id)
+        if event_service is None:
+            return None
+        page = await event_service.search_events(
+            limit=1,
+            kind=Condensation.__name__,
+            sort_order=EventSortOrder.TIMESTAMP_DESC,
+        )
+        return next((str(event.id) for event in page.items), None)
 
     async def usage(self, conversation_ids: Collection[UUID]) -> dict[UUID, Usage]:
         found: dict[UUID, Usage] = {}
