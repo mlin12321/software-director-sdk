@@ -21,8 +21,13 @@ documents:
         written_with: report
         readers: [team]
         holds: A decision and why, a setback, what failed.
-    # A type may add documents of its own. Each is a file in the team's
-    # folder that the member working there writes and commits. Its readers
+    # A `title` is what a team calls one of them where that is not its
+    # name here: `spec: {title: protocol}`.
+    #
+    # A type may add documents of its own. One with a `path` is a file in
+    # the team's folder that the member working there writes and commits;
+    # one `written_with: report` is a list of entries the director keeps,
+    # which a member adds to with `report`, naming the document. Its readers
     # are the team, its sub-teams, or both; a document goes to no team
     # above or beside.
     #
@@ -30,3 +35,6 @@ documents:
     #     path: baseline.md
     #     readers: [team, subteam]
     #     holds: What every sub-team compares against.
+    # findings:
+    #     written_with: report
+    #     holds: One claim to an entry.

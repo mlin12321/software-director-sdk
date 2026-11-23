@@ -22,6 +22,10 @@ IN_THE_BRIEFING = (
 )
 # Lists an agent adds to itself; what it added is not told back to it.
 _OWN = {"escalations_you_raised": None, "reports_of_your_team": "by"}
+# The entries of a document of the team's own: the list a member adds to
+# with `report`, by a key that ends so.
+OWN_ENTRIES = "_kept_by_your_team"
+ABOVE_ENTRIES = "_kept_by_the_team_above"
 # Lists with one entry for each team, told team by team.
 _BY_TEAM = (
     "sub_teams",
@@ -108,8 +112,8 @@ def changed(
             found[key] = value
             continue
         added = value[len(was) :]
-        if key in _OWN:
-            by = _OWN[key]
+        if key in _OWN or key.endswith(OWN_ENTRIES):
+            by = _OWN.get(key, "by")
             added = [item for item in added if by is not None and item[by] != role]
         if added:
             found[key] = {"added": added}

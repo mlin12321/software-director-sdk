@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from openhands.agent_server.director import compaction
 from openhands.agent_server.director.agent_types import (
     DIRECTOR_DOCUMENTS,
     SHIPPED_TYPES,
@@ -14,7 +15,7 @@ from openhands.agent_server.director.agent_types import (
     read_type,
 )
 from openhands.agent_server.director.context import changed, steady
-from openhands.agent_server.director.models import SplitChild
+from openhands.agent_server.director.models import Report, SplitChild
 from openhands.agent_server.director.service import DirectorService
 from openhands.agent_server.director.service.state import DIRECTOR_TOOL_NAMES
 from openhands.agent_server.director.tools import (
@@ -212,7 +213,11 @@ def test_a_type_that_says_of_the_directors_documents_what_the_director_does_is_r
         "  report:\n    holds: x\n    written_with: write_spec\n",
         # A document of the type's own is a file in the team's folder.
         "  findings:\n    holds: x\n",
-        "  findings:\n    holds: x\n    written_with: report\n",
+        # The director keeps one of the type's own only as a list of
+        # entries, and a document is kept one way.
+        "  findings:\n    holds: x\n    written_with: write_spec\n",
+        "  findings:\n    holds: x\n    written_with: edit_contracts\n",
+        "  findings:\n    holds: x\n    written_with: report\n    path: f.md\n",
         "  findings:\n    path: findings.md\n",
         "  findings:\n    holds: x\n    path: ../findings.md\n",
         "  findings:\n    holds: x\n    path: /findings.md\n",
@@ -256,6 +261,99 @@ def test_who_reads_the_directors_documents_is_the_types_to_say(tmp_path: Path):
     assert "- spec (read by your team and your sub-teams): The plan." in told
     assert "- contracts (read by your team): Promises." in told
     assert "- report: Decisions." in told
+
+
+# A team that calls its spec a protocol and keeps a list of findings with
+# the director, which its sub-teams read too.
+JOURNAL = (
+    members_yaml()
+    + """description: Keeps what it found.
+documents:
+  spec:
+    title: protocol
+    holds: The method.
+  findings:
+    written_with: report
+    readers: [team, subteam]
+    holds: One claim to an entry.
+"""
+)
+
+
+def test_a_type_names_the_directors_documents_and_keeps_entries_of_its_own(
+    tmp_path: Path,
+):
+    lab = read_type(a_type(tmp_path, "lab", JOURNAL), DIRECTOR_TOOL_NAMES)
+
+    assert list(lab.logs) == ["findings"] and lab.own_documents == {}
+    told = lab.text_for("ic")
+    assert (
+        "- protocol (what the director's tools and its own texts call your "
+        "team's spec; written with `write_spec`): The method." in told
+    )
+    assert (
+        "- findings (a list of entries the director keeps; add one with "
+        "`report`, naming the document `findings`; read by your team and "
+        "your sub-teams): One claim to an entry." in told
+    )
+
+
+async def test_the_entries_of_a_document_go_to_its_readers_and_are_no_reports(
+    repo: Path, launcher: FakeLauncher, tmp_path: Path
+):
+    service = await an_org_of(JOURNAL, repo, launcher, tmp_path)
+    try:
+        root, runs = node(service, "root"), node(service, "runs")
+        before = {
+            role: steady(service.context_of(root, role)) for role in ("ic", "manager")
+        }
+
+        found = ReportAction(text="It holds for n < 10.", document="findings")
+        said = await use(service, ic(service), ReportTool, found)
+        assert "Added to findings" in said.text
+        refused = await use(
+            service, ic(service), ReportTool, ReportAction(text="x", document="notes")
+        )
+        assert "keeps no document 'notes'" in refused.text
+
+        for role in ("ic", "manager"):
+            now = service.context_of(root, role)
+            assert [e["text"] for e in now["findings_kept_by_your_team"]] == [
+                "It holds for n < 10."
+            ]
+            # An entry is none of the team's reports.
+            assert [r["text"] for r in now["reports_of_your_team"]] == ["Chose A."]
+        below = service.context_of(runs, "ic")
+        assert [e["text"] for e in below["findings_kept_by_the_team_above"]] == [
+            "It holds for n < 10."
+        ]
+        assert "findings_kept_by_your_team" not in below
+        # The other member is told of the entry with the next message it
+        # gets, and the one that wrote it is not told it back.
+        told = changed(
+            before["manager"],
+            steady(service.context_of(root, "manager")),
+            "manager",
+            works=False,
+        )
+        assert [e["by"] for e in told["findings_kept_by_your_team"]] == ["ic"]
+        seen = steady(service.context_of(root, "ic"))
+        more = ReportAction(text="And for n = 10.", document="findings")
+        await use(service, ic(service), ReportTool, more)
+        now = steady(service.context_of(root, "ic"))
+        assert len(now["findings_kept_by_your_team"]) == 2
+        assert "findings_kept_by_your_team" not in changed(seen, now, "ic", works=True)
+    finally:
+        await service.aclose()
+
+
+def test_no_model_rewrites_the_entries_of_a_document():
+    kept = [
+        Report(at="1", role="ic", text="a report"),
+        Report(at="2", role="ic", text="an entry", document="findings"),
+    ]
+
+    assert [report.text for report in compaction.plain(kept)] == ["a report"]
 
 
 # A team whose sub-teams read its spec and its reports and not its

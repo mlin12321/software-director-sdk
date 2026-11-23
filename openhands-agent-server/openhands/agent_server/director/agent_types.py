@@ -66,6 +66,12 @@ DIRECTOR_DOCUMENTS: dict[str, tuple[str, tuple[Reader, ...]]] = {
     "report": ("report", ("team",)),
 }
 
+# What the director's own texts call each of them.
+_SAID = {"spec": "spec", "contracts": "contracts", "report": "reports"}
+# The tool a document of a type's own is written with where the director
+# keeps it: a list of entries that is only added to.
+LOG_TOOL = "report"
+
 # Tools the director finds one agent of a team by: a type gives each to
 # exactly one member. The last is found among the tools members have where
 # a team only reviews the work of a session.
@@ -207,6 +213,14 @@ class Document(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     holds: str = Field(min_length=1, description="What is written in it.")
+    title: str = Field(
+        default="",
+        description=(
+            "What the team calls it, where that is not its name in this "
+            "table: a team of researchers may call its `report` a 'research "
+            "log'. The director's tools and its own texts keep the name."
+        ),
+    )
     path: str = Field(
         default="",
         description=(
@@ -219,8 +233,10 @@ class Document(BaseModel):
         default="",
         description=(
             "The director's tool it is written with, for a document the "
-            "director keeps in team memory: `write_spec`, `edit_contracts`, "
-            "`report`."
+            "director keeps in team memory: `write_spec`, `edit_contracts` "
+            "and `report` for the spec, the contracts and the reports, and "
+            "`report` for a document of the type's own, which is then a "
+            "list of entries that is only added to."
         ),
     )
     readers: list[Reader] = Field(
@@ -388,17 +404,27 @@ class TeamTemplate(BaseModel):
                     )
                 self.documents[name] = Document(
                     holds=document.holds,
+                    title=document.title,
                     written_with=tool,
                     readers=document.readers
                     if "readers" in document.model_fields_set
                     else list(readers),
                 )
                 continue
+            if document.written_with == LOG_TOOL and not document.path:
+                if not any(LOG_TOOL in member.tools for member in agents.values()):
+                    raise ValueError(
+                        f"the document `{name}` is written with `{LOG_TOOL}`, "
+                        "which no member of the type has"
+                    )
+                continue
             if document.written_with or not document.path:
                 raise ValueError(
                     f"the document `{name}` is the type's own: say its "
-                    "`path` in the team's folder; the director has no tool "
-                    "to write it with"
+                    "`path` in the team's folder, or that it is "
+                    f"`written_with: {LOG_TOOL}` for the director to keep it "
+                    "as a list of entries; it is not both, and no other "
+                    "tool keeps a document of a type's own"
                 )
             if document.path in paths:
                 raise ValueError(f"two documents are kept in {document.path!r}")
@@ -522,6 +548,16 @@ class TeamTemplate(BaseModel):
         return self.has(member, DIRECTOR_DOCUMENTS[name][0]) or self.reads(name, "team")
 
     @property
+    def logs(self) -> dict[str, Document]:
+        """The documents of the type's own that the director keeps, each a
+        list of entries added with `report`, by name."""
+        return {
+            name: document
+            for name, document in self.documents.items()
+            if name not in DIRECTOR_DOCUMENTS and document.written_with
+        }
+
+    @property
     def own_documents(self) -> dict[str, Document]:
         """The documents that are files in the team's folder, by name."""
         return {
@@ -549,7 +585,8 @@ class TeamTemplate(BaseModel):
         if self.documents:
             lines += ["", "What your team keeps:"]
             lines += [
-                f"- {name}{_kept(document)}: {document.holds.strip()}"
+                f"- {document.title or name}{_kept(name, document)}: "
+                f"{document.holds.strip()}"
                 for name, document in self.documents.items()
             ]
         if self.actions:
@@ -563,25 +600,36 @@ class TeamTemplate(BaseModel):
         return f'<TEAM_TYPE name="{self.name}">\n{body}\n</TEAM_TYPE>'
 
 
-def _kept(document: Document) -> str:
-    """Where a document that is a file is and who reads it. Of one the
-    director keeps in team memory, who reads it where that is not who the
-    director gives it to unless told: '' otherwise, since what the director
-    says of the org already says it."""
+def _kept(name: str, document: Document) -> str:
+    """What a member is told of how a document is kept, after its name.
+
+    Of a file: where it is and who reads it. Of a list of entries of the
+    type's own: how it is added to and who reads it. Of the spec, the
+    contracts and the reports: what the director's own texts call it where
+    the team calls it otherwise, and who reads it where that is not who
+    the director gives it to unless told; '' where neither, since what
+    the director says of the org already says it.
+    """
+    read_by = " and ".join(
+        said
+        for reader, said in (("team", "your team"), ("subteam", "your sub-teams"))
+        if reader in document.readers
+    )
+    if name in DIRECTOR_DOCUMENTS:
+        said = []
+        if document.title and document.title != name:
+            said.append(
+                f"what the director's tools and its own texts call your "
+                f"team's {_SAID[name]}; written with `{document.written_with}`"
+            )
+        if set(document.readers) != set(DIRECTOR_DOCUMENTS[name][1]):
+            said.append(f"read by {read_by}")
+        return f" ({'; '.join(said)})" if said else ""
     if not document.path:
-        usual = next(
-            readers
-            for tool, readers in DIRECTOR_DOCUMENTS.values()
-            if tool == document.written_with
+        return (
+            f" (a list of entries the director keeps; add one with "
+            f"`{LOG_TOOL}`, naming the document `{name}`; read by {read_by})"
         )
-        if set(document.readers) == set(usual):
-            return ""
-        read_by = " and ".join(
-            said
-            for reader, said in (("team", "your team"), ("subteam", "your sub-teams"))
-            if reader in document.readers
-        )
-        return f" (read by {read_by})"
     return (
         f" (`{document.path}` in your team's folder; commit it with your "
         f"work, and {document.read_by} read it as you last committed it)"

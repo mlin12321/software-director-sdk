@@ -513,6 +513,13 @@ class Report(BaseModel):
         default="",
         description="That session's id: two sessions may have one title.",
     )
+    document: str = Field(
+        default="",
+        description=(
+            "The document of the team's type it is an entry of; '' for one "
+            "of the team's reports."
+        ),
+    )
     compacted: bool = Field(
         default=False,
         description=(

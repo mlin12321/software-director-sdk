@@ -245,7 +245,8 @@ def report_line(report: Report, titles: Mapping[str, str], *, names: Names) -> s
             f"were here before yours, {report.at}: {report.text}"
         )
     writer = titles.get(report.role, report.role)
-    return f"{writer}, {report.at}: {report.text}"
+    of = f" in {report.document}" if report.document else ""
+    return f"{writer}{of}, {report.at}: {report.text}"
 
 
 def _now_with(team: FormerTeam, children: list[SplitChild]) -> str:

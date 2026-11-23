@@ -9,9 +9,11 @@ from uuid import uuid4
 
 from pydantic import TypeAdapter
 
+from openhands.agent_server.director import compaction
 from openhands.agent_server.director.boundary import (
     owns,
 )
+from openhands.agent_server.director.context import ABOVE_ENTRIES, OWN_ENTRIES
 from openhands.agent_server.director.git import (
     changed_together,
     committed_text,
@@ -761,6 +763,7 @@ class Records(ServiceState):
                 for other in others
             ]
         context.update(self.kept_above(place))
+        context.update(self.entries_for(place, role))
         if documents := self.documents_for(place, role):
             context["documents_kept_as_files"] = documents
         works = role == self.team(place).writer
@@ -826,9 +829,42 @@ class Records(ServiceState):
             [
                 report
                 for report in self.reports_of(place)
-                if report.role == role or kind.reads("report", "team")
+                if not report.document
+                and (report.role == role or kind.reads("report", "team"))
             ],
         )
+
+    def entries_for(self, place: SessionTeam, role: str) -> dict[str, Any]:
+        """The documents the director keeps as lists of entries that the
+        member ``role`` of the team at ``place`` is given, each under a
+        key of its own so that an update tells only what was added: its
+        own team's (what it wrote itself, and the rest where the type
+        names the `team` a reader) and those of the team above, where
+        that team's type names each `subteam`."""
+
+        def entries(keeper: SessionTeam, name: str, all_of_it: bool) -> list[Any]:
+            return [
+                {
+                    "by": _written_by(report, session_of(place)),
+                    "at": report.at,
+                    "text": report.text,
+                }
+                for report in self.reports_of(keeper)
+                if report.document == name and (all_of_it or report.role == role)
+            ]
+
+        found: dict[str, Any] = {}
+        for name, document in self.type_of(place).logs.items():
+            if kept := entries(place, name, "team" in document.readers):
+                found[f"{name}{OWN_ENTRIES}"] = kept
+        above = self.org.place(place.parent_id) if place.parent_id else None
+        if above is not None and not is_division_lead(above):
+            for name, document in self.type_of(above).logs.items():
+                if "subteam" in document.readers and (
+                    kept := entries(above, name, True)
+                ):
+                    found[f"{name}{ABOVE_ENTRIES}"] = kept
+        return found
 
     def kept_above(self, place: SessionTeam) -> dict[str, Any]:
         """The spec and the reports of the team above, for the members of
@@ -844,7 +880,9 @@ class Records(ServiceState):
             spec = next((s for s in self.specs_of(above) if not s.old), None)
             if spec is not None:
                 found["spec_of_the_team_above"] = spec.spec
-        if kind.reads("report", "subteam") and (reports := self.reports_of(above)):
+        if kind.reads("report", "subteam") and (
+            reports := compaction.plain(self.reports_of(above))
+        ):
             found["reports_of_the_team_above"] = [
                 {
                     "by": _written_by(report, session_of(place)),

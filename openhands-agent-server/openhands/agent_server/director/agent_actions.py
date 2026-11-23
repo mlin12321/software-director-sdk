@@ -793,11 +793,26 @@ def edit_contracts(
     )
 
 
-def report(service: DirectorService, caller: Caller, text: str) -> str:
-    """Record something for the two agents of the caller's team."""
+def report(
+    service: DirectorService, caller: Caller, text: str, document: str = ""
+) -> str:
+    """Record something for the agents of the caller's team, or add an
+    entry to a document of its type's that the director keeps."""
     _not_aside(caller)
-    service.report(caller.node, caller.role, text)
-    return "Recorded for you and the other agent of your team."
+    document = document.strip()
+    if not document:
+        service.report(caller.node, caller.role, text)
+        return "Recorded for you and the other agent of your team."
+    kept = service.type_of(caller.node).logs
+    if document not in kept:
+        raise Invalid(
+            f"Your team keeps no document {document!r} that is written with "
+            "`report`"
+            + (f": it keeps {', '.join(kept)}" if kept else "")
+            + ". Leave `document` empty for a report."
+        )
+    service.report(caller.node, caller.role, text, document)
+    return f"Added to {kept[document].title or document}."
 
 
 def _team_named(

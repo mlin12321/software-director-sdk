@@ -196,7 +196,24 @@ The director keeps those three in team memory. The tool each is written with is 
 | `contracts` not read by `subteam` | the sub-teams are not given the contracts between them |
 | any of the three not read by `team` | only the member that writes it has it: for reports, each member its own |
 
-Any other name is a document of the type's own: a file at `path`, which the member that works in the folder writes and commits like any other file. Its readers are given it with their context as the team last committed it. No shipped type has a document of its own.
+A type may call any of the three what its teams call it with `title` (`spec: {title: protocol}`). Its agents are told the title and that the director's tools and its own texts say "spec"; the tools, the director's texts and the keys of the context keep the name.
+
+Any other name is a document of the type's own, kept in one of two ways:
+
+| Kept as | A type says | Written | Readers get |
+|---|---|---|---|
+| a file | `path: baseline.md` | by the member that works in the folder, committed like any file | the text as the team last committed it, in `documents_kept_as_files` |
+| a list of entries the director keeps | `written_with: report` | by any member with `report`, which then names the document: `report(text, document="findings")` | the entries, in `findings_kept_by_your_team` or `findings_kept_by_the_team_above` |
+
+```yaml
+documents:
+  findings:
+    written_with: report
+    readers: [team, subteam]
+    holds: One claim to an entry, with the command that reproduces it.
+```
+
+Entries are kept as reports are: the session's own until its work is accepted, then the team's, and two sessions' entries are both kept. They are not among the team's reports and no model rewrites them shorter. `write_spec` and `edit_contracts` keep no document of a type's own: a text that is replaced or edited is a file, which git merges. No shipped type has a document of its own.
 
 Every type starts from `_defaults.yaml`: the shipped one (`director/types/_defaults.yaml`, which holds the three documents as a team that builds software keeps them), then the one in the org's own `types` folder if there is one. A type file says only what it changes. Mappings are merged key by key; a list or a plain value takes the place of the default.
 

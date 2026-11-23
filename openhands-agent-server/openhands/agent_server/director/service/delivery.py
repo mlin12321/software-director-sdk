@@ -87,9 +87,12 @@ class Delivery(Records):
         if conversation_id is not None:
             self._post(conversation_id, from_director(text), at_once=at_once)
 
-    def report(self, place: SessionTeam, role: str, text: str) -> None:
-        """Record something for the two agents of a team. Safe from any
-        thread.
+    def report(
+        self, place: SessionTeam, role: str, text: str, document: str = ""
+    ) -> None:
+        """Record something for the two agents of a team, or add an entry
+        to the ``document`` of its type's that the director keeps. Safe
+        from any thread.
 
         Raises:
             Invalid: There is nothing to record.
@@ -103,6 +106,7 @@ class Delivery(Records):
             text=text,
             session=self.org.session_title(place),
             session_id=session_of(place),
+            document=document,
         )
         # Its session's alone until the session's work is accepted.
         self._keep_report(place, report)
@@ -110,7 +114,7 @@ class Delivery(Records):
     def reports_grew(self, node_id: str, role: str) -> None:
         """Compact what one agent of a team recorded, if it has grown past
         what the org set. Safe from any thread."""
-        reports = self._memory().reports(node_id, role)
+        reports = compaction.plain(self._memory().reports(node_id, role))
         if compaction.due(reports, self.settings.report_compaction_chars):
             self._enqueue(lambda: self._compact(node_id, role), MODELS_LANE)
 
@@ -485,7 +489,10 @@ class Delivery(Records):
         if asker is None or self._paused is not None:
             return
         team_memory = self._memory()
-        reports = await asyncio.to_thread(team_memory.reports, node_id, role)
+        kept = await asyncio.to_thread(team_memory.reports, node_id, role)
+        # The entries of a document are what the team wrote: no model
+        # rewrites them.
+        reports = compaction.plain(kept)
         if not compaction.due(reports, self.settings.report_compaction_chars):
             return
         answer = await self._ask(
@@ -498,7 +505,14 @@ class Delivery(Records):
         # Rewriting them changes what the org shares.
         await self._base(
             lambda: asyncio.to_thread(
-                team_memory.replace_reports, node_id, role, reports, shorter
+                team_memory.replace_reports,
+                node_id,
+                role,
+                kept,
+                sorted(
+                    [*shorter, *(r for r in kept if r.document)],
+                    key=lambda report: report.at,
+                ),
             )
         )
 

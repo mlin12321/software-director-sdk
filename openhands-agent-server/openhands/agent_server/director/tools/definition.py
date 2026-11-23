@@ -260,6 +260,14 @@ class ReportAction(Action):
     """Record a design decision, a setback or a reflection."""
 
     text: str = Field(description="What to record, in plain English.")
+    document: str = Field(
+        default="",
+        description=(
+            "Only where your team's type names a document that is written "
+            "with this tool: that document's name, to add the text to it "
+            "as an entry. Leave it empty for your team's reports."
+        ),
+    )
 
 
 class MsgTeamAction(Action):
@@ -759,7 +767,7 @@ class ReportTool(_DirectorTool[ReportAction]):
     @classmethod
     def act(cls):
         return lambda service, caller, action: agent_actions.report(
-            service, caller, action.text
+            service, caller, action.text, action.document
         )
 
 

@@ -23,6 +23,11 @@ overrides an earlier one, keep the later. Leave out what merely repeats.
 Answer with the report alone, as plain text."""
 
 
+def plain(reports: list[Report]) -> list[Report]:
+    """The reports among ``reports``, without the entries of documents."""
+    return [report for report in reports if not report.document]
+
+
 def size(reports: list[Report]) -> int:
     """How many characters of text ``reports`` hold."""
     return sum(len(report.text) for report in reports)
