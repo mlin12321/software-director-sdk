@@ -26,6 +26,7 @@ from openhands.sdk import LLM, Agent
 from openhands.sdk.agent import ACPAgent
 from openhands.sdk.conversation.state import ConversationExecutionStatus
 from openhands.sdk.errors import Conflict, NotFound
+from openhands.sdk.event.condenser import Condensation
 from openhands.sdk.llm.utils.metrics import Metrics, TokenUsage
 from openhands.sdk.profiles.resolver import ProfileNotFound
 from openhands.sdk.security.confirmation_policy import NeverConfirm
@@ -491,3 +492,44 @@ async def test_a_session_set_going_while_the_org_is_paused_goes_on_when_it_resum
 
     # The agent that was cut off in its turn runs again.
     assert (UUID(api), None) in launcher.resumed
+
+
+async def test_the_last_shortening_of_a_conversations_history_is_found():
+    asked: dict = {}
+    event = Condensation(
+        forgotten_event_ids={"e1", "e2"}, summary="So far.", llm_response_id="r1"
+    )
+
+    async def search_events(**query):
+        asked.update(query)
+        return SimpleNamespace(items=[event])
+
+    async def get_event_service(_: UUID):
+        return SimpleNamespace(search_events=search_events)
+
+    conversations = SimpleNamespace(get_event_service=get_event_service)
+    launcher = ConversationTeamLauncher(cast(ConversationService, conversations))
+
+    assert await launcher.condensed(uuid4()) == str(event.id)
+    assert (asked["kind"], asked["limit"]) == ("Condensation", 1)
+
+
+async def test_a_conversation_whose_history_was_never_shortened_says_so():
+    async def search_events(**_):
+        return SimpleNamespace(items=[])
+
+    async def get_event_service(conversation_id: UUID):
+        return (
+            None
+            if conversation_id == GONE
+            else SimpleNamespace(search_events=search_events)
+        )
+
+    conversations = SimpleNamespace(get_event_service=get_event_service)
+    launcher = ConversationTeamLauncher(cast(ConversationService, conversations))
+
+    assert await launcher.condensed(uuid4()) is None
+    assert await launcher.condensed(GONE) is None
+
+
+GONE = uuid4()

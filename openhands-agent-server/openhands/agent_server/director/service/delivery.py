@@ -10,6 +10,7 @@ from uuid import UUID
 
 from openhands.agent_server.director import compaction
 from openhands.agent_server.director.context import (
+    again_block,
     changed,
     steady,
     update_block,
@@ -31,6 +32,7 @@ from openhands.agent_server.director.prompts import (
     from_director,
 )
 from openhands.agent_server.director.run_state import (
+    CONDENSED,
     JOINED,
     RUNNING,
     TOLD,
@@ -176,12 +178,15 @@ class Delivery(Records):
         self._delivering.add(seq)
         self._at_once.discard(seq)
         try:
+            condensed = await self._condensed_since_told(conversation_id)
             text, told = await asyncio.to_thread(
-                self._with_what_changed, conversation_id, text
+                self._with_what_changed, conversation_id, text, condensed is not None
             )
             await self._send_again(UUID(conversation_id), text)
             if told is not None:
                 run.mark(TOLD, conversation_id, told)
+            if condensed is not None:
+                run.mark(CONDENSED, conversation_id, condensed)
             self._turn_begun(conversation_id)
         except NotFound:
             store = self.store
@@ -235,12 +240,29 @@ class Delivery(Records):
         told = json.loads(before) | {key: now[key] for key in keys if key in now}
         run.mark(TOLD, conversation_id, json.dumps(told))
 
+    async def _condensed_since_told(self, conversation_id: str) -> str | None:
+        """The shortening of an agent's history that it has not been told
+        again after, if there is one. What the director said to it before
+        then may be gone from what its model reads."""
+        launcher = self._require_launcher()
+        try:
+            last = await launcher.condensed(UUID(conversation_id))
+        except NotFound:
+            return None
+        known = self._runs().marked(CONDENSED).get(conversation_id)
+        return last if last is not None and last != known else None
+
     def _with_what_changed(
-        self, conversation_id: str, text: str
+        self, conversation_id: str, text: str, again: bool = False
     ) -> tuple[str, str | None]:
         """A message to an agent with what changed in its team's context
         since it was last told, so that no message has to be sent for a
         change alone.
+
+        Args:
+            again: Its history was shortened since it was last told: it is
+                told how the org works and all of its team's context once
+                more.
 
         Returns:
             The message, and the context to keep as told once it is sent;
@@ -254,8 +276,10 @@ class Delivery(Records):
             now = steady(self.context_of(node, role))
         except (GitError, OSError):
             return text, None
+        if again:
+            said = again_block(self.role_text(node, role), now)
+            return f"{text}\n\n{said}", json.dumps(now)
         before = self._runs().marked(TOLD).get(conversation_id)
-        # An agent briefed before contexts were kept is told all of it once.
         news = changed(
             json.loads(before) if before else {},
             now,

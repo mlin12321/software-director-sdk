@@ -4,6 +4,7 @@ its briefing, and what changed with the next message it gets anyway."""
 import json
 from pathlib import Path
 from typing import Any
+from uuid import UUID
 
 from openhands.agent_server.director.context import (
     CUT,
@@ -445,3 +446,23 @@ def test_a_part_that_is_gone_is_told_and_another_order_is_not():
         )
         == {}
     )
+
+
+async def test_an_agent_whose_history_was_shortened_is_told_of_the_org_again(
+    repo: Path, launcher: FakeLauncher
+):
+    service = await started(repo, launcher)
+    await split_root(service)
+    conversation = ic(service)
+    assert conversation is not None
+    await tell(service, launcher, "")
+
+    launcher.condensations[UUID(conversation)] = "first"
+    after = await tell(service, launcher, "")
+
+    assert "history was shortened" in after
+    assert "<ORG_PROTOCOL>" in after and "Your team's context now" in after
+    # It is said once for each shortening, not with every message.
+    assert "<ORG_PROTOCOL>" not in await tell(service, launcher, "")
+    launcher.condensations[UUID(conversation)] = "second"
+    assert "<ORG_PROTOCOL>" in await tell(service, launcher, "")
