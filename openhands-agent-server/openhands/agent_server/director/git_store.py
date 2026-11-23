@@ -93,6 +93,9 @@ class Landing(NamedTuple):
     events: dict[str, list[TeamEvent]]
     # Its requests that went straight to a team.
     routed: list[RoutedRequest]
+    # The members the org's teams may have: a team that goes leaves no
+    # reports of any of them.
+    members: tuple[AgentRole, ...] = AGENT_ROLES
 
 
 class Staged(NamedTuple):
@@ -236,7 +239,7 @@ def taking_in(
 
         for team in landing.forget:
             for file in (
-                *(_reports_file(team, role) for role in AGENT_ROLES),
+                *(_reports_file(team, role) for role in landing.members),
                 _history_file(team),
             ):
                 if read(file) is not None:
@@ -246,7 +249,8 @@ def taking_in(
             if read(path) is None:
                 out[path] = record.model_dump_json(indent=2) + "\n"
         for team, reports in landing.reports.items():
-            for role in AGENT_ROLES:
+            wrote = (report.role for report in reports)
+            for role in dict.fromkeys((*landing.members, *wrote)):
                 path = _reports_file(team, role)
                 kept = _parse_reports(now(path))
                 known = {report.id for report in kept if report.id}

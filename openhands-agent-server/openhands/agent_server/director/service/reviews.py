@@ -97,7 +97,6 @@ from openhands.agent_server.director.service.state import (
     _checkout_root,
     _contracts_file,
     _spec_file,
-    agent_conversation,
 )
 from openhands.agent_server.director.split import (
     Shape,
@@ -202,11 +201,12 @@ class Reviews(Requests):
 
     async def _rest(self, place_id: str) -> None:
         place = self.store.place(place_id)
-        conversation_id = agent_conversation(place, "ic") if place else None
+        conversation_id = self.writer_conversation(place) if place else None
         if place is None or conversation_id is None or self._paused is not None:
             return
         launcher = self._require_launcher()
-        if any(agent.role == "ic" and agent.kind == "acp" for agent in place.agents):
+        writer = self.team(place).writer
+        if any(agent.role == writer and agent.kind == "acp" for agent in place.agents):
             # It runs its own turn, and the tool's answer tells it to end
             # it. Only one that carries on regardless is cut short, which
             # costs it the step it is in.
@@ -271,7 +271,7 @@ class Reviews(Requests):
                 team=place,
             )
         self.notify(
-            agent_conversation(place, "ic"),
+            self.writer_conversation(place),
             changes_requested(
                 above or place, findings, of_a_session=store.opens_session(place)
             ),
@@ -350,7 +350,12 @@ class Reviews(Requests):
         ]
         if asked_before:
             requests.append(still_undecided(sorted(asked_before, key=_submitted)))
-        self.tell_ic(node.id, "\n\n---\n\n".join(requests), division_lead=True)
+        self.tell(
+            node.id,
+            self.team(node).reviewer,
+            "\n\n---\n\n".join(requests),
+            division_lead=True,
+        )
         # Only now: a server that ends before the request is kept asks again.
         for team in waiting:
             run.unmark(HELD, team.id)
@@ -1163,7 +1168,7 @@ class Reviews(Requests):
         review = self._review_of(top)
         if review is not None and landed.records.left:
             self.notify(
-                agent_conversation(review, "ic"),
+                self.reviewer_conversation(review),
                 files_not_written(top.title, landed.records.left),
             )
         if review is not None and (
@@ -1442,7 +1447,7 @@ class Reviews(Requests):
                 continue
             run.unmark(TURN, place_id)
             self.notify(
-                agent_conversation(above, "ic"),
+                self.reviewer_conversation(above),
                 f"It is your turn: the work submitted before that of "
                 f"{place.title!r} (id {place.id}) is decided on. Accept it "
                 "with `review_team` now, or send it back.",
@@ -1574,7 +1579,7 @@ class Reviews(Requests):
             Its description of the changes, '' when it gave none or was
             not asked.
         """
-        ic = agent_conversation(place, "ic")
+        ic = self.writer_conversation(place)
         if ic is None or not place.base_commit:
             return ""
         files = await asyncio.to_thread(
@@ -1636,7 +1641,7 @@ class Reviews(Requests):
             self._tell_turns()
         if place.review.state != "pending":
             return
-        reviewer = agent_conversation(above, "ic")
+        reviewer = self.reviewer_conversation(above)
         first = self._before(place)
         if first is not None:
             # The acceptance of work submitted earlier was carried out
@@ -1766,7 +1771,7 @@ class Reviews(Requests):
             merged = result.outcome == "merged"
             if resolved:
                 self.notify(
-                    agent_conversation(place, "ic"),
+                    self.writer_conversation(place),
                     "Your team's work did not merge by itself. The IC that "
                     "reviewed it finished the merge in these files, which are "
                     f"now as it left them: {', '.join(resolved)}",
@@ -1808,7 +1813,7 @@ class Reviews(Requests):
         if not is_division_lead(above):
             self.count_accepted_review(above.id)
         self.notify(
-            agent_conversation(place, "ic"),
+            self.writer_conversation(place),
             f"The IC of {above.title!r} accepted your team's work"
             + (" and it is merged into that team's checkout." if merged else "."),
         )
@@ -1820,7 +1825,7 @@ class Reviews(Requests):
         further = store.place(above.parent_id) if above.parent_id else None
         if needed_above and further is not None:
             self.notify(
-                agent_conversation(further, "ic"),
+                self.writer_conversation(further),
                 f"Team {above.title!r} (id {above.id}) below you accepted the "
                 f"work of its sub-team {place.title!r} in {where} and says a team "
                 f"above it waits on that work: {needed_above}\nIt is in "
@@ -1951,7 +1956,7 @@ class Reviews(Requests):
         teams = [
             team
             for team in store.below(place_id)
-            if team.review is not None or agent_conversation(team, "ic") is not None
+            if team.review is not None or self.writer_conversation(team) is not None
         ]
         if not teams or any(
             team.review is None or team.review.state != "accepted" for team in teams
@@ -1964,7 +1969,7 @@ class Reviews(Requests):
             # The work of a session goes into what the org shares.
             await self._in_base(lambda: self._pass_up(place_id, acted=acted))
             return
-        ic = agent_conversation(place, "ic")
+        ic = self.writer_conversation(place)
         above = store.place(place.parent_id) if place.parent_id else None
         own = await asyncio.to_thread(self._own_changes, place, teams)
         if own is None:
@@ -2066,6 +2071,6 @@ class Reviews(Requests):
             logger.exception("Could not put aside what is in %s", path)
             return
         self.notify(
-            agent_conversation(above, "ic"),
+            self.writer_conversation(above),
             put_aside_notice(team, files, ref),
         )

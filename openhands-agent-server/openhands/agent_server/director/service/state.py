@@ -58,6 +58,7 @@ from openhands.agent_server.director.headline import provisional_summary
 from openhands.agent_server.director.launch import TeamLauncher
 from openhands.agent_server.director.merge_checkout import MergeCheckout, discard
 from openhands.agent_server.director.models import (
+    AGENT_ROLES,
     ROLE_NAMES,
     AgentKind,
     AgentRef,
@@ -117,6 +118,7 @@ from openhands.agent_server.director.split import (
     child_boundary,
     clean_path,
 )
+from openhands.agent_server.director.team import Team
 from openhands.sdk.agent.base import AgentBase
 from openhands.sdk.conversation.state import ConversationExecutionStatus
 from openhands.sdk.errors import (
@@ -333,7 +335,7 @@ def agent_conversation(place: SessionTeam, role: AgentRole) -> str | None:
 def hand_over_of(place: SessionTeam) -> HandOverMode | None:
     """The hand-over mode of the team's IC, if it is or was in it."""
     for agent in place.agents:
-        if agent.role == "ic":
+        if agent.hand_over is not None:
             return agent.hand_over
     return None
 
@@ -345,7 +347,7 @@ def _agent_title(
     it is called what its team is, and the two agents a session's work is
     reviewed by are called its Division Leads."""
     where = f"{team} · {session}" if session and session != team else team
-    name = ROLE_NAMES[role]
+    name = ROLE_NAMES.get(role, role)
     return f"{where} ({'Division Lead ' + name if division_lead else name})"
 
 
@@ -691,6 +693,38 @@ class ServiceState:
             )
         return found
 
+    def member_names(self) -> tuple[AgentRole, ...]:
+        """Every member a team of the org may have, by the types it knows."""
+        named = (name for kind in self.agent_types.values() for name in kind.agents)
+        return tuple(dict.fromkeys((*AGENT_ROLES, *named)))
+
+    def team(self, place: SessionTeam) -> Team:
+        """A team of the org as the director reads it."""
+        return Team(self.store, place, self.type_of)
+
+    def _writer(self, place_id: str) -> AgentRole:
+        """The member of a team that works in its folder."""
+        place = self.store.place(place_id)
+        return self.team(place).writer if place else "ic"
+
+    def _overseer(self, place_id: str) -> AgentRole:
+        """The member of a team that settles what its sub-teams are."""
+        place = self.store.place(place_id)
+        return self.team(place).overseer if place else "manager"
+
+    def _reviewer(self, place_id: str) -> AgentRole:
+        """The member of a team that the teams below turn to."""
+        place = self.store.place(place_id)
+        return self.team(place).reviewer if place else "ic"
+
+    def writer_conversation(self, place: SessionTeam) -> str | None:
+        """The conversation of the member that works in a team's folder."""
+        return agent_conversation(place, self.team(place).writer)
+
+    def reviewer_conversation(self, place: SessionTeam) -> str | None:
+        """The conversation of the member the teams below turn to."""
+        return agent_conversation(place, self.team(place).reviewer)
+
     def tools_for(self, place: SessionTeam, member: AgentRole) -> tuple[str, ...]:
         """The director's tools the member of a team is offered."""
         kind = self.type_of(place)
@@ -900,6 +934,8 @@ class ServiceState:
                 that conversation's and not the IC's own.
         """
         children = self.store.below(place.id)
+        kind = self.type_of(place)
+        reviewer = self.team(place).reviewer
         # A team that has not started holds no one out of its directory:
         # the IC above may finish what it has there.
         started = [child for child in children if child.agents]
@@ -911,7 +947,7 @@ class ServiceState:
                 MergeArea(
                     where=merge.where,
                     files=tuple(merge.files),
-                    own=role == "ic"
+                    own=role == reviewer
                     and team is not None
                     and team.parent_id == place.id,
                 )
@@ -925,9 +961,14 @@ class ServiceState:
         )
         return replace(
             within,
-            # An IC writes in its boundary from its main conversation alone;
-            # a Division Lead IC only reviews, in the human's own checkout.
-            writes=role == "ic" and hand_over is None and not is_division_lead(place),
+            # Only the member that works in the folder edits a file in it.
+            edits=role == kind.writer,
+            # It writes in its boundary from its main conversation alone;
+            # at a Division Lead place it only reviews, in the human's own
+            # checkout.
+            writes=role == kind.writer
+            and hand_over is None
+            and not is_division_lead(place),
             aside=hand_over is not None,
             # Its git commits nothing in a sub-team's directory; it may still
             # write in that of a team that has not started.
@@ -1175,6 +1216,7 @@ class ServiceState:
 
     def _load_store(self) -> OrgStore:
         store = OrgStore()
+        store.writer_of = lambda node: self.type_of(node).writer
         remembered = self._remembered_repo()
         if remembered is None or not self._load_from(remembered, store):
             self._load_from(self._directory, store)
@@ -1580,10 +1622,11 @@ def _lane_for(intent: Intent) -> str:
     return intent.node_id
 
 
-def _new_agents(ic_id: UUID) -> list[AgentRef]:
-    """The agents a team starts with. Its Manager joins when something is
-    first sent to it (see :meth:`DirectorService.tell_manager`)."""
-    return [AgentRef(role="ic", conversation_id=str(ic_id), status="idle")]
+def _new_agents(ic_id: UUID, member: AgentRole = "ic") -> list[AgentRef]:
+    """The agents a team starts with: the member that works in its folder.
+    Any other joins when something is first sent to it (see
+    :meth:`DirectorService.tell`)."""
+    return [AgentRef(role=member, conversation_id=str(ic_id), status="idle")]
 
 
 def _progress_of(kept: str | None) -> dict[str, Any]:

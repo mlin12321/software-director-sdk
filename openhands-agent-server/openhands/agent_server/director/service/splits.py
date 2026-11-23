@@ -57,7 +57,6 @@ from openhands.agent_server.director.service.state import (
     _contracts_file,
     _Held,
     _spec_file,
-    agent_conversation,
     conversations_of,
     hand_over_of,
 )
@@ -105,7 +104,7 @@ class Splits(Watch):
             [child.path for child in proposal.children] if proposal else [],
         )
         self.notify(
-            agent_conversation(place, "ic"),
+            self.writer_conversation(place),
             f"The sub-teams your Manager approved could not be set up: {reason} "
             f"{left} Tell your Manager with msg_manager, with a new proposal if "
             "you have one.",
@@ -320,8 +319,9 @@ class Splits(Watch):
             for below_id, home in moves.items():
                 below = store.place(below_id)
                 if below and below.review and below.review.state == "pending":
-                    self.tell_ic(
+                    self.tell(
                         home,
+                        self._reviewer(home),
                         review_request(
                             below,
                             below.review,
@@ -354,7 +354,7 @@ class Splits(Watch):
             return
         # The shell the IC starts next can no longer write what it gave away.
         with suppress(GitError, OSError):
-            await asyncio.to_thread(self._confine, place_id, "ic")
+            await asyncio.to_thread(self._confine, place_id, self._writer(place_id))
         # The record each replaced team left last: the one just made.
         kept = self.former_drafts(place.session)
         former = [
@@ -370,7 +370,7 @@ class Splits(Watch):
                     uncommitted, Path(place.worktree_path), child.path
                 )
         self.notify(
-            agent_conversation(place, "ic"),
+            self.writer_conversation(place),
             approved_notice(
                 proposal.children,
                 former,
@@ -449,7 +449,7 @@ class Splits(Watch):
                 run.drop_held(str(conversation_id))
             intent = run.step_done(intent, "deleted")
         above = store.place(plan["parent"])
-        parent_ic = agent_conversation(above, "ic") if above else None
+        parent_ic = self.writer_conversation(above) if above else None
         if "removed" not in intent.steps:
             pruned = store.place(place_id)
             for team in map(store.place, plan["teams"]):
@@ -475,7 +475,9 @@ class Splits(Watch):
             store.remove(place_id)
             # The shell the IC above starts next can write there again.
             with suppress(GitError, OSError):
-                await asyncio.to_thread(self._confine, plan["parent"], "ic")
+                await asyncio.to_thread(
+                    self._confine, plan["parent"], self._writer(plan["parent"])
+                )
             await self._save()
             intent = run.step_done(intent, "removed")
         self._settling.pop(intent.id, None)
@@ -565,7 +567,7 @@ class Splits(Watch):
         store.set_hand_over(
             place.id, HandOverMode(conversation_id=conversation, status=AGENT_LOST)
         )
-        self.notify(agent_conversation(place, "ic"), HAND_OVER_FAILED)
+        self.notify(self.writer_conversation(place), HAND_OVER_FAILED)
 
     def _hand_over_ended(self, place_id: str) -> None:
         """Tell a team's IC, in its main conversation, what its hand-over
@@ -578,7 +580,7 @@ class Splits(Watch):
         run.unmark(HANDING, place_id)
         done = json.loads(kept)
         self.notify(
-            agent_conversation(place, "ic"),
+            self.writer_conversation(place),
             handed_over_notice(done["given"], done["spec"]),
         )
 

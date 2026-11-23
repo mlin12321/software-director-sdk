@@ -42,13 +42,13 @@ from openhands.agent_server.director.run_state import (
 from openhands.agent_server.director.service.splits import Splits
 from openhands.agent_server.director.service.state import (
     ASKED_KEPT,
-    TOOLS_OF,
     _agent_title,
     _base_of,
     _branch_of,
     _new_agents,
     apart,
     conversations_of,
+    tools_of,
 )
 from openhands.agent_server.director.split import shape_of
 from openhands.sdk.conversation.request import (
@@ -269,7 +269,8 @@ class Sessions(Splits):
         """
         store = self.store
         ic_id = conversation.conversation_id or uuid4()
-        store.update_place(top.id, agents=_new_agents(ic_id))
+        writer = self.team(top).writer
+        store.update_place(top.id, agents=_new_agents(ic_id, writer))
         additions = conversation.agent_launch_additions or AgentLaunchAdditions()
         suffix = "\n\n".join(
             part
@@ -277,7 +278,8 @@ class Sessions(Splits):
             if part
         )
         apart = top.isolation == "worktree"
-        tool_params = await asyncio.to_thread(self._confine, top.id, "ic")
+        tools = tools_of(top, writer, kind=self.type_of(top))
+        tool_params = await asyncio.to_thread(self._confine, top.id, writer)
         started = await launcher.start_root(
             conversation.model_copy(
                 update={
@@ -300,16 +302,14 @@ class Sessions(Splits):
                     ),
                 }
             ),
-            [Tool(name=name) for name in TOOLS_OF["ic"]],
-            title=_agent_title(top.title, "ic", store.session_title(top)),
+            [Tool(name=name) for name in tools],
+            title=_agent_title(top.title, writer, store.session_title(top)),
             tool_params=tool_params,
-            adapt_agent=await asyncio.to_thread(
-                self._adapter, str(ic_id), TOOLS_OF["ic"]
-            ),
+            adapt_agent=await asyncio.to_thread(self._adapter, str(ic_id), tools),
         )
         store.set_agent(
             top.id,
-            "ic",
+            writer,
             kind=started.kind,
             acp_server=started.acp_server,
             model=started.model,
@@ -328,7 +328,7 @@ class Sessions(Splits):
         self._enqueue(
             lambda: self._summarize(top.id, text, first=True, rename=rename), top.id
         )
-        self._begin("brief", top.id, role="ic", task=text + brief)
+        self._begin("brief", top.id, role=writer, task=text + brief)
         return str(ic_id)
 
     def _hand_on(

@@ -9,11 +9,12 @@
 export type DirectorNodeId = string;
 
 /**
- * A team has an IC and a Manager. A team's IC leads that team, is a report
- * of the team above, and does the code work in its boundary that no
- * sub-team has taken on.
+ * The member of a team an agent is, by the name its team's type gives it.
+ * A type that names no members has an IC and a Manager: the IC leads the
+ * team, is a report of the team above, and does the code work in its
+ * boundary that no sub-team has taken on.
  */
-export type DirectorAgentRole = 'ic' | 'manager';
+export type DirectorAgentRole = 'ic' | 'manager' | (string & {});
 
 /**
  * An IC in hand-over mode: beside its main conversation it has one the

@@ -42,8 +42,10 @@ AGENT_BLOCKED = "blocked"
 AGENT_LOST = "lost"
 
 
-def status_of(node: SessionTeamInput) -> NodeStatus:
+def status_of(node: SessionTeamInput, writer: AgentRole = "ic") -> NodeStatus:
     """The status a team has by what is known of it; no team declares one.
+
+    ``writer`` is the member that works in its folder: its IC.
 
     Blocked while its IC waits on an escalation, an agent of it failed or
     the IC above has stopped it, working while an agent of it is in a turn,
@@ -55,7 +57,7 @@ def status_of(node: SessionTeamInput) -> NodeStatus:
     if node.stopped is not None:
         return "blocked"
     if AGENT_BLOCKED in agents or any(
-        escalation.raised_by == "ic" for escalation in node.escalations
+        escalation.raised_by == writer for escalation in node.escalations
     ):
         return "blocked"
     if "working" in agents:
@@ -156,6 +158,9 @@ class OrgStore:
         self._listeners: dict[OrgListener, _Subscription] = {}
         self._change_listeners: list[Callable[[], None]] = []
         self._agents: dict[str, tuple[str, AgentRole]] = {}
+        # Gives the member of a team that works in its folder. The types
+        # of teams are not the store's: whoever reads them sets this.
+        self.writer_of: Callable[[OrgNodeInput], AgentRole] = lambda _: "ic"
         # The hand-over conversation of each IC that has one -> its team.
         self._hand_overs: dict[str, str] = {}
 
@@ -456,7 +461,7 @@ class OrgStore:
             node = self._require_place(place_id)
             agents = [
                 agent.model_copy(update={"hand_over": mode})
-                if agent.role == "ic"
+                if agent.role == self.writer_of(node)
                 else agent
                 for agent in node.agents
             ]
@@ -555,7 +560,9 @@ class OrgStore:
             ]
             if agents == node.agents:
                 return node
-            status = status_of(node.model_copy(update={"agents": agents}))
+            status = status_of(
+                node.model_copy(update={"agents": agents}), self.writer_of(node)
+            )
             return self.update_place(place_id, agents=agents, status=status)
 
     def set_review(
@@ -569,7 +576,9 @@ class OrgStore:
         """
         with self._lock:
             node = self._require_place(place_id)
-            status = status_of(node.model_copy(update={"review": review}))
+            status = status_of(
+                node.model_copy(update={"review": review}), self.writer_of(node)
+            )
             return self.update_place(place_id, review=review, status=status, **changes)
 
     def set_stopped(self, place_id: str, stopped: Stopped | None) -> SessionTeam:
@@ -581,7 +590,9 @@ class OrgStore:
         """
         with self._lock:
             node = self._require_place(place_id)
-            status = status_of(node.model_copy(update={"stopped": stopped}))
+            status = status_of(
+                node.model_copy(update={"stopped": stopped}), self.writer_of(node)
+            )
             return self.update_place(place_id, stopped=stopped, status=status)
 
     def upsert(self, node_input: OrgNodeInput) -> OrgNode:
@@ -958,7 +969,7 @@ class OrgStore:
         title: str,
         detail: str = "",
         at: str | None = None,
-        raised_by: AgentRole = "ic",
+        raised_by: AgentRole | None = None,
     ) -> Escalation:
         """Record something an agent of ``place_id`` cannot settle itself.
 
@@ -980,7 +991,7 @@ class OrgStore:
             escalation = Escalation(
                 id=escalation_id,
                 kind=kind,
-                raised_by=raised_by,
+                raised_by=raised_by or self.writer_of(node),
                 title=title,
                 detail=detail,
                 raised_at=at or utc_now(),
@@ -1201,7 +1212,11 @@ class OrgStore:
             status=_of_all(top.status, [team.status for team in teams]),
             review=top.review.state if top.review else None,
             conversation_id=next(
-                (agent.conversation_id for agent in top.agents if agent.role == "ic"),
+                (
+                    agent.conversation_id
+                    for agent in top.agents
+                    if agent.role == self.writer_of(top)
+                ),
                 None,
             ),
             teams=teams,
@@ -1265,7 +1280,9 @@ class OrgStore:
     def _set_escalations(
         self, place: SessionTeam, escalations: list[Escalation]
     ) -> None:
-        status = status_of(place.model_copy(update={"escalations": escalations}))
+        status = status_of(
+            place.model_copy(update={"escalations": escalations}), self.writer_of(place)
+        )
         self.update_place(place.id, escalations=escalations, status=status)
 
     def _index_agents(self, old: SessionTeam | None, new: SessionTeam | None) -> None:
