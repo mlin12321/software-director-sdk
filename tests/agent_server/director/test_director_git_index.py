@@ -483,6 +483,49 @@ def test_a_checkout_stays_on_the_branch_its_work_is_taken_from(
     ]
 
 
+def test_a_branch_made_where_another_teams_files_cannot_be_removed_is_refused(
+    shared: Path, agent: Callable[..., Git]
+):
+    api, web = agent("api", "svc/api"), agent("web", "svc/web")
+    branch = run_git(shared, "symbolic-ref", "--short", "HEAD").strip()
+    start = run_git(shared, "rev-parse", "HEAD").strip()
+    (shared / "svc" / "web" / "page.py").write_text("web\n")
+    web("add", "-A")
+    assert web("commit", "-m", "web").returncode == 0
+    accepted = run_git(shared, "rev-parse", "HEAD").strip()
+    # As in a sandbox: the other team's folder is not this agent's to write,
+    # so git could neither remove its files nor come back over them.
+    (shared / "svc" / "web").chmod(0o555)
+
+    try:
+        switched = api("checkout", "-b", "mine", start)
+    finally:
+        (shared / "svc" / "web").chmod(0o755)
+
+    assert switched.returncode != 0 and f"stays on {branch}" in switched.stderr
+    assert run_git(shared, "symbolic-ref", "--short", "HEAD").strip() == branch
+    assert run_git(shared, "rev-parse", "HEAD").strip() == accepted
+    assert (shared / "svc" / "web" / "page.py").read_text() == "web\n"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [("checkout", "HEAD", "svc/api/main.py"), ("checkout", "svc/api/main.py")],
+    ids=["from a commit", "by its name alone"],
+)
+def test_a_file_is_restored_without_two_dashes(
+    shared: Path, agent: Callable[..., Git], command: tuple[str, ...]
+):
+    api = agent("api", "svc/api")
+    kept = (shared / "svc" / "api" / "main.py").read_text()
+    (shared / "svc" / "api" / "main.py").write_text("scratch\n")
+
+    restored = api(*command)
+
+    assert restored.returncode == 0, restored.stderr
+    assert (shared / "svc" / "api" / "main.py").read_text() == kept
+
+
 def test_a_file_is_still_restored_with_checkout(
     shared: Path, agent: Callable[..., Git]
 ):

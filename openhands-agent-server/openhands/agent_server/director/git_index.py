@@ -186,6 +186,37 @@ def git_script(
         'before=$("$real" rev-parse -q --verify HEAD)',
         'on=$("$real" symbolic-ref -q HEAD)',
         'had=$("$real" for-each-ref --format="%(refname)" refs/heads)',
+        # A move to another branch is refused before it runs. Undone after,
+        # it can be left half done: where the agent may not write, files of
+        # other teams stay behind and keep git from going back, and what is
+        # accepted would then be taken from a branch without their commits.
+        "switches=",
+        '[ -n "$on" ] && case "$command" in',
+        "  switch) switches=1 ;;",
+        "  checkout)",
+        "    named=; first=; more=; dashes=",
+        '    for arg in "$@"; do',
+        '      if [ -z "$named" ]; then [ "$arg" = checkout ] && named=1; continue; fi',
+        # What follows -- are files to restore.
+        '      [ -n "$dashes" ] && break',
+        '      case "$arg" in',
+        "        --) dashes=1 ;;",
+        "        -|-b*|-B*|--orphan*|--detach|-d|-t|--track*) switches=1 ;;",
+        "        -*) ;;",
+        '        *) if [ -z "$first" ]; then first=$arg; else more=1; fi ;;',
+        "      esac",
+        "    done",
+        # One name alone that is a commit moves the checkout to it; with
+        # more, or after --, it is where files are restored from.
+        '    [ -z "$switches$dashes$more" ] && [ -n "$first" ] &&',
+        '      [ "refs/heads/$first" != "$on" ] &&',
+        '      "$real" rev-parse -q --verify "$first^{commit}" >/dev/null 2>&1 &&',
+        "      switches=1",
+        "  ;;",
+        "esac",
+        '[ -z "$switches" ] ||',
+        '  fail "the checkout stays on ${on#refs/heads/}, where your work'
+        ' is taken from; commit there"',
         # A reset that would take away other teams' commits is refused
         # before it runs: run, it would change their files and the index.
         '[ "$command" = reset ] && [ -n "$before" ] && {',
@@ -217,7 +248,10 @@ def git_script(
         # shared checkout the branch is every team's.
         '    now=$("$real" symbolic-ref -q HEAD)',
         '    if [ -n "$on" ] && [ "$now" != "$on" ]; then',
-        '      "$real" checkout -q "${on#refs/heads/}" || exit 1',
+        # Whatever could not be put back, the branch is the one that is
+        # accepted again.
+        '      "$real" checkout -q "${on#refs/heads/}" ||',
+        '        "$real" symbolic-ref HEAD "$on" || exit 1',
         # A branch the command made is of no use to anyone; one that was
         # there stays.
         '      printf "%s\n" "$had" | grep -qxF -- "$now" ||',
