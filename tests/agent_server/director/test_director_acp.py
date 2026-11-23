@@ -339,7 +339,9 @@ async def test_an_agent_calls_the_directors_tools_with_its_token_alone(
 
     listed = await client.get("/api/director/tools", headers=headers)
     spec = await client.post(
-        "/api/director/tools/write_spec", headers=headers, json={"text": "# Spec"}
+        "/api/director/tools/write_spec",
+        headers=headers,
+        json={"file_text": "# Spec"},
     )
     # Only a Manager approves sub-teams, and this is the IC.
     refused = await client.post(
@@ -410,7 +412,9 @@ async def test_an_ic_that_only_reviews_a_session_has_the_tools_for_that_alone(
 
     listed = await client.get("/api/director/tools", headers=headers)
     refused = await client.post(
-        "/api/director/tools/write_spec", headers=headers, json={"text": "# Spec"}
+        "/api/director/tools/write_spec",
+        headers=headers,
+        json={"file_text": "# Spec"},
     )
 
     assert {tool["name"] for tool in listed.json()} == {
@@ -689,7 +693,7 @@ async def test_what_the_human_says_reaches_such_an_agent_in_the_middle_of_a_turn
     )
     launcher.report(agent, ConversationExecutionStatus.RUNNING)
 
-    service.tell_ic(top, "The human: stop, use Go.", human=True)
+    service.tell_writer(top, "The human: stop, use Go.", human=True)
     service.answer_escalation(top, "jwt", "Opaque.")
     await service.settled()
 

@@ -693,7 +693,7 @@ async def test_a_manager_that_could_not_be_started_is_started_again_by_the_answe
     service = await started(repo, launcher)
     top = node(service, "root")
     launcher.derive_error = RuntimeError("npx is not installed")
-    service.tell_manager(top.id, "Look in on your team.")
+    service.tell_overseer(top.id, "Look in on your team.")
     await service.settled()
     [asked] = node(service, "root").escalations
     assert asked.id == failure_waits("manager")

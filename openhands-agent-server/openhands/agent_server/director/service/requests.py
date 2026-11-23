@@ -34,7 +34,7 @@ def _tracked(checkout: Path) -> list[str]:
     return [path for path in listed.split("\0") if path]
 
 
-def takes_requests(place: SessionTeam, writer: str = "ic") -> bool:
+def takes_requests(place: SessionTeam, writer: str) -> bool:
     """Whether a request may be sent straight to a team now.
 
     Not to one that was only set up, which has not had its task from the IC
@@ -242,7 +242,7 @@ class Requests(Teams):
         self, place: SessionTeam, above: SessionTeam, request: RoutedRequest, why: str
     ) -> str:
         """Give a request a team said is not its own to the IC above it."""
-        self.tell_ic(above.id, misrouted_notice(place, request.text, why))
+        self.tell_writer(above.id, misrouted_notice(place, request.text, why))
         return (
             f"Handed to the IC of the team above ({above.title}). It is no "
             "longer yours; go on with your own work."

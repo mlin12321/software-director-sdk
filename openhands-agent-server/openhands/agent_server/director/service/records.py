@@ -25,8 +25,6 @@ from openhands.agent_server.director.git_store import (
     team_key,
 )
 from openhands.agent_server.director.models import (
-    AGENT_ROLES,
-    AgentRole,
     BoundaryContracts,
     ConversationLink,
     ConversationPlace,
@@ -125,7 +123,7 @@ def thread_name(writer_node_id: str, ic_node_id: str, ic_to_ic: bool) -> str:
 class Taken(NamedTuple):
     """What became of a session's records when its work was accepted."""
 
-    grown: list[tuple[str, AgentRole]]
+    grown: list[tuple[str, str]]
     # The files that were not written: someone else changed them meanwhile.
     left: list[str]
 
@@ -244,6 +242,7 @@ class Records(ServiceState):
                 forget=[],
                 events={team_id: [event.model_copy(update={"unaccepted": False})]},
                 routed=[],
+                members=self.member_names(),
             ),
             f"memory: history of {team_id}",
         )
@@ -608,7 +607,7 @@ class Records(ServiceState):
         return taken
 
     def context_of(
-        self, place: SessionTeam, role: AgentRole, *, in_full: bool = False
+        self, place: SessionTeam, role: str, *, in_full: bool = False
     ) -> dict[str, Any]:
         """Who an agent is and everything of the org that concerns its
         team. Safe from any thread.
@@ -869,7 +868,7 @@ class Records(ServiceState):
         team_memory = self._memory()
         reports = [
             report
-            for role in dict.fromkeys((*AGENT_ROLES, *self.type_of(node).agents))
+            for role in self.type_of(node).agents
             for report in team_memory.reports(team_id_of(node), role)
             if self.is_orgs(node)
         ]
@@ -1305,11 +1304,10 @@ class Records(ServiceState):
                 run.unmark(REPORTS, place.id)
         for record in removed:
             run.unmark(FORMER, f"{session}\n{record.id}\n{record.at}")
-        grown: list[tuple[str, AgentRole]] = [
+        grown: list[tuple[str, str]] = [
             (team, role)
             for team, kept in reports.items()
-            for role in dict.fromkeys((*AGENT_ROLES, *(report.role for report in kept)))
-            if any(report.role == role for report in kept)
+            for role in dict.fromkeys(report.role for report in kept)
         ]
         return Taken(grown, sorted(conflicts))
 

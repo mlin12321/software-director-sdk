@@ -15,7 +15,6 @@ from openhands.agent_server.director import agent_actions
 from openhands.agent_server.director.git import common_dir
 from openhands.agent_server.director.headline import TeamSummary
 from openhands.agent_server.director.models import (
-    AgentRole,
     CreateOrgRequest,
     RouteMessageRequest,
     SplitChild,
@@ -26,9 +25,7 @@ from openhands.agent_server.director.prompts import MANAGER_ROLE, ORG_PROTOCOL
 from openhands.agent_server.director.service import (
     DIRECTOR_TOOL_NAMES,
     HAND_OVER_TOOLS,
-    TOOLS_OF,
     DirectorService,
-    agent_conversation,
 )
 from openhands.agent_server.director.tools.definition import DIRECTOR_TOOLS
 from openhands.sdk import LLM, Agent
@@ -47,9 +44,11 @@ from openhands.tools.grep.definition import GrepAction
 from openhands.tools.terminal.definition import TerminalAction
 from tests.agent_server.director.conftest import (
     FakeLauncher,
+    agent_conversation,
     as_proposed,
     root_conversation,
     run_git,
+    shipped_tools,
     tasked,
 )
 from tests.agent_server.director.test_director_landing import landed
@@ -91,7 +90,7 @@ async def test_starting_an_org_runs_a_root_team_briefed_with_the_task(
 
     assert launcher.root is not None
     assert str(launcher.root.conversation_id) == ic
-    assert launcher.root_tools == list(TOOLS_OF["ic"])
+    assert launcher.root_tools == list(shipped_tools("ic"))
     assert (launcher.root_title, launcher.root.autotitle) == (
         "Checkout (IC)",
         False,
@@ -140,11 +139,11 @@ async def test_what_the_caller_appends_to_the_system_prompt_is_left_as_it_is(
 
 def test_every_director_tool_is_offered_to_the_role_that_may_use_it():
     assert set(DIRECTOR_TOOL_NAMES) == set(DIRECTOR_TOOLS)
-    assert "approve_teams" not in TOOLS_OF["ic"]
-    assert "submit_review" not in TOOLS_OF["manager"]
-    assert set(HAND_OVER_TOOLS) <= set(TOOLS_OF["ic"])
+    assert "approve_teams" not in shipped_tools("ic")
+    assert "submit_review" not in shipped_tools("manager")
+    assert set(HAND_OVER_TOOLS) <= set(shipped_tools("ic"))
     # Only a Manager at a session's Division Lead place settles its teams.
-    assert "settle_teams" not in {*TOOLS_OF["ic"], *TOOLS_OF["manager"]}
+    assert "settle_teams" not in {*shipped_tools("ic"), *shipped_tools("manager")}
     # A tool an agent is given and the server cannot find stops its first turn.
     assert set(DIRECTOR_TOOL_NAMES) <= set(list_registered_tools())
 
@@ -161,14 +160,14 @@ async def test_a_manager_derived_from_its_ic_gets_its_own_tools_in_their_place(
         llm=LLM(model="gpt-4o", usage_id="test-llm"),
         tools=[
             Tool(name="terminal", params={"shell": "/bin/sh"}),
-            *(Tool(name=name) for name in TOOLS_OF["ic"]),
+            *(Tool(name=name) for name in shipped_tools("ic")),
         ],
     )
 
     adapted = manager_start.adapt_agent(ic_agent)
 
     names = [tool.name for tool in adapted.tools]
-    assert names == ["terminal", *TOOLS_OF["manager"]]
+    assert names == ["terminal", *shipped_tools("manager")]
     assert adapted.tools[0].params == {"shell": "/bin/sh"}
 
 
@@ -456,7 +455,7 @@ async def test_an_escalation_a_team_still_holds_cannot_be_answered_by_the_human(
 
 async def woken_manager(service: DirectorService, node_id: str = "root") -> str:
     """The Manager of a team, started as the first message to it does."""
-    service.tell_manager(node(service, node_id).id, "Look in on your team.")
+    service.tell_overseer(node(service, node_id).id, "Look in on your team.")
     await service.settled()
     manager = agent_conversation(node(service, node_id), "manager")
     assert manager is not None
@@ -466,7 +465,7 @@ async def woken_manager(service: DirectorService, node_id: str = "root") -> str:
 async def split_root(service: DirectorService, *children: SplitChild) -> None:
     """Have the root IC propose ``children`` and its Manager approve them."""
 
-    def caller(role: AgentRole) -> agent_actions.Caller:
+    def caller(role: str) -> agent_actions.Caller:
         conversation_id = agent_conversation(node(service, "root"), role)
         assert conversation_id is not None
         return agent_actions.caller_of(service, UUID(conversation_id))

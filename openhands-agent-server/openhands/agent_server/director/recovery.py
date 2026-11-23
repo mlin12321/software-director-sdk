@@ -13,8 +13,6 @@ from uuid import UUID
 
 from openhands.agent_server.director.git import GitError, git
 from openhands.agent_server.director.models import (
-    ROLE_NAMES,
-    AgentRole,
     RecoveryItem,
     RecoveryKind,
     SessionTeam,
@@ -32,13 +30,13 @@ from openhands.sdk.conversation.state import ConversationExecutionStatus
 
 logger = logging.getLogger(__name__)
 
-_STARTS = ("start_team", "launch_manager")
+_STARTS = ("start_team", "launch_member")
 # The steps that start agents of their team: until they are finished, an
 # agent of it without a conversation has not been lost.
-STARTING = ("start_team", "launch_manager", "prune")
+STARTING = ("start_team", "launch_member", "prune")
 STEP_NAMES: dict[str, str] = {
     "brief": "Its IC is given its task",
-    "launch_manager": "Its Manager is started",
+    "launch_member": "Its Manager is started",
     "start_team": "The team is started",
     "split": "Its approved split is carried out",
     "finish_split": "Its split is finished",
@@ -140,16 +138,17 @@ def describe(
     items: list[RecoveryItem] = []
     for conversation_id, place_id in run.marked(RUNNING).items():
         node = nodes.get(place_id)
-        roles: list[AgentRole] = [
+        roles: list[str] = [
             agent.role
             for agent in (node.agents if node else [])
             if agent.conversation_id == conversation_id
         ]
-        writer = store.writer_of(node) if node else "ic"
-        role = roles[0] if roles else writer
-        name = ROLE_NAMES.get(role, role)
-        if store.find_hand_over(conversation_id) is not None:
-            name = f"{ROLE_NAMES.get(writer, writer)} in hand-over mode"
+        name = "agent"
+        if node is not None:
+            kind = store.type_of(node)
+            name = kind.title_of(roles[0] if roles else kind.writer)
+            if store.find_hand_over(conversation_id) is not None:
+                name = f"{kind.title_of(kind.writer)} in hand-over mode"
         status = statuses.get(UUID(conversation_id))
         if status is None:
             items.append(
@@ -190,7 +189,7 @@ def describe(
                 (a.conversation_id for a in node.agents if a.role == writer), None
             )
             if ic is not None and UUID(ic) in statuses:
-                what = STEP_NAMES["launch_manager"]
+                what = STEP_NAMES["launch_member"]
         items.append(
             _item(
                 node,
@@ -237,7 +236,7 @@ def describe(
             continue
         for agent in node.agents:
             if agent.status == AGENT_LOST:
-                name = ROLE_NAMES.get(agent.role, agent.role)
+                name = store.type_of(node).title_of(agent.role)
                 items.append(
                     _item(
                         node,

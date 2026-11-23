@@ -140,6 +140,7 @@ def a_landing(
         forget or [],
         events or {},
         routed or [],
+        ("ic", "manager"),
     )
 
 

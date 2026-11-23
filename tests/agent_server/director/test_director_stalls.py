@@ -9,7 +9,6 @@ from uuid import UUID
 import pytest
 
 from openhands.agent_server.director.models import (
-    DirectorSettings,
     DirectorSettingsUpdate,
     SplitChild,
 )
@@ -462,7 +461,7 @@ async def test_a_team_set_up_and_given_no_task_is_told_to_the_ic_above(
     service = await started(repo, launcher, clock=clock, stall_poll=3600)
     await use(service, ic(service), ProposeTeamsTool, SPLIT)
     await use(service, manager(service), ApproveTeamsTool, APPROVE)
-    service.tell_ic(node(service, WEB).id, "Begin.")
+    service.tell_writer(node(service, WEB).id, "Begin.")
     await service.settled()
 
     await looked(service)
@@ -491,7 +490,7 @@ async def test_a_team_set_up_and_given_no_task_is_told_to_the_ic_above(
     await service.resume()
     clock.passes(240)
     await looked(service)
-    service.tell_ic(api, "Begin.")
+    service.tell_writer(api, "Begin.")
     await service.settled()
     clock.passes(120)
     await looked(service)
@@ -648,15 +647,3 @@ async def test_teams_checked_in_on_at_once_are_told_of_in_one_message(
 
     [told] = launcher.messages_to(ic(service))[before:]
     assert "Check-in: team 'API'" in told and "Check-in: team 'Web'" in told
-
-
-def test_the_names_the_two_check_ins_had_before_are_still_read():
-    earlier = DirectorSettings.model_validate(
-        {"stall_check_minutes": 30, "check_in_minutes": 90}
-    )
-    assert (earlier.soft_check_in_minutes, earlier.hard_check_in_minutes) == (30, 90)
-    # Where both are there, the name of now is the one that counts.
-    both = DirectorSettings.model_validate(
-        {"stall_check_minutes": 30, "soft_check_in_minutes": 45}
-    )
-    assert both.soft_check_in_minutes == 45

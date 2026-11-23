@@ -13,7 +13,6 @@ from pydantic import ValidationError
 
 from openhands.agent_server.director import agent_actions
 from openhands.agent_server.director.models import (
-    AgentRole,
     CreateOrgRequest,
     SessionTeam,
     SplitChild,
@@ -26,7 +25,6 @@ from openhands.agent_server.director.org_store import (
 from openhands.agent_server.director.prompts import MANAGER_ROLE, ORG_PROTOCOL
 from openhands.agent_server.director.service import (
     DirectorService,
-    agent_conversation,
 )
 from openhands.agent_server.director.tools import (
     ApproveTeamsTool,
@@ -67,6 +65,7 @@ from openhands.sdk.errors import NotFound
 from openhands.sdk.tool.tool import Action, ToolDefinition
 from tests.agent_server.director.conftest import (
     FakeLauncher,
+    agent_conversation,
     as_proposed,
     record_of,
     root_conversation,
@@ -149,7 +148,7 @@ def manager(service: DirectorService, node_id: str = "root") -> str | None:
 async def woken(service: DirectorService, node_id: str = "root") -> str:
     """The Manager of a team, started as the first message to it does."""
     if manager(service, node_id) is None:
-        service.tell_manager(node(service, node_id).id, "Look in on your team.")
+        service.tell_overseer(node(service, node_id).id, "Look in on your team.")
         await service.settled()
     found = manager(service, node_id)
     assert found is not None
@@ -810,7 +809,7 @@ async def test_what_a_manager_escalates_goes_to_the_manager_above(
 
 @pytest.mark.parametrize("role", ["ic", "manager"])
 async def test_what_the_top_team_escalates_waits_on_the_human(
-    service: DirectorService, launcher: FakeLauncher, role: AgentRole
+    service: DirectorService, launcher: FakeLauncher, role: str
 ):
     await woken(service)
     raiser = agent_conversation(node(service, "root"), role)

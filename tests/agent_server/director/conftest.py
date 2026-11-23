@@ -6,11 +6,18 @@ from pathlib import Path
 from uuid import UUID
 
 import pytest
+import yaml
 
 from openhands.agent_server.conversation_service import (
     AgentAdapter,
     ExecutionStatusListener,
     ToolParams,
+)
+from openhands.agent_server.director.agent_types import (
+    DEFAULT_TYPE,
+    SHIPPED_TYPES,
+    TeamTemplate,
+    load_types,
 )
 from openhands.agent_server.director.git_store import GitStore, Landing, team_key
 from openhands.agent_server.director.headline import TeamSummary
@@ -38,7 +45,10 @@ from openhands.agent_server.director.org_store import (
     division_lead_id,
     session_team_id,
 )
-from openhands.agent_server.director.service import DirectorService
+from openhands.agent_server.director.service import (
+    DIRECTOR_TOOL_NAMES,
+    DirectorService,
+)
 from openhands.agent_server.director.split import ProposedTeam
 from openhands.agent_server.event_service import (
     ActionGuard,
@@ -123,6 +133,7 @@ def make_escalation(
     return Escalation(
         id=escalation_id,
         kind=kind,
+        raised_by="ic",
         title=escalation_id,
         raised_at=raised_at,
         held_by=held_by,
@@ -561,7 +572,7 @@ async def tasked(service: DirectorService) -> None:
     """Give every team that was only set up its first message, which starts it."""
     for team in service.store.places():
         if not team.agents:
-            service.tell_ic(team.id, "Begin.")
+            service.tell_writer(team.id, "Begin.")
     await service.settled()
 
 
@@ -604,6 +615,7 @@ def take_in(
             forget=[],
             events=events or {},
             routed=[],
+            members=("ic", "manager"),
         ),
         "memory: for a test",
     )
@@ -628,3 +640,35 @@ def commit(checkout: Path, path: str, content: str) -> None:
 @pytest.fixture
 def launcher() -> FakeLauncher:
     return FakeLauncher()
+
+
+SHIPPED = load_types([SHIPPED_TYPES], DIRECTOR_TOOL_NAMES)
+
+
+def shipped_type(node: OrgNodeInput) -> TeamTemplate:
+    """The type of a team, among the ones the director ships."""
+    return SHIPPED.get(node.agent_type) or SHIPPED[DEFAULT_TYPE]
+
+
+def shipped_tools(member: str) -> tuple[str, ...]:
+    """The tools a member of a team of the default type has."""
+    return tuple(SHIPPED[DEFAULT_TYPE].agents[member].tools)
+
+
+def members_yaml(ic: str = "", manager: str = "") -> str:
+    """The `agents:` part of a type file for a team of an IC and a Manager,
+    each told what is given here."""
+    agents = {
+        name: member.model_dump(exclude_defaults=True) | {"text": text}
+        for (name, member), text in zip(
+            SHIPPED[DEFAULT_TYPE].agents.items(), (ic, manager), strict=True
+        )
+    }
+    return yaml.safe_dump({"agents": agents}, sort_keys=False)
+
+
+def agent_conversation(place: SessionTeam, role: str) -> str | None:
+    """The conversation of the team's agent in ``role``, if it has one."""
+    return next(
+        (agent.conversation_id for agent in place.agents if agent.role == role), None
+    )

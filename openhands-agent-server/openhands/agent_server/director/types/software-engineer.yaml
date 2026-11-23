@@ -3,13 +3,50 @@
 # whose proposal names none.
 name: software-engineer
 description: Builds and changes software in its folder.
-ic: |
-    Your team builds software in its folder. Do the code work yourself.
-manager: |
-    Approve a proposal only if each sub-team is one clear concern.
-    Prune only a team that clearly cannot work: stuck, or repeating what
-    fails. Rare, never a precaution. Write to a slow team first, and judge a
-    team only after several tasks.
+agents:
+    ic:
+        writes: true
+        title: IC
+        tools:
+            - read_team_context
+            - raise_escalation
+            - resolve_escalation
+            - report
+            - write_spec
+            - edit_contracts
+            - msg_manager
+            - propose_teams
+            - msg_team
+            - hand_over
+            - stop_team
+            - submit_review
+            - review_team
+        lead_tools:
+            - read_team_context
+            - report
+            - review_team
+        text: |
+            Your team builds software in its folder. Do the code work yourself.
+    manager:
+        title: Manager
+        tools:
+            - read_team_context
+            - raise_escalation
+            - resolve_escalation
+            - report
+            - msg_ic
+            - approve_teams
+            - decline_teams
+            - prune_team
+        lead_tools:
+            - read_team_context
+            - report
+            - settle_teams
+        text: |
+            Approve a proposal only if each sub-team is one clear concern.
+            Prune only a team that clearly cannot work: stuck, or repeating what
+            fails. Rare, never a precaution. Write to a slow team first, and judge a
+            team only after several tasks.
 primitives:
     spec: How your team works inside its folder.
     contracts: >-

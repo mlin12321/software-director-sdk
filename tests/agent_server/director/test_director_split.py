@@ -21,6 +21,7 @@ from openhands.agent_server.director.split import (
 from tests.agent_server.director.conftest import (
     make_team,
     open_session_in,
+    shipped_type,
     small_tree,
 )
 
@@ -37,7 +38,7 @@ def at(team_id: str) -> str:
 def store() -> OrgStore:
     """A session at the top of the small tree, each of its places in a
     checkout of its own."""
-    store = OrgStore()
+    store = OrgStore(shipped_type)
     store.replace_all(small_tree())
     open_session_in(store, "root", SESSION)
     for team in small_tree():
@@ -244,7 +245,7 @@ def test_what_a_proposal_keeps_is_asked_for_only_when_it_is_first_checked(
 def limits_under_a(max_depth: int = 4, max_teams: int = 32) -> tuple[OrgStore, str]:
     """A session opened at ``a``, one team below the top, and the id of its
     place at ``a1``."""
-    store = OrgStore()
+    store = OrgStore(shipped_type)
     store.replace_all(small_tree())
     open_session_in(store, "a", "low")
     return store, session_team_id("a1", "low")

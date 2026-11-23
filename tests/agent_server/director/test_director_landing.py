@@ -38,7 +38,6 @@ from openhands.agent_server.director.run_state import SESSION
 from openhands.agent_server.director.service import DirectorService
 from openhands.agent_server.director.service.state import (
     MERGE_WAITS,
-    agent_conversation,
 )
 from openhands.agent_server.director.tools import (
     PruneTeamTool,
@@ -60,9 +59,11 @@ from openhands.sdk.conversation.state import ConversationExecutionStatus
 from openhands.sdk.errors import NotFound, OperationFailed
 from tests.agent_server.director.conftest import (
     FakeLauncher,
+    agent_conversation,
     record_of,
     root_conversation,
     run_git,
+    shipped_type,
     take_in,
 )
 from tests.agent_server.director.test_director_limits import started
@@ -220,7 +221,7 @@ async def test_what_agents_write_to_each_other_is_never_the_orgs(
     service: DirectorService, repo: Path
 ):
     top = node(service, "root")
-    service.message(top.id, top.id, "ic", "Split in two?")
+    service.send(top.id, "ic", top.id, "manager", "Split in two?")
 
     await landed(service)
 
@@ -1721,7 +1722,7 @@ async def test_a_landing_that_cannot_be_committed_leaves_the_tree_as_it_was(
     # Neither the tree nor what decides how it lands moved without the
     # team memory that goes with it.
     assert [team.id for team in service.store.teams()] == ["root"]
-    saved = OrgStore()
+    saved = OrgStore(shipped_type)
     load_org(create_org_board(repo), saved)
     assert [team.id for team in saved.teams()] == ["root"]
     lead = service.store.place(division_lead_of(service))

@@ -406,9 +406,7 @@ async def test_start_child_conversation_inherits_parent_configuration(
 
 
 @pytest.mark.asyncio
-async def test_start_child_conversation_takes_a_chosen_id_and_prompt_suffix(
-    tmp_path, workspace_dir
-):
+async def test_start_child_conversation_takes_a_chosen_id(tmp_path, workspace_dir):
     child_id = uuid4()
     request = StartChildConversationRequest(task="Review the plan")
 
@@ -417,17 +415,11 @@ async def test_start_child_conversation_takes_a_chosen_id_and_prompt_suffix(
         workspace_dir,
         request,
         child_id=child_id,
-        extra_suffixes=["You review; you do not edit."],
     )
 
     assert launch.result is not None
     assert launch.result.conversation_id == child_id
-    child_agent = launch.services[child_id].get_conversation().agent
-    assert child_agent.agent_context.system_message_suffix.endswith(
-        "You review; you do not edit."
-    )
-    parent_agent = launch.services[launch.parent_id].get_conversation().agent
-    assert parent_agent.agent_context is None
+    assert child_id in launch.services
 
 
 @pytest.mark.asyncio

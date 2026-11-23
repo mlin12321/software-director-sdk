@@ -1,12 +1,10 @@
 """What the director tells the agents of an org."""
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from openhands.agent_server.director.git_store import team_key
 from openhands.agent_server.director.models import (
-    ROLE_NAMES,
-    AgentRole,
     BoundaryContracts,
     FormerTeam,
     InheritedSpec,
@@ -181,14 +179,18 @@ run commands that change the repository. Only `read_team_context`,
 DIRECTOR_PREFIX = "[director]"
 
 
-def report_line(report: Report) -> str:
-    """One report, with which agent of the team wrote it."""
+def report_line(report: Report, titles: Mapping[str, str]) -> str:
+    """One report, with which agent of the team wrote it.
+
+    Args:
+        titles: What each member of the team is called.
+    """
     if report.handed_over:
         return (
             "Handed over by the IC of the team above, from the teams that "
             f"were here before yours, {report.at}: {report.text}"
         )
-    writer = ROLE_NAMES.get(report.role, report.role)
+    writer = titles.get(report.role, report.role)
     return f"{writer}, {report.at}: {report.text}"
 
 
@@ -527,6 +529,7 @@ def _of_the_team(
     contracts: list[BoundaryContracts],
     reports: list[Report],
     context: str,
+    titles: Mapping[str, str],
 ) -> list[str]:
     """The specs, contracts, reports and context a briefing gives."""
     lines: list[str] = []
@@ -553,7 +556,7 @@ def _of_the_team(
         lines += ["", heading, agreed.contracts]
     if reports:
         lines += ["", "What your team has reported so far:"]
-        lines += [f"- {report_line(report)}" for report in reports]
+        lines += [f"- {report_line(report, titles)}" for report in reports]
     if context:
         lines += ["", context]
     return lines
@@ -588,12 +591,14 @@ def hand_over_brief(
     reports: list[Report],
     context: str = "",
     *,
+    titles: Mapping[str, str],
     role: str = "",
 ) -> str:
     """The first message of a hand-over conversation: a side conversation
     of a team's IC that knows nothing but what this gives it.
 
     Args:
+        titles: What each member of the team is called.
         role: How the org works and what this conversation is for.
         job: What changed, what the removed teams left and what to do.
         context: The rest of the team's context, as the agent is to read it.
@@ -612,7 +617,7 @@ def hand_over_brief(
         job,
         "",
         "What your team works to, so that you can judge what to pass on:",
-        *_of_the_team(specs, contracts, reports, context),
+        *_of_the_team(specs, contracts, reports, context, titles),
         "",
         "Do the hand-over now. You may read files; change none. When it is "
         "done, end with a line or two on what you gave to whom.",
@@ -622,7 +627,7 @@ def hand_over_brief(
 
 def brief(
     place: SessionTeam,
-    role: AgentRole,
+    role: str,
     task: str,
     specs: list[InheritedSpec],
     contracts: list[BoundaryContracts],
@@ -630,7 +635,8 @@ def brief(
     context: str = "",
     kind: str = "",
     *,
-    works: bool | None = None,
+    works: bool,
+    titles: Mapping[str, str],
     role_said: str = "",
 ) -> str:
     """The first message of an agent: who it is and what it works to.
@@ -644,10 +650,9 @@ def brief(
             agent of this role.
     """
     boundary = place.boundary.path or "the repository"
-    works = role == "ic" if works is None else works
     lines = [
         f"{DIRECTOR_PREFIX} You are the {'Division Lead ' * place.division_lead}"
-        f"{ROLE_NAMES.get(role, role)} of the team {place.title!r} "
+        f"{titles.get(role, role)} of the team {place.title!r} "
         f"(id {place.id}).",
         f"Folder: {boundary}",
         f"Writable: {', '.join(place.boundary.writable) or 'nothing'}",
@@ -659,7 +664,7 @@ def brief(
     if kind:
         lines += ["", kind]
     lines += ["", "Task of the team:", task]
-    lines += _of_the_team(specs, contracts, reports, context)
+    lines += _of_the_team(specs, contracts, reports, context, titles)
     lines.append("")
     lines.append(
         "Start on the task now." if works else "Wait until your IC writes to you."
@@ -1243,17 +1248,19 @@ def stall_notice(
     return "\n".join(lines)
 
 
-def failure_notice(
-    team: SessionTeam, role: AgentRole, reason: str, *, works: bool | None = None
-) -> str:
-    """What the IC above is told of a team whose agent failed."""
-    name = ROLE_NAMES.get(role, role)
+def failure_notice(team: SessionTeam, name: str, reason: str, *, works: bool) -> str:
+    """What the IC above is told of a team whose agent failed.
+
+    Args:
+        name: What the agent's member is called.
+        works: Whether it is the member that works in the team's folder.
+    """
     lines = [
         f"The {name} of team {team.title!r} (id {team.id}) failed and is at "
         f"rest: {reason}",
         "",
     ]
-    if role == "ic" if works is None else works:
+    if works:
         lines.append(
             "Nothing runs it again by itself. A message from you with "
             f"`msg_team` for team {team.id} does. If what failed is not "

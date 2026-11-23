@@ -22,7 +22,6 @@ from openhands.agent_server.director.git import (
 from openhands.agent_server.director.launch import StartedAgent
 from openhands.agent_server.director.models import (
     AgentRef,
-    AgentRole,
     OrgNode,
     Report,
     SessionTeam,
@@ -58,16 +57,14 @@ from openhands.agent_server.director.service.state import (
     _STARTED_WITH,
     HAND_OVER_TOOLS,
     LEFT_REFS,
-    ROLE_NAMES,
     _agent_title,
     _base_of,
     _branch_of,
-    _checkout_root,
     _Held,
     _instant,
     _new_agents,
     _progress_of,
-    agent_conversation,
+    checkout_root,
     failure_waits,
 )
 from openhands.sdk.conversation.state import ConversationExecutionStatus
@@ -87,9 +84,9 @@ class Teams(Delivery):
     def send(
         self,
         sender_place_id: str,
-        sender: AgentRole,
+        sender: str,
         target_place_id: str,
-        target: AgentRole,
+        target: str,
         text: str,
         note: str = "",
     ) -> bool:
@@ -134,7 +131,7 @@ class Teams(Delivery):
             ic_to_ic=between_ics,
         )
         stopped = self._assign(target_place_id) if between_ics else None
-        writer = ROLE_NAMES.get(sender, sender)
+        writer = self.team(sender_place).title(sender)
         heading = (
             f"Your {writer} writes:"
             if sender_place_id == target_place_id or not to_writer
@@ -168,33 +165,10 @@ class Teams(Delivery):
         self.progressed(place_id, by_above=True)
         return stopped
 
-    def message(
-        self,
-        manager_node_id: str,
-        ic_node_id: str,
-        sender: AgentRole,
-        text: str,
-        note: str = "",
-    ) -> None:
-        """Keep and deliver a message between a Manager and an IC. Safe
-        from any thread.
-
-        Args:
-            manager_node_id: The Manager's team.
-            ic_node_id: The IC's team: the same one, or one directly below.
-            note: What the director adds for the reader; it is not kept.
-        """
-        writer = self._writer(ic_node_id)
-        if sender == writer:
-            overseer = self._overseer(manager_node_id)
-            self.send(ic_node_id, sender, manager_node_id, overseer, text, note)
-        else:
-            self.send(manager_node_id, sender, ic_node_id, writer, text, note)
-
     def tell(
         self,
         place_id: str,
-        member: AgentRole,
+        member: str,
         text: str,
         *,
         human: bool = False,
@@ -215,21 +189,28 @@ class Teams(Delivery):
             The member's conversation; None when the team is gone or the
             message is not for an agent of that place.
         """
-        if member == self._writer(place_id):
+        place = self.store.place(place_id)
+        if place is None:
+            return None
+        if member == self.team(place).writer:
             return self._tell_writer(
                 place_id, member, text, human=human, division_lead=division_lead
             )
         return self._tell_other(place_id, member, text, division_lead=division_lead)
 
-    def tell_manager(
+    def tell_overseer(
         self, place_id: str, text: str, *, division_lead: bool = False
     ) -> None:
-        """Send a team's Manager a message from the director: the member
-        that settles what the team's sub-teams are. Safe from any thread."""
-        self.tell(place_id, self._overseer(place_id), text, division_lead=division_lead)
+        """Send a message from the director to the member of a team that
+        settles what its sub-teams are. Safe from any thread."""
+        place = self.store.place(place_id)
+        if place is not None:
+            self.tell(
+                place_id, self.team(place).overseer, text, division_lead=division_lead
+            )
 
     def _tell_other(
-        self, place_id: str, member: AgentRole, text: str, *, division_lead: bool
+        self, place_id: str, member: str, text: str, *, division_lead: bool
     ) -> str | None:
         """Send a message to a member that does not work in the team's
         folder. The first message starts it, and follows its briefing."""
@@ -246,15 +227,15 @@ class Teams(Delivery):
                 for agent in place.agents
                 if agent.role == member and agent.status == AGENT_LOST
             ]
-            if lost or agent_conversation(place, member) is None:
+            if lost or self.team(place).conversation(member) is None:
                 added = AgentRef(
                     role=member, conversation_id=str(uuid4()), status="idle"
                 )
                 kept = [agent for agent in place.agents if agent not in lost]
                 place = store.update_place(place_id, agents=[*kept, added])
                 task = self._runs().marked(TASK).get(place_id) or place.spec_summary
-                self._begin("launch_manager", place_id, task=task, role=member)
-        conversation_id = agent_conversation(place, member)
+                self._begin("launch_member", place_id, task=task, role=member)
+        conversation_id = self.team(place).conversation(member)
         self.notify(conversation_id, text)
         return conversation_id
 
@@ -266,7 +247,7 @@ class Teams(Delivery):
         waits: str,
         title: str,
         detail: str,
-        raised_by: AgentRole | None = None,
+        raised_by: str | None = None,
     ) -> None:
         """Tell the IC above a team of something wrong with it. Where no IC
         works above it (the team a session was opened at, and the session's
@@ -297,7 +278,7 @@ class Teams(Delivery):
         )
         self._save_soon()
 
-    def tell_of_failure(self, place_id: str, role: AgentRole, reason: str) -> None:
+    def tell_of_failure(self, place_id: str, role: str, reason: str) -> None:
         """Keep why an agent of a team failed, and tell of it."""
         store = self.store
         with suppress(NotFound):
@@ -305,12 +286,12 @@ class Teams(Delivery):
         team = store.place(place_id)
         if team is None:
             return
-        name = ROLE_NAMES.get(role, role)
+        name = self.team(team).title(role)
         self.record_event(team.parent_id, "failed", team, f"{name}: {reason}")
         lost = any(a.role == role and a.status == AGENT_LOST for a in team.agents)
         self.tell_above(
             team,
-            failure_notice(team, role, reason, works=role == self.team(team).writer),
+            failure_notice(team, name, reason, works=role == self.team(team).writer),
             waits=failure_waits(role),
             title=f"The {name} of {team.title!r} failed",
             detail=(
@@ -326,7 +307,7 @@ class Teams(Delivery):
             raised_by=role,
         )
 
-    def tell_ic(
+    def tell_writer(
         self,
         place_id: str,
         text: str,
@@ -334,15 +315,18 @@ class Teams(Delivery):
         human: bool = False,
         division_lead: bool = False,
     ) -> str | None:
-        """Send a team's IC a message: the member that works in the team's
+        """Send a message to the member of a team that works in its
         folder. Safe from any thread.
 
         Returns:
-            The IC's conversation; None when the team is gone.
+            Its conversation; None when the team is gone.
         """
+        place = self.store.place(place_id)
+        if place is None:
+            return None
         return self.tell(
             place_id,
-            self._writer(place_id),
+            self.team(place).writer,
             text,
             human=human,
             division_lead=division_lead,
@@ -351,7 +335,7 @@ class Teams(Delivery):
     def _tell_writer(
         self,
         place_id: str,
-        member: AgentRole,
+        member: str,
         text: str,
         *,
         human: bool,
@@ -365,7 +349,7 @@ class Teams(Delivery):
             place = store.place(place_id)
             if place is None:
                 return None
-            conversation_id = agent_conversation(place, member)
+            conversation_id = self.team(place).conversation(member)
             leads = is_division_lead(place)
             if conversation_id is None and leads and not division_lead:
                 return None
@@ -403,8 +387,8 @@ class Teams(Delivery):
             self.store.opens_session(place)
             and (
                 place.isolation != "worktree"
-                or _checkout_root(place.worktree_path)
-                != _checkout_root(str(self._repo_dir))
+                or checkout_root(place.worktree_path)
+                != checkout_root(str(self._repo_dir))
             )
         )
 
@@ -439,18 +423,6 @@ class Teams(Delivery):
         task = self._runs().marked(TASK).get(node.id) or node.spec_summary
         return task.split(_STARTED_WITH)[0]
 
-    def message_team(self, place_id: str, below_id: str, text: str) -> bool:
-        """Keep and deliver what a team's IC writes to the IC of a team
-        directly below. A team that was stopped goes on with it. Safe from
-        any thread.
-
-        Returns:
-            Whether the team was stopped.
-        """
-        return self.send(
-            place_id, self._writer(place_id), below_id, self._writer(below_id), text
-        )
-
     def count_accepted_review(self, place_id: str) -> None:
         """Count a review a team's IC accepted, and wake the team's Manager
         to look at its teams when that makes as many as the org set. Safe
@@ -474,7 +446,7 @@ class Teams(Delivery):
                 after_successes=True,
             )
 
-    def count_ic_escalation(self, place_id: str, below_id: str) -> None:
+    def count_escalation_from_below(self, place_id: str, below_id: str) -> None:
         """Count an escalation the IC of a team directly below raised to a
         team's IC, and wake the team's Manager when that team has raised as
         many, on the work it has in hand, as the org set. Safe from any
@@ -532,7 +504,7 @@ class Teams(Delivery):
                 since = now - datetime.fromisoformat(min(raised))
                 waiting[below.id] = int(since.total_seconds() // 60)
         self.record_event(place_id, "woken", team, reason)
-        self.tell_manager(
+        self.tell_overseer(
             place_id,
             manager_check(
                 reason,
@@ -569,7 +541,7 @@ class Teams(Delivery):
         team = self.store.place(place_id)
         if team is None or team.stopped is not None:
             return
-        own = None if own_too else agent_conversation(team, self.team(team).writer)
+        own = None if own_too else self.writer_conversation(team)
         if self._paused is not None:
             # The org goes on later: those cut off are run again then, like
             # any agent that was in a turn when the org was paused.
@@ -667,9 +639,7 @@ class Teams(Delivery):
         if running == ConversationExecutionStatus.RUNNING:
             self._resuming.discard(conversation_id)
 
-    def _briefing(
-        self, place: SessionTeam, role: AgentRole, task: str
-    ) -> tuple[str, str]:
+    def _briefing(self, place: SessionTeam, role: str, task: str) -> tuple[str, str]:
         """An agent's first message, and the context it tells, as kept to
         find later what changed."""
         contracts = self.contracts_of(place)
@@ -684,6 +654,7 @@ class Teams(Delivery):
             briefing_block(context),
             self.type_of(place).text_for(role),
             works=role == self.team(place).writer,
+            titles=self.type_of(place).titles,
             role_said=self.role_text(place, role),
         )
         return text, json.dumps(steady(context))
@@ -698,6 +669,7 @@ class Teams(Delivery):
             contracts,
             self.reports_of(place),
             briefing_block(self.context_of(place, self.team(place).writer)),
+            titles=self.type_of(place).titles,
             role=role_text(works=True, hand_over=True),
         )
 
@@ -747,11 +719,11 @@ class Teams(Delivery):
             return False
         return True
 
-    async def _brief(self, place_id: str, role: AgentRole, task: str) -> None:
+    async def _brief(self, place_id: str, role: str, task: str) -> None:
         place = self.store.place(place_id)
         if place is None:
             return
-        conversation_id = agent_conversation(place, role)
+        conversation_id = self.team(place).conversation(role)
         if conversation_id is not None:
             text, told = await asyncio.to_thread(self._briefing, place, role, task)
             self._runs().mark(TOLD, conversation_id, told)
@@ -760,7 +732,7 @@ class Teams(Delivery):
     async def _start_agent(
         self,
         place_id: str,
-        role: AgentRole,
+        role: str,
         parent_conversation: str | None,
         task: str,
         checkout: str | None = None,
@@ -776,7 +748,7 @@ class Teams(Delivery):
         """
         store = self.store
         place = store.place(place_id)
-        conversation_id = agent_conversation(place, role) if place else None
+        conversation_id = self.team(place).conversation(role) if place else None
         if place is None or conversation_id is None:
             return False
         launcher = self._require_launcher()
@@ -820,7 +792,7 @@ class Teams(Delivery):
     async def _start_new(
         self,
         place: SessionTeam,
-        role: AgentRole,
+        role: str,
         conversation_id: str,
         parent_conversation: str | None,
         task: str,
@@ -874,7 +846,7 @@ class Teams(Delivery):
         )
         title = _agent_title(
             place.title,
-            role,
+            self.team(place).title(role),
             self.store.session_title(place),
             division_lead=leads,
         )
@@ -916,7 +888,7 @@ class Teams(Delivery):
         derived from."""
         store, launcher = self.store, self._require_launcher()
         while place is not None:
-            ic = agent_conversation(place, self.team(place).writer)
+            ic = self.writer_conversation(place)
             # Never a Division Lead IC, whose role of reviewer the new agent
             # would inherit.
             if (
@@ -928,9 +900,7 @@ class Teams(Delivery):
             place = store.place(place.parent_id) if place.parent_id else None
         return None
 
-    async def _launch_manager(
-        self, place_id: str, task: str, member: AgentRole = "manager"
-    ) -> None:
+    async def _launch_member(self, place_id: str, task: str, member: str) -> None:
         place = self.store.place(place_id)
         if place is not None:
             # A Division Lead Manager is derived from the session's IC,
@@ -943,19 +913,16 @@ class Teams(Delivery):
             await self._start_agent(place_id, member, derived_from, task)
 
     async def _do_brief(self, intent: Intent) -> None:
-        if intent.payload["role"] == self._writer(intent.node_id):
+        place = self.store.place(intent.node_id)
+        if place and intent.payload["role"] == self.team(place).writer:
             self._runs().mark(TASK, intent.node_id, intent.payload["task"])
         await self._brief(
             intent.node_id, intent.payload["role"], intent.payload["task"]
         )
 
-    async def _do_launch_manager(self, intent: Intent) -> None:
-        await self._launch_manager(
-            intent.node_id,
-            intent.payload["task"],
-            # A kept step that names no member starts the one that settles
-            # the team's sub-teams.
-            intent.payload.get("role") or self._overseer(intent.node_id),
+    async def _do_launch_member(self, intent: Intent) -> None:
+        await self._launch_member(
+            intent.node_id, intent.payload["task"], intent.payload["role"]
         )
 
     async def _do_start_team(self, intent: Intent) -> None:
@@ -982,9 +949,11 @@ class Teams(Delivery):
                         Path(above.worktree_path),
                         started.boundary.path,
                     )
+        if started is None:
+            return
         await self._start_agent(
             place_id,
-            self._writer(place_id),
+            self.team(started).writer,
             parent_ic,
             f"{task}\n\n{left_for_team(left)}" if left else task,
             checkout,
@@ -1022,7 +991,7 @@ class Teams(Delivery):
             # The shell the IC above starts next cannot write there.
             self._confine(above.id, self.team(above).writer)
         source, target = Path(above.worktree_path), Path(team.worktree_path)
-        if _checkout_root(str(source)) == _checkout_root(str(target)):
+        if checkout_root(str(source)) == checkout_root(str(target)):
             # In one checkout the team finds the files where they are.
             return
         try:

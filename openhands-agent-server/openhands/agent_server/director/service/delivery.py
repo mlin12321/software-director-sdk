@@ -20,7 +20,6 @@ from openhands.agent_server.director.git import (
 from openhands.agent_server.director.headline import provisional_summary
 from openhands.agent_server.director.launch import TeamLauncher
 from openhands.agent_server.director.models import (
-    AgentRole,
     Report,
     SessionTeam,
 )
@@ -46,7 +45,6 @@ from openhands.agent_server.director.service.state import (
     _Held,
     _instant,
     _lane_for,
-    agent_conversation,
 )
 from openhands.agent_server.event_service import ConversationRunLimitExceeded
 from openhands.sdk.errors import (
@@ -87,7 +85,7 @@ class Delivery(Records):
         if conversation_id is not None:
             self._post(conversation_id, from_director(text), at_once=at_once)
 
-    def report(self, place: SessionTeam, role: AgentRole, text: str) -> None:
+    def report(self, place: SessionTeam, role: str, text: str) -> None:
         """Record something for the two agents of a team. Safe from any
         thread.
 
@@ -107,7 +105,7 @@ class Delivery(Records):
         # Its session's alone until the session's work is accepted.
         self._keep_report(place, report)
 
-    def reports_grew(self, node_id: str, role: AgentRole) -> None:
+    def reports_grew(self, node_id: str, role: str) -> None:
         """Compact what one agent of a team recorded, if it has grown past
         what the org set. Safe from any thread."""
         reports = self._memory().reports(node_id, role)
@@ -220,12 +218,12 @@ class Delivery(Records):
                 logger.warning("A message to %s is sent again", conversation_id)
                 await asyncio.sleep(self._run_limit_retry)
 
-    def knows(self, place_id: str, role: AgentRole, *keys: str) -> None:
+    def knows(self, place_id: str, role: str, *keys: str) -> None:
         """Take as told to an agent the parts of its context it has just
         written itself, so that they are not sent back to it. Safe from any
         thread."""
         place = self.store.place(place_id)
-        conversation_id = agent_conversation(place, role) if place else None
+        conversation_id = self.team(place).conversation(role) if place else None
         run = self._runs()
         before = run.marked(TOLD).get(conversation_id or "")
         if place is None or conversation_id is None or not before:
@@ -456,7 +454,7 @@ class Delivery(Records):
         sessions = self._store.sessions() if self._store else []
         return next((s.conversation_id for s in sessions if s.conversation_id), None)
 
-    async def _compact(self, node_id: str, role: AgentRole) -> None:
+    async def _compact(self, node_id: str, role: str) -> None:
         """Have a model rewrite one agent's reports shorter, if they are
         still too long."""
         asker = self._asker()
@@ -592,6 +590,8 @@ class Delivery(Records):
                     await launcher.rename(
                         UUID(agent.conversation_id),
                         _agent_title(
-                            place.title, agent.role, store.session_title(place)
+                            place.title,
+                            self.team(place).title(agent.role),
+                            store.session_title(place),
                         ),
                     )

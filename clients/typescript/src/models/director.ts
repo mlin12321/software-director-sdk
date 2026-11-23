@@ -10,11 +10,9 @@ export type DirectorNodeId = string;
 
 /**
  * The member of a team an agent is, by the name its team's type gives it.
- * A type that names no members has an IC and a Manager: the IC leads the
- * team, is a report of the team above, and does the code work in its
- * boundary that no sub-team has taken on.
+ * The types the director ships have an IC (`ic`) and a Manager (`manager`).
  */
-export type DirectorAgentRole = 'ic' | 'manager' | (string & {});
+export type DirectorAgentRole = string;
 
 /**
  * An IC in hand-over mode: beside its main conversation it has one the
@@ -136,10 +134,9 @@ export interface DirectorSplitChild {
   agent_profile: string | null;
   /**
    * The type of the sub-team: the name of the YAML file its agents are told
-   * from what the team is for. Optional so that a server from before types
-   * is read too; such a team is a `software-engineer`.
+   * from what the team is for.
    */
-  agent_type?: string;
+  agent_type: string;
 }
 
 /**
@@ -226,10 +223,9 @@ export interface DirectorOrgNode {
   agent_profile: string | null;
   /**
    * The type of the team: what its agents are told the team is for and how
-   * its work is reviewed. It changes nothing the runtime enforces. Optional
-   * so that a server from before types is read too.
+   * its work is reviewed. It changes nothing the runtime enforces.
    */
-  agent_type?: string;
+  agent_type: string;
   /**
    * When the team was set up. Two teams with one id are the same team only
    * when this is the same: an id comes from the directory, so a team that
@@ -1005,16 +1001,14 @@ export interface DirectorSettings {
   allowed_profiles: string[];
   /**
    * For every org that sets none of its own: the agent type of a new team
-   * whose making names none. Optional so that a server from before types is
-   * read.
+   * whose making names none.
    */
-  default_agent_type?: string;
+  default_agent_type: string;
   /**
    * For every org that sets none of its own: the agent types a new team may
-   * be. Empty: every type the director finds. Optional so that a server from
-   * before types is read.
+   * be. Empty: every type the director finds.
    */
-  allowed_agent_types?: string[];
+  allowed_agent_types: string[];
   /**
    * Whether an org that was stopped in the middle of its work takes it up
    * again as soon as the server is back, without being asked.
@@ -1120,9 +1114,9 @@ export interface DirectorAgentTypeInfo {
   allowed: boolean;
   /**
    * The agent profile a new team of this type runs on when its making names
-   * none. Optional so that a server from before it is read too.
+   * none.
    */
-  sas_profile?: string | null;
+  sas_profile: string | null;
 }
 
 /** What holds for new teams of the org, and what it has to choose from. */

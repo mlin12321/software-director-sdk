@@ -16,8 +16,6 @@ from openhands.agent_server.director.git import uncommitted
 from openhands.agent_server.director.git_store import team_key
 from openhands.agent_server.director.memory_edit import EditCommand, edited
 from openhands.agent_server.director.models import (
-    ROLE_NAMES,
-    AgentRole,
     ContractsChoice,
     EscalationKind,
     Review,
@@ -31,7 +29,6 @@ from openhands.agent_server.director.org_store import is_division_lead, utc_now
 from openhands.agent_server.director.prompts import role_text
 from openhands.agent_server.director.service import (
     DirectorService,
-    agent_conversation,
 )
 from openhands.agent_server.director.split import (
     Proposed,
@@ -49,7 +46,7 @@ class Caller:
     """The agent that uses a tool."""
 
     node: SessionTeam
-    role: AgentRole
+    role: str
     # Whether it is an IC that calls from its hand-over conversation.
     hand_over: bool = False
 
@@ -82,9 +79,9 @@ def _not_aside(caller: Caller) -> None:
         raise Invalid(_ASIDE)
 
 
-def _member_name(member: str) -> str:
-    """A member of a team as the agents are told of it."""
-    return ROLE_NAMES.get(member, member)
+def _title(service: DirectorService, caller: Caller, member: str) -> str:
+    """A member of the caller's team as the agents are told of it."""
+    return service.type_of(caller.node).title_of(member)
 
 
 def _has(
@@ -108,7 +105,9 @@ def _has(
         return
     _not_aside(caller)
     holder = kind.member_with(tool) or kind.member_with(tool, lead=True)
-    raise Invalid(f"Only the {_member_name(holder or tool)} of a team can {what}")
+    raise Invalid(
+        f"Only the {_title(service, caller, holder or tool)} of a team can {what}"
+    )
 
 
 def _writes(service: DirectorService, caller: Caller, what: str) -> None:
@@ -117,7 +116,9 @@ def _writes(service: DirectorService, caller: Caller, what: str) -> None:
     _not_aside(caller)
     writer = service.type_of(caller.node).writer
     if caller.role != writer:
-        raise Invalid(f"Only the {_member_name(writer)} of a team can {what}")
+        raise Invalid(
+            f"Only the {_title(service, caller, writer)} of a team can {what}"
+        )
 
 
 def node_context(service: DirectorService, caller: Caller) -> str:
@@ -274,7 +275,7 @@ def msg_manager(service: DirectorService, caller: Caller, text: str) -> str:
             "proposal: use propose_teams. Raise anything else with "
             "raise_escalation."
         )
-    service.message(node.id, node.id, caller.role, text)
+    service.send(node.id, caller.role, node.id, service.team(node).overseer, text)
     return "Sent to your Manager."
 
 
@@ -317,10 +318,11 @@ def propose_teams(
         node.id, "proposed", None, _named(proposal, replaced), _paths(proposal)
     )
     said = proposed.reason or "I propose these sub-teams."
-    service.message(
-        node.id,
+    service.send(
         node.id,
         caller.role,
+        node.id,
+        service.team(node).overseer,
         f"{said}\n\nProposed sub-teams:\n{as_written(proposed)}",
         note,
     )
@@ -352,7 +354,9 @@ def msg_ic(service: DirectorService, caller: Caller, text: str, team: str) -> st
         if waiting
         else ""
     )
-    service.message(node.id, target.id, caller.role, text, note)
+    service.send(
+        node.id, caller.role, target.id, service.team(target).writer, text, note
+    )
     return f"Sent to the IC of {target.title!r}." + (
         " The sub-teams it proposed still wait on you: approve_teams or decline_teams."
         if waiting
@@ -424,10 +428,11 @@ def decline_teams(service: DirectorService, caller: Caller, reason: str) -> str:
     service.record_event(
         node.id, "declined", None, f"{named}. Reason: {reason}", _paths(proposal)
     )
-    service.message(
-        node.id,
+    service.send(
         node.id,
         caller.role,
+        node.id,
+        service.team(node).writer,
         reason,
         f"\n\n[director] Your Manager declined the sub-teams you proposed "
         f"({named}); the above is its reason. Nothing was set up. Propose "
@@ -435,10 +440,6 @@ def decline_teams(service: DirectorService, caller: Caller, reason: str) -> str:
         "something has changed.",
     )
     return "Declined. Your IC is told your reason, and it is kept in the record."
-
-
-def _role_name(role: AgentRole) -> str:
-    return ROLE_NAMES[role]
 
 
 def raise_escalation(
@@ -476,9 +477,10 @@ def raise_escalation(
             "on the human."
         )
     service.hand_escalation(escalation.held_by, node, node, escalation, [])
+    mine = _title(service, caller, caller.role)
     return (
-        f"Raised as {escalation.id}. It is with the {_role_name(caller.role)} "
-        "of the team above; you will be told the answer."
+        f"Raised as {escalation.id}. It is with the {mine} of the team above; "
+        "you will be told the answer."
     )
 
 
@@ -513,14 +515,15 @@ def resolve_escalation(
         raise Invalid(
             f"Escalation {escalation_id} was raised by "
             f"{'an IC' if escalation.raised_by == 'ic' else 'a Manager'}: it is "
-            f"for your team's {_role_name(escalation.raised_by)} to settle"
+            f"for your team's {_title(service, caller, escalation.raised_by)} to settle"
         )
+    mine = _title(service, caller, caller.role)
     if action == "settle":
         store.settle_escalation(raiser.id, escalation_id)
         service.progressed(raiser.id)
         service.notify(
-            agent_conversation(raiser, escalation.raised_by),
-            f"The {_role_name(caller.role)} of {caller.node.title!r} settled "
+            service.team(raiser).conversation(escalation.raised_by),
+            f"The {mine} of {caller.node.title!r} settled "
             f"your escalation {escalation.title!r}:\n{text.strip()}",
         )
         return "Settled; the agent that raised it has your answer."
@@ -534,7 +537,7 @@ def resolve_escalation(
         passed,
         [f"{handoff.node_id}: {handoff.reason}" for handoff in passed.handoffs],
     )
-    return f"Passed up to the {_role_name(caller.role)} of the team above."
+    return f"Passed up to the {mine} of the team above."
 
 
 def submit_review(service: DirectorService, caller: Caller, summary: str) -> str:
@@ -795,7 +798,9 @@ def msg_team(service: DirectorService, caller: Caller, team: str, text: str) -> 
         if new
         else []
     )
-    if service.message_team(caller.node.id, target.id, text):
+    if service.send(
+        caller.node.id, caller.role, target.id, service.team(target).writer, text
+    ):
         return (
             f"Sent to the IC of {target.title!r}. Its team was stopped and goes on now."
         )

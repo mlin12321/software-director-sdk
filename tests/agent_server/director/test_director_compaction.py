@@ -67,7 +67,7 @@ async def test_long_reports_are_rewritten_by_a_model_once_they_are_the_teams(
     try:
         root = node(service, "root")
         service.report(root, "ic", "a" * 600)
-        service.tell_manager(root.id, "Look in on your team.")
+        service.tell_overseer(root.id, "Look in on your team.")
         await service.settled()
         service.report(root, "manager", "m" * 600)
         service.report(root, "ic", "b" * 600)

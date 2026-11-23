@@ -8,8 +8,6 @@ next message the agent gets anyway.
 import json
 from typing import Any
 
-from openhands.agent_server.director.models import AgentRole
-
 
 UPDATE_HEADING = "[director] context update"
 
@@ -76,9 +74,9 @@ def steady(context: dict[str, Any]) -> dict[str, Any]:
 def changed(
     before: dict[str, Any],
     now: dict[str, Any],
-    role: AgentRole,
+    role: str,
     *,
-    works: bool | None = None,
+    works: bool,
 ) -> dict[str, Any]:
     """The parts of a steady context that differ from what an agent was
     last told. A list that only grew gives what was added to it, the list
@@ -89,7 +87,7 @@ def changed(
         was = before.get(key)
         if value == was:
             continue
-        if key == "status" and before and (role == "ic" if works is None else works):
+        if key == "status" and before and works:
             # Its own doing: it submitted, or raised what it waits on.
             continue
         if not (isinstance(value, list) and isinstance(was, list)):

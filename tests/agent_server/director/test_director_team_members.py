@@ -8,7 +8,6 @@ import pytest
 
 from openhands.agent_server.director.models import SplitChild
 from openhands.agent_server.director.service import DirectorService
-from openhands.agent_server.director.service.state import agent_conversation
 from openhands.agent_server.director.tools import (
     ApproveTeamsTool,
     ProposeTeamsTool,
@@ -16,7 +15,12 @@ from openhands.agent_server.director.tools import (
 )
 from openhands.agent_server.director.tools.definition import SubmitReviewAction
 from openhands.agent_server.director.tools.remote import call_tool, list_tools
-from tests.agent_server.director.conftest import FakeLauncher, commit, tasked
+from tests.agent_server.director.conftest import (
+    FakeLauncher,
+    agent_conversation,
+    commit,
+    tasked,
+)
 from tests.agent_server.director.test_director_agent_types import an_org
 from tests.agent_server.director.test_director_tools import (
     APPROVE,
@@ -44,12 +48,10 @@ agents:
     tools: [{", ".join(BENCH)}]
     lead_tools: [read_team_context]
   referee:
-    like: bench
     text: Checks what the benches below found.
     tools: [read_team_context, review_team]
     lead_tools: [read_team_context, review_team]
   chair:
-    like: bench
     tools: [read_team_context, approve_teams, decline_teams]
     lead_tools: [read_team_context, settle_teams]
 """

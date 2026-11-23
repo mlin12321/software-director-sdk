@@ -214,9 +214,3 @@ async def test_the_contracts_are_changed_by_the_ic_whose_sub_teams_keep_them(
     )
     assert leaf.is_error and "sets no contracts" in leaf.text
     assert division_lead_ic(service) is None
-
-
-def test_the_whole_spec_is_still_read_under_the_name_it_had():
-    action = WriteSpecAction.model_validate({"text": "# Lab"})
-
-    assert (action.command, action.file_text) == ("create", "# Lab")

@@ -47,7 +47,6 @@ from openhands.agent_server.director.service.state import (
     _new_agents,
     apart,
     conversations_of,
-    tools_of,
 )
 from openhands.agent_server.director.split import shape_of
 from openhands.sdk.conversation.request import (
@@ -227,7 +226,7 @@ class Sessions(Splits):
         )
         brief = session_brief(top, title, others)
         if conversation is None:
-            conversation_id = self.tell_ic(top.id, text + brief, human=True) or ""
+            conversation_id = self.tell_writer(top.id, text + brief, human=True) or ""
         else:
             try:
                 conversation_id = await self._start_with(
@@ -270,7 +269,7 @@ class Sessions(Splits):
         writer = self.team(top).writer
         store.update_place(top.id, agents=_new_agents(ic_id, writer))
         apart = top.isolation == "worktree"
-        tools = tools_of(top, writer, kind=self.type_of(top))
+        tools = self.tools_for(top, writer)
         tool_params = await asyncio.to_thread(self._confine, top.id, writer)
         started = await launcher.start_root(
             conversation.model_copy(
@@ -292,7 +291,9 @@ class Sessions(Splits):
                 }
             ),
             [Tool(name=name) for name in tools],
-            title=_agent_title(top.title, writer, store.session_title(top)),
+            title=_agent_title(
+                top.title, self.team(top).title(writer), store.session_title(top)
+            ),
             tool_params=tool_params,
             adapt_agent=await asyncio.to_thread(self._adapter, str(ic_id), tools),
         )
@@ -342,7 +343,7 @@ class Sessions(Splits):
             )
         # It may say the same, and the session then goes up once more.
         self.keep_routed("asked", top, request.text, "top", why)
-        self.tell_ic(
+        self.tell_writer(
             top.id,
             handed_up(place, request.text, why)
             + session_brief(top, self.store.session_title(top), []),

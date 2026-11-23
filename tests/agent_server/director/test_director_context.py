@@ -74,7 +74,7 @@ def update_of(message: str) -> dict[str, Any] | None:
 async def tell(service: DirectorService, launcher: FakeLauncher, to: str) -> str:
     """Send the IC of a team a message from the human; what it got."""
     team = "apps.web" if to else "root"
-    service.tell_ic(node(service, team).id, "Go on.", human=True)
+    service.tell_writer(node(service, team).id, "Go on.", human=True)
     await service.settled()
     return launcher.messages_to(ic(service, team))[-1]
 
@@ -88,7 +88,7 @@ def test_a_team_that_starts_or_ends_a_turn_has_not_changed():
     assert steady(working) == steady(idle)
     assert "headline" not in steady(idle)["sub_teams"][0]
     blocked = context(sub_teams=[{"team_id": "api", "status": "blocked"}])
-    assert changed(steady(idle), steady(blocked), "ic") == {
+    assert changed(steady(idle), steady(blocked), "ic", works=True) == {
         "sub_teams": {"changed": [{"team_id": "api", "status": "blocked"}]}
     }
 
@@ -102,14 +102,14 @@ def test_of_the_sub_teams_only_those_that_changed_or_went_are_told():
     submitted = context(sub_teams=[api, {**web, "status": "done"}])
     replaced = context(sub_teams=[api, db])
 
-    assert changed(before, submitted, "ic") == {
+    assert changed(before, submitted, "ic", works=True) == {
         "sub_teams": {"changed": [{**web, "status": "done"}]}
     }
-    assert changed(before, replaced, "ic") == {
+    assert changed(before, replaced, "ic", works=True) == {
         "sub_teams": {"added": [db], "removed": ["web"]}
     }
     # The first sub-teams a team gets are told as they are.
-    assert changed(context(sub_teams=[]), before, "ic") == {
+    assert changed(context(sub_teams=[]), before, "ic", works=True) == {
         "sub_teams": {"added": [api, web]}
     }
 
@@ -122,14 +122,14 @@ def test_only_what_differs_is_told_and_of_a_list_that_grew_only_what_was_added()
         review_of_your_work={"state": "accepted"},
     )
 
-    assert changed(before, before, "ic") == {}
-    assert changed(before, now, "ic") == {
+    assert changed(before, before, "ic", works=True) == {}
+    assert changed(before, now, "ic", works=True) == {
         "reports_of_your_team": {"added": [{"by": "manager", "text": "Then the API."}]},
         "review_of_your_work": {"state": "accepted"},
     }
     # Rewritten, not added to: all of it.
     rewritten = context(reports_of_your_team=[{"by": "ic", "text": "In short."}])
-    assert changed(before, rewritten, "manager") == {
+    assert changed(before, rewritten, "manager", works=False) == {
         "reports_of_your_team": [{"by": "ic", "text": "In short."}]
     }
 
@@ -144,7 +144,7 @@ def test_an_agent_is_not_told_back_what_it_added_itself():
         escalations_you_raised=[{"escalation_id": "jwt"}],
     )
 
-    assert changed(before, now, "ic") == {
+    assert changed(before, now, "ic", works=True) == {
         "reports_of_your_team": {"added": [{"by": "manager", "text": "Theirs."}]}
     }
 
@@ -161,10 +161,10 @@ def test_of_a_list_known_by_id_only_what_was_added_changed_or_went_is_told():
         ]
     )
 
-    assert changed(before, settled, "ic") == {
+    assert changed(before, settled, "ic", works=True) == {
         "escalations_for_you_to_settle": {"removed": ["e1"]}
     }
-    assert changed(before, passed, "ic") == {
+    assert changed(before, passed, "ic", works=True) == {
         "escalations_for_you_to_settle": {
             "changed": [passed["escalations_for_you_to_settle"][1]]
         }
@@ -174,8 +174,8 @@ def test_of_a_list_known_by_id_only_what_was_added_changed_or_went_is_told():
 def test_an_ic_is_not_told_the_status_its_own_acts_gave_its_team():
     before, done = context(status="at work"), context(status="done")
 
-    assert changed(before, done, "ic") == {}
-    assert changed(before, done, "manager") == {"status": "done"}
+    assert changed(before, done, "ic", works=True) == {}
+    assert changed(before, done, "manager", works=False) == {"status": "done"}
 
 
 def test_a_long_text_is_cut_in_an_update():
@@ -433,7 +433,7 @@ def test_a_part_that_is_gone_is_told_and_another_order_is_not():
     other = [{"session": "s2", "title": "Refunds"}]
     before = context(sub_teams=[api, web], other_sessions_of_your_team=other)
 
-    assert changed(before, context(sub_teams=[web, api]), "ic") == {
+    assert changed(before, context(sub_teams=[web, api]), "ic", works=True) == {
         "other_sessions_of_your_team": None
     }
     assert (
@@ -441,6 +441,7 @@ def test_a_part_that_is_gone_is_told_and_another_order_is_not():
             before,
             context(sub_teams=[web, api], other_sessions_of_your_team=other),
             "ic",
+            works=True,
         )
         == {}
     )

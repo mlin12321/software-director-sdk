@@ -317,11 +317,11 @@ class Splits(Watch):
             # the IC of the team it reports to, which this starts if it is
             # a new team.
             for below_id, home in moves.items():
-                below = store.place(below_id)
-                if below and below.review and below.review.state == "pending":
+                below, above = store.place(below_id), store.place(home)
+                if below and above and below.review and below.review.state == "pending":
                     self.tell(
                         home,
-                        self._reviewer(home),
+                        self.team(above).reviewer,
                         review_request(
                             below,
                             below.review,
@@ -354,7 +354,7 @@ class Splits(Watch):
             return
         # The shell the IC starts next can no longer write what it gave away.
         with suppress(GitError, OSError):
-            await asyncio.to_thread(self._confine, place_id, self._writer(place_id))
+            await asyncio.to_thread(self._confine, place_id)
         # The record each replaced team left last: the one just made.
         kept = self.former_drafts(place.session)
         former = [
@@ -475,9 +475,7 @@ class Splits(Watch):
             store.remove(place_id)
             # The shell the IC above starts next can write there again.
             with suppress(GitError, OSError):
-                await asyncio.to_thread(
-                    self._confine, plan["parent"], self._writer(plan["parent"])
-                )
+                await asyncio.to_thread(self._confine, plan["parent"])
             await self._save()
             intent = run.step_done(intent, "removed")
         self._settling.pop(intent.id, None)

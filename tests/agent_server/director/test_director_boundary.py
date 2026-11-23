@@ -3,12 +3,21 @@
 import pytest
 
 from openhands.agent_server.director.boundary import (
-    glob_matches,
     nearest_team,
-    write_refusal,
-    written_paths,
+    scope_within,
+    worded,
 )
 from openhands.agent_server.director.models import Boundary, OrgNode
+from openhands.agent_server.director.scope import glob_matches, written_paths
+
+
+def write_refusal(
+    node: OrgNode, sub_teams: list[OrgNode], path: str, *, edits: bool = True
+) -> str | None:
+    """Why an agent of ``node`` may not write ``path``, as it is told."""
+    scope = scope_within(node, sub_teams, edits=edits)
+    denied = scope.refuse(path)
+    return None if denied is None else worded(denied, scope)
 
 
 def team(
@@ -86,12 +95,12 @@ def test_a_patch_names_every_file_it_adds_updates_deletes_or_moves():
 def test_an_ic_may_write_what_its_team_owns():
     api = team("api", "svc/api")
 
-    assert write_refusal(api, "ic", [], "svc/api/handlers/pay.py") is None
+    assert write_refusal(api, [], "svc/api/handlers/pay.py") is None
 
 
 @pytest.mark.parametrize("path", ["svc/web/page.tsx", "README.md", "svc/apiary/x.py"])
 def test_an_ic_may_not_write_outside_its_boundary(path):
-    refusal = write_refusal(team("api", "svc/api"), "ic", [], path)
+    refusal = write_refusal(team("api", "svc/api"), [], path)
 
     assert refusal is not None and "outside your team's boundary" in refusal
 
@@ -99,10 +108,10 @@ def test_an_ic_may_not_write_outside_its_boundary(path):
 def test_an_ic_may_not_write_what_it_handed_to_a_sub_team():
     root, api = team("root", ""), team("api", "svc/api")
 
-    refusal = write_refusal(root, "ic", [api], "svc/api/handlers/pay.py")
+    refusal = write_refusal(root, [api], "svc/api/handlers/pay.py")
 
     assert refusal is not None and "sub-team 'api'" in refusal
-    assert write_refusal(root, "ic", [api], "README.md") is None
+    assert write_refusal(root, [api], "README.md") is None
 
 
 def test_read_only_globs_and_narrow_writable_globs_are_kept():
@@ -110,13 +119,13 @@ def test_read_only_globs_and_narrow_writable_globs_are_kept():
         "api", "svc/api", writable=["svc/api/**/*.py"], readonly=["svc/api/gen/**"]
     )
 
-    assert write_refusal(api, "ic", [], "svc/api/pay.py") is None
-    assert "read-only" in (write_refusal(api, "ic", [], "svc/api/gen/x.py") or "")
-    assert "may write" in (write_refusal(api, "ic", [], "svc/api/notes.md") or "")
+    assert write_refusal(api, [], "svc/api/pay.py") is None
+    assert "read-only" in (write_refusal(api, [], "svc/api/gen/x.py") or "")
+    assert "may write" in (write_refusal(api, [], "svc/api/notes.md") or "")
 
 
 def test_a_manager_may_write_nothing():
-    refusal = write_refusal(team("api", "svc/api"), "manager", [], "svc/api/pay.py")
+    refusal = write_refusal(team("api", "svc/api"), [], "svc/api/pay.py", edits=False)
 
     assert refusal is not None and "Manager" in refusal
 
@@ -154,7 +163,7 @@ def test_a_team_that_may_only_read_the_directory_is_passed_over():
 def test_no_agent_writes_what_belongs_to_git():
     root = team("root", "")
 
-    refusal = write_refusal(root, "ic", [], ".git/config")
+    refusal = write_refusal(root, [], ".git/config")
 
     assert refusal is not None and "belongs to git" in refusal
-    assert write_refusal(root, "ic", [], ".gitignore") is None
+    assert write_refusal(root, [], ".gitignore") is None
