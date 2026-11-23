@@ -16,14 +16,15 @@ from openhands.agent_server.director.tools import MsgTeamTool, PruneTeamTool
 from openhands.agent_server.director.tools.definition import MsgTeamAction
 from openhands.sdk.conversation.state import ConversationExecutionStatus
 from openhands.sdk.errors import Conflict
-from tests.agent_server.director.conftest import FakeLauncher, record_of
-from tests.agent_server.director.test_director_acp import started
-from tests.agent_server.director.test_director_tools import (
+from tests.agent_server.director.conftest import (
     PRUNE_API,
+    FakeLauncher,
     ic,
     manager,
     node,
+    record_of,
     split_root,
+    started_with_server,
     use,
     woken,
 )
@@ -34,15 +35,12 @@ NO_KEY = "LLMAuthenticationError: the key was refused"
 
 
 @pytest.fixture
-def launcher() -> FakeLauncher:
-    return FakeLauncher()
-
-
-@pytest.fixture
 async def service(repo: Path, launcher: FakeLauncher):
     """An org of API and Web whose timer never fires by itself."""
     now = datetime(2026, 11, 17, tzinfo=UTC)
-    service = await started(repo, launcher, clock=lambda: now, stall_poll=3600)
+    service = await started_with_server(
+        repo, launcher, clock=lambda: now, stall_poll=3600
+    )
     await split_root(service)
     yield service
     await service.aclose()
@@ -211,7 +209,9 @@ async def test_the_human_is_asked_of_a_stalled_team_with_no_ic_above(
     repo: Path, launcher: FakeLauncher
 ):
     now = [datetime(2026, 11, 17, tzinfo=UTC)]
-    service = await started(repo, launcher, clock=lambda: now[0], stall_poll=3600)
+    service = await started_with_server(
+        repo, launcher, clock=lambda: now[0], stall_poll=3600
+    )
     try:
         await service._check_stalls()
         await service.settled()

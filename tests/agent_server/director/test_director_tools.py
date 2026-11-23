@@ -1,11 +1,9 @@
 """The tools an org's agents use, called as the agents call them."""
 
-import asyncio
 import json
 from collections.abc import AsyncIterator
 from pathlib import Path
-from types import SimpleNamespace
-from typing import Any, Literal, cast
+from typing import Literal
 from uuid import UUID, uuid4
 
 import pytest
@@ -14,12 +12,9 @@ from pydantic import ValidationError
 from openhands.agent_server.director import agent_actions
 from openhands.agent_server.director.models import (
     CreateOrgRequest,
-    SessionTeam,
     SplitChild,
 )
 from openhands.agent_server.director.org_store import (
-    division_lead_id,
-    session_id_of,
     team_id_of,
 )
 from openhands.agent_server.director.prompts import MANAGER_ROLE, ORG_PROTOCOL
@@ -42,13 +37,11 @@ from openhands.agent_server.director.tools import (
     WriteSpecTool,
 )
 from openhands.agent_server.director.tools.definition import (
-    ApproveTeamsAction,
     DeclineTeamsAction,
     MsgIcAction,
     MsgManagerAction,
     ProposeTeamsAction,
     PruneTeamAction,
-    RaiseEscalationAction,
     ReadTeamContextAction,
     ReportAction,
     ResolveEscalationAction,
@@ -56,21 +49,31 @@ from openhands.agent_server.director.tools.definition import (
     SubmitReviewAction,
     WriteSpecAction,
 )
-from openhands.agent_server.director.tools.impl import DirectorObservation
 from openhands.sdk.conversation.state import (
     ConversationExecutionStatus,
-    ConversationState,
 )
 from openhands.sdk.errors import NotFound
-from openhands.sdk.tool.tool import Action, ToolDefinition
 from tests.agent_server.director.conftest import (
+    APPROVE,
+    CENTS,
+    PRUNE_API,
+    SPLIT,
     FakeLauncher,
     agent_conversation,
-    as_proposed,
+    division_lead_ic,
+    has_place,
+    ic,
+    manager,
+    node,
+    proposing,
     record_of,
     root_conversation,
     run_git,
+    split_root,
+    sub_teams,
     tasked,
+    use,
+    woken,
 )
 
 
@@ -88,116 +91,6 @@ async def service(repo: Path, launcher: FakeLauncher) -> AsyncIterator[DirectorS
     await service.settled()
     yield service
     await service.aclose()
-
-
-async def use(
-    service: DirectorService,
-    conversation_id: str | None,
-    tool: type[ToolDefinition[Any, Any]],
-    action: Action,
-) -> DirectorObservation:
-    """Call ``tool`` as the agent of ``conversation_id`` does: off the loop."""
-    assert conversation_id is not None
-    state = cast(ConversationState, SimpleNamespace(id=UUID(conversation_id)))
-    executor = tool.create(state)[0].executor
-    assert executor is not None
-    observation = await asyncio.to_thread(executor, action)
-    await service.settled()
-    assert isinstance(observation, DirectorObservation)
-    return observation
-
-
-def node(service: DirectorService, node_id: str) -> SessionTeam:
-    """A place by its id, or the place of the session opened first at the
-    team of that id."""
-    found = service.org.place(node_id)
-    if "@" not in node_id:
-        found = next(
-            (
-                place
-                for place in service.org.places()
-                if not place.division_lead and place.team_id == node_id
-            ),
-            None,
-        )
-    assert found is not None
-    return found
-
-
-def division_lead_ic(service: DirectorService, node_id: str = "root") -> str | None:
-    """The IC that reviews the session of the place ``node_id``."""
-    place = service.org.place(division_lead_of(service, node_id))
-    assert place is not None
-    return agent_conversation(place, "ic")
-
-
-def division_lead_of(service: DirectorService, node_id: str = "root") -> str:
-    session = service.org.session_of(node(service, node_id))
-    assert session is not None
-    return division_lead_id(session.above_id, session.id)
-
-
-def ic(service: DirectorService, node_id: str = "root") -> str | None:
-    return agent_conversation(node(service, node_id), "ic")
-
-
-def manager(service: DirectorService, node_id: str = "root") -> str | None:
-    return agent_conversation(node(service, node_id), "manager")
-
-
-async def woken(service: DirectorService, node_id: str = "root") -> str:
-    """The Manager of a team, started as the first message to it does."""
-    if manager(service, node_id) is None:
-        service.tell_overseer(node(service, node_id).id, "Look in on your team.")
-        await service.settled()
-    found = manager(service, node_id)
-    assert found is not None
-    return found
-
-
-def proposing(
-    children: list[SplitChild],
-    contracts: str = "",
-    keep: list[str] | None = None,
-    text: str = "",
-) -> ProposeTeamsAction:
-    return ProposeTeamsAction(
-        teams=as_proposed(children), contracts=contracts, keep=keep or [], text=text
-    )
-
-
-SPLIT = proposing(
-    [
-        SplitChild(title="API", path="services/api", task="Serve the checkout API"),
-        SplitChild(
-            title="Web",
-            path="apps/web",
-            task="Build the checkout pages",
-            isolation="worktree",
-        ),
-    ],
-    "POST /checkout returns {order_id}",
-)
-APPROVE = ApproveTeamsAction()
-
-
-async def split_root(service: DirectorService) -> None:
-    await use(service, ic(service), ProposeTeamsTool, SPLIT)
-    await use(service, manager(service), ApproveTeamsTool, APPROVE)
-    await tasked(service)
-
-
-def sub_teams(service: DirectorService, node_id: str = "root") -> list[SessionTeam]:
-    """What the session opened first has directly below a team."""
-    return service.org.below(node(service, node_id).id)
-
-
-def has_place(service: DirectorService, team_id: str) -> bool:
-    """Whether a session has the team ``team_id``."""
-    return any(
-        session_id_of(place) and team_id_of(place) == team_id
-        for place in service.org.places()
-    )
 
 
 async def test_an_agent_reads_who_it_is_and_what_its_team_reported(
@@ -664,9 +557,6 @@ async def test_a_sub_team_that_cannot_start_is_shown_as_blocked(
 
 
 READ = ReadTeamContextAction()
-CENTS = RaiseEscalationAction(
-    category="design_decision", title="Cents or decimals?", detail="For totals."
-)
 
 
 def resolving(
@@ -834,12 +724,6 @@ async def test_what_the_top_team_escalates_waits_on_the_human(
     assert "The human answered" in launcher.messages_to(raiser)[-1]
     assert len(launcher.messages_to(other)) == heard
     assert node(service, "root").status == "idle"
-
-
-PRUNE_API = PruneTeamAction(
-    team="services.api",
-    reason="Every schema change broke all of them.",
-)
 
 
 async def test_a_pruned_team_is_gone_with_its_agents_and_its_ic_above_is_told(

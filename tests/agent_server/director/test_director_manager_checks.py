@@ -10,7 +10,6 @@ from openhands.agent_server.director.tools import (
     ApproveTeamsTool,
     ProposeTeamsTool,
     PruneTeamTool,
-    RaiseEscalationTool,
     ReadTeamContextTool,
     ResolveEscalationTool,
     ReviewTeamTool,
@@ -18,25 +17,27 @@ from openhands.agent_server.director.tools import (
 )
 from openhands.agent_server.director.tools.definition import (
     PruneTeamAction,
-    RaiseEscalationAction,
     ReadTeamContextAction,
     ResolveEscalationAction,
 )
-from tests.agent_server.director.conftest import FakeLauncher, record_of, tasked
-from tests.agent_server.director.test_director_acp import started
-from tests.agent_server.director.test_director_review import (
+from tests.agent_server.director.conftest import (
+    APPROVE,
     DONE,
+    FakeLauncher,
     accept,
     commit,
-    reject,
-)
-from tests.agent_server.director.test_director_tools import (
-    APPROVE,
+    escalates,
     ic,
+    looks,
     manager,
     node,
     proposing,
+    record_of,
+    sent_back,
     split_root,
+    started_with_server,
+    tasked,
+    team_accepted,
     use,
 )
 
@@ -46,50 +47,19 @@ API, WEB = "services.api", "apps.web"
 
 @pytest.fixture
 async def service(repo: Path, launcher: FakeLauncher):
-    service = await started(repo, launcher, stall_poll=3600)
+    service = await started_with_server(repo, launcher, stall_poll=3600)
     await split_root(service)
     yield service
     await service.aclose()
 
 
-def looks(service: DirectorService, launcher: FakeLauncher, team: str = "root"):
-    """The looks the director asked the Manager of a team to take."""
-    return [
-        text
-        for text in launcher.messages_to(manager(service, team))
-        if "A look at your teams" in text
-    ]
-
-
-async def accepted(service: DirectorService, repo: Path, team: str, times: int = 1):
-    """Have a team submit work and the top team's IC accept it."""
-    directory = node(service, team).boundary.path
-    for _ in range(times):
-        count = len(list((repo / directory).glob("*.txt"))) if directory else 0
-        commit(repo, f"{directory}/part{count}.txt", "done\n")
-        await use(service, ic(service, team), SubmitReviewTool, DONE)
-        await use(service, ic(service), ReviewTeamTool, accept(team))
-    await service.settled()
-
-
-async def escalates(service: DirectorService, team: str, times: int = 1) -> None:
-    for number in range(times):
-        await use(
-            service,
-            ic(service, team),
-            RaiseEscalationTool,
-            RaiseEscalationAction(category="design_decision", title=f"Q{number}?"),
-        )
-    await service.settled()
-
-
 async def test_a_manager_looks_after_every_so_many_reviews_its_ic_accepted(
     service: DirectorService, launcher: FakeLauncher, repo: Path
 ):
-    await accepted(service, repo, API, times=4)
+    await team_accepted(service, repo, API, times=4)
     assert looks(service, launcher) == []
 
-    await accepted(service, repo, WEB)
+    await team_accepted(service, repo, WEB)
 
     [look] = looks(service, launcher)
     assert "your IC has accepted 5 reviews" in look
@@ -97,9 +67,9 @@ async def test_a_manager_looks_after_every_so_many_reviews_its_ic_accepted(
     assert "review accepted, round 1" in look
     assert "Nothing is asked of you" in look
 
-    await accepted(service, repo, API, times=4)
+    await team_accepted(service, repo, API, times=4)
     assert len(looks(service, launcher)) == 1
-    await accepted(service, repo, API)
+    await team_accepted(service, repo, API)
     assert len(looks(service, launcher)) == 2
 
 
@@ -139,7 +109,7 @@ async def test_what_a_team_escalated_is_counted_for_the_work_it_has_in_hand(
                 team=API, escalation_id=escalation.id, action="settle", text="Yes."
             ),
         )
-    await accepted(service, repo, API)
+    await team_accepted(service, repo, API)
 
     # Its work was accepted: what it raises now is on other work.
     await escalates(service, API, times=2)
@@ -158,16 +128,16 @@ async def test_the_two_counts_are_kept_apart(
         )
     )
     await escalates(service, WEB)
-    await accepted(service, repo, API, times=2)
+    await team_accepted(service, repo, API, times=2)
     [by_reviews] = looks(service, launcher)
 
     # The look for the reviews did not use up what Web has escalated.
     await escalates(service, WEB)
     by_escalations = looks(service, launcher)[1:]
     # And that look did not use up the reviews counted since.
-    await accepted(service, repo, API)
+    await team_accepted(service, repo, API)
     still = len(looks(service, launcher))
-    await accepted(service, repo, API)
+    await team_accepted(service, repo, API)
 
     assert "accepted 2 reviews" in by_reviews
     assert (
@@ -186,7 +156,7 @@ async def test_each_check_can_be_turned_off(
         )
     )
 
-    await accepted(service, repo, API, times=6)
+    await team_accepted(service, repo, API, times=6)
     await escalates(service, WEB, times=4)
 
     assert looks(service, launcher) == []
@@ -227,7 +197,7 @@ async def test_an_escalation_passed_up_counts_for_the_team_it_came_through(
 async def test_what_was_counted_is_kept_over_a_restart(
     repo: Path, launcher: FakeLauncher
 ):
-    first = await started(repo, launcher, stall_poll=3600)
+    first = await started_with_server(repo, launcher, stall_poll=3600)
     await split_root(first)
     await escalates(first, API, times=2)
     await first.aclose()
@@ -296,23 +266,12 @@ async def test_a_new_team_in_a_removed_teams_place_starts_from_nothing(
     assert len(looks(service, launcher)) == 1
 
 
-async def sent_back(service: DirectorService, repo: Path, team: str, times: int = 1):
-    """Have a team submit work and the top team's IC send it back."""
-    directory = node(service, team).boundary.path
-    for _ in range(times):
-        count = len(list((repo / directory).glob("*.txt")))
-        commit(repo, f"{directory}/try{count}.txt", "again\n")
-        await use(service, ic(service, team), SubmitReviewTool, DONE)
-        await use(service, ic(service), ReviewTeamTool, reject(team))
-    await service.settled()
-
-
 async def test_what_became_of_its_teams_is_kept_for_a_teams_two_agents(
     service: DirectorService, launcher: FakeLauncher, repo: Path
 ):
     await sent_back(service, repo, API)
-    await accepted(service, repo, API)
-    await accepted(service, repo, WEB)
+    await team_accepted(service, repo, API)
+    await team_accepted(service, repo, WEB)
 
     kinds = [
         (event.team, event.kind, event.detail)
@@ -351,7 +310,7 @@ async def test_a_manager_is_shown_what_became_of_teams_that_are_gone(
     )
     await service.settled()
 
-    await accepted(service, repo, WEB)
+    await team_accepted(service, repo, WEB)
 
     look = looks(service, launcher)[-1]
     assert "Teams that were here before and are gone:" in look

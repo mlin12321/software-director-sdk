@@ -32,85 +32,22 @@ from openhands.agent_server.director.tools.definition import SubmitReviewAction
 from openhands.sdk.conversation.state import ConversationExecutionStatus
 from openhands.sdk.errors import Invalid, Unprocessable
 from tests.agent_server.director.conftest import (
-    FakeLauncher,
-    commit,
-    members_yaml,
-    root_conversation,
-    tasked,
-)
-from tests.agent_server.director.test_director_tools import (
     APPROVE,
+    CODE_REVIEW,
+    FakeLauncher,
+    an_org,
+    commit,
     ic,
     manager,
+    members_yaml,
     node,
+    org_config,
     proposing,
+    root_conversation,
+    split_into_typed_teams,
+    tasked,
     use,
 )
-
-
-CODE_REVIEW = "Review the diff for bugs."
-ANALYST = (
-    members_yaml(
-        ic="Your team analyses results. It runs no experiments.\n",
-        manager="Approve a proposal if each sub-team reads one set of results.\n",
-    )
-    + """\
-description: Reads results and says what they mean.
-actions:
-  submit_review: Submit one table and what it shows.
-review:
-  write_up: |
-    Write the account of your tables for the reviewer.
-  checklist: |
-    Every number in a table is in a committed result file.
-omit_tools: [propose_teams, read_team_context]
-"""
-)
-TEAMS = proposing(
-    [
-        SplitChild(
-            title="Tables", path="tables", task="Tabulate", agent_type="analyst"
-        ),
-        SplitChild(title="Harness", path="harness", task="Build the harness"),
-    ],
-    contracts="Tables reads what Harness writes to `out/`.",
-)
-
-
-def org_config(folder: Path, settings: str = "") -> Path:
-    """An org's ``director.yaml`` with the type ``analyst`` beside it."""
-    config = folder / "config" / "director.yaml"
-    (config.parent / "types").mkdir(parents=True, exist_ok=True)
-    config.write_text(settings)
-    (config.parent / "types" / "analyst.yaml").write_text(ANALYST)
-    return config
-
-
-async def an_org(
-    repo: Path,
-    launcher: FakeLauncher,
-    config_file: Path | None = None,
-    agent_type: str | None = None,
-) -> DirectorService:
-    service = DirectorService(
-        repo,
-        save_delay=0,
-        run_limit_retry=0,
-        find_review_instructions=lambda: CODE_REVIEW,
-        config_file=config_file,
-        remembered=repo.parent / "director.json",
-    )
-    await service.start(launcher)
-    await service.create_org(
-        CreateOrgRequest(
-            title="Lab",
-            task="Find out what helps training",
-            agent_type=agent_type,
-            conversation=root_conversation(repo),
-        )
-    )
-    await service.settled()
-    return service
 
 
 @pytest.fixture
@@ -120,12 +57,6 @@ async def service(
     service = await an_org(repo, launcher, org_config(tmp_path))
     yield service
     await service.aclose()
-
-
-async def split(service: DirectorService) -> None:
-    await use(service, ic(service), ProposeTeamsTool, TEAMS)
-    await use(service, manager(service), ApproveTeamsTool, APPROVE)
-    await tasked(service)
 
 
 def briefing(launcher: FakeLauncher, title: str) -> str:
@@ -172,7 +103,7 @@ async def test_a_team_is_told_what_its_own_type_says_and_not_its_parents(
         "Reads results and says what they mean."
     )
 
-    await split(service)
+    await split_into_typed_teams(service)
 
     tables, harness = briefing(launcher, "Tables"), briefing(launcher, "Harness")
     assert node(service, "tables").agent_type == "analyst"
@@ -189,7 +120,7 @@ async def test_a_team_is_told_what_its_own_type_says_and_not_its_parents(
 async def test_a_type_takes_tools_away_but_not_the_ones_an_agent_needs(
     service: DirectorService, launcher: FakeLauncher
 ):
-    await split(service)
+    await split_into_typed_teams(service)
 
     tables = node(service, "tables")
     offered = service.tools_for(tables, "ic")
@@ -219,7 +150,7 @@ async def test_a_team_cannot_be_of_a_type_the_director_does_not_find(
 async def test_work_is_written_up_and_reviewed_as_the_reviewed_teams_type_says(
     service: DirectorService, launcher: FakeLauncher, repo: Path
 ):
-    await split(service)
+    await split_into_typed_teams(service)
     launcher.agent_answers = {"account of your tables": "One table: 0.97."}
 
     commit(repo, "tables/t1.md", "| warmup | 0.97 |\n")

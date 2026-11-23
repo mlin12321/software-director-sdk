@@ -11,7 +11,6 @@ from fastapi.testclient import TestClient
 
 from openhands.agent_server import director_router
 from openhands.agent_server.api import create_app
-from openhands.agent_server.config import Config
 from openhands.agent_server.director.git_store import GitStore
 from openhands.agent_server.director.models import (
     OrgNodeInput,
@@ -37,23 +36,11 @@ from tests.agent_server.director.conftest import (
     open_session_in,
     root_conversation,
     run_git,
+    server_config,
     shipped_type,
     small_tree,
     take_in,
 )
-
-
-def server_config(repo_dir: Path, **config) -> Config:
-    """A server whose director is started for ``repo_dir`` and keeps what it
-    remembers beside it."""
-    return Config(
-        **{
-            "session_api_keys": [],
-            "director_repo_path": repo_dir,
-            "conversations_path": repo_dir.parent / "state" / "conversations",
-            **config,
-        }
-    )
 
 
 def make_client(repo_dir: Path, **config) -> TestClient:
@@ -173,256 +160,260 @@ def renamed(team: OrgNodeInput, title: str) -> OrgNodeInput:
     return team.model_copy(update={"title": title})
 
 
-class TestTeamMemory:
-    def test_returns_what_applies_to_the_nodes_boundary_and_what_its_agents_reported(
-        self, repo: Path
-    ):
-        store = OrgStore(shipped_type)
-        store.replace_all(small_tree())
-        save_org(create_org_board(repo), store)
-        board = GitStore(repo)
-        board.write("", "spec.md", "root spec")
-        board.write("svc/a", "spec.md", "a spec")
-        board.write("svc/b", "spec.md", "b spec")
-        board.write("", "contracts.md", "a serves b")
-        later = Report(at="2026-11-02T00:00:00+00:00", role="ic", text="Chose SQLite.")
-        earlier = Report(
-            at="2026-11-01T00:00:00+00:00", role="manager", text="Two sub-teams."
-        )
-        take_in(board, reports={"a": [later, earlier], "b": [later]})
+def test_returns_what_applies_to_the_nodes_boundary_and_what_its_agents_reported(
+    repo: Path,
+):
+    store = OrgStore(shipped_type)
+    store.replace_all(small_tree())
+    save_org(create_org_board(repo), store)
+    board = GitStore(repo)
+    board.write("", "spec.md", "root spec")
+    board.write("svc/a", "spec.md", "a spec")
+    board.write("svc/b", "spec.md", "b spec")
+    board.write("", "contracts.md", "a serves b")
+    later = Report(at="2026-11-02T00:00:00+00:00", role="ic", text="Chose SQLite.")
+    earlier = Report(
+        at="2026-11-01T00:00:00+00:00", role="manager", text="Two sub-teams."
+    )
+    take_in(board, reports={"a": [later, earlier], "b": [later]})
 
-        response = make_client(repo).get("/api/director/org/nodes/a/memory")
+    response = make_client(repo).get("/api/director/org/nodes/a/memory")
 
-        assert response.status_code == 200
-        assert response.json() == {
-            "specs": [
-                {
-                    "path": "svc/a",
-                    "spec": "a spec",
-                    "readonly": False,
-                    "old": False,
-                    "left_by": None,
-                }
-            ],
-            "contracts": [{"path": "", "contracts": "a serves b", "own": False}],
-            "reports": [earlier.model_dump(), later.model_dump()],
-            "former_teams": [],
-            "history": [],
-        }
-
-    async def test_returns_the_threads_a_places_agents_take_part_in(
-        self, running, repo: Path
-    ):
-        client, _, service = running
-        opened = (await client.post("/api/director/org", json=org_body(repo))).json()
-        await service.settled()
-        top = opened["session"]["teams"][0]["id"]
-        asked = ThreadMessage(
-            at="2026-11-01T00:00:00+00:00", sender="ic", text="Split?"
-        )
-        told = ThreadMessage(
-            at="2026-11-02T00:00:00+00:00", sender="manager", text="Status?"
-        )
-        service._keep_message(top, top, asked)
-        service._keep_message(top, "below@other", told)
-        service._keep_message("above@other", "below@other", told)
-
-        response = await client.get(f"/api/director/org/nodes/{top}/messages")
-        at_the_team = await client.get("/api/director/org/nodes/root/messages")
-        missing = await client.get("/api/director/org/nodes/missing/messages")
-
-        assert response.status_code == 200
-        assert response.json() == [
+    assert response.status_code == 200
+    assert response.json() == {
+        "specs": [
             {
-                "manager_node_id": top,
-                "ic_node_id": top,
-                "ic_to_ic": False,
-                "messages": [asked.model_dump()],
-            },
-        ]
-        # Nobody works at a team of the org itself, so nothing was said there.
-        assert at_the_team.json() == []
-        assert missing.status_code == 404
+                "path": "svc/a",
+                "spec": "a spec",
+                "readonly": False,
+                "old": False,
+                "left_by": None,
+            }
+        ],
+        "contracts": [{"path": "", "contracts": "a serves b", "own": False}],
+        "reports": [earlier.model_dump(), later.model_dump()],
+        "former_teams": [],
+        "history": [],
+    }
 
 
-class TestTreeStream:
-    """Drives the endpoint's own response body, without an HTTP client.
+async def test_returns_the_threads_a_places_agents_take_part_in(running, repo: Path):
+    client, _, service = running
+    opened = (await client.post("/api/director/org", json=org_body(repo))).json()
+    await service.settled()
+    top = opened["session"]["teams"][0]["id"]
+    asked = ThreadMessage(at="2026-11-01T00:00:00+00:00", sender="ic", text="Split?")
+    told = ThreadMessage(
+        at="2026-11-02T00:00:00+00:00", sender="manager", text="Status?"
+    )
+    service._keep_message(top, top, asked)
+    service._keep_message(top, "below@other", told)
+    service._keep_message("above@other", "below@other", told)
 
-    The stream never ends, so each test reads the events it expects and then
-    closes the body the way a disconnecting client does.
-    """
+    response = await client.get(f"/api/director/org/nodes/{top}/messages")
+    at_the_team = await client.get("/api/director/org/nodes/root/messages")
+    missing = await client.get("/api/director/org/nodes/missing/messages")
 
-    @pytest.fixture
-    def service(self, tmp_path: Path) -> DirectorService:
-        service = DirectorService(tmp_path)
-        service.org.replace_all(small_tree())
-        return service
+    assert response.status_code == 200
+    assert response.json() == [
+        {
+            "manager_node_id": top,
+            "ic_node_id": top,
+            "ic_to_ic": False,
+            "messages": [asked.model_dump()],
+        },
+    ]
+    # Nobody works at a team of the org itself, so nothing was said there.
+    assert at_the_team.json() == []
+    assert missing.status_code == 404
 
-    @staticmethod
-    async def open_stream(
-        service: DirectorService,
-        node: str | None = None,
-        expanded: list[str] | None = None,
-        full: bool = False,
-    ) -> AsyncIterator[str]:
-        response = await director_router.stream_org_tree(service, node, expanded, full)
-        assert response.media_type == "text/event-stream"
-        body = response.body_iterator
-        assert isinstance(body, AsyncIterator)
 
-        async def frames() -> AsyncIterator[str]:
-            try:
-                async for frame in body:
-                    assert isinstance(frame, str)
-                    yield frame
-            finally:
-                await body.aclose()  # type: ignore[attr-defined]
+# Drives the endpoint's own response body, without an HTTP client.
+#
+# The stream never ends, so each test reads the events it expects and then
+# closes the body the way a disconnecting client does.
+@pytest.fixture
+def tree_stream_service(tmp_path: Path) -> DirectorService:
+    tree_stream_service = DirectorService(tmp_path)
+    tree_stream_service.org.replace_all(small_tree())
+    return tree_stream_service
 
-        return frames()
 
-    @staticmethod
-    async def next_event(body: AsyncIterator[str]) -> tuple[str, dict]:
-        frame = await asyncio.wait_for(anext(body), timeout=5)
-        event_line, data_line = frame.strip().split("\n")
-        return event_line.removeprefix("event: "), json.loads(
-            data_line.removeprefix("data: ")
-        )
+async def open_stream(
+    tree_stream_service: DirectorService,
+    node: str | None = None,
+    expanded: list[str] | None = None,
+    full: bool = False,
+) -> AsyncIterator[str]:
+    response = await director_router.stream_org_tree(
+        tree_stream_service, node, expanded, full
+    )
+    assert response.media_type == "text/event-stream"
+    body = response.body_iterator
+    assert isinstance(body, AsyncIterator)
 
-    async def test_starts_with_a_snapshot_of_the_root_then_follows_changes(
-        self, service: DirectorService
-    ):
-        body = await self.open_stream(service)
+    async def frames() -> AsyncIterator[str]:
+        try:
+            async for frame in body:
+                assert isinstance(frame, str)
+                yield frame
+        finally:
+            await body.aclose()  # type: ignore[attr-defined]
 
-        name, snapshot = await self.next_event(body)
-        await asyncio.to_thread(
-            service.org.upsert, renamed(make_team("b", "root"), "Billing")
-        )
-        _, upsert = await self.next_event(body)
-        await asyncio.to_thread(service.org.remove, "b")
-        _, removed = await self.next_event(body)
-        _, above = await self.next_event(body)
+    return frames()
 
-        assert name == "snapshot"
-        assert snapshot["focus_id"] == "root"
-        assert [node["id"] for node in snapshot["nodes"]] == ["root", "a", "b"]
-        assert (upsert["type"], upsert["node"]["title"]) == ("node_upsert", "Billing")
-        assert removed == {"type": "node_removed", "id": "b"}
-        assert (above["node"]["id"], above["node"]["child_ids"]) == ("root", ["a"])
 
-    async def test_follows_only_the_requested_node(self, service: DirectorService):
-        body = await self.open_stream(service, "b")
+async def next_event(body: AsyncIterator[str]) -> tuple[str, dict]:
+    frame = await asyncio.wait_for(anext(body), timeout=5)
+    event_line, data_line = frame.strip().split("\n")
+    return event_line.removeprefix("event: "), json.loads(
+        data_line.removeprefix("data: ")
+    )
 
-        _, snapshot = await self.next_event(body)
-        service.org.upsert(renamed(make_team("a1", "a"), "One"))
-        service.org.upsert(renamed(make_team("b", "root"), "Billing"))
-        _, first_change = await self.next_event(body)
 
-        assert [node["id"] for node in snapshot["nodes"]] == ["root", "b"]
-        # The change to a1 does not reach this viewer.
-        assert first_change["node"]["id"] == "b"
+async def test_starts_with_a_snapshot_of_the_root_then_follows_changes(
+    tree_stream_service: DirectorService,
+):
+    body = await open_stream(tree_stream_service)
 
-    async def test_follows_the_reports_of_expanded_nodes(
-        self, service: DirectorService
-    ):
-        body = await self.open_stream(service, expanded=["a", "missing"])
+    name, snapshot = await next_event(body)
+    await asyncio.to_thread(
+        tree_stream_service.org.upsert, renamed(make_team("b", "root"), "Billing")
+    )
+    _, upsert = await next_event(body)
+    await asyncio.to_thread(tree_stream_service.org.remove, "b")
+    _, removed = await next_event(body)
+    _, above = await next_event(body)
 
-        _, snapshot = await self.next_event(body)
-        service.org.upsert(renamed(make_team("a1", "a"), "One"))
-        _, change = await self.next_event(body)
+    assert name == "snapshot"
+    assert snapshot["focus_id"] == "root"
+    assert [node["id"] for node in snapshot["nodes"]] == ["root", "a", "b"]
+    assert (upsert["type"], upsert["node"]["title"]) == ("node_upsert", "Billing")
+    assert removed == {"type": "node_removed", "id": "b"}
+    assert (above["node"]["id"], above["node"]["child_ids"]) == ("root", ["a"])
 
-        assert [node["id"] for node in snapshot["nodes"]] == [
-            "root",
-            "a",
-            "b",
-            "a1",
-            "a2",
-        ]
-        assert change["node"]["id"] == "a1"
 
-    async def test_a_full_stream_follows_every_node_below_the_focus(
-        self, service: DirectorService
-    ):
-        body = await self.open_stream(service, "a", full=True)
+async def test_follows_only_the_requested_node(tree_stream_service: DirectorService):
+    body = await open_stream(tree_stream_service, "b")
 
-        _, snapshot = await self.next_event(body)
-        service.org.upsert(make_team("deep", "a1"))
-        _, change = await self.next_event(body)
+    _, snapshot = await next_event(body)
+    tree_stream_service.org.upsert(renamed(make_team("a1", "a"), "One"))
+    tree_stream_service.org.upsert(renamed(make_team("b", "root"), "Billing"))
+    _, first_change = await next_event(body)
 
-        assert [node["id"] for node in snapshot["nodes"]] == ["root", "a", "a1", "a2"]
-        assert change["node"]["id"] == "deep"
+    assert [node["id"] for node in snapshot["nodes"]] == ["root", "b"]
+    # The change to a1 does not reach this viewer.
+    assert first_change["node"]["id"] == "b"
 
-    async def test_sends_what_waits_on_the_human_and_each_change_to_it(
-        self, service: DirectorService
-    ):
-        store = service.org
-        top = open_session_in(store, "a", "s1")
-        store.raise_escalation(top.id, "jwt", kind="design_decision", title="jwt")
-        body = await self.open_stream(service)
 
-        _, snapshot = await self.next_event(body)
-        store.settle_escalation(top.id, "jwt")
-        events = [await self.next_event(body) for _ in range(2)]
+async def test_follows_the_reports_of_expanded_nodes(
+    tree_stream_service: DirectorService,
+):
+    body = await open_stream(tree_stream_service, expanded=["a", "missing"])
 
-        [waiting] = snapshot["escalations"]
-        assert (waiting["node_id"], waiting["session_id"]) == ("a", "s1")
-        assert waiting["escalation"]["id"] == "jwt"
-        assert [step["title"] for step in waiting["path"]] == ["a"]
-        # Nothing of the session is a node of the tree.
-        assert [node["id"] for node in snapshot["nodes"]] == ["root", "a", "b"]
-        assert ("escalations", {"type": "escalations", "escalations": []}) in events
+    _, snapshot = await next_event(body)
+    tree_stream_service.org.upsert(renamed(make_team("a1", "a"), "One"))
+    _, change = await next_event(body)
 
-    async def test_says_when_the_org_is_paused_and_when_it_runs_again(
-        self, service: DirectorService
-    ):
-        service._hold("human")
-        body = await self.open_stream(service)
+    assert [node["id"] for node in snapshot["nodes"]] == [
+        "root",
+        "a",
+        "b",
+        "a1",
+        "a2",
+    ]
+    assert change["node"]["id"] == "a1"
 
-        _, snapshot = await self.next_event(body)
-        await asyncio.to_thread(service._release)
-        name, running = await self.next_event(body)
-        await body.aclose()  # type: ignore[attr-defined]
 
-        assert (snapshot["paused"], snapshot["merging"]) == ("human", False)
-        assert name == "org_state"
-        assert running == {"type": "org_state", "paused": None, "merging": False}
-        assert service._state_listeners == []
+async def test_a_full_stream_follows_every_node_below_the_focus(
+    tree_stream_service: DirectorService,
+):
+    body = await open_stream(tree_stream_service, "a", full=True)
 
-    async def test_an_idle_stream_sends_heartbeats(
-        self, service: DirectorService, monkeypatch: pytest.MonkeyPatch
-    ):
-        monkeypatch.setattr(director_router, "STREAM_HEARTBEAT_SECONDS", 0.01)
-        body = await self.open_stream(service)
-        await self.next_event(body)
+    _, snapshot = await next_event(body)
+    tree_stream_service.org.upsert(make_team("deep", "a1"))
+    _, change = await next_event(body)
 
-        frame = await asyncio.wait_for(anext(body), timeout=5)
+    assert [node["id"] for node in snapshot["nodes"]] == ["root", "a", "a1", "a2"]
+    assert change["node"]["id"] == "deep"
 
-        assert frame == ": keep-alive\n\n"
 
-    async def test_a_closed_stream_stops_listening(self, service: DirectorService):
-        delivered: list[object] = []
-        body = await self.open_stream(service)
-        await self.next_event(body)
-        other = await self.open_stream(service)
-        await self.next_event(other)
+async def test_sends_what_waits_on_the_human_and_each_change_to_it(
+    tree_stream_service: DirectorService,
+):
+    store = tree_stream_service.org
+    top = open_session_in(store, "a", "s1")
+    store.raise_escalation(top.id, "jwt", kind="design_decision", title="jwt")
+    body = await open_stream(tree_stream_service)
 
-        await body.aclose()  # type: ignore[attr-defined]
-        service.org.subscribe("root", delivered.append)
-        service.org.upsert(renamed(make_team("b", "root"), "Billing"))
+    _, snapshot = await next_event(body)
+    store.settle_escalation(top.id, "jwt")
+    events = [await next_event(body) for _ in range(2)]
 
-        # The store has exactly the open stream and this test's listener left.
-        assert len(service.org._listeners) == 2
-        assert (await self.next_event(other))[0] == "node_upsert"
-        assert len(delivered) == 1
+    [waiting] = snapshot["escalations"]
+    assert (waiting["node_id"], waiting["session_id"]) == ("a", "s1")
+    assert waiting["escalation"]["id"] == "jwt"
+    assert [step["title"] for step in waiting["path"]] == ["a"]
+    # Nothing of the session is a node of the tree.
+    assert [node["id"] for node in snapshot["nodes"]] == ["root", "a", "b"]
+    assert ("escalations", {"type": "escalations", "escalations": []}) in events
 
-    async def test_an_empty_tree_or_unknown_node_is_refused_before_streaming(
-        self, tmp_path: Path, service: DirectorService
-    ):
-        with pytest.raises(NotFound):
-            await self.open_stream(DirectorService(tmp_path))
-        with pytest.raises(NotFound):
-            await self.open_stream(service, "missing")
 
-        assert service.org._listeners == {}
+async def test_says_when_the_org_is_paused_and_when_it_runs_again(
+    tree_stream_service: DirectorService,
+):
+    tree_stream_service._hold("human")
+    body = await open_stream(tree_stream_service)
+
+    _, snapshot = await next_event(body)
+    await asyncio.to_thread(tree_stream_service._release)
+    name, running = await next_event(body)
+    await body.aclose()  # type: ignore[attr-defined]
+
+    assert (snapshot["paused"], snapshot["merging"]) == ("human", False)
+    assert name == "org_state"
+    assert running == {"type": "org_state", "paused": None, "merging": False}
+    assert tree_stream_service._state_listeners == []
+
+
+async def test_an_idle_stream_sends_heartbeats(
+    tree_stream_service: DirectorService, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(director_router, "STREAM_HEARTBEAT_SECONDS", 0.01)
+    body = await open_stream(tree_stream_service)
+    await next_event(body)
+
+    frame = await asyncio.wait_for(anext(body), timeout=5)
+
+    assert frame == ": keep-alive\n\n"
+
+
+async def test_a_closed_stream_stops_listening(tree_stream_service: DirectorService):
+    delivered: list[object] = []
+    body = await open_stream(tree_stream_service)
+    await next_event(body)
+    other = await open_stream(tree_stream_service)
+    await next_event(other)
+
+    await body.aclose()  # type: ignore[attr-defined]
+    tree_stream_service.org.subscribe("root", delivered.append)
+    tree_stream_service.org.upsert(renamed(make_team("b", "root"), "Billing"))
+
+    # The store has exactly the open stream and this test's listener left.
+    assert len(tree_stream_service.org._listeners) == 2
+    assert (await next_event(other))[0] == "node_upsert"
+    assert len(delivered) == 1
+
+
+async def test_an_empty_tree_or_unknown_node_is_refused_before_streaming(
+    tmp_path: Path, tree_stream_service: DirectorService
+):
+    with pytest.raises(NotFound):
+        await open_stream(DirectorService(tmp_path))
+    with pytest.raises(NotFound):
+        await open_stream(tree_stream_service, "missing")
+
+    assert tree_stream_service.org._listeners == {}
 
 
 def org_body(workspace: Path) -> dict:

@@ -2,7 +2,6 @@
 sub-teams, its specs and what its agents recorded."""
 
 import threading
-from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -15,11 +14,9 @@ from openhands.agent_server.director.models import (
     CreateOrgRequest,
     DirectorSettingsUpdate,
     OpenSessionRequest,
-    OrgNodeInput,
     Report,
     RouteMessageRequest,
     SessionTeam,
-    SessionTeamInput,
     SpecChoice,
     TeamChoice,
 )
@@ -58,49 +55,35 @@ from openhands.agent_server.director.tools.definition import (
 from openhands.sdk.conversation.state import ConversationExecutionStatus
 from openhands.sdk.errors import NotFound, OperationFailed
 from tests.agent_server.director.conftest import (
+    DONE,
+    FINDING,
+    JOBS,
+    PRUNE_API,
     FakeLauncher,
-    agent_conversation,
+    accept,
+    at_api,
+    commit,
+    division_lead_ic,
+    division_lead_manager,
+    division_lead_of,
+    ic,
+    landed,
+    manager,
+    node,
+    org_gains,
+    path_of,
     record_of,
     root_conversation,
     run_git,
+    session_accepted,
+    sets_up_jobs,
     shipped_type,
-    take_in,
-)
-from tests.agent_server.director.test_director_limits import started
-from tests.agent_server.director.test_director_review import (
-    DONE,
-    FINDING,
-    accept,
-    commit,
-)
-from tests.agent_server.director.test_director_tools import (
-    PRUNE_API,
-    division_lead_ic,
-    division_lead_of,
-    ic,
-    manager,
-    node,
     split_root,
+    started,
+    take_in,
     use,
+    waiting,
 )
-
-
-@pytest.fixture
-async def service(repo: Path, launcher: FakeLauncher) -> AsyncIterator[DirectorService]:
-    service = await started(repo, launcher)
-    yield service
-    await service.aclose()
-
-
-async def landed(service: DirectorService) -> None:
-    """Have the work of the session opened first reviewed and accepted."""
-    await use(service, ic(service), SubmitReviewTool, DONE)
-    await use(
-        service,
-        division_lead_ic(service),
-        ReviewTeamTool,
-        accept(node(service, "root").id),
-    )
 
 
 async def test_the_org_has_a_sessions_sub_teams_once_its_work_is_accepted(
@@ -279,16 +262,18 @@ async def test_an_accept_on_record_says_which_commits_it_took_the_work_between(
 
     await landed(service)
 
-    [accepted] = [
+    [session_accepted] = [
         event
         for event in service.team_memory.history("root")
         if event.kind == "accepted"
     ]
-    assert (accepted.base, accepted.head) == (started_at, accepted_at)
+    assert (session_accepted.base, session_accepted.head) == (started_at, accepted_at)
     # The top team's folder is the whole repository.
-    assert accepted.paths == [""]
+    assert session_accepted.paths == [""]
     # The session can be closed: the repository has both commits.
-    changes = accepted_changes(repo, accepted.base, accepted.head, accepted.paths[0])
+    changes = accepted_changes(
+        repo, session_accepted.base, session_accepted.head, session_accepted.paths[0]
+    )
     assert [(file.path, file.kind) for file in changes.files] == [("app.py", "added")]
 
 
@@ -425,21 +410,6 @@ async def test_what_the_human_says_in_a_session_is_routed_among_its_own_teams(
         )
 
 
-async def at_api(service: DirectorService) -> tuple[str, str]:
-    """A session opened at API once the org has it.
-
-    Returns:
-        The place it was opened at and its IC's conversation.
-    """
-    await split_root(service)
-    await landed(service)
-    opened = await service.open_session(
-        OpenSessionRequest(text="Add refunds.", node_id="services.api")
-    )
-    await service.settled()
-    return opened.session.teams[0].id, opened.conversation_id
-
-
 async def test_work_is_accepted_and_a_team_the_org_lost_meanwhile_stays_gone(
     service: DirectorService,
 ):
@@ -453,13 +423,13 @@ async def test_work_is_accepted_and_a_team_the_org_lost_meanwhile_stays_gone(
     service.org.remove("services.api")
 
     await use(service, conversation, SubmitReviewTool, DONE)
-    accepted = await use(
+    session_accepted = await use(
         service, division_lead_ic(service, top), ReviewTeamTool, accept(top)
     )
 
     # The session set up no teams of its own, so nothing is asked and the
     # team stays gone; its code is merged all the same.
-    assert "Accepting the work of 'API'" in accepted.text
+    assert "Accepting the work of 'API'" in session_accepted.text
     assert service.org.team("services.api") is None
     place = service.org.place(top)
     assert place is not None and place.review is not None
@@ -474,85 +444,6 @@ async def test_work_is_accepted_and_a_team_the_org_lost_meanwhile_stays_gone(
     assert "not_taken" in [e.kind for e in record_of(service, "root")]
 
 
-JOBS = "services.api.jobs"
-
-
-def sets_up_jobs(
-    service: DirectorService,
-    top: str,
-    path: str = "services/api/jobs",
-    team_id: str = JOBS,
-):
-    """Have a session set up a team for a directory under the team it was
-    opened at."""
-    place = service.org.place(top)
-    assert isinstance(place, SessionTeam)
-    service.org.upsert(
-        SessionTeamInput(
-            **place.model_dump(include={"session", "title", "isolation", "status"}),
-            worktree_path=place.worktree_path,
-            branch=place.branch,
-            id=f"{team_id}@{place.session}",
-            team_id=team_id,
-            parent_id=top,
-            agents=[],
-            boundary=place.boundary.model_copy(update={"path": path}),
-            since="set up by the session",
-        )
-    )
-
-
-def org_gains(service: DirectorService, team_id: str, path: str) -> None:
-    """Have other accepted work give the org a team under API."""
-    api = service.org.team("services.api")
-    assert api is not None
-    service.org.upsert(
-        OrgNodeInput(
-            **api.model_dump(include={"title", "isolation"}),
-            id=team_id,
-            parent_id=api.id,
-            boundary=api.boundary.model_copy(update={"path": path}),
-            since="set up by other work",
-        )
-    )
-
-
-def waiting(service: DirectorService, top: str) -> list[str]:
-    """The teams of a session that wait to be settled."""
-    place = service.org.place(division_lead_of(service, top))
-    assert isinstance(place, SessionTeam)
-    return [
-        item.key
-        for item in (place.merge.items if place.merge else [])
-        if item.kind == "team"
-    ]
-
-
-def division_lead_manager(service: DirectorService, top: str) -> str | None:
-    place = service.org.place(division_lead_of(service, top))
-    assert place is not None
-    return agent_conversation(place, "manager")
-
-
-def path_of(service: DirectorService, team_id: str) -> str | None:
-    team = service.org.team(team_id)
-    return team.boundary.path if team else None
-
-
-async def accepted(service: DirectorService, top: str, conversation: str) -> str:
-    """Have a session's work submitted and accepted.
-
-    Returns:
-        What its reviewer was answered.
-    """
-    await use(service, conversation, SubmitReviewTool, DONE)
-    answer = await use(
-        service, division_lead_ic(service, top), ReviewTeamTool, accept(top)
-    )
-    await service.settled()
-    return answer.text
-
-
 async def test_a_stale_session_adds_its_team_and_keeps_what_the_org_gained(
     service: DirectorService,
 ):
@@ -560,7 +451,7 @@ async def test_a_stale_session_adds_its_team_and_keeps_what_the_org_gained(
     sets_up_jobs(service, top)
     org_gains(service, "services.api.cache", "services/api/cache")
 
-    answer = await accepted(service, top, conversation)
+    answer = await session_accepted(service, top, conversation)
 
     # Each team is settled on its own, and nobody is asked.
     assert "Accepting the work of 'API'" in answer
@@ -590,7 +481,7 @@ async def test_a_team_both_made_something_else_of_waits_for_the_manager_above(
     assert place is not None
     service.write_spec(place, "Run the refund jobs.")
 
-    answer = await accepted(service, top, conversation)
+    answer = await session_accepted(service, top, conversation)
 
     # The code is merged whatever becomes of the team; the org's stays.
     assert "Accepting the work of 'API'" in answer
@@ -659,7 +550,7 @@ async def test_a_team_set_up_under_one_the_org_lost_goes_under_the_nearest_team(
     service.hand_over(api_place(service, top), "", IDEMPOTENT)
     service.org.remove("services.api")
 
-    answer = await accepted(service, top, conversation)
+    answer = await session_accepted(service, top, conversation)
 
     assert "Accepting the work of 'API'" in answer
     assert service.org.team("services.api") is None
@@ -719,7 +610,7 @@ async def test_contracts_and_notes_a_session_hands_over_are_the_orgs_on_accept(
         "The old jobs team retried forever."
     ]
 
-    await accepted(service, top, conversation)
+    await session_accepted(service, top, conversation)
 
     assert service.team_memory.read(API_CONTRACTS) == "Jobs are idempotent.\n"
     [note] = service.team_memory.reports("services.api", "ic")
@@ -745,7 +636,7 @@ async def test_contracts_both_changed_wait_for_the_manager_above(
         "services/api", "contracts.md", "Orders go through Jobs.\n"
     )
 
-    answer = await accepted(service, top, conversation)
+    answer = await session_accepted(service, top, conversation)
 
     # The code is merged; of the contracts the org's stay until they are
     # settled, and nothing is overwritten.
@@ -869,7 +760,7 @@ async def test_what_a_session_wrote_for_a_team_that_was_replaced_is_not_the_new_
     # the same id.
     service.org.update_team("services.api", since="set up by other work")
 
-    await accepted(service, top, conversation)
+    await session_accepted(service, top, conversation)
 
     assert service.team_memory.read(API_SPEC) is None
     assert service.team_memory.reports("services.api", "ic") == []
@@ -888,7 +779,7 @@ async def test_a_team_only_the_session_renamed_is_renamed_in_the_org(
     top, conversation = await at_api(service)
     service.org.update_place(top, title="Payments API")
 
-    await accepted(service, top, conversation)
+    await session_accepted(service, top, conversation)
 
     team = service.org.team("services.api")
     assert team is not None and team.title == "Payments API"
@@ -924,7 +815,7 @@ async def test_closing_a_session_keeps_what_waited_of_its_accepted_work(
     jobs = service.org.place(f"{JOBS}@{api_place(service, top).session}")
     assert jobs is not None
     service.write_spec(jobs, "Run the refund jobs.")
-    await accepted(service, top, conversation)
+    await session_accepted(service, top, conversation)
     assert waiting(service, top) == [JOBS]
 
     service.close_session(jobs.session)
@@ -1237,7 +1128,7 @@ async def test_the_division_lead_ic_is_told_of_a_spec_that_could_not_be_written(
 
     monkeypatch.setattr(service, "_commit_landing", changed_meanwhile)
 
-    await accepted(service, top, conversation)
+    await session_accepted(service, top, conversation)
 
     told = launcher.messages_to(division_lead_ic(service, top))[-1]
     assert API_SPEC in told and "was not written" in told
@@ -1437,7 +1328,7 @@ async def test_a_manager_that_does_not_answer_is_asked_again_and_then_the_human(
     top, conversation = await at_api(service)
     sets_up_jobs(service, top)
     org_gains(service, JOBS, "services/api/workers")
-    await accepted(service, top, conversation)
+    await session_accepted(service, top, conversation)
     asked = division_lead_manager(service, top)
     told = len(launcher.messages_to(asked))
 
@@ -1621,7 +1512,7 @@ async def test_contracts_the_org_did_not_take_are_on_record_when_the_session_clo
     service.team_memory.write(
         "services/api", "contracts.md", "Orders go through Jobs.\n"
     )
-    await accepted(service, top, conversation)
+    await session_accepted(service, top, conversation)
 
     service.close_session(api_place(service, top).session)
     await service.settled()
@@ -1645,7 +1536,7 @@ async def test_contracts_for_a_team_the_org_lost_wait_with_the_rest_of_the_landi
     ahead = web.session.teams[0].id
     service.hand_over(node(service, ahead), "", "The web session's contracts.")
     service.team_memory.write("apps/web", "contracts.md", "The org's.\n")
-    await accepted(service, ahead, web.conversation_id)
+    await session_accepted(service, ahead, web.conversation_id)
     opened = await service.open_session(
         OpenSessionRequest(text="Add refunds.", node_id="services.api")
     )
@@ -1656,7 +1547,7 @@ async def test_contracts_for_a_team_the_org_lost_wait_with_the_rest_of_the_landi
     # Other accepted work set the team at that directory up anew meanwhile.
     service.org.update_team("services.api", since="set up anew")
 
-    await accepted(service, top, opened.conversation_id)
+    await session_accepted(service, top, opened.conversation_id)
 
     # Only its code has landed: what it wrote is not lost before the rest.
     assert [text for text, _ in service.drafts(place.session).values()] == [
@@ -1672,7 +1563,7 @@ async def test_a_team_beside_one_inside_its_directory_waits_for_the_manager_abov
     # Other accepted work gave the org a team inside the same directory.
     org_gains(service, "services.api.nightly", "services/api/jobs/nightly")
 
-    await accepted(service, top, conversation)
+    await session_accepted(service, top, conversation)
 
     # Side by side, one would hold the other's directory: not the org's yet.
     assert service.org.team(JOBS) is None

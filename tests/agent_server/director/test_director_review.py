@@ -11,14 +11,10 @@ import pytest
 
 from openhands.agent_server.director.models import (
     CreateOrgRequest,
-    ReviewFinding,
-    SplitChild,
 )
 from openhands.agent_server.director.service import DirectorService
 from openhands.agent_server.director.tools import (
-    ApproveTeamsTool,
     MsgTeamTool,
-    ProposeTeamsTool,
     RaiseEscalationTool,
     ReviewTeamTool,
     SubmitReviewTool,
@@ -29,7 +25,6 @@ from openhands.agent_server.director.tools.definition import (
     ReviewTeamAction,
     SubmitReviewAction,
 )
-from openhands.agent_server.director.tools.impl import DirectorObservation
 from openhands.sdk.conversation.state import (
     ConversationExecutionStatus,
     ConversationState,
@@ -37,19 +32,25 @@ from openhands.sdk.conversation.state import (
 from openhands.sdk.event import ActionEvent
 from openhands.tools.file_editor.definition import FileEditorAction
 from tests.agent_server.director.conftest import (
+    DONE,
+    FINDING,
+    SCHEMA,
+    WRITE_UP,
     FakeLauncher,
+    accept,
+    api_submits,
     commit,
-    root_conversation,
-    run_git,
-    tasked,
-)
-from tests.agent_server.director.test_director_tools import (
-    APPROVE,
     division_lead_ic,
     ic,
+    in_own_worktree,
     manager,
     node,
-    proposing,
+    reject,
+    requests,
+    reviewer_wakes,
+    root_conversation,
+    run_git,
+    split_api,
     split_root,
     use,
     woken,
@@ -57,10 +58,7 @@ from tests.agent_server.director.test_director_tools import (
 
 
 INSTRUCTIONS = "Review the diff for bugs."
-WRITE_UP = "pull request description"
 ACCOUNT = "Adds the checkout endpoint in app.py."
-FINDING = ReviewFinding(path="services/api/app.py", line=1, issue="Returns a string.")
-DONE = SubmitReviewAction(summary="Endpoint shipped.")
 
 
 @pytest.fixture
@@ -82,36 +80,6 @@ async def service(repo: Path, launcher: FakeLauncher) -> AsyncIterator[DirectorS
     await service.settled()
     yield service
     await service.aclose()
-
-
-async def api_submits(service: DirectorService, repo: Path) -> DirectorObservation:
-    commit(repo, "services/api/app.py", "order_id = '1'\n")
-    return await use(service, ic(service, "services.api"), SubmitReviewTool, DONE)
-
-
-async def reviewer_wakes(
-    service: DirectorService, launcher: FakeLauncher, node_id: str = "root"
-) -> None:
-    """The IC of a team starts a turn, as when anything is sent to it."""
-    reviewer = ic(service, node_id)
-    assert reviewer is not None
-    launcher.report(reviewer, ConversationExecutionStatus.RUNNING)
-    await service.settled()
-
-
-def requests(service: DirectorService, launcher: FakeLauncher) -> list[str]:
-    """The review requests the top team's IC got."""
-    return [
-        text for text in launcher.messages_to(ic(service)) if "Review request" in text
-    ]
-
-
-def reject(node_id: str = "services.api") -> ReviewTeamAction:
-    return ReviewTeamAction(team=node_id, decision="reject", findings=[FINDING])
-
-
-def accept(node_id: str = "services.api", needed_above: str = "") -> ReviewTeamAction:
-    return ReviewTeamAction(team=node_id, decision="accept", needed_above=needed_above)
 
 
 async def test_submitted_work_goes_to_the_ic_above_with_the_teams_own_account(
@@ -406,24 +374,6 @@ async def test_only_the_ic_directly_above_reviews_and_only_work_that_waits(
     assert review is not None and review.state == "pending"
 
 
-async def split_api(service: DirectorService) -> None:
-    await use(
-        service,
-        ic(service, "services.api"),
-        ProposeTeamsTool,
-        proposing(
-            [
-                SplitChild(
-                    title="Schema", path="services/api/schema", task="Define orders"
-                )
-            ],
-            "Order has an id.",
-        ),
-    )
-    await use(service, manager(service, "services.api"), ApproveTeamsTool, APPROVE)
-    await tasked(service)
-
-
 @pytest.mark.parametrize("needed_above", ["", "Web builds its forms from the schema."])
 async def test_accepted_work_is_told_further_up_only_when_a_team_there_needs_it(
     service: DirectorService, launcher: FakeLauncher, repo: Path, needed_above: str
@@ -454,22 +404,6 @@ async def test_accepted_work_is_told_further_up_only_when_a_team_there_needs_it(
     if needed_above:
         assert needed_above in notes[0] and "Schema" in notes[0]
     assert len(launcher.messages_to(manager(service))) == to_root_manager
-
-
-def in_own_worktree(
-    service: DirectorService, tmp_path: Path, repo: Path, *teams: str
-) -> Path:
-    """Give teams (the Web team, when none is named) the one worktree a
-    conversation of theirs would have made."""
-    teams = teams or ("apps.web",)
-    name = teams[0].rsplit(".", 1)[-1]
-    worktree = tmp_path / name
-    run_git(repo, "worktree", "add", "--quiet", "-b", name, str(worktree))
-    for team in teams:
-        service.org.update_place(
-            node(service, team).id, worktree_path=str(worktree), branch=name
-        )
-    return worktree
 
 
 async def test_accepted_work_of_a_worktree_team_is_merged_into_the_checkout_above(
@@ -647,9 +581,6 @@ async def test_the_top_team_is_done_once_it_submits_and_its_reviewer_is_instruct
     assert str(start.conversation_id) == division_lead_ic(service)
     assert INSTRUCTIONS in start.task
     assert "Returns a string." not in start.task
-
-
-SCHEMA = "services.api.schema"
 
 
 async def schema_is_accepted(service: DirectorService, checkout: Path) -> None:

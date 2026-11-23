@@ -299,141 +299,150 @@ def test_a_linked_worktree_shares_the_team_memory(
     assert run_git(linked, "status", "--porcelain") == ""
 
 
-class TestMerge:
-    @pytest.fixture
-    def merge_supported(self, repo: Path) -> bool:
-        return git_version(repo) >= (2, 38)
+@pytest.fixture
+def merge_supported(repo: Path) -> bool:
+    return git_version(repo) >= (2, 38)
 
-    @pytest.fixture
-    def theirs(self, repo: Path) -> GitStore:
-        return GitStore(repo, ref="refs/agents/theirs")
 
-    def test_old_git_is_reported_as_unsupported(
-        self, board: GitStore, theirs: GitStore, merge_supported: bool
-    ):
-        if merge_supported:
-            pytest.skip("the installed git can merge")
-        theirs.write("svc/b", "spec.md", "B")
+@pytest.fixture
+def theirs(repo: Path) -> GitStore:
+    return GitStore(repo, ref="refs/agents/theirs")
 
-        with pytest.raises(NotSupported, match="2.38"):
-            board.merge(theirs.ref)
 
-    def test_combines_changes_to_different_files(
-        self, board: GitStore, theirs: GitStore, merge_supported: bool
-    ):
-        if not merge_supported:
-            pytest.skip("needs git 2.38")
-        board.write("svc/a", "spec.md", "A")
-        theirs.write("svc/b", "spec.md", "B")
+def test_old_git_is_reported_as_unsupported(
+    board: GitStore, theirs: GitStore, merge_supported: bool
+):
+    if merge_supported:
+        pytest.skip("the installed git can merge")
+    theirs.write("svc/b", "spec.md", "B")
 
+    with pytest.raises(NotSupported, match="2.38"):
         board.merge(theirs.ref)
 
-        assert board.read("svc/a/spec.md") == "A"
-        assert board.read("svc/b/spec.md") == "B"
 
-    def test_reports_both_sides_added_are_all_kept_in_order(
-        self, board: GitStore, theirs: GitStore, merge_supported: bool
-    ):
-        if not merge_supported:
-            pytest.skip("needs git 2.38")
-        shared = a_report("Shared.", "2026-11-01T00:00:00+00:00")
-        ours = a_report("Ours.", "2026-11-03T00:00:00+00:00")
-        their = a_report("Theirs.", "2026-11-02T00:00:00+00:00")
-        take_in(board, reports={"api": [shared, ours]})
-        take_in(theirs, reports={"api": [shared, their]})
+def test_combines_changes_to_different_files(
+    board: GitStore, theirs: GitStore, merge_supported: bool
+):
+    if not merge_supported:
+        pytest.skip("needs git 2.38")
+    board.write("svc/a", "spec.md", "A")
+    theirs.write("svc/b", "spec.md", "B")
 
-        merged = board.merge(theirs.ref)
+    board.merge(theirs.ref)
 
-        assert merged.kept_local == []
-        assert board.reports("api", "ic") == [shared, their, ours]
+    assert board.read("svc/a/spec.md") == "A"
+    assert board.read("svc/b/spec.md") == "B"
 
-    def test_events_both_sides_added_are_all_kept_in_order(
-        self, board: GitStore, theirs: GitStore, merge_supported: bool
-    ):
-        if not merge_supported:
-            pytest.skip("needs git 2.38")
 
-        def event(name: str, at: str) -> TeamEvent:
-            return TeamEvent.model_validate(
-                {"at": at, "kind": "accepted", "team_id": "api", "id": name}
-            )
+def test_reports_both_sides_added_are_all_kept_in_order(
+    board: GitStore, theirs: GitStore, merge_supported: bool
+):
+    if not merge_supported:
+        pytest.skip("needs git 2.38")
+    shared = a_report("Shared.", "2026-11-01T00:00:00+00:00")
+    ours = a_report("Ours.", "2026-11-03T00:00:00+00:00")
+    their = a_report("Theirs.", "2026-11-02T00:00:00+00:00")
+    take_in(board, reports={"api": [shared, ours]})
+    take_in(theirs, reports={"api": [shared, their]})
 
-        shared = event("shared", "2026-11-01T00:00:00+00:00")
-        ours = event("ours", "2026-11-03T00:00:00+00:00")
-        their = event("theirs", "2026-11-02T00:00:00+00:00")
-        take_in(board, events={"root": [shared, ours]})
-        take_in(theirs, events={"root": [shared, their]})
+    merged = board.merge(theirs.ref)
 
-        merged = board.merge(theirs.ref)
+    assert merged.kept_local == []
+    assert board.reports("api", "ic") == [shared, their, ours]
 
-        assert merged.kept_local == []
-        assert board.history("root") == [shared, their, ours]
 
-    def test_a_file_this_side_removed_stays_removed_and_is_named(
-        self, board: GitStore, theirs: GitStore, merge_supported: bool
-    ):
-        if not merge_supported:
-            pytest.skip("needs git 2.38")
-        board.write("svc/a", "spec.md", "base")
-        git(board.repo_dir, ["update-ref", theirs.ref, board.head() or ""])
-        board.commit(lambda _read: [StoreChange("svc/a/spec.md", None)], "remove")
-        theirs.write("svc/a", "spec.md", "theirs")
+def test_events_both_sides_added_are_all_kept_in_order(
+    board: GitStore, theirs: GitStore, merge_supported: bool
+):
+    if not merge_supported:
+        pytest.skip("needs git 2.38")
 
-        merged = board.merge(theirs.ref)
+    def event(name: str, at: str) -> TeamEvent:
+        return TeamEvent.model_validate(
+            {"at": at, "kind": "accepted", "team_id": "api", "id": name}
+        )
 
-        assert merged.kept_local == ["svc/a/spec.md"]
-        assert board.read("svc/a/spec.md") is None
+    shared = event("shared", "2026-11-01T00:00:00+00:00")
+    ours = event("ours", "2026-11-03T00:00:00+00:00")
+    their = event("theirs", "2026-11-02T00:00:00+00:00")
+    take_in(board, events={"root": [shared, ours]})
+    take_in(theirs, events={"root": [shared, their]})
 
-    def test_a_file_this_side_changed_and_the_other_removed_is_kept_and_named(
-        self, board: GitStore, theirs: GitStore, merge_supported: bool
-    ):
-        if not merge_supported:
-            pytest.skip("needs git 2.38")
-        board.write("svc/a", "spec.md", "base")
-        git(board.repo_dir, ["update-ref", theirs.ref, board.head() or ""])
-        board.write("svc/a", "spec.md", "ours")
-        theirs.commit(lambda _read: [StoreChange("svc/a/spec.md", None)], "remove")
+    merged = board.merge(theirs.ref)
 
-        assert [clash.path for clash in board.clashes(theirs.ref)] == ["svc/a/spec.md"]
-        merged = board.merge(theirs.ref)
+    assert merged.kept_local == []
+    assert board.history("root") == [shared, their, ours]
 
-        assert merged.kept_local == ["svc/a/spec.md"]
-        assert board.read("svc/a/spec.md") == "ours"
 
-    def test_of_a_spec_both_sides_changed_ours_is_kept_and_named(
-        self, board: GitStore, theirs: GitStore, merge_supported: bool
-    ):
-        if not merge_supported:
-            pytest.skip("needs git 2.38")
-        board.write("svc/a", "spec.md", "ours")
-        theirs.write("svc/a", "spec.md", "theirs")
-        theirs.write("svc/b", "spec.md", "only theirs")
+def test_a_file_this_side_removed_stays_removed_and_is_named(
+    board: GitStore, theirs: GitStore, merge_supported: bool
+):
+    if not merge_supported:
+        pytest.skip("needs git 2.38")
+    board.write("svc/a", "spec.md", "base")
+    git(board.repo_dir, ["update-ref", theirs.ref, board.head() or ""])
+    board.commit(lambda _read: [StoreChange("svc/a/spec.md", None)], "remove")
+    theirs.write("svc/a", "spec.md", "theirs")
 
-        merged = board.merge(theirs.ref)
+    merged = board.merge(theirs.ref)
 
-        assert merged.kept_local == ["svc/a/spec.md"]
-        assert board.read("svc/a/spec.md") == "ours"
-        assert board.read("svc/b/spec.md") == "only theirs"
-        history = git(board.repo_dir, ["log", "--format=%H", board.ref]).split()
-        assert theirs.head() in history
+    assert merged.kept_local == ["svc/a/spec.md"]
+    assert board.read("svc/a/spec.md") is None
 
-    def test_merging_what_is_already_merged_changes_nothing(
-        self, board: GitStore, theirs: GitStore, merge_supported: bool
-    ):
-        if not merge_supported:
-            pytest.skip("needs git 2.38")
-        board.write("svc/a", "spec.md", "A")
-        theirs.write("svc/b", "spec.md", "B")
-        head = board.merge(theirs.ref).head
 
-        assert board.merge(theirs.ref).head == head
+def test_a_file_this_side_changed_and_the_other_removed_is_kept_and_named(
+    board: GitStore, theirs: GitStore, merge_supported: bool
+):
+    if not merge_supported:
+        pytest.skip("needs git 2.38")
+    board.write("svc/a", "spec.md", "base")
+    git(board.repo_dir, ["update-ref", theirs.ref, board.head() or ""])
+    board.write("svc/a", "spec.md", "ours")
+    theirs.commit(lambda _read: [StoreChange("svc/a/spec.md", None)], "remove")
 
-    def test_an_empty_team_memory_adopts_the_other_ref(
-        self, board: GitStore, theirs: GitStore, merge_supported: bool
-    ):
-        if not merge_supported:
-            pytest.skip("needs git 2.38")
-        theirs.write("svc/b", "spec.md", "B")
+    assert [clash.path for clash in board.clashes(theirs.ref)] == ["svc/a/spec.md"]
+    merged = board.merge(theirs.ref)
 
-        assert board.merge(theirs.ref).head == theirs.head()
-        assert board.read("svc/b/spec.md") == "B"
+    assert merged.kept_local == ["svc/a/spec.md"]
+    assert board.read("svc/a/spec.md") == "ours"
+
+
+def test_of_a_spec_both_sides_changed_ours_is_kept_and_named(
+    board: GitStore, theirs: GitStore, merge_supported: bool
+):
+    if not merge_supported:
+        pytest.skip("needs git 2.38")
+    board.write("svc/a", "spec.md", "ours")
+    theirs.write("svc/a", "spec.md", "theirs")
+    theirs.write("svc/b", "spec.md", "only theirs")
+
+    merged = board.merge(theirs.ref)
+
+    assert merged.kept_local == ["svc/a/spec.md"]
+    assert board.read("svc/a/spec.md") == "ours"
+    assert board.read("svc/b/spec.md") == "only theirs"
+    history = git(board.repo_dir, ["log", "--format=%H", board.ref]).split()
+    assert theirs.head() in history
+
+
+def test_merging_what_is_already_merged_changes_nothing(
+    board: GitStore, theirs: GitStore, merge_supported: bool
+):
+    if not merge_supported:
+        pytest.skip("needs git 2.38")
+    board.write("svc/a", "spec.md", "A")
+    theirs.write("svc/b", "spec.md", "B")
+    head = board.merge(theirs.ref).head
+
+    assert board.merge(theirs.ref).head == head
+
+
+def test_an_empty_team_memory_adopts_the_other_ref(
+    board: GitStore, theirs: GitStore, merge_supported: bool
+):
+    if not merge_supported:
+        pytest.skip("needs git 2.38")
+    theirs.write("svc/b", "spec.md", "B")
+
+    assert board.merge(theirs.ref).head == theirs.head()
+    assert board.read("svc/b/spec.md") == "B"

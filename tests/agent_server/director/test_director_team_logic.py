@@ -31,30 +31,28 @@ from openhands.agent_server.director.tools.definition import (
     PruneTeamAction,
     ReviewTeamAction,
 )
-from tests.agent_server.director.conftest import FakeLauncher, record_of
-from tests.agent_server.director.test_director_acp import started
-from tests.agent_server.director.test_director_manager_checks import (
-    accepted,
-    escalates,
-    looks,
-    sent_back,
-)
-from tests.agent_server.director.test_director_review import (
-    DONE,
-    commit,
-    requests,
-    run_git,
-)
-from tests.agent_server.director.test_director_service import attempt, create
-from tests.agent_server.director.test_director_tools import (
+from tests.agent_server.director.conftest import (
     APPROVE,
+    DONE,
     SPLIT,
+    FakeLauncher,
+    attempt,
+    commit,
+    create,
+    escalates,
     ic,
+    looks,
     manager,
     node,
     proposing,
+    record_of,
+    requests,
+    run_git,
+    sent_back,
     split_root,
+    started_with_server,
     sub_teams,
+    team_accepted,
     use,
 )
 
@@ -65,7 +63,7 @@ PRUNE = PruneTeamAction(team=API, reason="It holds everything up.")
 
 @pytest.fixture
 async def service(repo: Path, launcher: FakeLauncher):
-    service = await started(repo, launcher, stall_poll=3600)
+    service = await started_with_server(repo, launcher, stall_poll=3600)
     await split_root(service)
     yield service
     await service.aclose()
@@ -109,7 +107,7 @@ def test_a_teams_success_rate_is_its_tasks_accepted_without_reaching_the_limit(
 async def test_a_look_tells_the_success_rate_of_each_team(
     service: DirectorService, launcher: FakeLauncher, repo: Path
 ):
-    await accepted(service, repo, WEB, times=2)
+    await team_accepted(service, repo, WEB, times=2)
     await escalates(service, API, times=3)
 
     [look] = looks(service, launcher)
@@ -135,7 +133,7 @@ async def test_a_look_tells_the_success_rate_of_each_team(
 async def test_a_look_after_accepted_work_says_that_nothing_went_wrong(
     service: DirectorService, launcher: FakeLauncher, repo: Path
 ):
-    await accepted(service, repo, API, times=5)
+    await team_accepted(service, repo, API, times=5)
 
     [look] = looks(service, launcher)
     assert "Nothing went wrong: this look comes after work that was accepted." in look
@@ -170,7 +168,7 @@ async def test_work_sent_back_as_often_as_the_limit_wakes_the_manager_once(
     assert "its work being sent back 3 times" in look
     # The task counts against the team, also once it is accepted.
     assert success_rate(record_of_api(service)) == "success rate 0 of 1 task (0%)"
-    await accepted(service, repo, API)
+    await team_accepted(service, repo, API)
     assert success_rate(record_of_api(service)) == "success rate 0 of 1 task (0%)"
 
 
@@ -187,7 +185,7 @@ async def test_send_backs_wake_nobody_when_the_check_is_off(
 async def test_a_manager_may_prune_a_team_with_nothing_against_it(
     service: DirectorService, repo: Path
 ):
-    await accepted(service, repo, API)
+    await team_accepted(service, repo, API)
 
     pruned = await use(service, manager(service), PruneTeamTool, PRUNE)
 
@@ -250,7 +248,7 @@ def both(repo: Path, number: int) -> None:
 async def test_directories_that_were_changed_together_are_pointed_out(
     repo: Path, launcher: FakeLauncher
 ):
-    service = await started(repo, launcher, stall_poll=3600)
+    service = await started_with_server(repo, launcher, stall_poll=3600)
     commit(repo, "services/api/alone.py", "x = 1\n")
     for number in range(3):
         both(repo, number)

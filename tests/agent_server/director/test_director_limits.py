@@ -2,15 +2,10 @@
 
 import asyncio
 import json
-from collections.abc import AsyncIterator
 from pathlib import Path
 
-import pytest
-
 from openhands.agent_server.director.models import (
-    CreateOrgRequest,
     DirectorSettingsUpdate,
-    SplitChild,
 )
 from openhands.agent_server.director.service import DirectorService
 from openhands.agent_server.director.tools import (
@@ -20,61 +15,26 @@ from openhands.agent_server.director.tools import (
     SubmitReviewTool,
 )
 from openhands.agent_server.director.tools.definition import (
-    ProposeTeamsAction,
     ReviewTeamAction,
     SubmitReviewAction,
 )
 from openhands.sdk.conversation.state import ConversationExecutionStatus
 from tests.agent_server.director.conftest import (
-    FakeLauncher,
-    root_conversation,
-    run_git,
-    tasked,
-)
-from tests.agent_server.director.test_director_tools import (
     APPROVE,
+    FakeLauncher,
     division_lead_ic,
+    eventually,
     ic,
     manager,
     node,
-    proposing,
+    run_git,
+    split,
     split_root,
+    started,
+    tasked,
     use,
     woken,
 )
-
-
-async def started(repo: Path, launcher: FakeLauncher, **options) -> DirectorService:
-    service = DirectorService(
-        repo,
-        save_delay=0,
-        remembered=repo.parent / "state" / "director.json",
-        **{"run_limit_retry": 0, **options},
-    )
-    await service.start(launcher)
-    await service.create_org(
-        CreateOrgRequest(
-            title="Checkout", task="Build", conversation=root_conversation(repo)
-        )
-    )
-    await service.settled()
-    return service
-
-
-@pytest.fixture
-async def service(repo: Path, launcher: FakeLauncher) -> AsyncIterator[DirectorService]:
-    service = await started(repo, launcher)
-    yield service
-    await service.aclose()
-
-
-def split(below: str, count: int) -> ProposeTeamsAction:
-    return proposing(
-        [
-            SplitChild(title=f"{below} {n}", path=f"{below}/t{n}", task="Work")
-            for n in range(count)
-        ]
-    )
 
 
 async def accepted(service: DirectorService) -> None:
@@ -89,14 +49,6 @@ async def accepted(service: DirectorService) -> None:
         ReviewTeamTool,
         ReviewTeamAction(team=node(service, "root").id, decision="accept"),
     )
-
-
-async def eventually(condition) -> None:
-    for _ in range(400):
-        if condition():
-            return
-        await asyncio.sleep(0.005)
-    raise AssertionError("It never happened")
 
 
 async def test_a_split_that_makes_too_many_teams_is_refused_and_says_what_fits(

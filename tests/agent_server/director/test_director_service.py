@@ -5,7 +5,6 @@ import shutil
 import subprocess
 from collections.abc import AsyncIterator
 from pathlib import Path
-from types import SimpleNamespace
 from typing import cast
 from uuid import UUID, uuid4
 
@@ -23,8 +22,6 @@ from openhands.agent_server.director.org_persistence import ORG_REF
 from openhands.agent_server.director.org_store import AGENT_LOST, team_id_of
 from openhands.agent_server.director.prompts import MANAGER_ROLE, ORG_PROTOCOL
 from openhands.agent_server.director.service import (
-    DIRECTOR_TOOL_NAMES,
-    HAND_OVER_TOOLS,
     DirectorService,
 )
 from openhands.agent_server.director.tools.definition import DIRECTOR_TOOLS
@@ -32,10 +29,8 @@ from openhands.sdk import LLM, Agent
 from openhands.sdk.conversation.request import AgentLaunchAdditions
 from openhands.sdk.conversation.state import ConversationExecutionStatus
 from openhands.sdk.errors import Conflict, NotFound, Unavailable, Unprocessable
-from openhands.sdk.event import ActionEvent
 from openhands.sdk.tool.registry import list_registered_tools
 from openhands.sdk.tool.spec import Tool
-from openhands.sdk.tool.tool import Action
 from openhands.tools.apply_patch.definition import ApplyPatchAction
 from openhands.tools.file_editor.definition import FileEditorAction
 from openhands.tools.gemini.read_file.definition import ReadFileAction
@@ -43,16 +38,20 @@ from openhands.tools.glob.definition import GlobAction
 from openhands.tools.grep.definition import GrepAction
 from openhands.tools.terminal.definition import TerminalAction
 from tests.agent_server.director.conftest import (
+    SHIPPED,
     FakeLauncher,
     agent_conversation,
     as_proposed,
+    attempt,
+    create,
+    division_lead_of,
+    landed,
+    node,
     root_conversation,
     run_git,
     shipped_tools,
     tasked,
 )
-from tests.agent_server.director.test_director_landing import landed
-from tests.agent_server.director.test_director_tools import division_lead_of, node
 
 
 @pytest.fixture
@@ -137,15 +136,16 @@ async def test_what_the_caller_appends_to_the_system_prompt_is_left_as_it_is(
     assert ORG_PROTOCOL.strip() in briefing
 
 
-def test_every_director_tool_is_offered_to_the_role_that_may_use_it():
-    assert set(DIRECTOR_TOOL_NAMES) == set(DIRECTOR_TOOLS)
-    assert "approve_teams" not in shipped_tools("ic")
-    assert "submit_review" not in shipped_tools("manager")
-    assert set(HAND_OVER_TOOLS) <= set(shipped_tools("ic"))
-    # Only a Manager at a session's Division Lead place settles its teams.
-    assert "settle_teams" not in {*shipped_tools("ic"), *shipped_tools("manager")}
-    # A tool an agent is given and the server cannot find stops its first turn.
-    assert set(DIRECTOR_TOOL_NAMES) <= set(list_registered_tools())
+def test_every_tool_a_shipped_type_gives_a_member_can_be_started_and_called():
+    registered = set(list_registered_tools())
+    for template in SHIPPED.values():
+        for member in template.agents.values():
+            given = {*member.tools, *member.lead_tools}
+            # A tool an agent is given and the server cannot find stops its
+            # first turn; one that is not the director's cannot be called by
+            # an agent that runs its own tools.
+            assert given <= registered
+            assert given <= set(DIRECTOR_TOOLS)
 
 
 async def test_a_manager_derived_from_its_ic_gets_its_own_tools_in_their_place(
@@ -606,18 +606,6 @@ async def test_a_report_rewrites_the_headline(
         "Build the checkout flow\n\nLatest report of the team: it is done. "
         "Tax is left out."
     )
-
-
-def attempt(
-    service: DirectorService, conversation_id: str | None, tool: str, action: Action
-) -> str | None:
-    """What the director says to an agent that is about to use ``tool``."""
-    event = cast(ActionEvent, SimpleNamespace(tool_name=tool, action=action))
-    return service.guard_action(UUID(conversation_id or ""), event)
-
-
-def create(path: Path | str) -> FileEditorAction:
-    return FileEditorAction(command="create", path=str(path), file_text="x")
 
 
 async def test_a_file_tool_is_refused_a_write_outside_the_teams_boundary(

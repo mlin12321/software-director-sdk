@@ -20,16 +20,15 @@ from openhands.agent_server.director.tools.definition import (
     SubmitReviewAction,
     WriteSpecAction,
 )
-from tests.agent_server.director.conftest import FakeLauncher, commit
-from tests.agent_server.director.test_director_agent_types import (
+from tests.agent_server.director.conftest import (
+    FakeLauncher,
     an_org,
-    org_config,
-    split,
-)
-from tests.agent_server.director.test_director_tools import (
+    commit,
     division_lead_ic,
     ic,
     node,
+    org_config,
+    split_into_typed_teams,
     use,
 )
 
@@ -46,7 +45,7 @@ async def service(
 async def test_accepting_work_can_add_to_the_contracts_every_sub_team_reads(
     service: DirectorService, launcher: FakeLauncher, repo: Path
 ):
-    await split(service)
+    await split_into_typed_teams(service)
     commit(repo, "tables/t1.md", "| warmup | 0.97 |\n")
     await use(
         service,
@@ -180,7 +179,7 @@ async def test_a_team_without_a_spec_has_nothing_to_change_in_one_place(
 async def test_the_contracts_are_changed_by_the_ic_whose_sub_teams_keep_them(
     service: DirectorService, launcher: FakeLauncher
 ):
-    await split(service)
+    await split_into_typed_teams(service)
     root = node(service, "root")
 
     await use(
