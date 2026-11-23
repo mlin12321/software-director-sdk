@@ -12,7 +12,7 @@ from typing import Literal
 from uuid import UUID, uuid4
 
 from openhands.agent_server.director.boundary import owns
-from openhands.agent_server.director.git import uncommitted
+from openhands.agent_server.director.git import head_of, uncommitted
 from openhands.agent_server.director.git_store import team_key
 from openhands.agent_server.director.memory_edit import EditCommand, edited
 from openhands.agent_server.director.models import (
@@ -622,6 +622,9 @@ def submit_review(service: DirectorService, caller: Caller, summary: str) -> str
             f"committed: {', '.join(left[:10])}"
             + (f" and {len(left) - 10} more" if len(left) > 10 else "")
         )
+    astray = service.work_astray(node)
+    if astray is not None:
+        raise Conflict(astray)
     again = review is not None and review.state == "changes_requested"
     store.set_review(
         node.id,
@@ -631,6 +634,7 @@ def submit_review(service: DirectorService, caller: Caller, summary: str) -> str
             summary=summary,
             at=utc_now(),
             seq=service.next_submission(),
+            commit=head_of(Path(node.worktree_path)) or "",
         ),
     )
     service.progressed(node.id)

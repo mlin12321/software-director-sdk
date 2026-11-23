@@ -173,6 +173,9 @@ class Scope:
             the shell and the agent's git open nothing for writing.
         edits: Whether its file tools may change a file at all.
         aside: A side conversation, which changes no file anywhere.
+        branch: The branch its work is taken from, in a checkout the
+            director made for it; '' where the checkout is someone else's
+            and may be on any branch.
         closed: Folders inside its own that are closed to it.
         hidden: Folders inside its own that its git leaves alone.
         merges: The merges being finished in the repository.
@@ -185,6 +188,7 @@ class Scope:
     aside: bool = False
     writable: tuple[str, ...] = ()
     readonly: tuple[str, ...] = ()
+    branch: str = ""
     closed: tuple[Closed, ...] = ()
     hidden: tuple[str, ...] = ()
     merges: tuple[MergeArea, ...] = ()

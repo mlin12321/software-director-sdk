@@ -38,7 +38,7 @@ def agent(shared: Path, tmp_path: Path) -> Callable[..., Git]:
         shared, "rev-parse", "--path-format=absolute", "--git-common-dir"
     ).strip()
 
-    def make(name: str, directory: str, *sub_teams: str) -> Git:
+    def make(name: str, directory: str, *sub_teams: str, branch: str = "") -> Git:
         home = tmp_path / "agents" / name
         excludes = home / "exclude"
         home.mkdir(parents=True, exist_ok=True)
@@ -55,6 +55,8 @@ def agent(shared: Path, tmp_path: Path) -> Callable[..., Git]:
                 flock=shutil.which("flock"),
                 readonly=(),
                 writable=[f"{directory}/**" if directory else "**"],
+                checkout=os.path.realpath(shared),
+                branch=branch,
             ),
         )
         env = {
@@ -506,6 +508,90 @@ def test_a_branch_made_where_another_teams_files_cannot_be_removed_is_refused(
     assert run_git(shared, "symbolic-ref", "--short", "HEAD").strip() == branch
     assert run_git(shared, "rev-parse", "HEAD").strip() == accepted
     assert (shared / "svc" / "web" / "page.py").read_text() == "web\n"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        ("branch", "-m", "renamed"),
+        ("checkout", "--detach"),
+        ("-c", "advice.detachedHead=false", "checkout", "HEAD~0"),
+        ("symbolic-ref", "HEAD", "refs/heads/elsewhere"),
+    ],
+    ids=["a rename", "a detached checkout", "an option first", "by hand"],
+)
+def test_the_checkout_is_on_its_branch_again_however_it_was_taken_off(
+    shared: Path, agent: Callable[..., Git], command: tuple[str, ...]
+):
+    api = agent("api", "svc/api")
+    branch = run_git(shared, "symbolic-ref", "--short", "HEAD").strip()
+    head = run_git(shared, "rev-parse", "HEAD").strip()
+
+    moved = api(*command)
+
+    assert moved.returncode != 0 and f"stays on {branch}" in moved.stderr
+    assert run_git(shared, "symbolic-ref", "--short", "HEAD").strip() == branch
+    assert run_git(shared, "rev-parse", "HEAD").strip() == head
+    assert run_git(shared, "branch", "--format=%(refname:short)").split() == [branch]
+
+
+def test_a_checkout_left_on_another_branch_is_back_on_its_own_with_the_next_command(
+    shared: Path, agent: Callable[..., Git]
+):
+    branch = run_git(shared, "symbolic-ref", "--short", "HEAD").strip()
+    api = agent("api", "svc/api", branch=branch)
+    web = agent("web", "svc/web", branch=branch)
+    start = run_git(shared, "rev-parse", "HEAD").strip()
+    (shared / "svc" / "web" / "page.py").write_text("web\n")
+    web("add", "-A")
+    assert web("commit", "-m", "web").returncode == 0
+    # By a git the agents' own never saw.
+    run_git(shared, "checkout", "-q", "-b", "stray", start)
+    (shared / "svc" / "api" / "main.py").write_text("api v2\n")
+
+    first = api("status", "--porcelain")
+    api("add", "-A")
+    committed = api("commit", "-m", "api")
+
+    assert first.returncode != 0 and f"stays on {branch}" in first.stderr
+    assert committed.returncode == 0, committed.stderr
+    assert run_git(shared, "symbolic-ref", "--short", "HEAD").strip() == branch
+    # The other team's commit is under this one, and its file is there.
+    assert files_of(shared, "HEAD~1") == ["svc/web/page.py"]
+    assert files_of(shared, "HEAD") == ["svc/api/main.py"]
+    assert (shared / "svc" / "web" / "page.py").read_text() == "web\n"
+
+
+def test_another_checkout_of_the_repository_keeps_its_own_branch(
+    shared: Path, agent: Callable[..., Git], tmp_path: Path
+):
+    branch = run_git(shared, "symbolic-ref", "--short", "HEAD").strip()
+    api = agent("api", "svc/api", branch=branch)
+    other = tmp_path / "other"
+    run_git(shared, "worktree", "add", "-q", "-b", "theirs", str(other))
+
+    looked = api("-C", str(other), "status", "--porcelain")
+
+    assert looked.returncode == 0, looked.stderr
+    assert run_git(other, "symbolic-ref", "--short", "HEAD").strip() == "theirs"
+
+
+def test_files_changed_on_the_way_to_another_commit_are_put_back(
+    shared: Path, agent: Callable[..., Git]
+):
+    api = agent("api", "svc/api")
+    start = run_git(shared, "rev-parse", "HEAD").strip()
+    (shared / "svc" / "api" / "main.py").write_text("api v2\n")
+    (shared / "svc" / "api" / "new.py").write_text("new\n")
+    api("add", "-A")
+    assert api("commit", "-m", "v2").returncode == 0
+
+    moved = api("checkout", start)
+
+    assert moved.returncode != 0 and "stays on" in moved.stderr
+    assert (shared / "svc" / "api" / "main.py").read_text() == "api v2\n"
+    assert (shared / "svc" / "api" / "new.py").read_text() == "new\n"
+    assert api("status", "--porcelain").stdout.strip() == ""
 
 
 @pytest.mark.parametrize(

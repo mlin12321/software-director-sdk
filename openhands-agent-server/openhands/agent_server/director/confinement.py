@@ -147,6 +147,8 @@ class Confinement:
                     flock=shutil.which("flock"),
                     readonly=list(scope.readonly),
                     writable=list(scope.writable),
+                    checkout=str(checkout_root(scope.checkout)),
+                    branch=scope.branch,
                 ),
             )
             atomic_write_text(

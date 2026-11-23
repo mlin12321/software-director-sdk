@@ -57,6 +57,8 @@ def git_script(
     flock: str | None,
     readonly: Sequence[str],
     writable: Sequence[str],
+    checkout: str = "",
+    branch: str = "",
 ) -> str:
     """A ``git`` that keeps one agent's index apart from everyone else's.
 
@@ -69,6 +71,10 @@ def git_script(
         excludes: The ignore file from :func:`excludes_file`.
         readonly: Globs of the boundary the team may only read.
         writable: Globs of the boundary the team may write; none is nothing.
+        checkout: The top of the agent's own checkout.
+        branch: The branch that checkout's work is taken from. Given, the
+            checkout is held to it; else to the branch it is on when a
+            command starts.
         flock: The ``flock`` binary, or None where there is none; commands
             that move HEAD are then not kept apart.
     """
@@ -185,38 +191,19 @@ def git_script(
         '  fail "your index could not be brought up to date; try again"',
         'before=$("$real" rev-parse -q --verify HEAD)',
         'on=$("$real" symbolic-ref -q HEAD)',
+        # In the agent's own checkout the branch is the one the director
+        # takes its work from, wherever something left the checkout.
+        *(
+            [
+                f"pinned={quote('refs/heads/' + branch)}",
+                'here=$("$real" rev-parse --show-toplevel 2>/dev/null)',
+                f'[ "$here" = {quote(checkout)} ] &&'
+                ' "$real" show-ref -q --verify "$pinned" && on=$pinned',
+            ]
+            if branch and checkout
+            else []
+        ),
         'had=$("$real" for-each-ref --format="%(refname)" refs/heads)',
-        # A move to another branch is refused before it runs. Undone after,
-        # it can be left half done: where the agent may not write, files of
-        # other teams stay behind and keep git from going back, and what is
-        # accepted would then be taken from a branch without their commits.
-        "switches=",
-        '[ -n "$on" ] && case "$command" in',
-        "  switch) switches=1 ;;",
-        "  checkout)",
-        "    named=; first=; more=; dashes=",
-        '    for arg in "$@"; do',
-        '      if [ -z "$named" ]; then [ "$arg" = checkout ] && named=1; continue; fi',
-        # What follows -- are files to restore.
-        '      [ -n "$dashes" ] && break',
-        '      case "$arg" in',
-        "        --) dashes=1 ;;",
-        "        -|-b*|-B*|--orphan*|--detach|-d|-t|--track*) switches=1 ;;",
-        "        -*) ;;",
-        '        *) if [ -z "$first" ]; then first=$arg; else more=1; fi ;;',
-        "      esac",
-        "    done",
-        # One name alone that is a commit moves the checkout to it; with
-        # more, or after --, it is where files are restored from.
-        '    [ -z "$switches$dashes$more" ] && [ -n "$first" ] &&',
-        '      [ "refs/heads/$first" != "$on" ] &&',
-        '      "$real" rev-parse -q --verify "$first^{commit}" >/dev/null 2>&1 &&',
-        "      switches=1",
-        "  ;;",
-        "esac",
-        '[ -z "$switches" ] ||',
-        '  fail "the checkout stays on ${on#refs/heads/}, where your work'
-        ' is taken from; commit there"',
         # A reset that would take away other teams' commits is refused
         # before it runs: run, it would change their files and the index.
         '[ "$command" = reset ] && [ -n "$before" ] && {',
@@ -242,25 +229,53 @@ def git_script(
         # The lock is not for what git leaves running behind it.
         f'"$real" -c core.excludesFile={quote(str(excludes))} "$@" 9>&-',
         "code=$?",
-        'case "$command" in',
-        "  checkout|switch)",
         # What is accepted is what the checkout's branch holds, and in a
-        # shared checkout the branch is every team's.
-        '    now=$("$real" symbolic-ref -q HEAD)',
-        '    if [ -n "$on" ] && [ "$now" != "$on" ]; then',
-        # Whatever could not be put back, the branch is the one that is
-        # accepted again.
-        '      "$real" checkout -q "${on#refs/heads/}" ||',
-        '        "$real" symbolic-ref HEAD "$on" || exit 1',
+        # shared checkout the branch is every team's. Whatever the command
+        # was, the checkout is on that branch again after it. This looks at
+        # where the checkout is, not at how the command was written, and it
+        # does not ask git to go back: where the agent may not write, files
+        # of other teams stay behind, and git would refuse to come back over
+        # them.
+        'now=$("$real" symbolic-ref -q HEAD)',
+        'if [ -n "$on" ] && [ "$now" != "$on" ]; then',
+        "  resting=1",
+        # A rebase or a bisect has the checkout off its branch until it ends.
+        f"  for marker in {_IN_PROGRESS}; do",
+        '    [ -e "$git_dir/$marker" ] && resting=',
+        "  done",
+        '  if [ -n "$resting" ]; then',
+        '    went=$("$real" rev-parse -q --verify HEAD)',
+        # A branch that was renamed or removed is there again.
+        '    "$real" show-ref -q --verify "$on" ||',
+        '      "$real" update-ref "$on" "$before" || exit 1',
+        '    "$real" symbolic-ref HEAD "$on" || exit 1',
+        '    target=$("$real" rev-parse -q --verify "$on")',
+        # The files the command changed on its way are as the branch has
+        # them again, where the agent may write them; the rest it could
+        # not change either.
+        '    if [ -n "$went" ] && [ -n "$target" ] && [ "$went" != "$target" ]; then',
+        '      top=$("$real" rev-parse --show-toplevel)',
+        '      "$real" -C "$top" diff --no-renames --name-only -z --diff-filter=D'
+        ' "$went" "$target" | (cd "$top" && xargs -0 rm -f --) 2>/dev/null',
+        '      "$real" -C "$top" diff --no-renames --name-only -z --diff-filter=d'
+        ' "$went" "$target" |',
+        '        "$real" --literal-pathspecs -C "$top" restore -q --source="$target"'
+        " --worktree --pathspec-from-file=- --pathspec-file-nul 2>/dev/null",
+        "    fi",
+        # The agent's index went with the command; it is the branch's again,
+        # and brought up to date before the next command.
+        '    [ -z "$target" ] || [ "$went" = "$target" ] || {',
+        '      "$real" read-tree "$target" 2>/dev/null',
+        '      rm -f "$GIT_INDEX_FILE.synced"',
+        "    }",
         # A branch the command made is of no use to anyone; one that was
         # there stays.
-        '      printf "%s\n" "$had" | grep -qxF -- "$now" ||',
-        '        "$real" branch -q -D "${now#refs/heads/}" 2>/dev/null',
-        '      fail "the checkout stays on ${on#refs/heads/}, where your work'
+        '    [ -z "$now" ] || printf "%s\n" "$had" | grep -qxF -- "$now" ||',
+        '      "$real" branch -q -D "${now#refs/heads/}" 2>/dev/null',
+        '    fail "the checkout stays on ${on#refs/heads/}, where your work'
         ' is taken from; commit there"',
-        "    fi",
-        "  ;;",
-        "esac",
+        "  fi",
+        "fi",
         'after=$("$real" rev-parse -q --verify HEAD)',
         'case "$command" in',
         f"  {_COMMITS})",

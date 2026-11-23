@@ -959,6 +959,12 @@ class ServiceState:
             and hand_over is None
             and not is_division_lead(place),
             aside=hand_over is not None,
+            # The repository's own checkout is the human's, on whatever
+            # branch they have it.
+            branch=place.branch or ""
+            if place.worktree_path
+            and checkout_root(place.worktree_path) != checkout_root(str(self._repo_dir))
+            else "",
             # Its git commits nothing in a sub-team's directory; it may still
             # write in that of a team that has not started.
             hidden=tuple(child.boundary.path for child in children),
