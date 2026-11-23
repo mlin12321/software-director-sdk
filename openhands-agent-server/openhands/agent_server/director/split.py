@@ -27,6 +27,7 @@ from openhands.agent_server.director.org_store import (
     OrgStoreError,
     team_id_of,
 )
+from openhands.agent_server.director.scope import is_inside
 
 
 MAX_SPLIT_CHILDREN = 16
@@ -420,13 +421,6 @@ def clean_path(path: str) -> str:
     if "/" in parts[:1] or ".." in parts:
         raise OrgStoreError(f"{path!r} is not a path inside the repository")
     return "/".join(part for part in parts if part != ".")
-
-
-def is_inside(path: str, ancestor: str) -> bool:
-    """Whether ``path`` is strictly below ``ancestor`` ('' is the repository)."""
-    if not path:
-        return False
-    return not ancestor or path.startswith(f"{ancestor}/")
 
 
 # Each team, the team above it, its directory and, where it is known, what
