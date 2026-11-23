@@ -14,6 +14,7 @@ from openhands.agent_server.director.changes import require_editable, write_by_h
 from openhands.agent_server.director.git_store import (
     GitStore,
 )
+from openhands.agent_server.director.intents import Brief, StartTeam
 from openhands.agent_server.director.models import (
     FileEdit,
     MemorySync,
@@ -473,13 +474,14 @@ class Sync(Sessions):
         if conversation is None:
             store.update_place(node_id, agents=agents, status="idle")
             self._begin(
-                "start_team",
                 node_id,
-                task=task,
-                parent=like,
-                checkout=place.worktree_path
-                if own_checkout or self._in_place(place)
-                else None,
+                StartTeam(
+                    task=task,
+                    parent=like,
+                    checkout=place.worktree_path
+                    if own_checkout or self._in_place(place)
+                    else None,
+                ),
             )
             return store.place(node_id) or place
         store.update_place(node_id, agents=agents, status="idle")
@@ -515,7 +517,7 @@ class Sync(Sessions):
             acp_server=started.acp_server,
             model=started.model,
         )
-        self._begin("brief", node_id, role=writer, task=task)
+        self._begin(node_id, Brief(role=writer, task=task))
         return store.place(node_id) or place
 
     async def _after(self, lane: str) -> None:

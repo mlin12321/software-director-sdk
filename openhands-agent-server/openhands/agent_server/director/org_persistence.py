@@ -25,6 +25,8 @@ _ORG_FILE = "org.json"
 # What the org sets for itself, beside its tree in the same ref.
 _SETTINGS_FILE = "settings.json"
 _VERSION = 1
+_SETTINGS_VERSION = 1
+_SETTINGS_VERSION_KEY = "schema_version"
 
 
 class _PersistedOrg(BaseModel):
@@ -39,19 +41,36 @@ def create_org_board(repo_dir: Path) -> GitStore:
 
 def own_settings(board: GitStore) -> OrgSettings:
     """What the org of ``board`` sets for itself; nothing when it kept none
-    or what it kept cannot be read."""
+    or what it kept cannot be read.
+
+    Raises:
+        ValueError: The settings have a format this version does not read.
+    """
     raw = board.read(_SETTINGS_FILE)
     if raw is None:
         return OrgSettings()
     try:
-        return OrgSettings.model_validate_json(raw)
+        kept = json.loads(raw)
+        # A file kept before the version was written is of the first.
+        version = kept.pop(_SETTINGS_VERSION_KEY, _SETTINGS_VERSION)
+    except (ValueError, AttributeError):
+        return OrgSettings()
+    if version != _SETTINGS_VERSION:
+        # Read as nothing, a newer director's settings would be saved over.
+        raise ValueError(f"Unrecognized org settings version {version} in {board.ref}")
+    try:
+        return OrgSettings.model_validate(kept)
     except ValueError:
         return OrgSettings()
 
 
 def save_own_settings(board: GitStore, settings: OrgSettings) -> None:
     """Keep what the org sets for itself beside its tree."""
-    content = settings.model_dump_json(indent=2, exclude_none=True) + "\n"
+    kept = {
+        _SETTINGS_VERSION_KEY: _SETTINGS_VERSION,
+        **settings.model_dump(mode="json", exclude_none=True),
+    }
+    content = json.dumps(kept, indent=2) + "\n"
     board.commit(
         lambda read: (
             []
@@ -118,7 +137,8 @@ def load_org(board: GitStore, store: OrgStore) -> bool:
         Whether a saved tree was found.
 
     Raises:
-        ValueError: The saved tree has a format this version does not read.
+        ValueError: The saved tree or the org's settings have a format this
+            version does not read.
     """
     raw = board.read(_ORG_FILE)
     if raw is None:
@@ -128,5 +148,7 @@ def load_org(board: GitStore, store: OrgStore) -> bool:
         raise ValueError(
             f"Unrecognized org tree version {saved.version} in {board.ref}"
         )
+    # Refused with the tree, before anything of the org is used.
+    own_settings(board)
     store.replace_all(saved.nodes)
     return True

@@ -19,13 +19,12 @@ from openhands.agent_server.director.git_store import (
     normalize_store_path,
     team_key,
 )
+from openhands.agent_server.director.intents import FinishSplit, HandOver, Prune, Split
 from openhands.agent_server.director.merge_back import merge_back
 from openhands.agent_server.director.models import (
     FormerTeam,
     HandOverMode,
     SessionTeam,
-    SessionTeamInput,
-    SplitChild,
 )
 from openhands.agent_server.director.org_store import (
     AGENT_LOST,
@@ -79,12 +78,12 @@ class Splits(Watch):
 
     def carry_out_split(self, place_id: str) -> None:
         """Start the sub-teams of a team's approved split. Safe from any thread."""
-        self._begin("split", place_id)
+        self._begin(place_id, Split())
 
     def prune(self, place_id: str, reason: str) -> None:
         """Remove a team and what is below it; its boundary goes back to
         the team above. Safe from any thread."""
-        self._begin("prune", place_id, reason=reason)
+        self._begin(place_id, Prune(reason=reason))
 
     async def _do_finish_split(self, intent: Intent) -> None:
         await self._finish_split(intent.node_id)
@@ -226,7 +225,7 @@ class Splits(Watch):
             intent = run.step_done(
                 intent,
                 "planned",
-                teams=[team.model_dump(mode="json") for team in teams],
+                teams=teams,
                 replaces=sorted(gone),
                 moves={
                     below.id: home_of(below, place_id, by_path)
@@ -247,13 +246,13 @@ class Splits(Watch):
                 was_stopped=any(team.stopped is not None for team in split.replaces),
                 stamp=ref_stamp(),
             )
-        plan = intent.payload
-        moves: dict[str, str] = plan["moves"]
+        plan = intent.of(Split)
+        moves = plan.moves
         # A new team may have the id of one it replaces, and is not that one.
-        made = {team["id"]: team["since"] for team in plan["teams"]}
+        made = {team.id: team.since for team in plan.teams}
         replaced = [
             team
-            for team in map(store.place, plan["replaces"])
+            for team in map(store.place, plan.replaces)
             if team and team.since != made.get(team.id)
         ]
         if replaced and "replaced" not in intent.steps:
@@ -262,14 +261,14 @@ class Splits(Watch):
                 watched.extend(below.id for below in store.below(team_id))
             self._wait_until_quiet(intent, watched)
             refusal = await asyncio.to_thread(
-                self._take_in, place, replaced, plan["stamp"]
+                self._take_in, place, replaced, plan.stamp
             )
             if refusal is not None:
                 self._let_go(intent)
                 self._decline(place, refusal)
                 return
             launcher = self._require_launcher()
-            for conversation_id in map(UUID, plan["conversations"]):
+            for conversation_id in map(UUID, plan.conversations):
                 await launcher.stop(conversation_id)
                 await launcher.delete(conversation_id)
                 run.unmark(TOLD, str(conversation_id))
@@ -285,7 +284,7 @@ class Splits(Watch):
                 if store.place(below_id) is not None:
                     store.move_place(below_id, place_id)
             for team in replaced:
-                await self._archive(team, "replaced", plan["stamp"])
+                await self._archive(team, "replaced", plan.stamp)
                 self.record_event(place_id, "replaced", team)
                 store.remove(team.id)
         if proposal.contracts.strip():
@@ -295,10 +294,10 @@ class Splits(Watch):
                 self._record_contracts,
                 place,
                 proposal.contracts,
-                bool(plan["replaces"]),
+                bool(plan.replaces),
             )
 
-        teams = [SessionTeamInput.model_validate(team) for team in plan["teams"]]
+        teams = plan.teams
         for team in teams:
             if store.place(team.id) is None:
                 store.upsert(team)
@@ -337,16 +336,16 @@ class Splits(Watch):
                 # progress, and what was held for it while a team above
                 # was stopped.
                 self.progressed(below_id, by_above=True)
-                if plan.get("was_stopped"):
+                if plan.was_stopped:
                     self._enqueue(
                         lambda below_id=below_id: self._go_on(
-                            below_id, plan.get("cut_off", []), own_too=True
+                            below_id, plan.cut_off, own_too=True
                         ),
                         below_id,
                     )
             # Begun first: a server that ends between the two tells the IC
             # twice rather than never.
-            self._begin("finish_split", place_id)
+            self._begin(place_id, FinishSplit())
             intent = run.step_done(intent, "handed_over")
 
     async def _finish_split(self, place_id: str) -> None:
@@ -382,23 +381,24 @@ class Splits(Watch):
                 unfinished=unfinished,
             ),
         )
-        named = [[team.id, team.at] for team in former]
+        named = [(team.id, team.at) for team in former]
         # Begun already by a server that ended before the split was saved.
         begun = any(
-            intent.kind == "hand_over"
+            isinstance(intent.payload, HandOver)
             and intent.node_id == place_id
-            and intent.payload.get("former") == named
+            and intent.payload.former == named
             for intent in self._runs().open_intents()
         )
         if former and not begun:
             self._begin(
-                "hand_over",
                 place_id,
-                conversation=str(uuid4()),
-                ended="replaced",
-                former=named,
-                children=[child.model_dump(mode="json") for child in proposal.children],
-                contracts_replaced=replaced,
+                HandOver(
+                    conversation=str(uuid4()),
+                    ended="replaced",
+                    former=named,
+                    children=proposal.children,
+                    contracts_replaced=replaced,
+                ),
             )
         # Last: until the IC is told, a server that ends has this to do again.
         store.update_place(place_id, pending_split=None)
@@ -429,38 +429,36 @@ class Splits(Watch):
                 conversations=conversations_of(teams),
                 stamp=ref_stamp(),
             )
-        plan = intent.payload
-        where = plan["path"]
-        conversations = [UUID(agent) for agent in plan["conversations"]]
+        plan = intent.of(Prune)
+        where = plan.path
+        conversations = [UUID(agent) for agent in plan.conversations]
         if "stopped" not in intent.steps:
             # A team is removed only once it and the teams below it are at
             # rest, so nothing is cut off in the middle.
-            self._wait_until_quiet(intent, plan["teams"])
+            self._wait_until_quiet(intent, plan.teams)
             for conversation_id in conversations:
                 await launcher.stop(conversation_id)
             intent = run.step_done(intent, "stopped")
         if "discarded" not in intent.steps:
-            teams = [
-                team for team in map(store.place, plan["teams"]) if team is not None
-            ]
-            saved = await asyncio.to_thread(self._discard_work, teams, plan["stamp"])
+            teams = [team for team in map(store.place, plan.teams) if team is not None]
+            saved = await asyncio.to_thread(self._discard_work, teams, plan.stamp)
             intent = run.step_done(intent, "discarded", saved=saved)
-        saved = intent.payload["saved"]
+        saved = intent.of(Prune).saved
         if "deleted" not in intent.steps:
             for conversation_id in conversations:
                 await launcher.delete(conversation_id)
                 run.unmark(TOLD, str(conversation_id))
                 run.drop_held(str(conversation_id))
             intent = run.step_done(intent, "deleted")
-        above = store.place(plan["parent"])
+        above = store.place(plan.parent)
         parent_ic = self.writer_conversation(above) if above else None
         if "removed" not in intent.steps:
             pruned = store.place(place_id)
-            for team in map(store.place, plan["teams"]):
+            for team in map(store.place, plan.teams):
                 if team is not None:
-                    await self._archive(team, "pruned", plan["stamp"])
+                    await self._archive(team, "pruned", plan.stamp)
             if "recorded" not in intent.steps:
-                self.record_event(plan["parent"], "pruned", pruned, plan["reason"])
+                self.record_event(plan.parent, "pruned", pruned, plan.reason)
                 intent = run.step_done(intent, "recorded")
             if pruned is not None and above is not None:
                 # The directory is the team above's again, with a spec that
@@ -479,7 +477,7 @@ class Splits(Watch):
             store.remove(place_id)
             # The shell the IC above starts next can write there again.
             with suppress(GitError, OSError):
-                await asyncio.to_thread(self._confine, plan["parent"])
+                await asyncio.to_thread(self._confine, plan.parent)
             await self._save()
             intent = run.step_done(intent, "removed")
         self._settling.pop(intent.id, None)
@@ -488,14 +486,14 @@ class Splits(Watch):
         former = [
             record
             for record in self.former_drafts(above.session if above else "")
-            if record.id == team_key(place_id) and record.at == plan["stamp"]
+            if record.id == team_key(place_id) and record.at == plan.stamp
         ]
         self.notify(
             parent_ic,
             pruned_notice(
-                plan["title"],
+                plan.title,
                 where,
-                plan["reason"],
+                plan.reason,
                 saved,
                 former,
                 names=self.names_at(intent.node_id),
@@ -503,26 +501,27 @@ class Splits(Watch):
         )
         if former and parent_ic is not None:
             self._begin(
-                "hand_over",
-                plan["parent"],
-                conversation=str(uuid4()),
-                ended="pruned",
-                former=[[team.id, team.at] for team in former],
-                title=plan["title"],
-                where=where,
-                reason=plan["reason"],
+                plan.parent,
+                HandOver(
+                    conversation=str(uuid4()),
+                    ended="pruned",
+                    former=[(team.id, team.at) for team in former],
+                    title=plan.title,
+                    where=where,
+                    reason=plan.reason,
+                ),
             )
         run.step_done(intent, "told")
 
     async def _do_hand_over(self, intent: Intent) -> None:
         """Put a team's IC in hand-over mode: start the side conversation
         in which it passes on what removed teams left."""
-        store, run, payload = self.org, self._runs(), intent.payload
+        store, run, payload = self.org, self._runs(), intent.of(HandOver)
         place = store.place(intent.node_id)
         if place is None:
             return
-        conversation = payload["conversation"]
-        wanted = {(team_id, at) for team_id, at in payload["former"]}
+        conversation = payload.conversation
+        wanted = set(payload.former)
         # The records are the session's own until its work is accepted.
         former = [
             record
@@ -536,22 +535,22 @@ class Splits(Watch):
             or ""
             for team in former
         }
-        children = [SplitChild(**child) for child in payload.get("children", [])]
-        if payload["ended"] == "replaced":
+        children = payload.children
+        if payload.ended == "replaced":
             paths = {child.path for child in children}
             job = replaced_job(
                 [team for team in store.below(place.id) if team.boundary.path in paths],
                 children,
                 former,
                 specs,
-                contracts_replaced=payload["contracts_replaced"],
+                contracts_replaced=payload.contracts_replaced,
                 names=self.names_at(intent.node_id),
             )
         else:
             job = pruned_job(
-                payload["title"],
-                payload["where"],
-                payload["reason"],
+                payload.title,
+                payload.where,
+                payload.reason,
                 former,
                 specs,
                 names=self.names_at(intent.node_id),

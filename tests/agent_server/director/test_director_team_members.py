@@ -21,6 +21,8 @@ from openhands.agent_server.director.tools.definition import (
 from openhands.agent_server.director.tools.remote import call_tool, list_tools
 from tests.agent_server.director.conftest import (
     APPROVE,
+    BENCH,
+    LAB,
     FakeLauncher,
     agent_conversation,
     an_org,
@@ -32,31 +34,6 @@ from tests.agent_server.director.conftest import (
 )
 
 
-BENCH = [
-    "read_team_context",
-    "raise_escalation",
-    "report",
-    "write_spec",
-    "submit_review",
-    "propose_teams",
-    "msg_team",
-]
-LAB = f"""\
-description: A lab.
-agents:
-  bench:
-    writes: true
-    text: Runs the experiments.
-    tools: [{", ".join(BENCH)}]
-    lead_tools: [read_team_context]
-  referee:
-    text: Checks what the benches below found.
-    tools: [read_team_context, review_team]
-    lead_tools: [read_team_context, review_team]
-  chair:
-    tools: [read_team_context, approve_teams, decline_teams]
-    lead_tools: [read_team_context, settle_teams]
-"""
 TEAMS = proposing(
     [
         SplitChild(title="Assay", path="assay", task="Run the assay"),

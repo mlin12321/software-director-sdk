@@ -1,5 +1,6 @@
 """OrgStore and persistence in a hidden git ref."""
 
+import json
 from pathlib import Path
 
 import pytest
@@ -7,6 +8,7 @@ import pytest
 from openhands.agent_server.director.models import (
     AgentRef,
     Escalation,
+    OrgSettings,
     Review,
     ReviewState,
     SnapshotEvent,
@@ -15,7 +17,9 @@ from openhands.agent_server.director.org_persistence import (
     ORG_REF,
     create_org_board,
     load_org,
+    own_settings,
     save_org,
+    save_own_settings,
 )
 from openhands.agent_server.director.org_store import (
     OrgChange,
@@ -696,6 +700,33 @@ def test_a_tree_saved_in_an_unknown_version_is_refused(repo: Path):
 
     with pytest.raises(ValueError, match="99"):
         load_org(board, OrgStore(shipped_type))
+
+
+def test_settings_are_kept_with_their_version_and_read_back(repo: Path):
+    board = create_org_board(repo)
+
+    save_own_settings(board, OrgSettings(allowed_agent_types=["researcher"]))
+
+    assert json.loads(board.read("settings.json") or "")["schema_version"] == 1
+    assert own_settings(board) == OrgSettings(allowed_agent_types=["researcher"])
+
+
+def test_settings_kept_before_they_had_a_version_are_still_read(repo: Path):
+    board = create_org_board(repo)
+    board.write("", "settings.json", '{"allowed_agent_types": ["researcher"]}')
+
+    assert own_settings(board).allowed_agent_types == ["researcher"]
+
+
+def test_settings_of_an_unknown_version_are_refused_with_the_tree(repo: Path):
+    board = create_org_board(repo)
+    store = OrgStore(shipped_type)
+    board.write("", "org.json", '{"version": 1, "nodes": []}')
+    board.write("", "settings.json", '{"schema_version": 99}')
+
+    # Read as nothing, they would be saved over.
+    with pytest.raises(ValueError, match="settings version 99"):
+        load_org(board, store)
 
 
 def give_agents(store: OrgStore, place_id: str, ic: str, manager: str) -> None:

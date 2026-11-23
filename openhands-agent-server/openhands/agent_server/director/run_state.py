@@ -16,6 +16,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from pydantic import BaseModel, ValidationError
+
+from openhands.agent_server.director.intents import PAYLOAD, IntentPayload
 from openhands.sdk.errors import DomainError
 
 
@@ -83,15 +86,38 @@ class RunStateError(DomainError):
     """The run state on disk cannot be used."""
 
 
+def _stored(payload: IntentPayload) -> str:
+    # The kind has a column of its own.
+    return payload.model_dump_json(exclude={"kind"})
+
+
+def _read(kind: str, stored: str) -> IntentPayload:
+    try:
+        return PAYLOAD.validate_python({**json.loads(stored), "kind": kind})
+    except ValidationError as error:
+        raise RunStateError(
+            f"The run state holds a {kind!r} that this director cannot read: {error}"
+        ) from error
+
+
 @dataclass(frozen=True)
 class Intent:
     """Something of several steps the director began for a team."""
 
     id: int
-    kind: str
     node_id: str
-    payload: dict[str, Any]
+    payload: IntentPayload
     steps: frozenset[str]
+
+    @property
+    def kind(self) -> str:
+        return self.payload.kind
+
+    def of[P: BaseModel](self, kind: type[P]) -> P:
+        """What was recorded of it, as the kind its handler expects."""
+        if not isinstance(self.payload, kind):
+            raise TypeError(f"A {self.kind} is not a {kind.__name__}")
+        return self.payload
 
 
 @dataclass(frozen=True)
@@ -195,29 +221,30 @@ class RunState:
                 [(kind, key, value) for key, value in marks.items()],
             )
 
-    def begin(self, kind: str, place_id: str, payload: dict[str, Any]) -> Intent:
+    def begin(self, place_id: str, payload: IntentPayload) -> Intent:
         with self._lock:
             cursor = self._db.execute(
                 "INSERT INTO intents (kind, node_id, payload, steps) "
                 "VALUES (?, ?, ?, '[]')",
-                (kind, place_id, json.dumps(payload)),
+                (payload.kind, place_id, _stored(payload)),
             )
             intent_id = cursor.lastrowid
         assert intent_id is not None
-        return Intent(intent_id, kind, place_id, payload, frozenset())
+        return Intent(intent_id, place_id, payload, frozenset())
 
     def step_done(self, intent: Intent, step: str, **learned: Any) -> Intent:
         """Record that a step of ``intent`` is done, with what it found out."""
+        payload = intent.payload
         changed = Intent(
             intent.id,
-            intent.kind,
             intent.node_id,
-            {**intent.payload, **learned},
+            # Checked as a whole: a step cannot record what the kind has not.
+            type(payload).model_validate({**dict(payload), **learned}),
             intent.steps | {step},
         )
         self._run(
             "UPDATE intents SET payload = ?, steps = ? WHERE id = ?",
-            (json.dumps(changed.payload), json.dumps(sorted(changed.steps)), intent.id),
+            (_stored(changed.payload), json.dumps(sorted(changed.steps)), intent.id),
         )
         return changed
 
@@ -230,9 +257,8 @@ class RunState:
         return [
             Intent(
                 intent_id,
-                kind,
                 place_id,
-                json.loads(payload),
+                _read(kind, payload),
                 frozenset(json.loads(steps)),
             )
             for intent_id, kind, place_id, payload, steps in self._all(

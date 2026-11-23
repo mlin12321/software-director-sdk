@@ -26,6 +26,7 @@ from openhands.agent_server.director.git_store import (
     SPEC_FILE,
     normalize_store_path,
 )
+from openhands.agent_server.director.intents import Accept, LandOrg, RequestReview
 from openhands.agent_server.director.merge_back import (
     MergeBack,
     merge_back,
@@ -190,7 +191,7 @@ class Reviews(Requests):
         place = self.org.place(place_id)
         if place is not None and self.org.opens_session(place):
             self._open_merge(place)
-        self._begin("request_review", place_id)
+        self._begin(place_id, RequestReview())
 
     def rest(self, place_id: str) -> None:
         """End the turn of a team's IC after the step it is in: it has
@@ -433,13 +434,14 @@ class Reviews(Requests):
         """
         place = self.org.place(place_id)
         self._begin(
-            "accept",
             place_id,
-            needed_above=needed_above,
-            reconciled=reconciled,
-            specs=specs or [],
-            # The work of a session goes into what the org shares.
-            base=place is not None and self.org.opens_session(place),
+            Accept(
+                needed_above=needed_above,
+                reconciled=reconciled,
+                specs=specs or [],
+                # The work of a session goes into what the org shares.
+                base=place is not None and self.org.opens_session(place),
+            ),
         )
 
     def _shapes(
@@ -758,7 +760,7 @@ class Reviews(Requests):
                     intent.kind != "land_org" or intent.node_id != top.id
                     for intent in self._runs().open_intents()
                 ):
-                    self._begin("land_org", top.id)
+                    self._begin(top.id, LandOrg())
 
     def _ask_manager(self, top: SessionTeam, merge: Merge) -> None:
         """Ask the Manager of a session's Division Lead place to
@@ -1235,7 +1237,7 @@ class Reviews(Requests):
         if top is None:
             return
         landed = await asyncio.to_thread(
-            self._land_org, top, bool(intent.payload.get("org_holds"))
+            self._land_org, top, intent.of(LandOrg).org_holds
         )
         if landed is not None:
             self._after_landing(top, *landed)
@@ -1593,11 +1595,9 @@ class Reviews(Requests):
         self._save_soon()
 
     async def _do_accept(self, intent: Intent) -> None:
+        accept = intent.of(Accept)
         await self._accept(
-            intent.node_id,
-            intent.payload["needed_above"],
-            intent.payload.get("reconciled", ""),
-            intent.payload.get("specs", []),
+            intent.node_id, accept.needed_above, accept.reconciled, accept.specs
         )
 
     async def _own_account(self, place: SessionTeam) -> str:
