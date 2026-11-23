@@ -293,6 +293,11 @@ class Review(BaseModel):
         description="Whether the work went up without a review of its own: "
         "all of it was accepted work of the team's sub-teams.",
     )
+    commit: str = Field(
+        default="",
+        description="The commit the team's checkout was on when it submitted; "
+        "'' when it had none.",
+    )
     at: str = Field(description="ISO 8601 timestamp of the last change.")
 
 

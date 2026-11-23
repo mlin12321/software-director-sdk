@@ -14,8 +14,10 @@ from openhands.agent_server.director import bugbot
 from openhands.agent_server.director.boundary import owns
 from openhands.agent_server.director.git import (
     GitError,
+    branch_of,
     git,
     head_of,
+    holds_commit,
     pathspec,
     ref_stamp,
     save_and_discard,
@@ -1522,6 +1524,55 @@ class Reviews(Requests):
         if refusal is not None:
             raise Conflict(refusal)
 
+    def work_astray(self, place: SessionTeam) -> str | None:
+        """Why what a team's checkout is on is not all of its work, if it
+        is not.
+
+        The work of a team is what the branch of its checkout holds. The
+        agents' own git keeps a checkout on that branch, but an agent can
+        reach another git, so the director looks for itself before work is
+        submitted and before it is accepted: the checkout is on its branch,
+        and what was accepted from the teams that share it is in it.
+
+        Returns:
+            What to tell whoever asked, in words for an agent; None when
+            the work is all there.
+        """
+        if not place.worktree_path:
+            return None
+        checkout = Path(place.worktree_path)
+        ours = checkout_root(place.worktree_path) != checkout_root(str(self._repo_dir))
+        on = branch_of(checkout)
+        # The repository's own checkout is the human's, on any branch.
+        if ours and place.branch and on != place.branch:
+            return (
+                f"The checkout of {place.title!r} is "
+                + (f"on the branch {on!r}" if on else "on no branch")
+                + f", and its work is taken from {place.branch!r}. Run any git "
+                "command there: the checkout goes back to its branch. Then "
+                "bring over what was committed elsewhere"
+                + (f" with `git merge {on}`" if on else "")
+                + " and submit again."
+            )
+        for team in self.org.below(place.id):
+            review = team.review
+            if (
+                review is None
+                or review.state != "accepted"
+                or not review.commit
+                or checkout_root(team.worktree_path) != checkout_root(str(checkout))
+            ):
+                continue
+            if not holds_commit(checkout, review.commit):
+                return (
+                    f"The accepted work of {team.title!r} (commit "
+                    f"{review.commit[:10]}) is not in what the checkout of "
+                    f"{place.title!r} is on: it was left on another branch. "
+                    f"Bring it in with `git merge {review.commit[:10]}`, then "
+                    "submit again."
+                )
+        return None
+
     def _not_reconciled(
         self, place: SessionTeam, meets: Meets | None, reconciled: str
     ) -> str | None:
@@ -1694,6 +1745,15 @@ class Reviews(Requests):
         if refusal is not None:
             # Something came into the checkout between the review and now.
             self.notify(reviewer, refusal)
+            return
+        astray = await asyncio.to_thread(self.work_astray, place)
+        if astray is not None:
+            # Accepted, part of the work would not be in what is merged.
+            self.notify(
+                reviewer,
+                f"The work of {place.title!r} is not accepted yet. {astray} "
+                "Send it back with `review_team` and that as what to change.",
+            )
             return
         if checkout_root(str(team)) != checkout_root(str(checkout)):
             elsewhere = await asyncio.to_thread(self._elsewhere, place, above)
@@ -2067,6 +2127,7 @@ class Reviews(Requests):
                 summary="The accepted work of its sub-teams, with no changes of "
                 "its own.",
                 passed_up=True,
+                commit=tip or "",
                 at=utc_now(),
                 # It goes into the org after what was submitted before now.
                 seq=self.next_submission() if opens else 0,

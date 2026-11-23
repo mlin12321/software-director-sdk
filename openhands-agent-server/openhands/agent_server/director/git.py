@@ -194,6 +194,23 @@ def head_of(checkout: Path) -> str | None:
         return None
 
 
+def branch_of(checkout: Path) -> str | None:
+    """The branch a checkout is on; None when it is on none."""
+    try:
+        return git(checkout, ["symbolic-ref", "--quiet", "--short", "HEAD"]).strip()
+    except (GitError, OSError):
+        return None
+
+
+def holds_commit(checkout: Path, commit: str) -> bool:
+    """Whether what a checkout is on has ``commit`` in its history."""
+    try:
+        git(checkout, ["merge-base", "--is-ancestor", commit, "HEAD"])
+    except (GitError, OSError):
+        return False
+    return True
+
+
 def last_commit_in(checkout: Path, path: str) -> str | None:
     """The last commit of a checkout's branch that changed anything under
     ``path``; None when there is none or it cannot be told."""

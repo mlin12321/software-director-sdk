@@ -32,6 +32,7 @@ from openhands.sdk.conversation.state import (
 from openhands.sdk.event import ActionEvent
 from openhands.tools.file_editor.definition import FileEditorAction
 from tests.agent_server.director.conftest import (
+    API,
     DONE,
     FINDING,
     SCHEMA,
@@ -825,3 +826,67 @@ async def test_a_blocked_sub_team_does_not_keep_work_from_going_up(
     done = await use(service, ic(service), SubmitReviewTool, DONE)
 
     assert not done.is_error, done.text
+
+
+async def test_work_is_not_submitted_without_what_was_accepted_from_a_team_below(
+    service: DirectorService, repo: Path
+):
+    await split_root(service)
+    await api_submits(service, repo)
+    await use(service, ic(service), ReviewTeamTool, accept())
+    accepted = run_git(repo, "rev-parse", "HEAD").strip()
+    # Left on another branch by a git the agents' own never saw.
+    run_git(repo, "checkout", "-q", "-b", "stray", "HEAD~1")
+    commit(repo, "notes.md", "The rest.\n")
+
+    refused = await use(service, ic(service), SubmitReviewTool, DONE)
+
+    assert refused.is_error
+    assert "accepted work of 'API'" in refused.text and accepted[:10] in refused.text
+    assert node(service, "root").review is None
+
+    run_git(repo, "merge", "-q", "--no-edit", accepted)
+    submitted = await use(service, ic(service), SubmitReviewTool, DONE)
+
+    assert not submitted.is_error, submitted.text
+    review = node(service, "root").review
+    assert review is not None
+    assert review.commit == run_git(repo, "rev-parse", "HEAD").strip()
+
+
+async def test_work_whose_checkout_left_its_branch_is_not_submitted(
+    service: DirectorService, repo: Path, tmp_path: Path
+):
+    await split_root(service)
+    worktree = in_own_worktree(service, tmp_path, repo)
+    branch = run_git(worktree, "symbolic-ref", "--short", "HEAD").strip()
+    run_git(worktree, "checkout", "-q", "-b", "stray")
+    commit(worktree, "apps/web/page.tsx", "export {}\n")
+
+    refused = await use(service, ic(service, "apps.web"), SubmitReviewTool, DONE)
+
+    assert refused.is_error
+    assert "on the branch 'stray'" in refused.text and repr(branch) in refused.text
+    assert node(service, "apps.web").review is None
+
+
+async def test_work_is_not_accepted_once_part_of_it_is_no_longer_in_its_checkout(
+    service: DirectorService, launcher: FakeLauncher, repo: Path
+):
+    await split_root(service)
+    await split_api(service)
+    commit(repo, "services/api/schema/order.py", "id: int\n")
+    await use(service, ic(service, SCHEMA), SubmitReviewTool, DONE)
+    await use(service, ic(service, API), ReviewTeamTool, accept(SCHEMA))
+    commit(repo, "services/api/app.py", "order_id = '1'\n")
+    await use(service, ic(service, API), SubmitReviewTool, DONE)
+    # After it was submitted, the checkout is left where the schema is not.
+    run_git(repo, "checkout", "-q", "-b", "stray", "HEAD~2")
+
+    await use(service, ic(service), ReviewTeamTool, accept(API))
+    await service.settled()
+
+    review = node(service, API).review
+    assert review is not None and review.state == "pending"
+    told = launcher.messages_to(ic(service))[-1]
+    assert "is not accepted yet" in told and "accepted work of 'Schema'" in told

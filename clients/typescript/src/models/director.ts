@@ -190,6 +190,8 @@ export interface DirectorReview {
   /** Whether the work went up without a review of its own: all of it was
    * accepted work of the team's sub-teams. */
   passed_up?: boolean;
+  /** The commit the team's checkout was on when it submitted. */
+  commit?: string;
   /** ISO 8601 timestamp of the last change. */
   at: string;
 }
