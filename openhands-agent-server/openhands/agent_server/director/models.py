@@ -977,6 +977,18 @@ class OrgSettings(BaseModel):
     )
 
 
+class MemberInfo(BaseModel):
+    """One member of a team of a type, as a page that shows teams reads it."""
+
+    name: str = Field(description="What the type names it: an agent's `role`.")
+    title: str = Field(description="What it is called in words for a person.")
+    writes: bool = Field(description="Whether it works in the team's folder.")
+    reviews: bool = Field(description="Whether it reviews the work of the teams below.")
+    oversees: bool = Field(
+        description="Whether it settles what the team's sub-teams are."
+    )
+
+
 class AgentTypeInfo(BaseModel):
     """An agent type, as someone choosing one sees it."""
 
@@ -989,6 +1001,10 @@ class AgentTypeInfo(BaseModel):
             "The agent profile a new team of this type runs on when its "
             "making names none; none when the type names none."
         ),
+    )
+    members: list[MemberInfo] = Field(
+        default_factory=list,
+        description="The members of a team of this type, in the type's order.",
     )
 
 

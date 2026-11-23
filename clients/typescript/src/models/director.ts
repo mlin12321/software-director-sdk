@@ -1107,6 +1107,20 @@ export interface DirectorOrgSettings {
 }
 
 /** An agent type, as someone choosing one sees it. */
+/** One member of a team of a type, as a page that shows teams reads it. */
+export interface DirectorMemberInfo {
+  /** What the type names it: an agent's `role`. */
+  name: DirectorAgentRole;
+  /** What it is called in words for a person. */
+  title: string;
+  /** Whether it works in the team's folder. */
+  writes: boolean;
+  /** Whether it reviews the work of the teams below. */
+  reviews: boolean;
+  /** Whether it settles what the team's sub-teams are. */
+  oversees: boolean;
+}
+
 export interface DirectorAgentTypeInfo {
   name: string;
   description: string;
@@ -1117,6 +1131,8 @@ export interface DirectorAgentTypeInfo {
    * none.
    */
   sas_profile: string | null;
+  /** The members of a team of this type, in the type's order. */
+  members: DirectorMemberInfo[];
 }
 
 /** What holds for new teams of the org, and what it has to choose from. */

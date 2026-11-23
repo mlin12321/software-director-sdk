@@ -177,3 +177,27 @@ async def test_an_escalation_from_below_reaches_the_member_of_the_same_name(
     assert "It is with the bench of the team above" in raised.text
     told = "\n".join(launcher.messages_to(member(service, "bench")))
     assert "The bench of team 'Rig'" in told and "Which frame?" in told
+
+
+async def test_a_page_is_told_who_the_members_of_each_type_are(
+    service: DirectorService,
+):
+    """What shows a team need not know any member by name."""
+    types = {kind.name: kind for kind in service.org_settings_state().agent_types}
+
+    lab = [
+        (m.name, m.title, m.writes, m.reviews, m.oversees) for m in types["lab"].members
+    ]
+    assert lab == [
+        ("bench", "bench", True, False, False),
+        ("referee", "referee", False, True, False),
+        ("chair", "chair", False, False, True),
+    ]
+    shipped = [
+        (m.name, m.title, m.writes, m.reviews, m.oversees)
+        for m in types["software-engineer"].members
+    ]
+    assert shipped == [
+        ("ic", "IC", True, True, False),
+        ("manager", "Manager", False, False, True),
+    ]

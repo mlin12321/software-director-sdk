@@ -264,6 +264,24 @@ class TeamTemplate(BaseModel):
         return found is not None and (tool in found.tools or tool in found.lead_tools)
 
     @property
+    def reviewer(self) -> str:
+        """The member that reviews the work of the teams below."""
+        return (
+            self.member_with("review_team")
+            or self.member_with("review_team", lead=True)
+            or self.writer
+        )
+
+    @property
+    def overseer(self) -> str:
+        """The member that settles what a team's sub-teams are."""
+        return (
+            self.member_with("approve_teams")
+            or self.member_with("settle_teams", lead=True)
+            or self.writer
+        )
+
+    @property
     def names(self) -> Names:
         """What the members the director turns to are called."""
         return Names(
