@@ -472,7 +472,7 @@ def read_type(
     return found.model_copy(
         update={
             "documents": {
-                name: text or documents[name].holds
+                name: text or documents[name].description
                 for name, text in found.documents.items()
             }
         }

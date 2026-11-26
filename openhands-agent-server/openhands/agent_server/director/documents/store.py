@@ -18,7 +18,7 @@ from openhands.agent_server.director.git_store import GitStore
 from openhands.agent_server.director.run_state import FILES, RunState
 
 
-class DocRef(NamedTuple):
+class DocumentRef(NamedTuple):
     """One document: its name, in the folder of the team that keeps it."""
 
     folder: str
@@ -31,13 +31,13 @@ class DocRef(NamedTuple):
         return f"{self.folder}/{file}" if self.folder else file
 
     @classmethod
-    def at(cls, path: str) -> "DocRef":
+    def at(cls, path: str) -> "DocumentRef":
         """The document kept at ``path``."""
         folder, _, file = path.rpartition("/")
         return cls(folder, file.removesuffix(".md"))
 
 
-class Draft(NamedTuple):
+class DocumentDraft(NamedTuple):
     """What a session made of a document, which is its own until its work
     is accepted."""
 
@@ -51,28 +51,28 @@ class DocumentStore(ABC):
     """Keeps the documents of teams. Safe from any thread."""
 
     @abstractmethod
-    def read(self, session: str, ref: DocRef) -> str | None:
+    def read(self, session: str, ref: DocumentRef) -> str | None:
         """A document as ``session`` has it: what it wrote, else the
         org's. '' for the session reads the org's. None where there is
         none."""
 
     @abstractmethod
-    def write(self, session: str, ref: DocRef, text: str) -> None:
+    def write(self, session: str, ref: DocumentRef, text: str) -> None:
         """Put ``text`` in the place of a document, for ``session`` alone
         until its work is accepted."""
 
     @abstractmethod
-    def remove(self, session: str, ref: DocRef) -> None:
+    def remove(self, session: str, ref: DocumentRef) -> None:
         """Take a document away, for ``session`` alone until its work is
         accepted."""
 
     @abstractmethod
-    def discard(self, session: str, ref: DocRef) -> None:
+    def discard(self, session: str, ref: DocumentRef) -> None:
         """Forget what ``session`` made of a document: the org's holds
         for it again."""
 
     @abstractmethod
-    def drafts(self, session: str) -> dict[DocRef, Draft]:
+    def drafts(self, session: str) -> dict[DocumentRef, DocumentDraft]:
         """Every document ``session`` wrote or removed and the org has not
         taken yet."""
 
@@ -100,20 +100,20 @@ class GitDocumentStore(DocumentStore):
         self._changed = changed
         self._lock = threading.RLock()
 
-    def read(self, session: str, ref: DocRef) -> str | None:
+    def read(self, session: str, ref: DocumentRef) -> str | None:
         draft = self.drafts(session).get(ref)
         return draft.text if draft else self._memory().read(ref.path)
 
-    def write(self, session: str, ref: DocRef, text: str) -> None:
+    def write(self, session: str, ref: DocumentRef, text: str) -> None:
         self._keep(session, ref, text)
 
-    def remove(self, session: str, ref: DocRef) -> None:
+    def remove(self, session: str, ref: DocumentRef) -> None:
         self._keep(session, ref, None)
 
-    def discard(self, session: str, ref: DocRef) -> None:
+    def discard(self, session: str, ref: DocumentRef) -> None:
         self._runs().unmark(FILES, _key(session, ref))
 
-    def drafts(self, session: str) -> dict[DocRef, Draft]:
+    def drafts(self, session: str) -> dict[DocumentRef, DocumentDraft]:
         if not session:
             return {}
         prefix = f"{session}\n"
@@ -121,12 +121,12 @@ class GitDocumentStore(DocumentStore):
         for key, raw in self._runs().marked(FILES).items():
             if key.startswith(prefix):
                 draft = json.loads(raw)
-                found[DocRef.at(key.removeprefix(prefix))] = Draft(
+                found[DocumentRef.at(key.removeprefix(prefix))] = DocumentDraft(
                     draft["text"], draft["over"]
                 )
         return found
 
-    def _keep(self, session: str, ref: DocRef, text: str | None) -> None:
+    def _keep(self, session: str, ref: DocumentRef, text: str | None) -> None:
         # What it is written over is what the session first wrote over, so
         # that what the org made of it since is not lost sight of.
         with self._lock:
@@ -138,5 +138,5 @@ class GitDocumentStore(DocumentStore):
         self._changed(session)
 
 
-def _key(session: str, ref: DocRef) -> str:
+def _key(session: str, ref: DocumentRef) -> str:
     return f"{session}\n{ref.path}"

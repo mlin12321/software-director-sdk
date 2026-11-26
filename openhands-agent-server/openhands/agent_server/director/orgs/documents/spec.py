@@ -4,8 +4,8 @@ from typing import ClassVar
 
 from openhands.agent_server.director.documents.protocol import (
     DocumentProtocolBase,
-    Writing,
-    Written,
+    DocumentToolCall,
+    DocumentToolResult,
     register_protocol,
 )
 
@@ -17,12 +17,14 @@ class SpecProtocol(DocumentProtocolBase):
 
     usable_in_hand_over: ClassVar[bool] = True
 
-    def write(self, writing: Writing) -> Written:
-        written = super().write(writing)
-        ref = writing.team.keeps(self.document.name)
-        text = self.store.read(writing.team.session, ref) or ""
+    def write(self, call: DocumentToolCall) -> DocumentToolResult:
+        written = super().write(call)
+        ref = call.team.keeps(self.document.name)
+        text = self.store.read(call.team.session, ref) or ""
         first = text.strip().splitlines()[0] if text.strip() else ""
-        return Written(written.answer, purpose=first.lstrip("# ").strip()[:200])
+        return DocumentToolResult(
+            written.answer, purpose=first.lstrip("# ").strip()[:200]
+        )
 
 
 register_protocol("spec", SpecProtocol)

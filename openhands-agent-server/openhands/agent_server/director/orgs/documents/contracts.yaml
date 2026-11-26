@@ -1,9 +1,10 @@
+---
 # What the sub-teams of a team promise each other. The team writes it and
 # each of its sub-teams reads it.
 name: contracts
-holds: What teams promise each other.
+description: What teams promise each other.
 tool: edit_contracts
-says: >-
+tool_description: >-
     IC only, with sub-teams. Change the contracts between your sub-teams
     with the commands of your file editor: `str_replace` to change one
     place, `insert` to add text after a line, or at the end with no

@@ -184,7 +184,7 @@ def test_returns_what_applies_to_the_nodes_boundary_and_what_its_agents_reported
         "documents": [
             {
                 "name": "spec",
-                "holds": "How your team works inside its folder.",
+                "description": "How your team works inside its folder.",
                 "path": "svc/a",
                 "text": "a spec",
                 "own": True,
@@ -193,7 +193,7 @@ def test_returns_what_applies_to_the_nodes_boundary_and_what_its_agents_reported
             },
             {
                 "name": "contracts",
-                "holds": (
+                "description": (
                     "What teams promise each other: types, endpoints, file formats."
                 ),
                 "path": "",

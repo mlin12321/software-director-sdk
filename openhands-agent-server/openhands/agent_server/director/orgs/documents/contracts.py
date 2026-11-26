@@ -7,20 +7,20 @@ from pydantic import BaseModel, Field
 
 from openhands.agent_server.director.documents.declared import Document
 from openhands.agent_server.director.documents.events import (
-    HandedOver,
+    RemovedTeamHandedOver,
     SubTeamsCreated,
+    SubTeamWorkAccepted,
     TeamRef,
     TeamRemoved,
-    WorkAccepted,
 )
 from openhands.agent_server.director.documents.protocol import (
     INSERT_LINE,
     NEW_STR,
     OLD_STR,
     DocumentProtocolBase,
-    Shown,
-    Writing,
-    Written,
+    DocumentToolCall,
+    DocumentToolResult,
+    ShownDocument,
     register_protocol,
 )
 from openhands.sdk.errors import Invalid
@@ -49,37 +49,37 @@ class ContractsProtocol(DocumentProtocolBase):
     def arguments_for(cls, document: Document) -> type[BaseModel]:  # noqa: ARG003
         return EditContractsArguments
 
-    def write(self, writing: Writing) -> Written:
+    def write(self, call: DocumentToolCall) -> DocumentToolResult:
         # Contracts are first written by the proposal that makes the
         # sub-teams, so the tool only changes them.
-        given = writing.arguments
+        given = call.arguments
         assert isinstance(given, EditContractsArguments)
-        words = writing.words
-        if writing.leads_session:
+        words = call.words
+        if call.leads_session:
             raise Invalid(
                 "Contracts are not yours as the Division Lead "
                 f"{words.get('reviewer', '')}: the Division "
                 f"Lead {words.get('overseer', '')} settles them"
             )
-        if not self.tree.below(writing.team):
+        if not self.tree.below(call.team):
             raise Invalid(
                 "Your team has no sub-teams, so it sets no contracts. The ones "
                 "you keep are the team's above; raise what must change in them "
                 "with raise_escalation."
             )
-        ref = writing.team.keeps(self.document.name)
-        now = self.store.read(writing.team.session, ref) or ""
+        ref = call.team.keeps(self.document.name)
+        now = self.store.read(call.team.session, ref) or ""
         text = self.edited(now, given)
         text = f"{text.strip()}\n"
         if text != now:
-            self.store.write(writing.team.session, ref, text)
-        return Written(
+            self.store.write(call.team.session, ref, text)
+        return DocumentToolResult(
             "The contracts between your sub-teams are changed. Each sub-team is "
             "told with its next message; write to one with msg_team if it must "
             "know at once."
         )
 
-    def told_to_reader(self, shown: Sequence[Shown]) -> dict[str, Any]:
+    def told_to_reader(self, shown: Sequence[ShownDocument]) -> dict[str, Any]:
         return {
             "contracts_with_the_teams_beside_you": [
                 found.text for found in shown if not found.own
@@ -103,10 +103,10 @@ class ContractsProtocol(DocumentProtocolBase):
         # new ones.
         self._record(created.team, created.given, replace=created.replaced)
 
-    def when_sub_team_work_is_accepted(self, accepted: WorkAccepted) -> None:
+    def when_sub_team_work_is_accepted(self, accepted: SubTeamWorkAccepted) -> None:
         self._record(accepted.team, accepted.given, replace=False)
 
-    def when_removed_team_is_handed_over(self, handed: HandedOver) -> None:
+    def when_removed_team_is_handed_over(self, handed: RemovedTeamHandedOver) -> None:
         self._record(handed.team, handed.given, replace=True)
 
     def when_team_is_removed(self, removed: TeamRemoved) -> str | None:

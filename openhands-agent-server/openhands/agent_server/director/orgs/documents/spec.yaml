@@ -1,9 +1,10 @@
+---
 # How a team works inside its folder. It is the team's own: no other team
 # reads it.
 name: spec
-holds: How your team works inside its folder.
+description: How your team works inside its folder.
 tool: write_spec
-says: >-
+tool_description: >-
     IC only. Write the spec of your folder, how your team works inside it,
     with the commands of your file editor: `create` with the whole of it in
     `file_text`, `str_replace` to change one place, `insert` to add text

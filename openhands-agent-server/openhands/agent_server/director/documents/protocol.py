@@ -15,14 +15,14 @@ from pydantic import BaseModel, Field, create_model
 
 from openhands.agent_server.director.documents.declared import Document
 from openhands.agent_server.director.documents.events import (
-    HandedOver,
+    RemovedTeamHandedOver,
     SubTeamsCreated,
+    SubTeamWorkAccepted,
     TeamRef,
     TeamRemoved,
-    WorkAccepted,
 )
 from openhands.agent_server.director.documents.store import DocumentStore
-from openhands.agent_server.director.documents.tree import Tree
+from openhands.agent_server.director.documents.tree import TeamTree
 from openhands.agent_server.director.memory_edit import edited
 from openhands.sdk.errors import Invalid
 
@@ -32,7 +32,7 @@ class UnknownProtocol(ValueError):
 
 
 @dataclass(frozen=True)
-class Writing:
+class DocumentToolCall:
     """One call of a document's tool.
 
     Attributes:
@@ -53,7 +53,7 @@ class Writing:
 
 
 @dataclass(frozen=True)
-class Shown:
+class ShownDocument:
     """A document as a team that reads it is shown it.
 
     Attributes:
@@ -70,7 +70,7 @@ class Shown:
 
 
 @dataclass(frozen=True)
-class Written:
+class DocumentToolResult:
     """What came of a call of a document's tool.
 
     Attributes:
@@ -147,7 +147,9 @@ class DocumentProtocolBase(ABC):
         commands and arguments of the file editor."""
         return editor_arguments(document.written_with, document.name)
 
-    def __init__(self, document: Document, store: DocumentStore, tree: Tree) -> None:
+    def __init__(
+        self, document: Document, store: DocumentStore, tree: TeamTree
+    ) -> None:
         """
         Args:
             document: The document this is the protocol of.
@@ -158,7 +160,7 @@ class DocumentProtocolBase(ABC):
         self.store = store
         self.tree = tree
 
-    def write(self, writing: Writing) -> Written:
+    def write(self, call: DocumentToolCall) -> DocumentToolResult:
         """Carry out a call of the document's tool.
 
         The plain document is rewritten whole, or changed in one place,
@@ -168,20 +170,20 @@ class DocumentProtocolBase(ABC):
             Invalid: The call cannot be carried out as it was made.
         """
         name = self.document.name
-        given = writing.arguments
+        given = call.arguments
         command: Any = getattr(given, "command", "create")
         text = getattr(given, "file_text", "")
         old_str = getattr(given, "old_str", "")
         new_str = getattr(given, "new_str", "")
         insert_line = getattr(given, "insert_line", None)
-        ref = writing.team.keeps(name)
+        ref = call.team.keeps(name)
         if command != "create":
             if text.strip():
                 raise Invalid(
                     f"`file_text` is the whole {name} and goes with `create`; "
                     f"`{command}` takes `old_str`, `new_str` and `insert_line`"
                 )
-            own = self.store.read(writing.team.session, ref)
+            own = self.store.read(call.team.session, ref)
             if own is None:
                 raise Invalid(
                     f"Your team has no {name} to change yet: write it with `create`"
@@ -194,12 +196,12 @@ class DocumentProtocolBase(ABC):
             )
         if not text.strip():
             raise Invalid(f"A {name} cannot be empty")
-        self.store.write(writing.team.session, ref, text)
-        return Written(
-            f"Saved the {name} of {writing.team.folder or 'the repository'}."
+        self.store.write(call.team.session, ref, text)
+        return DocumentToolResult(
+            f"Saved the {name} of {call.team.folder or 'the repository'}."
         )
 
-    def told_to_reader(self, shown: Sequence[Shown]) -> dict[str, Any]:
+    def told_to_reader(self, shown: Sequence[ShownDocument]) -> dict[str, Any]:
         """What the context of an agent says of this document: the parts
         it adds to it, by the name of each. The agent is told of a part
         again whenever it changes.
@@ -248,10 +250,10 @@ class DocumentProtocolBase(ABC):
     def when_sub_teams_are_created(self, created: SubTeamsCreated) -> None:
         """A proposal was approved and the team now has sub-teams."""
 
-    def when_sub_team_work_is_accepted(self, accepted: WorkAccepted) -> None:
+    def when_sub_team_work_is_accepted(self, accepted: SubTeamWorkAccepted) -> None:
         """The team's reviewer accepted what a sub-team submitted."""
 
-    def when_removed_team_is_handed_over(self, handed: HandedOver) -> None:
+    def when_removed_team_is_handed_over(self, handed: RemovedTeamHandedOver) -> None:
         """The team above passed on to the team what the teams before it
         left."""
 
@@ -294,7 +296,7 @@ def protocol_class(document: Document) -> type[DocumentProtocolBase]:
 
 
 def protocol_of(
-    document: Document, store: DocumentStore, tree: Tree
+    document: Document, store: DocumentStore, tree: TeamTree
 ) -> DocumentProtocolBase:
     """What ``document`` does: the protocol it names, or the plain one.
 

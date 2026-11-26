@@ -22,7 +22,7 @@ from tests.agent_server.director.conftest import (
 
 
 # A document that is one YAML file: no protocol, no tool named, no Python.
-GLOSSARY = "holds: What the words of this team's work mean.\n"
+GLOSSARY = "description: What the words of this team's work mean.\n"
 
 
 @pytest.fixture
@@ -125,7 +125,7 @@ async def test_a_team_is_told_the_documents_its_type_keeps_under_their_names(
     assert [found.model_dump() for found in service.documents_of(root)] == [
         {
             "name": "glossary",
-            "holds": "What the words of this team's work mean.",
+            "description": "What the words of this team's work mean.",
             "path": "",
             "text": "A run is a job.",
             "own": True,

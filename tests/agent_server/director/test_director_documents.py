@@ -11,11 +11,11 @@ from openhands.agent_server.director.documents.declared import (
     read_document,
 )
 from openhands.agent_server.director.documents.events import (
-    HandedOver,
+    RemovedTeamHandedOver,
     SubTeamsCreated,
+    SubTeamWorkAccepted,
     TeamRef,
     TeamRemoved,
-    WorkAccepted,
 )
 from openhands.agent_server.director.documents.protocol import (
     DocumentProtocolBase,
@@ -23,8 +23,8 @@ from openhands.agent_server.director.documents.protocol import (
     protocol_of,
 )
 from openhands.agent_server.director.documents.store import (
-    DocRef,
-    Draft,
+    DocumentDraft,
+    DocumentRef,
     GitDocumentStore,
 )
 from openhands.agent_server.director.git_store import GitStore
@@ -41,7 +41,7 @@ from openhands.agent_server.director.service import DirectorService
 from openhands.agent_server.director.service.state import DIRECTOR_TOOL_NAMES
 
 
-NOTES = DocRef("services/api", "notes")
+NOTES = DocumentRef("services/api", "notes")
 
 
 class FakeTree:
@@ -81,9 +81,9 @@ def store(repo: Path) -> GitDocumentStore:
 
 def test_a_document_is_kept_in_its_teams_folder_under_its_name():
     assert NOTES.path == "services/api/notes.md"
-    assert DocRef("", "notes").path == "notes.md"
-    assert DocRef.at("services/api/notes.md") == NOTES
-    assert DocRef.at("notes.md") == DocRef("", "notes")
+    assert DocumentRef("", "notes").path == "notes.md"
+    assert DocumentRef.at("services/api/notes.md") == NOTES
+    assert DocumentRef.at("notes.md") == DocumentRef("", "notes")
 
 
 def test_what_a_session_writes_is_its_own_until_it_is_taken(
@@ -96,7 +96,7 @@ def test_what_a_session_writes_is_its_own_until_it_is_taken(
     assert store.read("one", NOTES) == "Session one's."
     assert store.read("two", NOTES) == "The org's."
     assert store.read("", NOTES) == "The org's."
-    assert store.drafts("one") == {NOTES: Draft("Session one's.", "The org's.")}
+    assert store.drafts("one") == {NOTES: DocumentDraft("Session one's.", "The org's.")}
     assert store.drafts("two") == {}
 
 
@@ -107,7 +107,7 @@ def test_a_session_keeps_what_it_first_wrote_over(store: GitDocumentStore, repo:
 
     store.write("one", NOTES, "Mine, again.")
 
-    assert store.drafts("one")[NOTES] == Draft("Mine, again.", "First.")
+    assert store.drafts("one")[NOTES] == DocumentDraft("Mine, again.", "First.")
 
 
 def test_a_session_may_remove_a_document_or_forget_what_it_made_of_it(
@@ -118,7 +118,7 @@ def test_a_session_may_remove_a_document_or_forget_what_it_made_of_it(
     store.remove("one", NOTES)
 
     assert store.read("one", NOTES) is None
-    assert store.drafts("one")[NOTES] == Draft(None, "The org's.")
+    assert store.drafts("one")[NOTES] == DocumentDraft(None, "The org's.")
 
     store.discard("one", NOTES)
 
@@ -141,7 +141,7 @@ def test_the_shipped_documents_are_the_ones_the_shipped_types_keep():
 
 def test_a_document_needs_no_more_than_a_name_and_what_it_holds(tmp_path: Path):
     path = tmp_path / "decision-log.yaml"
-    path.write_text("holds: What was decided and why.\n")
+    path.write_text("description: What was decided and why.\n")
 
     document = read_document(path)
 
@@ -151,10 +151,10 @@ def test_a_document_needs_no_more_than_a_name_and_what_it_holds(tmp_path: Path):
 
 
 def test_a_file_that_is_no_document_is_left_out(tmp_path: Path):
-    (tmp_path / "notes.yaml").write_text("holds: Notes.\n")
+    (tmp_path / "notes.yaml").write_text("description: Notes.\n")
     (tmp_path / "empty.yaml").write_text("name: empty\n")
-    (tmp_path / "other.yaml").write_text("name: another\nholds: Something.\n")
-    (tmp_path / "flagged.yaml").write_text("holds: Something.\nappend: true\n")
+    (tmp_path / "other.yaml").write_text("name: another\ndescription: Something.\n")
+    (tmp_path / "flagged.yaml").write_text("description: Something.\nappend: true\n")
 
     with pytest.raises(InvalidDocument, match="name the file after it"):
         read_document(tmp_path / "other.yaml")
@@ -165,8 +165,8 @@ def test_a_file_that_is_no_document_is_left_out(tmp_path: Path):
 def test_a_type_says_what_a_document_holds_for_it_or_takes_the_documents_own(
     tmp_path: Path,
 ):
-    (tmp_path / "notes.yaml").write_text("holds: Notes of the team.\n")
-    (tmp_path / "plan.yaml").write_text("holds: The plan.\n")
+    (tmp_path / "notes.yaml").write_text("description: Notes of the team.\n")
+    (tmp_path / "plan.yaml").write_text("description: The plan.\n")
     documents = load_documents([tmp_path])
     path = tmp_path / "planner.yaml"
     path.write_text(
@@ -210,7 +210,7 @@ def test_a_type_cannot_keep_a_document_there_is_none_of(tmp_path: Path):
 def test_a_document_without_a_protocol_is_a_plain_text(
     store: GitDocumentStore, tmp_path: Path
 ):
-    (tmp_path / "notes.yaml").write_text("holds: Notes.\n")
+    (tmp_path / "notes.yaml").write_text("description: Notes.\n")
 
     protocol = protocol_of(read_document(tmp_path / "notes.yaml"), store, TREE)
 
@@ -223,8 +223,10 @@ def test_a_document_does_what_the_protocol_it_names_does(
 ):
     # Any document may name the protocol: it is not the name `contracts`
     # that makes a document wait for the teams.
-    (tmp_path / "glossary.yaml").write_text("holds: Terms.\nprotocol: contracts\n")
-    (tmp_path / "plan.yaml").write_text("holds: The plan.\nprotocol: nobodys\n")
+    (tmp_path / "glossary.yaml").write_text(
+        "description: Terms.\nprotocol: contracts\n"
+    )
+    (tmp_path / "plan.yaml").write_text("description: The plan.\nprotocol: nobodys\n")
 
     protocol = protocol_of(read_document(tmp_path / "glossary.yaml"), store, TREE)
 
@@ -246,7 +248,7 @@ def test_the_director_asks_a_files_document_what_it_does(repo: Path):
 
 
 TEAM = TeamRef(id="services.api@one", session="one", folder="services/api")
-CONTRACTS = DocRef("services/api", "contracts")
+CONTRACTS = DocumentRef("services/api", "contracts")
 
 
 @pytest.fixture
@@ -293,7 +295,7 @@ def test_contracts_grow_by_what_a_reviewer_establishes_and_a_hand_over_replaces(
     store.write("one", CONTRACTS, "Cart owns the cart page.\n")
 
     contracts.when_sub_team_work_is_accepted(
-        WorkAccepted(TEAM, {"contracts": "Prices are in cents."})
+        SubTeamWorkAccepted(TEAM, {"contracts": "Prices are in cents."})
     )
 
     assert store.read("one", CONTRACTS) == (
@@ -301,7 +303,7 @@ def test_contracts_grow_by_what_a_reviewer_establishes_and_a_hand_over_replaces(
     )
 
     contracts.when_removed_team_is_handed_over(
-        HandedOver(TEAM, {"contracts": "Only the cart is left."})
+        RemovedTeamHandedOver(TEAM, {"contracts": "Only the cart is left."})
     )
 
     assert store.read("one", CONTRACTS) == "Only the cart is left.\n"
@@ -311,7 +313,9 @@ def test_contracts_are_told_only_of_what_is_given_for_them(
     contracts: ContractsProtocol, store: GitDocumentStore
 ):
     contracts.when_sub_teams_are_created(SubTeamsCreated(TEAM, {"notes": "Other."}))
-    contracts.when_sub_team_work_is_accepted(WorkAccepted(TEAM, {"contracts": "  "}))
+    contracts.when_sub_team_work_is_accepted(
+        SubTeamWorkAccepted(TEAM, {"contracts": "  "})
+    )
 
     assert store.drafts("one") == {}
 
@@ -346,7 +350,7 @@ def test_the_store_tells_of_every_change_a_session_makes(repo: Path):
 def test_a_plain_document_is_read_by_the_team_that_keeps_it_and_no_other(
     store: GitDocumentStore, tmp_path: Path
 ):
-    (tmp_path / "notes.yaml").write_text("holds: Notes.\n")
+    (tmp_path / "notes.yaml").write_text("description: Notes.\n")
     plain = protocol_of(read_document(tmp_path / "notes.yaml"), store, TREE)
 
     assert plain.read_from(TREE.ref("services.api")) == [TREE.ref("services.api")]
