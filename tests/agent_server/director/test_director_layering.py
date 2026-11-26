@@ -83,7 +83,8 @@ def test_where_documents_are_kept_knows_no_tool_type_or_tree():
         if name.startswith("openhands.agent_server.director.")
     }
 
-    assert reached == {"git_store", "run_state"}
+    # `models` for what an entry of a log is.
+    assert reached == {"git_store", "models", "run_state"}
 
 
 @pytest.mark.parametrize(
@@ -118,3 +119,4 @@ def test_the_director_has_no_tool_for_any_one_document(module: str):
 
     assert "def write_spec" not in text and "def edit_contracts" not in text
     assert "WRITE_SPEC" not in text and "EDIT_CONTRACTS" not in text
+    assert "def report(" not in text and "REPORT = ToolSpec" not in text

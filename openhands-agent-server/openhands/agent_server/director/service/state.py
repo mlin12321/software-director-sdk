@@ -90,6 +90,7 @@ from openhands.agent_server.director.models import (
     OrgSummary,
     PauseReason,
     RecoveryItem,
+    Report,
     RoutedRequest,
     SessionTeam,
     SessionTeamInput,
@@ -173,7 +174,6 @@ DIRECTOR_TOOL_NAMES = (
     "read_team_context",
     "raise_escalation",
     "resolve_escalation",
-    "report",
     "msg_manager",
     "propose_teams",
     "msg_team",
@@ -497,7 +497,7 @@ class ServiceState:
         # Held while one of a session's own records is read and added to.
         self._keeping = threading.RLock()
         self.documents: DocumentStore = GitDocumentStore(
-            self._memory, self._runs, self._document_changed
+            self._memory, self._runs, self._document_changed, self
         )
         self.tree: TeamTree = _TeamsOfTheOrg(lambda: self.org)
         # The kind of organisation this is: what it allows.
@@ -626,6 +626,14 @@ class ServiceState:
 
     def _memory(self) -> GitStore:
         return GitStore(self._repo_dir)
+
+    def entries(self, team: TeamRef, name: str) -> list[Report]:
+        """What was added to a log of a team; the records keep it."""
+        raise NotImplementedError
+
+    def append(self, team: TeamRef, name: str, entry: Report) -> None:
+        """Add to a log of a team; the records keep it."""
+        raise NotImplementedError
 
     def _migrate_reports(self, store: OrgStore) -> None:
         """Move the reports of an org that kept them by team id into each

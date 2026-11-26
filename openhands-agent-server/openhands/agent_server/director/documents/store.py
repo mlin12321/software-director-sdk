@@ -12,10 +12,13 @@ import json
 import threading
 from abc import ABC, abstractmethod
 from collections.abc import Callable
-from typing import NamedTuple
+from dataclasses import dataclass
+from typing import NamedTuple, Protocol
 
 from openhands.agent_server.director.git_store import GitStore
+from openhands.agent_server.director.models import Report as LogEntry
 from openhands.agent_server.director.run_state import FILES, RunState
+from openhands.sdk.errors import NotSupported
 
 
 class DocumentRef(NamedTuple):
@@ -35,6 +38,25 @@ class DocumentRef(NamedTuple):
         """The document kept at ``path``."""
         folder, _, file = path.rpartition("/")
         return cls(folder, file.removesuffix(".md"))
+
+
+@dataclass(frozen=True)
+class TeamRef:
+    """The team a document is told of: the work of one team in a session.
+
+    Attributes:
+        id: The id of the session's place of the team.
+        session: The session the work is of.
+        folder: The team's folder, where its documents are kept.
+    """
+
+    id: str
+    session: str
+    folder: str
+
+    def keeps(self, name: str) -> DocumentRef:
+        """The team's document of that name."""
+        return DocumentRef(self.folder, name)
 
 
 class DocumentDraft(NamedTuple):
@@ -76,6 +98,17 @@ class DocumentStore(ABC):
         """Every document ``session`` wrote or removed and the org has not
         taken yet."""
 
+    @abstractmethod
+    def entries(self, team: TeamRef, name: str) -> list[LogEntry]:
+        """What was added to the log named ``name`` of a team, oldest
+        first: what the org has of it and what the team's session added."""
+
+    @abstractmethod
+    def append(self, team: TeamRef, name: str, entry: LogEntry) -> None:
+        """Add an entry to the log named ``name`` of a team, for its
+        session alone until its work is accepted. The store says when it
+        was added and in which session."""
+
 
 class GitDocumentStore(DocumentStore):
     """Documents in the org's team memory, a hidden ref of its git
@@ -87,6 +120,7 @@ class GitDocumentStore(DocumentStore):
         memory: Callable[[], GitStore],
         runs: Callable[[], RunState],
         changed: Callable[[str], None] = lambda _session: None,
+        logs: "Logs | None" = None,
     ) -> None:
         """
         Args:
@@ -94,10 +128,13 @@ class GitDocumentStore(DocumentStore):
             runs: Where the director keeps its unfinished work.
             changed: Told the session whenever one writes or removes a
                 document.
+            logs: Where what teams add to their logs is kept; None for a
+                store that keeps none.
         """
         self._memory = memory
         self._runs = runs
         self._changed = changed
+        self._logs = logs
         self._lock = threading.RLock()
 
     def read(self, session: str, ref: DocumentRef) -> str | None:
@@ -137,6 +174,22 @@ class GitDocumentStore(DocumentStore):
             )
         self._changed(session)
 
+    def entries(self, team: TeamRef, name: str) -> list[LogEntry]:
+        return self._logs.entries(team, name) if self._logs else []
+
+    def append(self, team: TeamRef, name: str, entry: LogEntry) -> None:
+        if self._logs is None:
+            raise NotSupported("This store keeps no logs")
+        self._logs.append(team, name, entry)
+
 
 def _key(session: str, ref: DocumentRef) -> str:
     return f"{session}\n{ref.path}"
+
+
+class Logs(Protocol):
+    """Where what teams add to their logs is kept."""
+
+    def entries(self, team: TeamRef, name: str) -> list[LogEntry]: ...
+
+    def append(self, team: TeamRef, name: str, entry: LogEntry) -> None: ...

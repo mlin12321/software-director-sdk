@@ -41,14 +41,12 @@ from openhands.agent_server.director.service.state import (
 from openhands.agent_server.director.tools import (
     PruneTeamTool,
     RaiseEscalationTool,
-    ReportTool,
     ReviewTeamTool,
     SettleTeamsTool,
     SubmitReviewTool,
 )
 from openhands.agent_server.director.tools.definition import (
     RaiseEscalationAction,
-    ReportAction,
     ReviewTeamAction,
     SettleTeamsAction,
 )
@@ -86,8 +84,11 @@ from tests.agent_server.director.conftest import (
     waiting,
 )
 from tests.agent_server.director.document_tools import (
+    ReportAction,
+    ReportTool,
     WriteSpecAction,
     WriteSpecTool,
+    report,
 )
 
 
@@ -151,7 +152,7 @@ async def test_what_is_recorded_while_work_lands_is_not_lost(
     def a_report_comes(*args: Any, **kwargs: Any):
         # The session's records are read by now and not yet cleared.
         writer = threading.Thread(
-            target=service.report, args=(root, "ic", "Chose JSON.")
+            target=report, args=(service, root, "ic", "Chose JSON.")
         )
         writer.start()
         writer.join(0.3)
