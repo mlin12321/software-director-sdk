@@ -24,7 +24,6 @@ from openhands.agent_server.director.git import (
     uncommitted,
 )
 from openhands.agent_server.director.git_store import (
-    CONTRACTS_FILE,
     SPEC_FILE,
     normalize_store_path,
 )
@@ -700,7 +699,7 @@ class Reviews(Requests):
         memory = self._memory()
         for file, (text, over) in sorted(self.drafts(top.session).items()):
             path = file.rpartition("/")[0]
-            if not file.endswith(CONTRACTS_FILE) or path in coming:
+            if not self._waits_for_team_changes(file) or path in coming:
                 continue
             has = memory.read(file)
             if has != over and has != text:
@@ -1079,7 +1078,7 @@ class Reviews(Requests):
             agreements = {
                 file
                 for file in self.drafts(top.session)
-                if file.endswith(CONTRACTS_FILE)
+                if self._waits_for_team_changes(file)
             }
             self._keep_merge(
                 top,
@@ -1330,6 +1329,12 @@ class Reviews(Requests):
                 )
         self._org_turn()
 
+    def _waits_for_team_changes(self, file: str) -> bool:
+        """Whether what a session wrote in a file of team memory becomes
+        the org's only with its changes to the teams: its document says."""
+        protocol = self.protocol_at(file)
+        return protocol is not None and protocol.waits_for_team_changes()
+
     def _contracts_written(self, top: SessionTeam) -> list[tuple[str, str]]:
         """The contracts a session wrote that are not the org's: each
         directory with the session's text."""
@@ -1337,7 +1342,7 @@ class Reviews(Requests):
         return [
             (file.rpartition("/")[0], text or "")
             for file, (text, _) in sorted(self.drafts(top.session).items())
-            if file.endswith(CONTRACTS_FILE) and memory.read(file) != text
+            if self._waits_for_team_changes(file) and memory.read(file) != text
         ]
 
     def _merged_as(self, place: SessionTeam) -> str:

@@ -52,7 +52,6 @@ from openhands.agent_server.director.service.state import (
     _REASON_KEPT,
     PRUNED_REFS,
     _child_node,
-    _contracts_file,
     _Held,
     _spec_file,
     conversations_of,
@@ -287,15 +286,12 @@ class Splits(Watch):
                 await self._archive(team, "replaced", plan.stamp)
                 self.record_event(place_id, "replaced", team)
                 store.remove(team.id)
-        if proposal.contracts.strip():
-            # Contracts that named teams which are gone do not stay beside
-            # the new ones.
-            await asyncio.to_thread(
-                self._record_contracts,
-                place,
-                proposal.contracts,
-                bool(plan.replaces),
-            )
+        await asyncio.to_thread(
+            self.sub_teams_created,
+            place,
+            {"contracts": proposal.contracts},
+            bool(plan.replaces),
+        )
 
         teams = plan.teams
         for team in teams:
@@ -609,8 +605,10 @@ class Splits(Watch):
         record = next((f for f in kept if f.id == team.team_id and f.at == at), None)
         if record is None:
             reports = await asyncio.to_thread(self.reports_of, team)
-            agreed = _contracts_file(normalize_store_path(team.boundary.path))
-            contracts = await asyncio.to_thread(self.read_file, team, agreed)
+            # What each of the team's documents keeps of itself. A document
+            # that keeps nothing stays where it is: an old one for whoever
+            # has the directory next.
+            kept = await asyncio.to_thread(self.team_removed, team)
             record = FormerTeam(
                 id=team.team_id,
                 title=team.title,
@@ -622,18 +620,13 @@ class Splits(Watch):
                 review=team.review.state if team.review else None,
                 reports=reports,
                 compacted_report=await self._as_one_report(reports),
-                contracts=contracts or "",
+                contracts=kept.get("contracts", ""),
                 session=self.org.session_title(team),
                 since=team.since,
                 threads=self._take_threads(team.id),
             )
-            # The record is the session's until its work is accepted, and
-            # so is the directory without the contracts of a team that is
-            # gone. The spec the team wrote stays the session's too: an
-            # old one for whoever has the directory next.
+            # The record is the session's until its work is accepted.
             self._keep_former(team.session, record)
-            if contracts:
-                await asyncio.to_thread(self._draft, team.session, agreed, None)
         run = self._runs()
         for kind in (TASK, PROGRESS, CHECKS, REPORTS):
             run.unmark(kind, team.id)

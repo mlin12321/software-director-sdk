@@ -45,7 +45,14 @@ def test_what_a_tool_is_knows_no_tool_of_the_directors():
 
 @pytest.mark.parametrize(
     "module",
-    ["org.py", "documents/store.py", "documents/declared.py", "tools/spec.py"],
+    [
+        "org.py",
+        "documents/store.py",
+        "documents/declared.py",
+        "documents/events.py",
+        "documents/protocol.py",
+        "tools/spec.py",
+    ],
 )
 def test_the_directors_own_parts_do_not_know_the_shipped_orgs_or_the_service(
     module: str,
@@ -74,3 +81,18 @@ def test_where_documents_are_kept_knows_no_tool_type_or_tree():
     }
 
     assert reached == {"git_store", "run_state"}
+
+
+@pytest.mark.parametrize("module", ["orgs/documents/contracts.py"])
+def test_what_a_document_does_reaches_the_director_only_through_documents(
+    module: str,
+):
+    # A document acts through the store it is given. It knows nothing of
+    # how teams are split, reviewed or merged.
+    reached = {
+        name.removeprefix("openhands.agent_server.director.")
+        for name in _imports(module)
+        if name.startswith("openhands.agent_server.director.")
+    }
+
+    assert all(name.startswith("documents.") for name in reached)

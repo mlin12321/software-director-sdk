@@ -3,3 +3,4 @@
 name: contracts
 holds: What teams promise each other.
 tool: edit_contracts
+protocol: contracts

@@ -9,6 +9,7 @@ a team keeps, and what becomes of a document as the team's work goes on.
 from pathlib import Path
 
 from openhands.agent_server.director.org import OrgBase
+from openhands.agent_server.director.orgs import documents  # noqa: F401
 from openhands.agent_server.director.orgs.research import ResearchOrg
 from openhands.agent_server.director.orgs.software import SoftwareOrg
 

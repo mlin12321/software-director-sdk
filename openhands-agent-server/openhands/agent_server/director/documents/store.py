@@ -83,15 +83,21 @@ class GitDocumentStore(DocumentStore):
     unfinished work until it is accepted."""
 
     def __init__(
-        self, memory: Callable[[], GitStore], runs: Callable[[], RunState]
+        self,
+        memory: Callable[[], GitStore],
+        runs: Callable[[], RunState],
+        changed: Callable[[str], None] = lambda _session: None,
     ) -> None:
         """
         Args:
             memory: The org's team memory, as it is when asked.
             runs: Where the director keeps its unfinished work.
+            changed: Told the session whenever one writes or removes a
+                document.
         """
         self._memory = memory
         self._runs = runs
+        self._changed = changed
         self._lock = threading.RLock()
 
     def read(self, session: str, ref: DocRef) -> str | None:
@@ -129,6 +135,7 @@ class GitDocumentStore(DocumentStore):
             self._runs().mark(
                 FILES, _key(session, ref), json.dumps({"text": text, "over": over})
             )
+        self._changed(session)
 
 
 def _key(session: str, ref: DocRef) -> str:
