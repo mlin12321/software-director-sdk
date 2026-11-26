@@ -53,7 +53,7 @@ def list_tools(service: DirectorService, conversation_id: UUID) -> list[RemoteTo
     return [
         RemoteTool(
             name=name,
-            description=tool.summary,
+            description=tool.spec.summary,
             input_schema=tool.action().to_mcp_schema(),
         )
         for name, tool in DIRECTOR_TOOLS.items()
@@ -80,6 +80,6 @@ def call_tool(
         caller = acting(service, conversation_id)
         if name not in _offered(service, caller):
             return ToolAnswer(text=f"{name} is not one of your tools.", is_error=True)
-        return ToolAnswer(text=tool.act()(service, caller, action), is_error=False)
+        return ToolAnswer(text=tool.spec.act(service, caller, action), is_error=False)
     except (DomainError, GitError) as error:
         return ToolAnswer(text=str(error), is_error=True)
