@@ -18,7 +18,10 @@ from openhands.agent_server.director.documents.events import (
     TeamRemoved,
     WorkAccepted,
 )
-from openhands.agent_server.director.documents.protocol import Shown
+from openhands.agent_server.director.documents.protocol import (
+    DocumentProtocolBase,
+    Shown,
+)
 from openhands.agent_server.director.documents.store import DocRef
 from openhands.agent_server.director.git import (
     changed_together,
@@ -47,6 +50,7 @@ from openhands.agent_server.director.models import (
     RoutedRequest,
     SessionTeam,
     SplitProposal,
+    TeamDocument,
     TeamEvent,
     TeamEventKind,
     Thread,
@@ -948,16 +952,59 @@ class Records(ServiceState):
         the order the type lists them, and any other it is shown one of."""
         shown = self.documents_shown(node)
         kept = self.protocols_of(node)
-        others = [
-            protocol for protocol in self.protocols.values() if protocol not in kept
-        ]
         told: dict[str, Any] = {}
-        for protocol in (*kept, *others):
+        for protocol in self._protocols_for(node):
             name = protocol.document.name
             of_it = [found for found in shown if found.name == name]
             if of_it or protocol in kept:
                 told |= protocol.told_to_reader(of_it)
         return told
+
+    def _protocols_for(self, node: OrgNode) -> list[DocumentProtocolBase]:
+        """What every document of the org does: first the ones the team's
+        type keeps, in the order the type lists them."""
+        kept = self.protocols_of(node)
+        return [
+            *kept,
+            *(found for found in self.protocols.values() if found not in kept),
+        ]
+
+    def documents_of(self, node: OrgNode) -> list[TeamDocument]:
+        """The documents a team reads, for whoever looks at the team: the
+        ones it is shown, and with them what teams before it left in its
+        folder."""
+        holds = self.type_of(node).documents
+        shown = self.documents_shown(node)
+        left = [spec for spec in self.specs_of(node) if spec.old]
+        found: list[TeamDocument] = []
+        for protocol in self._protocols_for(node):
+            document = protocol.document
+            said = holds.get(document.name) or document.holds
+            found += [
+                TeamDocument(
+                    name=one.name,
+                    holds=said,
+                    path=one.folder,
+                    text=one.text,
+                    own=one.own,
+                )
+                for one in shown
+                if one.name == document.name
+            ]
+            if document.name == LEFT_BEHIND:
+                found += [
+                    TeamDocument(
+                        name=document.name,
+                        holds=said,
+                        path=spec.path,
+                        text=spec.spec,
+                        own=False,
+                        left=True,
+                        left_by=spec.left_by,
+                    )
+                    for spec in left
+                ]
+        return found
 
     def documents_shown(self, node: OrgNode) -> list[Shown]:
         """Every document a team reads, as its session has it: of each
@@ -966,7 +1013,7 @@ class Records(ServiceState):
         reader = team_ref(node)
         left = {normalize_store_path(old.path) for old in node.old_specs}
         found: dict[DocRef, Shown] = {}
-        for protocol in self.protocols.values():
+        for protocol in self._protocols_for(node):
             name = protocol.document.name
             for owner in protocol.read_from(reader):
                 ref = owner.keeps(name)

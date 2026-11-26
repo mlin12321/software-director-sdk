@@ -121,6 +121,18 @@ async def test_a_team_is_told_the_documents_its_type_keeps_under_their_names(
 
     assert "glossary" in before and before["glossary"] is None
     assert after["glossary"] == "A run is a job."
+    # Whoever looks at the team is given it as the team reads it.
+    assert [found.model_dump() for found in service.documents_of(root)] == [
+        {
+            "name": "glossary",
+            "holds": "What the words of this team's work mean.",
+            "path": "",
+            "text": "A run is a job.",
+            "own": True,
+            "left": False,
+            "left_by": None,
+        }
+    ]
     # Its type keeps the glossary alone.
     assert "spec" not in after
 

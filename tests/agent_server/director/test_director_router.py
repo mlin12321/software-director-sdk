@@ -181,16 +181,28 @@ def test_returns_what_applies_to_the_nodes_boundary_and_what_its_agents_reported
 
     assert response.status_code == 200
     assert response.json() == {
-        "specs": [
+        "documents": [
             {
+                "name": "spec",
+                "holds": "How your team works inside its folder.",
                 "path": "svc/a",
-                "spec": "a spec",
-                "readonly": False,
-                "old": False,
+                "text": "a spec",
+                "own": True,
+                "left": False,
                 "left_by": None,
-            }
+            },
+            {
+                "name": "contracts",
+                "holds": (
+                    "What teams promise each other: types, endpoints, file formats."
+                ),
+                "path": "",
+                "text": "a serves b",
+                "own": False,
+                "left": False,
+                "left_by": None,
+            },
         ],
-        "contracts": [{"path": "", "contracts": "a serves b", "own": False}],
         "reports": [earlier.model_dump(), later.model_dump()],
         "former_teams": [],
         "history": [],
