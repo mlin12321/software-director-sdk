@@ -40,7 +40,13 @@ from openhands.agent_server.director.documents.declared import (
     DOCUMENTS_FOLDER,
     load_documents,
 )
+from openhands.agent_server.director.documents.protocol import (
+    DocumentProtocolBase,
+    UnknownProtocol,
+    protocol_of,
+)
 from openhands.agent_server.director.documents.store import (
+    DocRef,
     DocumentStore,
     GitDocumentStore,
 )
@@ -475,6 +481,7 @@ class ServiceState:
             load_org_config(config_file) if config_file else {}
         )
         self._agent_types: dict[str, TeamTemplate] | None = None
+        self._protocols: dict[str, DocumentProtocolBase] = {}
         self._agent_types_seen: tuple[tuple[str, int], ...] = ()
         # What the org sets for itself, by the repository it was read from.
         self._own_settings: tuple[str, OrgSettings] | None = None
@@ -650,6 +657,22 @@ class ServiceState:
         and the ones beside ``director.yaml``. They are read again when a
         file among them is added, removed or changed, so a new type can be
         given to the next team without a restart."""
+        return self._declared()[0]
+
+    @property
+    def protocols(self) -> dict[str, DocumentProtocolBase]:
+        """What each document teams may keep does, by the document's name.
+        Read again with the types."""
+        return self._declared()[1]
+
+    def protocol_at(self, file: str) -> DocumentProtocolBase | None:
+        """What the document kept in ``file`` of team memory does; None
+        for a file that is no document anyone declared."""
+        return self.protocols.get(DocRef.at(file).name)
+
+    def _declared(
+        self,
+    ) -> tuple[dict[str, TeamTemplate], dict[str, DocumentProtocolBase]]:
         folders = [*SHIPPED_TYPES]
         documents = [SHIPPED_DOCUMENTS]
         if self._config_file:
@@ -665,11 +688,20 @@ class ServiceState:
         seen = tuple((str(path), path.stat().st_mtime_ns) for path in files)
         with self._lock:
             if self._agent_types is None or seen != self._agent_types_seen:
+                protocols: dict[str, DocumentProtocolBase] = {}
+                for document in load_documents(documents).values():
+                    try:
+                        protocols[document.name] = protocol_of(document, self.documents)
+                    except UnknownProtocol:
+                        logger.exception("Ignoring the document %s", document.name)
                 self._agent_types = load_types(
-                    folders, DIRECTOR_TOOL_NAMES, load_documents(documents)
+                    folders,
+                    DIRECTOR_TOOL_NAMES,
+                    {name: found.document for name, found in protocols.items()},
                 )
+                self._protocols = protocols
                 self._agent_types_seen = seen
-            return self._agent_types
+            return self._agent_types, self._protocols
 
     def type_of(self, node: OrgNodeInput) -> TeamTemplate:
         """The type of a team. A team whose type the director no longer

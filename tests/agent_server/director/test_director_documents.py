@@ -10,6 +10,11 @@ from openhands.agent_server.director.documents.declared import (
     load_documents,
     read_document,
 )
+from openhands.agent_server.director.documents.protocol import (
+    DocumentProtocolBase,
+    UnknownProtocol,
+    protocol_of,
+)
 from openhands.agent_server.director.documents.store import (
     DocRef,
     Draft,
@@ -17,7 +22,9 @@ from openhands.agent_server.director.documents.store import (
 )
 from openhands.agent_server.director.git_store import GitStore
 from openhands.agent_server.director.orgs import SHIPPED_DOCUMENTS, SHIPPED_TYPES
+from openhands.agent_server.director.orgs.documents import ContractsProtocol
 from openhands.agent_server.director.run_state import RunState
+from openhands.agent_server.director.service import DirectorService
 from openhands.agent_server.director.service.state import DIRECTOR_TOOL_NAMES
 
 
@@ -156,3 +163,41 @@ def test_a_type_cannot_keep_a_document_there_is_none_of(tmp_path: Path):
 
     with pytest.raises(InvalidAgentType, match="no document named roadmap"):
         read_type(path, DIRECTOR_TOOL_NAMES, {})
+
+
+def test_a_document_without_a_protocol_is_a_plain_text(
+    store: GitDocumentStore, tmp_path: Path
+):
+    (tmp_path / "notes.yaml").write_text("holds: Notes.\n")
+
+    protocol = protocol_of(read_document(tmp_path / "notes.yaml"), store)
+
+    assert type(protocol) is DocumentProtocolBase
+    assert not protocol.waits_for_team_changes()
+
+
+def test_a_document_does_what_the_protocol_it_names_does(
+    store: GitDocumentStore, tmp_path: Path
+):
+    # Any document may name the protocol: it is not the name `contracts`
+    # that makes a document wait for the teams.
+    (tmp_path / "glossary.yaml").write_text("holds: Terms.\nprotocol: contracts\n")
+    (tmp_path / "plan.yaml").write_text("holds: The plan.\nprotocol: nobodys\n")
+
+    protocol = protocol_of(read_document(tmp_path / "glossary.yaml"), store)
+
+    assert isinstance(protocol, ContractsProtocol)
+    assert protocol.waits_for_team_changes()
+    with pytest.raises(UnknownProtocol, match="nobodys"):
+        protocol_of(read_document(tmp_path / "plan.yaml"), store)
+
+
+def test_the_director_asks_a_files_document_what_it_does(repo: Path):
+    service = DirectorService(repo)
+
+    assert set(service.protocols) == {"spec", "contracts", "report"}
+    contracts = service.protocol_at("services/api/contracts.md")
+    assert contracts is not None and contracts.waits_for_team_changes()
+    spec = service.protocol_at("spec.md")
+    assert spec is not None and not spec.waits_for_team_changes()
+    assert service.protocol_at("services/api/README.md") is None
