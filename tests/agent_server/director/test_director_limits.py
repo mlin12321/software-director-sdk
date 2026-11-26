@@ -165,6 +165,7 @@ async def test_settings_are_kept_for_the_next_start_beside_the_repository(
         "default_agent_type": "software-engineer",
         "allowed_agent_types": [],
         "resume_on_start": False,
+        "org_kind": "software",
         "report_compaction_chars": 24_000,
         "soft_check_in_minutes": 120,
         "hard_check_in_minutes": 360,

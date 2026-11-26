@@ -211,7 +211,7 @@ async def test_what_agents_write_to_each_other_is_never_the_orgs(
     service: DirectorService, repo: Path
 ):
     top = node(service, "root")
-    service.send(top.id, "ic", top.id, "manager", "Split in two?")
+    service.send_msg(top.id, "ic", top.id, "manager", "Split in two?")
 
     await landed(service)
 

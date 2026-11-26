@@ -219,6 +219,15 @@ class MsgTeamArguments(BaseModel):
     text: str = Field(description="The message, in your own words.")
 
 
+class SendDocumentArguments(BaseModel):
+    """Pass a document of your team to another team, to read."""
+
+    team: str = Field(description="The id of the team that is to read it.")
+    document: str = Field(
+        description="The name of the document, as your team's context lists it."
+    )
+
+
 class HandOverArguments(BaseModel):
     """Pass on to a team below yours what the teams before it left."""
 
@@ -316,6 +325,18 @@ MSG_TEAM = ToolSpec(
     arguments=MsgTeamArguments,
     act=lambda service, caller, action: agent_actions.msg_team(
         service, caller, action.team, action.text
+    ),
+)
+
+SEND_DOCUMENT = ToolSpec(
+    name="send_document",
+    summary="Pass one of your team's documents to another team of your "
+    "session to read from now on: it is told of it, and of every change to "
+    "it, with its next message. Whether you may pass it to that team is "
+    "your org's to say.",
+    arguments=SendDocumentArguments,
+    act=lambda service, caller, action: agent_actions.send_document(
+        service, caller, action.team, action.document
     ),
 )
 
@@ -478,6 +499,7 @@ DIRECTOR_TOOL_SPECS: dict[str, ToolSpec] = {
         PROPOSE_TEAMS,
         MSG_IC,
         MSG_TEAM,
+        SEND_DOCUMENT,
         STOP_TEAM,
         APPROVE_TEAMS,
         DECLINE_TEAMS,

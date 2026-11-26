@@ -741,6 +741,7 @@ def test_the_limits_on_new_teams_are_read_changed_and_kept(saved_tree: Path):
         "default_agent_type": "software-engineer",
         "allowed_agent_types": [],
         "resume_on_start": False,
+        "org_kind": "software",
         "report_compaction_chars": 24_000,
         "soft_check_in_minutes": 120,
         "hard_check_in_minutes": 360,

@@ -274,7 +274,7 @@ def msg_manager(service: DirectorService, caller: Caller, text: str) -> str:
             "proposal: use propose_teams. Raise anything else with "
             "raise_escalation."
         )
-    service.send(node.id, caller.role, node.id, service.team(node).overseer, text)
+    service.send_msg(node.id, caller.role, node.id, service.team(node).overseer, text)
     return f"Sent to your {names.overseer}."
 
 
@@ -320,7 +320,7 @@ def propose_teams(
         node.id, "proposed", None, _named(proposal, replaced), _paths(proposal)
     )
     said = proposed.reason or "I propose these sub-teams."
-    service.send(
+    service.send_msg(
         node.id,
         caller.role,
         node.id,
@@ -357,7 +357,7 @@ def msg_ic(service: DirectorService, caller: Caller, text: str, team: str) -> st
         if waiting
         else ""
     )
-    service.send(
+    service.send_msg(
         node.id, caller.role, target.id, service.team(target).writer, text, note
     )
     return f"Sent to the {names.writer} of {target.title!r}." + (
@@ -434,7 +434,7 @@ def decline_teams(service: DirectorService, caller: Caller, reason: str) -> str:
     service.record_event(
         node.id, "declined", None, f"{named}. Reason: {reason}", _paths(proposal)
     )
-    service.send(
+    service.send_msg(
         node.id,
         caller.role,
         node.id,
@@ -744,6 +744,31 @@ def _team_named(
     return store.instance(name, caller.node.session)
 
 
+def send_document(
+    service: DirectorService, caller: Caller, team: str, document: str
+) -> str:
+    """Pass a document of the caller's team to another team of its
+    session, to read."""
+    _has(service, caller, "send_document", "pass a document to another team")
+    target = _team_named(service, caller, team)
+    if target is None or target.session != caller.node.session:
+        raise Invalid(f"{team.strip()} is not a team of your session")
+    name = document.strip()
+    if name not in service.protocols:
+        raise Invalid(f"The org keeps no document named {name!r}")
+    service.send_ref(
+        caller.node.id,
+        caller.role,
+        target.id,
+        service.team(target).writer,
+        team_ref(caller.node).keeps(name),
+    )
+    return (
+        f"{target.title!r} reads your team's {name} from now on. It is told "
+        "with its next message."
+    )
+
+
 def _team_below(service: DirectorService, caller: Caller, node_id: str) -> SessionTeam:
     team = _team_named(service, caller, node_id)
     if team is None or team.parent_id != caller.node.id:
@@ -765,7 +790,7 @@ def msg_team(service: DirectorService, caller: Caller, team: str, text: str) -> 
         if new
         else []
     )
-    if service.send(
+    if service.send_msg(
         caller.node.id, caller.role, target.id, service.team(target).writer, text
     ):
         return (

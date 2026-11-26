@@ -902,6 +902,15 @@ class DirectorSettings(BaseModel):
             "it up again as soon as the server is back, without being asked."
         ),
     )
+    org_kind: str = Field(
+        default="software",
+        description=(
+            "The kind of organisation the org is, which says who may write "
+            "to whom and who may pass or read whose documents: 'software' "
+            "and 'research' pass documents down the tree only, 'open' "
+            "refuses nothing."
+        ),
+    )
     report_compaction_chars: int = Field(
         default=24_000,
         ge=1_000,
@@ -984,6 +993,7 @@ class DirectorSettingsUpdate(BaseModel):
     default_agent_type: str | None = None
     allowed_agent_types: list[str] | None = None
     resume_on_start: bool | None = None
+    org_kind: str | None = None
     report_compaction_chars: int | None = Field(default=None, ge=1_000)
     soft_check_in_minutes: int | None = Field(default=None, ge=0)
     hard_check_in_minutes: int | None = Field(default=None, ge=0)

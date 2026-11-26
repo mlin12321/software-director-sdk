@@ -115,7 +115,7 @@ from openhands.agent_server.director.org_store import (
     session_team_id,
 )
 from openhands.agent_server.director.orgs import (
-    DEFAULT_ORG,
+    ORG_KINDS,
     SHIPPED_DOCUMENTS,
     SHIPPED_TYPES,
 )
@@ -177,6 +177,7 @@ DIRECTOR_TOOL_NAMES = (
     "msg_manager",
     "propose_teams",
     "msg_team",
+    "send_document",
     "hand_over",
     "stop_team",
     "submit_review",
@@ -500,8 +501,6 @@ class ServiceState:
             self._memory, self._runs, self._document_changed, self
         )
         self.tree: TeamTree = _TeamsOfTheOrg(lambda: self.org)
-        # The kind of organisation this is: what it allows.
-        self.kind: OrgBase = DEFAULT_ORG(self.tree)
         # Held while the tree is saved, and all through a landing, which
         # changes the tree and saves it with team memory in one step.
         self._saving = threading.RLock()
@@ -798,6 +797,17 @@ class ServiceState:
             return self._agent_types, self._protocols
 
     @property
+    def org_kind(self) -> OrgBase:
+        """The kind of organisation this is, as its settings name it:
+        what it allows. One the director does not know is the default."""
+        named = self.settings.org_kind
+        kind = ORG_KINDS.get(named)
+        if kind is None:
+            logger.warning("There is no kind of org named %r", named)
+            kind = ORG_KINDS[DirectorSettings().org_kind]
+        return kind(self.tree)
+
+    @property
     def tool_names(self) -> tuple[str, ...]:
         """Every tool an agent of the org may be offered: the director's
         own and the one of each document the org keeps."""
@@ -1022,8 +1032,16 @@ class ServiceState:
 
         An open session follows a new cost limit, unless the human let it
         go on past the one it had.
+
+        Raises:
+            Invalid: A kind of org is named that the director does not know.
         """
         values = update.model_dump(exclude_none=True)
+        if values.get("org_kind", self.settings.org_kind) not in ORG_KINDS:
+            raise Invalid(
+                f"There is no kind of org named {values['org_kind']!r}. "
+                f"The kinds are: {', '.join(ORG_KINDS)}."
+            )
         before = self.settings.session_cost_limit
         now = self.settings.model_dump()
         # The org page sends every setting when one is changed: only what
