@@ -43,7 +43,6 @@ from openhands.agent_server.director.scope import Scope, named_paths, searched_f
 from openhands.agent_server.director.service.state import (
     AGENT_PAUSED,
     DIRECTOR_TOOL_NAMES,
-    HAND_OVER_TOOLS,
     LIMIT_WAITS,
     MERGE_WAITS,
     ORG_WAITS,
@@ -73,7 +72,6 @@ logger = get_logger(__name__)
 __all__ = [
     "AGENT_PAUSED",
     "DIRECTOR_TOOL_NAMES",
-    "HAND_OVER_TOOLS",
     "RESTART_NOTE",
     "DirectorService",
     "hand_over_of",

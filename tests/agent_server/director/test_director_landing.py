@@ -36,6 +36,7 @@ from openhands.agent_server.director.run_state import SESSION
 from openhands.agent_server.director.service import DirectorService
 from openhands.agent_server.director.service.state import (
     MERGE_WAITS,
+    team_ref,
 )
 from openhands.agent_server.director.tools import (
     PruneTeamTool,
@@ -44,14 +45,12 @@ from openhands.agent_server.director.tools import (
     ReviewTeamTool,
     SettleTeamsTool,
     SubmitReviewTool,
-    WriteSpecTool,
 )
 from openhands.agent_server.director.tools.definition import (
     RaiseEscalationAction,
     ReportAction,
     ReviewTeamAction,
     SettleTeamsAction,
-    WriteSpecAction,
 )
 from openhands.sdk.conversation.state import ConversationExecutionStatus
 from openhands.sdk.errors import NotFound, OperationFailed
@@ -85,6 +84,10 @@ from tests.agent_server.director.conftest import (
     take_in,
     use,
     waiting,
+)
+from tests.agent_server.director.document_tools import (
+    WriteSpecAction,
+    WriteSpecTool,
 )
 
 
@@ -484,7 +487,9 @@ async def test_a_team_both_made_something_else_of_waits_for_the_manager_above(
     commit(repo, "services/api/refunds.py", "refunds = True\n")
     place = service.org.place(f"{JOBS}@{top.split('@')[1]}")
     assert place is not None
-    service.write_spec(place, "Run the refund jobs.")
+    service.documents.write(
+        place.session, team_ref(place).keeps("spec"), "Run the refund jobs."
+    )
 
     answer = await session_accepted(service, top, conversation)
 
@@ -819,7 +824,9 @@ async def test_closing_a_session_keeps_what_waited_of_its_accepted_work(
     org_gains(service, JOBS, "services/api/workers")
     jobs = service.org.place(f"{JOBS}@{api_place(service, top).session}")
     assert jobs is not None
-    service.write_spec(jobs, "Run the refund jobs.")
+    service.documents.write(
+        jobs.session, team_ref(jobs).keeps("spec"), "Run the refund jobs."
+    )
     await session_accepted(service, top, conversation)
     assert waiting(service, top) == [JOBS]
 

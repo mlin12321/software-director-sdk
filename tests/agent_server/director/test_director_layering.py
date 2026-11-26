@@ -22,7 +22,9 @@ def _imports(module: str) -> set[str]:
     return found
 
 
-@pytest.mark.parametrize("module", ["tools/spec.py", "tools/catalog.py"])
+@pytest.mark.parametrize(
+    "module", ["tools/spec.py", "tools/catalog.py", "tools/documents.py"]
+)
 def test_what_a_tool_is_does_not_know_the_agent_sdk(module: str):
     # What the director's tools take and do is said without the agent SDK:
     # only `tools/definition.py` makes tools of the SDK out of them.
@@ -97,3 +99,14 @@ def test_what_a_document_does_reaches_the_director_only_through_documents(
     }
 
     assert all(name.startswith(("documents.", "org")) for name in reached)
+
+
+@pytest.mark.parametrize(
+    "module", ["tools/catalog.py", "agent_actions.py", "service/records.py"]
+)
+def test_the_director_has_no_tool_for_any_one_document(module: str):
+    # A document's tool is made of its YAML and its protocol.
+    text = (DIRECTOR / module).read_text(encoding="utf-8")
+
+    assert "def write_spec" not in text and "def edit_contracts" not in text
+    assert "WRITE_SPEC" not in text and "EDIT_CONTRACTS" not in text

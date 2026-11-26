@@ -6,19 +6,16 @@ from pathlib import Path
 
 import pytest
 
-from openhands.agent_server.director.models import ReviewFinding
+from openhands.agent_server.director.models import ReviewFinding, SessionTeam
 from openhands.agent_server.director.service import DirectorService
+from openhands.agent_server.director.service.state import team_ref
 from openhands.agent_server.director.tools import (
     ReviewTeamTool,
     SubmitReviewTool,
-    WriteSpecTool,
 )
 from openhands.agent_server.director.tools.definition import (
-    EditContractsAction,
-    EditContractsTool,
     ReviewTeamAction,
     SubmitReviewAction,
-    WriteSpecAction,
 )
 from tests.agent_server.director.conftest import (
     FakeLauncher,
@@ -31,6 +28,19 @@ from tests.agent_server.director.conftest import (
     split_into_typed_teams,
     use,
 )
+from tests.agent_server.director.document_tools import (
+    EditContractsAction,
+    EditContractsTool,
+    WriteSpecAction,
+    WriteSpecTool,
+)
+
+
+def own_contracts(service: DirectorService, place: SessionTeam) -> str:
+    """The contracts between the sub-teams of a place, as its session has
+    them."""
+    ref = team_ref(place).keeps("contracts")
+    return service.documents.read(place.session, ref) or ""
 
 
 @pytest.fixture
@@ -67,7 +77,7 @@ async def test_accepting_work_can_add_to_the_contracts_every_sub_team_reads(
         ),
     )
     assert refused.is_error and "leave it empty when you reject" in refused.text
-    assert finding not in service.own_contracts(node(service, "root"))
+    assert finding not in own_contracts(service, node(service, "root"))
 
     accepted = await use(
         service,
@@ -77,7 +87,7 @@ async def test_accepting_work_can_add_to_the_contracts_every_sub_team_reads(
     )
 
     assert not accepted.is_error
-    contracts = service.own_contracts(node(service, "root"))
+    contracts = own_contracts(service, node(service, "root"))
     assert "Tables reads what Harness writes" in contracts
     assert contracts.rstrip().endswith(finding)
     # The team beside it reads it as a contract it works to.
@@ -199,7 +209,7 @@ async def test_the_contracts_are_changed_by_the_ic_whose_sub_teams_keep_them(
         ),
     )
 
-    assert service.own_contracts(root) == (
+    assert own_contracts(service, root) == (
         "Tables reads what Harness writes to `results/`.\n\n"
         "Unchecked: 4k warmup diverges (Tables).\n"
     )

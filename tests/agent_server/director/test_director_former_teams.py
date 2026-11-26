@@ -34,7 +34,6 @@ from openhands.agent_server.director.tools import (
     ReadTeamContextTool,
     ReportTool,
     StopTeamTool,
-    WriteSpecTool,
 )
 from openhands.agent_server.director.tools.definition import (
     HandOverAction,
@@ -45,7 +44,6 @@ from openhands.agent_server.director.tools.definition import (
     ReadTeamContextAction,
     ReportAction,
     StopTeamAction,
-    WriteSpecAction,
 )
 from openhands.agent_server.director_router import get_node_memory
 from openhands.sdk.conversation.state import ConversationExecutionStatus
@@ -72,6 +70,10 @@ from tests.agent_server.director.conftest import (
     sub_teams,
     tasked,
     use,
+)
+from tests.agent_server.director.document_tools import (
+    WriteSpecAction,
+    WriteSpecTool,
 )
 
 

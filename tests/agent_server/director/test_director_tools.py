@@ -34,7 +34,6 @@ from openhands.agent_server.director.tools import (
     ResolveEscalationTool,
     ReviewTeamTool,
     SubmitReviewTool,
-    WriteSpecTool,
 )
 from openhands.agent_server.director.tools.definition import (
     DeclineTeamsAction,
@@ -47,7 +46,6 @@ from openhands.agent_server.director.tools.definition import (
     ResolveEscalationAction,
     ReviewTeamAction,
     SubmitReviewAction,
-    WriteSpecAction,
 )
 from openhands.sdk.conversation.state import (
     ConversationExecutionStatus,
@@ -76,6 +74,10 @@ from tests.agent_server.director.conftest import (
     tasked,
     use,
     woken,
+)
+from tests.agent_server.director.document_tools import (
+    WriteSpecAction,
+    WriteSpecTool,
 )
 
 

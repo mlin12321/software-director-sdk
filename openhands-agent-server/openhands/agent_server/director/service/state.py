@@ -44,6 +44,7 @@ from openhands.agent_server.director.documents.events import TeamRef
 from openhands.agent_server.director.documents.protocol import (
     DocumentProtocolBase,
     UnknownProtocol,
+    declare,
     protocol_of,
 )
 from openhands.agent_server.director.documents.store import (
@@ -159,19 +160,20 @@ ROOT_ID = "root"
 # What no type takes from an agent: without them it could not read its
 # place, hand its work on, or say that it cannot go on.
 _TOOLS_NO_TYPE_REMOVES = ("read_team_context", "raise_escalation", "submit_review")
-HAND_OVER_TOOLS = ("read_team_context", "hand_over", "write_spec")
+# What the member that takes over what a removed team left is offered,
+# beside the tools of the documents it may write while it does.
+_HAND_OVER_TOOLS = ("read_team_context", "hand_over")
 
 
-# Every tool of the director's; they register in ``director.tools``. Which
-# of them an agent is offered is its team's type's to say, and
-# `agent_actions` refuses the rest whatever is offered.
+# Every tool of the director's own; they register in ``director.tools``.
+# The documents an org keeps bring theirs beside these. Which of them an
+# agent is offered is its team's type's to say, and `agent_actions`
+# refuses the rest whatever is offered.
 DIRECTOR_TOOL_NAMES = (
     "read_team_context",
     "raise_escalation",
     "resolve_escalation",
     "report",
-    "write_spec",
-    "edit_contracts",
     "msg_manager",
     "propose_teams",
     "msg_team",
@@ -744,13 +746,23 @@ class ServiceState:
         with self._lock:
             if self._agent_types is None or seen != self._agent_types_seen:
                 protocols: dict[str, DocumentProtocolBase] = {}
+                tools: dict[str, str] = {}
                 for document in load_documents(documents).values():
+                    tool = document.written_with
                     try:
+                        if tool in tools:
+                            raise ValueError(
+                                f"The document {tools[tool]!r} is written with "
+                                f"{tool} already"
+                            )
+                        declare(document)
                         protocols[document.name] = protocol_of(
                             document, self.documents, self.tree
                         )
-                    except UnknownProtocol:
+                    except (UnknownProtocol, ValueError):
                         logger.exception("Ignoring the document %s", document.name)
+                        continue
+                    tools[tool] = document.name
                 self._agent_types = load_types(
                     folders,
                     DIRECTOR_TOOL_NAMES,
@@ -759,6 +771,25 @@ class ServiceState:
                 self._protocols = protocols
                 self._agent_types_seen = seen
             return self._agent_types, self._protocols
+
+    @property
+    def tool_names(self) -> tuple[str, ...]:
+        """Every tool an agent of the org may be offered: the director's
+        own and the one of each document the org keeps."""
+        written_with = (
+            protocol.document.written_with for protocol in self.protocols.values()
+        )
+        return tuple(dict.fromkeys((*DIRECTOR_TOOL_NAMES, *written_with)))
+
+    @property
+    def hand_over_tools(self) -> tuple[str, ...]:
+        """What the member that takes over what a removed team left is
+        offered in the conversation it does so in."""
+        return _HAND_OVER_TOOLS + tuple(
+            protocol.document.written_with
+            for protocol in self.protocols.values()
+            if protocol.usable_in_hand_over
+        )
 
     def type_of(self, node: OrgNodeInput) -> TeamTemplate:
         """The type of a team. A team whose type the director no longer
@@ -1102,7 +1133,7 @@ class ServiceState:
         return self._confinement().adapter(
             conversation_id,
             offered,
-            known=DIRECTOR_TOOL_NAMES,
+            known=self.tool_names,
             never=_SUB_AGENT_TOOLS,
         )
 

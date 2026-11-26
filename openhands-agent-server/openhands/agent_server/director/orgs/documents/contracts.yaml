@@ -3,4 +3,10 @@
 name: contracts
 holds: What teams promise each other.
 tool: edit_contracts
+says: >-
+    IC only, with sub-teams. Change the contracts between your sub-teams
+    with the commands of your file editor: `str_replace` to change one
+    place, `insert` to add text after a line, or at the end with no
+    `insert_line`. The contracts are kept outside the working tree. Every
+    sub-team reads them and is told of the change with its next message.
 protocol: contracts
