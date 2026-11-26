@@ -1813,7 +1813,7 @@ def _child_node(
         agents=[],
         status="idle",
         headline=provisional_summary(child.task).headline,
-        spec_summary=_summary_of(child.task),
+        purpose=_summary_of(child.task),
         since=_instant(),
     )
 

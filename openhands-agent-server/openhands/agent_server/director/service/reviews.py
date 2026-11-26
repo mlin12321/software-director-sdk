@@ -526,7 +526,7 @@ class Reviews(Requests):
                     agent_profile=place.agent_profile,
                     agent_type=place.agent_type,
                     headline=place.headline,
-                    spec_summary=place.spec_summary,
+                    purpose=place.purpose,
                     old_specs=place.old_specs,
                     since=place.since,
                 )
@@ -543,7 +543,7 @@ class Reviews(Requests):
                 boundary=place.boundary,
                 agent_profile=place.agent_profile,
                 agent_type=place.agent_type,
-                spec_summary=place.spec_summary,
+                purpose=place.purpose,
                 old_specs=place.old_specs,
                 since=place.since,
             )

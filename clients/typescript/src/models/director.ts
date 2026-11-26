@@ -212,7 +212,11 @@ export interface DirectorOrgNode {
    * team's task and its latest report.
    */
   headline: string;
-  spec_summary: string;
+  /**
+   * What the team is for, in a line: from its task, and from then on from
+   * whichever of its documents says so.
+   */
+  purpose: string;
   /**
    * Specs that teams before this one left in its directory. They are old
    * until the team's IC writes its own spec.
