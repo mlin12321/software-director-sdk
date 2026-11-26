@@ -129,9 +129,10 @@ a = Analysis(
         # installed package silently yields nothing when the wheel was built
         # without the .cjs (non-editable installs), which would leave the
         # frozen editor without its proxy.
-        # The team types the director ships, read from beside its code.
+        # The team types and documents the director's orgs ship, read from
+        # beside their code.
         *collect_data_files(
-            "openhands.agent_server.director", includes=["types/*.yaml"]
+            "openhands.agent_server.director", includes=["orgs/**/*.yaml"]
         ),
         (
             str(

@@ -18,10 +18,10 @@ from openhands.agent_server.conversation_service import (
 )
 from openhands.agent_server.director.agent_types import (
     DEFAULT_TYPE,
-    SHIPPED_TYPES,
     TeamTemplate,
     load_types,
 )
+from openhands.agent_server.director.documents.declared import load_documents
 from openhands.agent_server.director.git_store import GitStore, Landing, team_key
 from openhands.agent_server.director.headline import TeamSummary
 from openhands.agent_server.director.launch import StartedAgent
@@ -53,6 +53,7 @@ from openhands.agent_server.director.org_store import (
     session_team_id,
     team_id_of,
 )
+from openhands.agent_server.director.orgs import SHIPPED_DOCUMENTS, SHIPPED_TYPES
 from openhands.agent_server.director.prompts import in_words, org_protocol
 from openhands.agent_server.director.service import (
     DIRECTOR_TOOL_NAMES,
@@ -677,7 +678,8 @@ def launcher() -> FakeLauncher:
     return FakeLauncher()
 
 
-SHIPPED = load_types([SHIPPED_TYPES], DIRECTOR_TOOL_NAMES)
+DOCUMENTS = load_documents([SHIPPED_DOCUMENTS])
+SHIPPED = load_types(SHIPPED_TYPES, DIRECTOR_TOOL_NAMES, DOCUMENTS)
 
 
 def shipped_type(node: OrgNodeInput) -> TeamTemplate:

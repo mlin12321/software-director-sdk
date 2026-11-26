@@ -41,3 +41,36 @@ def test_what_a_tool_is_knows_no_tool_of_the_directors():
         for name in _imports("tools/spec.py")
         if name.startswith("openhands.agent_server")
     }
+
+
+@pytest.mark.parametrize(
+    "module",
+    ["org.py", "documents/store.py", "documents/declared.py", "tools/spec.py"],
+)
+def test_the_directors_own_parts_do_not_know_the_shipped_orgs_or_the_service(
+    module: str,
+):
+    # What is particular to an organisation is under `orgs`, and the
+    # service puts the parts together: neither is known to a part.
+    reached = {
+        name
+        for name in _imports(module)
+        if name.startswith(
+            (
+                "openhands.agent_server.director.orgs",
+                "openhands.agent_server.director.service",
+            )
+        )
+    }
+
+    assert not reached
+
+
+def test_where_documents_are_kept_knows_no_tool_type_or_tree():
+    reached = {
+        name.removeprefix("openhands.agent_server.director.")
+        for name in _imports("documents/store.py")
+        if name.startswith("openhands.agent_server.director.")
+    }
+
+    assert reached == {"git_store", "run_state"}

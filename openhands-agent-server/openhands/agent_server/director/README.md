@@ -96,7 +96,7 @@ An agent profile is made in the settings of Canvas and made active there.
 
 ## Agent types and `director.yaml`
 
-Every team has a type, and a type is a YAML file: a team template. It says what the team's agents are told (what the team is for, what its spec, contracts and reports hold, what the director's tools mean to it, how its work is reviewed), and it may name the team's members. Three are shipped (`director/types`): `software-engineer` (the default), `researcher` and `research-engineer`. An IC names a type for each sub-team it proposes, so one org can hold all three.
+Every team has a type, and a type is a YAML file: a team template. It says what the team's agents are told (what the team is for, what its spec, contracts and reports hold, what the director's tools mean to it, how its work is reviewed), and it may name the team's members. Three are shipped, with the orgs under `director/orgs` (`software/types`, `research/types`): `software-engineer` (the default), `researcher` and `research-engineer`. An IC names a type for each sub-team it proposes, so one org can hold all three.
 
 To add one, point the server at a settings file and put the type beside it:
 

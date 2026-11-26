@@ -1,0 +1,5 @@
+# What the sub-teams of a team promise each other. The team writes it and
+# each of its sub-teams reads it.
+name: contracts
+holds: What teams promise each other.
+tool: edit_contracts

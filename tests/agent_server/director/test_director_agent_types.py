@@ -7,11 +7,11 @@ from pathlib import Path
 import pytest
 
 from openhands.agent_server.director.agent_types import (
-    SHIPPED_TYPES,
     InvalidAgentType,
     load_types,
     read_type,
 )
+from openhands.agent_server.director.documents.declared import load_documents
 from openhands.agent_server.director.models import (
     CreateOrgRequest,
     DirectorSettingsUpdate,
@@ -19,6 +19,7 @@ from openhands.agent_server.director.models import (
     SplitChild,
 )
 from openhands.agent_server.director.org_config import InvalidOrgConfig
+from openhands.agent_server.director.orgs import SHIPPED_DOCUMENTS, SHIPPED_TYPES
 from openhands.agent_server.director.service import DirectorService
 from openhands.agent_server.director.service.state import (
     DIRECTOR_TOOL_NAMES,
@@ -50,6 +51,9 @@ from tests.agent_server.director.conftest import (
 )
 
 
+DOCUMENTS = load_documents([SHIPPED_DOCUMENTS])
+
+
 @pytest.fixture
 async def service(
     repo: Path, launcher: FakeLauncher, tmp_path: Path
@@ -65,7 +69,7 @@ def briefing(launcher: FakeLauncher, title: str) -> str:
 
 
 def test_the_shipped_default_type_says_something_to_both_roles():
-    types = load_types([SHIPPED_TYPES], DIRECTOR_TOOL_NAMES)
+    types = load_types(SHIPPED_TYPES, DIRECTOR_TOOL_NAMES, DOCUMENTS)
 
     kind = types["software-engineer"]
     assert kind.text_for("ic").startswith('<TEAM_TYPE name="software-engineer">')
@@ -91,8 +95,8 @@ def test_a_type_that_says_what_no_type_may_is_refused(tmp_path: Path, body: str)
     path.write_text(body)
 
     with pytest.raises(InvalidAgentType):
-        read_type(path, DIRECTOR_TOOL_NAMES)
-    assert load_types([tmp_path], DIRECTOR_TOOL_NAMES) == {}
+        read_type(path, DIRECTOR_TOOL_NAMES, DOCUMENTS)
+    assert load_types([tmp_path], DIRECTOR_TOOL_NAMES, DOCUMENTS) == {}
 
 
 async def test_a_team_is_told_what_its_own_type_says_and_not_its_parents(

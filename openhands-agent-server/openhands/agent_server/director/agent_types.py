@@ -2,25 +2,25 @@
 
 A type is a YAML file, a team template. It names the agents of a team of
 that type (its members), the director's tools each has, and which of them
-works in the team's folder; and it says what each is for, what the team's
-spec, contracts and reports hold, what each of the director's tools means
-to it, and how its work is written up and reviewed.
+works in the team's folder; and it says what each is for, which documents
+the team keeps and what each holds, what each of the director's tools
+means to it, and how its work is written up and reviewed.
 
 A member is whatever the type names it. What it may do is the tools it is
 given: the director finds whom to turn to by tool, so the reviewer of a
 team is the member of the team above that has ``review_team``. Every team
 keeps its folder and lands its work the same way, whatever its type.
 
-The types shipped with the director are in ``director/types``; an org adds
-its own in the ``types`` folder beside its ``director.yaml``, where a file
-of the same name takes the place of a shipped one.
+The types shipped with the director are those of the orgs under
+``director/orgs``; an org adds its own in the ``types`` folder beside its
+``director.yaml``, where a file of the same name takes the place of a
+shipped one.
 """
 
 import re
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Literal
 
 import yaml
 from pydantic import (
@@ -32,6 +32,7 @@ from pydantic import (
     model_validator,
 )
 
+from openhands.agent_server.director.documents.declared import Document
 from openhands.sdk.logger import get_logger
 
 
@@ -39,12 +40,9 @@ logger = get_logger(__name__)
 
 # The type of a team whose proposal names none.
 DEFAULT_TYPE = "software-engineer"
-SHIPPED_TYPES = Path(__file__).parent / "types"
 # The folder of an org's own types, beside its ``director.yaml``.
 TYPES_FOLDER = "types"
 _NAME = re.compile(r"[a-z0-9][a-z0-9-]*")
-
-Primitive = Literal["spec", "contracts", "report"]
 
 # Tools the director finds one agent of a team by: a type gives each to
 # exactly one member. The last is found among the tools members have where
@@ -241,9 +239,13 @@ class TeamTemplate(BaseModel):
         min_length=1,
         description="The members of a team of this type, by the name of each.",
     )
-    primitives: dict[Primitive, str] = Field(
+    documents: dict[str, str | None] = Field(
         default_factory=dict,
-        description="What the team's spec, contracts and reports hold.",
+        description=(
+            "The documents the team keeps, by the name of each, and what "
+            "each holds for a team of this type. Nothing said of one: what "
+            "the document itself says it holds."
+        ),
     )
     actions: dict[str, str] = Field(
         default_factory=dict,
@@ -404,10 +406,11 @@ class TeamTemplate(BaseModel):
         said = member.text.strip() if member else ""
         if said:
             lines.append(said)
-        if self.primitives:
+        if self.documents:
             lines += ["", "What your team keeps:"]
             lines += [
-                f"- {name}: {text.strip()}" for name, text in self.primitives.items()
+                f"- {name}: {(text or '').strip()}"
+                for name, text in self.documents.items()
             ]
         if self.actions:
             lines += ["", "What the director's tools mean for your team:"]
@@ -420,12 +423,19 @@ class TeamTemplate(BaseModel):
         return f'<TEAM_TYPE name="{self.name}">\n{body}\n</TEAM_TYPE>'
 
 
-def read_type(path: Path, tools: Iterable[str]) -> TeamTemplate:
+def read_type(
+    path: Path, tools: Iterable[str], documents: Mapping[str, Document]
+) -> TeamTemplate:
     """The type a file defines.
+
+    Args:
+        tools: The names of the director's tools.
+        documents: The documents a team may keep, by name.
 
     Raises:
         InvalidAgentType: The file is not a type, names a tool the
-            director does not have, or is not named as its type is.
+            director does not have or a document there is none of, or is
+            not named as its type is.
     """
     known = set(tools)
     try:
@@ -453,11 +463,25 @@ def read_type(path: Path, tools: Iterable[str]) -> TeamTemplate:
         raise InvalidAgentType(
             f"{path}: the director has no tool named {', '.join(unknown)}"
         )
-    return found
+    unknown = sorted(set(found.documents) - set(documents))
+    if unknown:
+        raise InvalidAgentType(
+            f"{path}: there is no document named {', '.join(unknown)}"
+        )
+    return found.model_copy(
+        update={
+            "documents": {
+                name: text or documents[name].holds
+                for name, text in found.documents.items()
+            }
+        }
+    )
 
 
 def load_types(
-    folders: Iterable[Path], tools: Iterable[str]
+    folders: Iterable[Path],
+    tools: Iterable[str],
+    documents: Mapping[str, Document],
 ) -> dict[str, TeamTemplate]:
     """The types of the YAML files in ``folders``, by name; a later folder's
     type takes the place of an earlier one of the same name.
@@ -472,7 +496,7 @@ def load_types(
             continue
         for path in sorted([*folder.glob("*.yaml"), *folder.glob("*.yml")]):
             try:
-                found[path.stem] = read_type(path, known)
+                found[path.stem] = read_type(path, known, documents)
             except InvalidAgentType:
                 logger.exception("Ignoring the agent type in %s", path)
     return found

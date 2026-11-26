@@ -4,7 +4,9 @@ from pathlib import Path
 
 import pytest
 
-from openhands.agent_server.director.agent_types import SHIPPED_TYPES, load_types
+from openhands.agent_server.director.agent_types import load_types
+from openhands.agent_server.director.documents.declared import load_documents
+from openhands.agent_server.director.orgs import SHIPPED_DOCUMENTS, SHIPPED_TYPES
 from openhands.agent_server.director.service import DirectorService
 from openhands.agent_server.director.service.state import DIRECTOR_TOOL_NAMES
 from tests.agent_server.director.conftest import (
@@ -14,8 +16,11 @@ from tests.agent_server.director.conftest import (
 )
 
 
+DOCUMENTS = load_documents([SHIPPED_DOCUMENTS])
+
+
 def test_the_research_types_load_and_say_how_research_is_done_and_reviewed():
-    types = load_types([SHIPPED_TYPES], DIRECTOR_TOOL_NAMES)
+    types = load_types(SHIPPED_TYPES, DIRECTOR_TOOL_NAMES, DOCUMENTS)
 
     assert {"software-engineer", "researcher", "research-engineer"} <= set(types)
     researcher = types["researcher"]
