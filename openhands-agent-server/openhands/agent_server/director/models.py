@@ -1468,9 +1468,9 @@ class TeamChoice(BaseModel):
 
 
 # What a session and the org each made something else of. `code`: a file
-# both changed. `spec`, `contracts`: the text of one directory. `team`: a
-# sub-team.
-MergeKind = Literal["code", "spec", "contracts", "team"]
+# both changed. `document`: the text of a document of one directory.
+# `team`: a sub-team.
+MergeKind = Literal["code", "document", "team"]
 # Who settles it: the IC that reviews the session's work, before its code
 # is merged, or the Manager of its Division Lead place.
 Gate = Literal["ic", "manager"]
@@ -1484,10 +1484,29 @@ class MergeItem(BaseModel):
     kind: MergeKind
     key: str = Field(
         description=(
-            "What it is about: a file for `code`, a directory for `spec` and "
-            "`contracts`, a team's id for `team`."
+            "What it is about: a file for `code`, a directory for "
+            "`document`, a team's id for `team`."
         )
     )
+    document: str = Field(
+        default="", description="Only with `document`: the name of the document."
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _kind_of_an_item_kept_earlier(cls, data: Any) -> Any:
+        """Read an item kept when a document's name was its kind. For
+        merges that waited before the rename; to be removed once none does."""
+        if isinstance(data, dict) and data.get("kind") in ("spec", "contracts"):
+            data = {**data, "document": data["kind"], "kind": "document"}
+        return data
+
+    @property
+    def waits_with_teams(self) -> bool:
+        """Whether it is a document that becomes the org's only with the
+        session's changes to its teams."""
+        return self.kind == "document" and self.gate == "manager"
+
     gate: Gate
     title: str = Field(default="", description="What a team is called.")
     session: str = Field(
