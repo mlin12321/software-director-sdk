@@ -13,16 +13,16 @@ from openhands.agent_server.director.boundary import (
     owns,
 )
 from openhands.agent_server.director.documents.events import (
-    HandedOver,
+    RemovedTeamHandedOver,
     SubTeamsCreated,
+    SubTeamWorkAccepted,
     TeamRemoved,
-    WorkAccepted,
 )
 from openhands.agent_server.director.documents.protocol import (
     DocumentProtocolBase,
-    Shown,
+    ShownDocument,
 )
-from openhands.agent_server.director.documents.store import DocRef
+from openhands.agent_server.director.documents.store import DocumentRef
 from openhands.agent_server.director.git import (
     changed_together,
     tracked_files,
@@ -919,7 +919,7 @@ class Records(ServiceState):
         """Keep, for a session alone, what it makes of a file of team
         memory."""
         _ = self.team_memory  # refuses where the org has no team memory
-        ref = DocRef.at(file)
+        ref = DocumentRef.at(file)
         if text is None:
             self.documents.remove(session, ref)
         else:
@@ -929,12 +929,12 @@ class Records(ServiceState):
         self._note_change(session)
 
     def _undraft(self, session: str, file: str) -> None:
-        self.documents.discard(session, DocRef.at(file))
+        self.documents.discard(session, DocumentRef.at(file))
 
     def read_file(self, node: OrgNode, file: str) -> str | None:
         """A file of team memory as the agents of ``node`` have it: what
         their session wrote there, else the org's."""
-        return self.documents.read(session_of(node), DocRef.at(file))
+        return self.documents.read(session_of(node), DocumentRef.at(file))
 
     def contracts_of(self, node: OrgNode) -> list[BoundaryContracts]:
         """The contracts a team works to: the ones between it and the teams
@@ -973,17 +973,17 @@ class Records(ServiceState):
         """The documents a team reads, for whoever looks at the team: the
         ones it is shown, and with them what teams before it left in its
         folder."""
-        holds = self.type_of(node).documents
+        by_type = self.type_of(node).documents
         shown = self.documents_shown(node)
         left = [spec for spec in self.specs_of(node) if spec.old]
         found: list[TeamDocument] = []
         for protocol in self._protocols_for(node):
             document = protocol.document
-            said = holds.get(document.name) or document.holds
+            said = by_type.get(document.name) or document.description
             found += [
                 TeamDocument(
                     name=one.name,
-                    holds=said,
+                    description=said,
                     path=one.folder,
                     text=one.text,
                     own=one.own,
@@ -995,7 +995,7 @@ class Records(ServiceState):
                 found += [
                     TeamDocument(
                         name=document.name,
-                        holds=said,
+                        description=said,
                         path=spec.path,
                         text=spec.spec,
                         own=False,
@@ -1006,13 +1006,13 @@ class Records(ServiceState):
                 ]
         return found
 
-    def documents_shown(self, node: OrgNode) -> list[Shown]:
+    def documents_shown(self, node: OrgNode) -> list[ShownDocument]:
         """Every document a team reads, as its session has it: of each
         kind of document, the ones of the teams its protocol names, where
         the org allows it."""
         reader = team_ref(node)
         left = {normalize_store_path(old.path) for old in node.old_specs}
-        found: dict[DocRef, Shown] = {}
+        found: dict[DocumentRef, ShownDocument] = {}
         for protocol in self._protocols_for(node):
             name = protocol.document.name
             for owner in protocol.read_from(reader):
@@ -1027,7 +1027,7 @@ class Records(ServiceState):
                     continue
                 text = self.documents.read(reader.session, ref)
                 if text:
-                    found[ref] = Shown(
+                    found[ref] = ShownDocument(
                         folder=ref.folder,
                         name=name,
                         text=text,
@@ -1482,7 +1482,7 @@ class Records(ServiceState):
         """Tell the documents of ``place`` that its reviewer accepted the
         work of a sub-team, with what the reviewer gave for them."""
         _ = self.team_memory
-        accepted = WorkAccepted(team_ref(place), given)
+        accepted = SubTeamWorkAccepted(team_ref(place), given)
         for protocol in self.protocols_of(place):
             protocol.when_sub_team_work_is_accepted(accepted)
 
@@ -1492,7 +1492,7 @@ class Records(ServiceState):
         """Tell the documents of ``place`` what the team above passed on
         to it of the teams that were there before."""
         _ = self.team_memory
-        handed = HandedOver(team_ref(place), given)
+        handed = RemovedTeamHandedOver(team_ref(place), given)
         for protocol in self.protocols_of(place):
             protocol.when_removed_team_is_handed_over(handed)
 

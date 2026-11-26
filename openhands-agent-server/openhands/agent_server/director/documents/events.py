@@ -3,7 +3,7 @@
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
-from openhands.agent_server.director.documents.store import DocRef
+from openhands.agent_server.director.documents.store import DocumentRef
 
 
 @dataclass(frozen=True)
@@ -20,9 +20,9 @@ class TeamRef:
     session: str
     folder: str
 
-    def keeps(self, name: str) -> DocRef:
+    def keeps(self, name: str) -> DocumentRef:
         """The team's document of that name."""
-        return DocRef(self.folder, name)
+        return DocumentRef(self.folder, name)
 
 
 @dataclass(frozen=True)
@@ -42,7 +42,7 @@ class SubTeamsCreated:
 
 
 @dataclass(frozen=True)
-class WorkAccepted:
+class SubTeamWorkAccepted:
     """The team's reviewer accepted what a sub-team submitted.
 
     Attributes:
@@ -55,7 +55,7 @@ class WorkAccepted:
 
 
 @dataclass(frozen=True)
-class HandedOver:
+class RemovedTeamHandedOver:
     """The team above passed on to the team what the teams that were
     there before it left.
 

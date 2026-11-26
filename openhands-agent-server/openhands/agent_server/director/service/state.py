@@ -48,11 +48,11 @@ from openhands.agent_server.director.documents.protocol import (
     protocol_of,
 )
 from openhands.agent_server.director.documents.store import (
-    DocRef,
+    DocumentRef,
     DocumentStore,
     GitDocumentStore,
 )
-from openhands.agent_server.director.documents.tree import Tree
+from openhands.agent_server.director.documents.tree import TeamTree
 from openhands.agent_server.director.git import (
     GitError,
     enclosing_repository,
@@ -499,7 +499,7 @@ class ServiceState:
         self.documents: DocumentStore = GitDocumentStore(
             self._memory, self._runs, self._document_changed
         )
-        self.tree: Tree = _TeamsOfTheOrg(lambda: self.org)
+        self.tree: TeamTree = _TeamsOfTheOrg(lambda: self.org)
         # The kind of organisation this is: what it allows.
         self.kind: OrgBase = DEFAULT_ORG(self.tree)
         # Held while the tree is saved, and all through a landing, which
@@ -725,7 +725,7 @@ class ServiceState:
     def protocol_at(self, file: str) -> DocumentProtocolBase | None:
         """What the document kept in ``file`` of team memory does; None
         for a file that is no document anyone declared."""
-        return self.protocols.get(DocRef.at(file).name)
+        return self.protocols.get(DocumentRef.at(file).name)
 
     def _declared(
         self,

@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import ClassVar
 
 from openhands.agent_server.director.documents.events import TeamRef
-from openhands.agent_server.director.documents.tree import Tree
+from openhands.agent_server.director.documents.tree import TeamTree
 
 
 class OrgBase(ABC):
@@ -21,7 +21,7 @@ class OrgBase(ABC):
     types_folder: ClassVar[Path | None] = None
     """The folder of the types of team it ships, one YAML file for each."""
 
-    def __init__(self, tree: Tree) -> None:
+    def __init__(self, tree: TeamTree) -> None:
         """
         Args:
             tree: Where each team of the org stands among the others.

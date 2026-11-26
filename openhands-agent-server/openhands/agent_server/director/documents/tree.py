@@ -5,7 +5,7 @@ from typing import Protocol
 from openhands.agent_server.director.documents.events import TeamRef
 
 
-class Tree(Protocol):
+class TeamTree(Protocol):
     """Where a team stands among the others. It is read, never changed."""
 
     def above(self, team: TeamRef) -> TeamRef | None:

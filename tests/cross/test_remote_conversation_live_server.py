@@ -4304,8 +4304,10 @@ def test_director_runs_an_org_whose_root_splits_into_sub_teams(
         specs = client.get(
             f"/api/director/org/nodes/services.api@{session_id}/memory"
         ).json()
-        assert specs["specs"] == []
-        assert "POST /checkout" in specs["contracts"][0]["contracts"]
+        assert [(found["name"], found["own"]) for found in specs["documents"]] == [
+            ("contracts", False)
+        ]
+        assert "POST /checkout" in specs["documents"][0]["text"]
         # Everything the org keeps is in hidden refs, not in the working tree.
         assert run_git_command(["git", "status", "--porcelain"], repo) == ""
 

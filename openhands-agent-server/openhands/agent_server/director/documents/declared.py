@@ -32,7 +32,7 @@ class Document(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str
-    holds: str = Field(
+    description: str = Field(
         min_length=1,
         description=(
             "What it holds, in a line or two. A type of team may say what it "
@@ -45,7 +45,7 @@ class Document(BaseModel):
             "The name of the tool its team writes it with. Empty: `write_<name>`."
         ),
     )
-    says: str = Field(
+    tool_description: str = Field(
         default="",
         description=(
             "What the agents that have its tool are told the tool is for. "
@@ -78,8 +78,8 @@ class Document(BaseModel):
     @property
     def tool_summary(self) -> str:
         """What the agents that have its tool are told it is for."""
-        return " ".join(self.says.split()) or (
-            f"Write your team's {self.name}: {self.holds.strip()} `create` "
+        return " ".join(self.tool_description.split()) or (
+            f"Write your team's {self.name}: {self.description.strip()} `create` "
             "with the whole of it in `file_text`, `str_replace` to change "
             "one place, `insert` to add text after a line."
         )

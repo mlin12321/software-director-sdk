@@ -723,7 +723,7 @@ export interface DirectorTeamDocument {
   /** The name of the document, as the org declares it. */
   name: string;
   /** What the document holds for a team of this type. */
-  holds?: string;
+  description?: string;
   /** The folder of the team that keeps it. */
   path: string;
   text: string;

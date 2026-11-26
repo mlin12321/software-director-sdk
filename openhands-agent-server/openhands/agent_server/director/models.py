@@ -651,7 +651,7 @@ class TeamDocument(BaseModel):
     """A document a team reads, as the team memory has it."""
 
     name: str = Field(description="The name of the document, as the org declares it.")
-    holds: str = Field(
+    description: str = Field(
         default="", description="What the document holds for a team of this type."
     )
     path: str = Field(description="The folder of the team that keeps it.")

@@ -9,7 +9,7 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from openhands.agent_server.director.documents.store import DocRef
+from openhands.agent_server.director.documents.store import DocumentRef
 from openhands.agent_server.director.git import git
 from openhands.agent_server.director.headline import TeamSummary
 from openhands.agent_server.director.merge_back import merge_back
@@ -866,7 +866,7 @@ async def test_any_document_a_session_writes_is_merged_with_its_accepted_work(
     # Nothing in merging is particular to the documents the shipped orgs
     # keep: one of any name goes the same way.
     top = (await opened(service)).session.teams[0].id
-    glossary = DocRef("services/api", "glossary")
+    glossary = DocumentRef("services/api", "glossary")
 
     service.documents.write(node(service, top).session, glossary, "A run is a job.")
 
