@@ -19,6 +19,12 @@ class ContractsProtocol(DocumentProtocolBase):
     """Contracts are true of the teams they are between, so they become
     the org's when those teams do."""
 
+    def read_from(self, reader: TeamRef) -> list[TeamRef]:
+        # A team keeps to the contracts the team above set between it and
+        # the teams beside it, and sets those between its own sub-teams.
+        above = self.tree.above(reader)
+        return [reader] if above is None else [above, reader]
+
     def waits_for_team_changes(self) -> bool:
         return True
 

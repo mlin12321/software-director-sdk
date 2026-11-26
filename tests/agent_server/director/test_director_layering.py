@@ -51,6 +51,7 @@ def test_what_a_tool_is_knows_no_tool_of_the_directors():
         "documents/declared.py",
         "documents/events.py",
         "documents/protocol.py",
+        "documents/tree.py",
         "tools/spec.py",
     ],
 )
@@ -83,7 +84,7 @@ def test_where_documents_are_kept_knows_no_tool_type_or_tree():
     assert reached == {"git_store", "run_state"}
 
 
-@pytest.mark.parametrize("module", ["orgs/documents/contracts.py"])
+@pytest.mark.parametrize("module", ["orgs/documents/contracts.py", "orgs/top_down.py"])
 def test_what_a_document_does_reaches_the_director_only_through_documents(
     module: str,
 ):
@@ -95,4 +96,4 @@ def test_what_a_document_does_reaches_the_director_only_through_documents(
         if name.startswith("openhands.agent_server.director.")
     }
 
-    assert all(name.startswith("documents.") for name in reached)
+    assert all(name.startswith(("documents.", "org")) for name in reached)

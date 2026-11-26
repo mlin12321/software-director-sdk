@@ -15,6 +15,8 @@ from openhands.agent_server.director.orgs.software import SoftwareOrg
 
 
 SHIPPED_ORGS: tuple[type[OrgBase], ...] = (SoftwareOrg, ResearchOrg)
+# The kind an org is of when nothing says otherwise.
+DEFAULT_ORG: type[OrgBase] = SoftwareOrg
 # The types of team of every shipped org: a team of any org may be of any.
 SHIPPED_TYPES: tuple[Path, ...] = tuple(
     org.types_folder for org in SHIPPED_ORGS if org.types_folder is not None
@@ -23,6 +25,7 @@ SHIPPED_TYPES: tuple[Path, ...] = tuple(
 SHIPPED_DOCUMENTS = Path(__file__).parent / "documents"
 
 __all__ = [
+    "DEFAULT_ORG",
     "SHIPPED_DOCUMENTS",
     "SHIPPED_ORGS",
     "SHIPPED_TYPES",

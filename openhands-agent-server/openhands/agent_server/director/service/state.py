@@ -40,6 +40,7 @@ from openhands.agent_server.director.documents.declared import (
     DOCUMENTS_FOLDER,
     load_documents,
 )
+from openhands.agent_server.director.documents.events import TeamRef
 from openhands.agent_server.director.documents.protocol import (
     DocumentProtocolBase,
     UnknownProtocol,
@@ -50,6 +51,7 @@ from openhands.agent_server.director.documents.store import (
     DocumentStore,
     GitDocumentStore,
 )
+from openhands.agent_server.director.documents.tree import Tree
 from openhands.agent_server.director.git import (
     GitError,
     enclosing_repository,
@@ -94,6 +96,7 @@ from openhands.agent_server.director.models import (
     TeamEnforcement,
     TeamMatch,
 )
+from openhands.agent_server.director.org import OrgBase
 from openhands.agent_server.director.org_config import load_org_config
 from openhands.agent_server.director.org_persistence import (
     create_org_board,
@@ -106,9 +109,14 @@ from openhands.agent_server.director.org_persistence import (
 from openhands.agent_server.director.org_store import (
     OrgStore,
     is_division_lead,
+    session_id_of,
     session_team_id,
 )
-from openhands.agent_server.director.orgs import SHIPPED_DOCUMENTS, SHIPPED_TYPES
+from openhands.agent_server.director.orgs import (
+    DEFAULT_ORG,
+    SHIPPED_DOCUMENTS,
+    SHIPPED_TYPES,
+)
 from openhands.agent_server.director.prompts import role_text
 from openhands.agent_server.director.run_state import (
     MERGING,
@@ -353,6 +361,36 @@ def apart(team: SessionTeam, above: SessionTeam) -> bool:
     return checkout_root(team.worktree_path) != checkout_root(above.worktree_path)
 
 
+def team_ref(node: OrgNodeInput) -> TeamRef:
+    """A team, or the work of one in a session, as its documents and its
+    org are told of it."""
+    return TeamRef(
+        id=node.id,
+        session=session_id_of(node),
+        folder=normalize_store_path(node.boundary.path),
+    )
+
+
+class _TeamsOfTheOrg:
+    """Where a team stands among the others: the org's tree for a team of
+    the org, its session's for the work of one in a session."""
+
+    def __init__(self, org: Callable[[], OrgStore]) -> None:
+        self._org = org
+
+    def above(self, team: TeamRef) -> TeamRef | None:
+        store = self._org()
+        node = store.get(team.id)
+        above = store.get(node.parent_id) if node and node.parent_id else None
+        return team_ref(above) if above else None
+
+    def below(self, team: TeamRef) -> list[TeamRef]:
+        store = self._org()
+        if store.place(team.id) is not None:
+            return [team_ref(place) for place in store.below(team.id)]
+        return [team_ref(node) for node in store.sub_teams(team.id)]
+
+
 class ServiceState:
     """The state of the director for one server, and what guards and saves it."""
 
@@ -459,6 +497,9 @@ class ServiceState:
         self.documents: DocumentStore = GitDocumentStore(
             self._memory, self._runs, self._document_changed
         )
+        self.tree: Tree = _TeamsOfTheOrg(lambda: self.org)
+        # The kind of organisation this is: what it allows.
+        self.kind: OrgBase = DEFAULT_ORG(self.tree)
         # Held while the tree is saved, and all through a landing, which
         # changes the tree and saves it with team memory in one step.
         self._saving = threading.RLock()
@@ -705,7 +746,9 @@ class ServiceState:
                 protocols: dict[str, DocumentProtocolBase] = {}
                 for document in load_documents(documents).values():
                     try:
-                        protocols[document.name] = protocol_of(document, self.documents)
+                        protocols[document.name] = protocol_of(
+                            document, self.documents, self.tree
+                        )
                     except UnknownProtocol:
                         logger.exception("Ignoring the document %s", document.name)
                 self._agent_types = load_types(
