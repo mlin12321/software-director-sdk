@@ -8,6 +8,12 @@ names a protocol in its YAML file, a subclass registered under that name.
 from abc import ABC
 
 from openhands.agent_server.director.documents.declared import Document
+from openhands.agent_server.director.documents.events import (
+    HandedOver,
+    SubTeamsCreated,
+    TeamRemoved,
+    WorkAccepted,
+)
 from openhands.agent_server.director.documents.store import DocumentStore
 
 
@@ -33,6 +39,28 @@ class DocumentProtocolBase(ABC):
         org's only once the session's changes to the teams are settled,
         and not with its code."""
         return False
+
+    def when_sub_teams_are_created(self, created: SubTeamsCreated) -> None:
+        """A proposal was approved and the team now has sub-teams."""
+
+    def when_sub_team_work_is_accepted(self, accepted: WorkAccepted) -> None:
+        """The team's reviewer accepted what a sub-team submitted."""
+
+    def when_removed_team_is_handed_over(self, handed: HandedOver) -> None:
+        """The team above passed on to the team what the teams before it
+        left."""
+
+    def when_team_is_removed(
+        self,
+        removed: TeamRemoved,  # noqa: ARG002
+    ) -> str | None:
+        """The team was replaced or pruned.
+
+        Returns:
+            What is kept of the document in the record of the team that
+            is gone; None for nothing.
+        """
+        return None
 
 
 _PROTOCOLS: dict[str, type[DocumentProtocolBase]] = {}

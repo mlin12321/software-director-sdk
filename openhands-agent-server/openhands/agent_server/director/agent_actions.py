@@ -707,7 +707,7 @@ def review_team(
     service.check_accept(place_id, reconciled.strip())
     service.accept_review(place_id, needed_above.strip(), reconciled.strip(), chosen)
     if contracts:
-        service.add_to_contracts(caller.node, contracts)
+        service.sub_team_work_accepted(caller.node, {"contracts": contracts})
     return (
         f"Accepting the work of {team.title!r}. You are told if it cannot be "
         "brought into your checkout."

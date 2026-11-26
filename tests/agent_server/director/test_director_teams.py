@@ -653,7 +653,7 @@ async def test_sub_teams_that_fail_to_be_set_up_are_put_aside_and_told(
     def fails(*_: object) -> None:
         raise OSError("disk full")
 
-    monkeypatch.setattr(service, "_record_contracts", fails)
+    monkeypatch.setattr(service, "sub_teams_created", fails)
     await use(
         service,
         ic(service, "apps.web"),

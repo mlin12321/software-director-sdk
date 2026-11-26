@@ -610,8 +610,7 @@ class Teams(Delivery):
                     handed_over=True,
                 ),
             )
-        if contracts.strip():
-            self._record_contracts(team, contracts, True)
+        self.removed_team_handed_over(team, {"contracts": contracts})
 
     def _task_of(self, place: SessionTeam) -> str:
         """What a team that is started again is to do, from what the org

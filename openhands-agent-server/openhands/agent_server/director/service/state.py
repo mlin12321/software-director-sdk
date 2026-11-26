@@ -456,7 +456,9 @@ class ServiceState:
         self._keeping_needs = threading.Lock()
         # Held while one of a session's own records is read and added to.
         self._keeping = threading.RLock()
-        self.documents: DocumentStore = GitDocumentStore(self._memory, self._runs)
+        self.documents: DocumentStore = GitDocumentStore(
+            self._memory, self._runs, self._document_changed
+        )
         # Held while the tree is saved, and all through a landing, which
         # changes the tree and saves it with team memory in one step.
         self._saving = threading.RLock()
@@ -664,6 +666,18 @@ class ServiceState:
         """What each document teams may keep does, by the document's name.
         Read again with the types."""
         return self._declared()[1]
+
+    def _document_changed(self, session: str) -> None:
+        """A session wrote or removed a document."""
+
+    def protocols_of(self, node: OrgNodeInput) -> list[DocumentProtocolBase]:
+        """What each document a team keeps does, as its type lists them."""
+        protocols = self.protocols
+        return [
+            protocols[name]
+            for name in self.type_of(node).documents
+            if name in protocols
+        ]
 
     def protocol_at(self, file: str) -> DocumentProtocolBase | None:
         """What the document kept in ``file`` of team memory does; None

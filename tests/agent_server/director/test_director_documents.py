@@ -10,6 +10,13 @@ from openhands.agent_server.director.documents.declared import (
     load_documents,
     read_document,
 )
+from openhands.agent_server.director.documents.events import (
+    HandedOver,
+    SubTeamsCreated,
+    TeamRef,
+    TeamRemoved,
+    WorkAccepted,
+)
 from openhands.agent_server.director.documents.protocol import (
     DocumentProtocolBase,
     UnknownProtocol,
@@ -201,3 +208,101 @@ def test_the_director_asks_a_files_document_what_it_does(repo: Path):
     spec = service.protocol_at("spec.md")
     assert spec is not None and not spec.waits_for_team_changes()
     assert service.protocol_at("services/api/README.md") is None
+
+
+TEAM = TeamRef(id="services.api@one", session="one", folder="services/api")
+CONTRACTS = DocRef("services/api", "contracts")
+
+
+@pytest.fixture
+def contracts(store: GitDocumentStore) -> ContractsProtocol:
+    document = load_documents([SHIPPED_DOCUMENTS])["contracts"]
+    protocol = protocol_of(document, store)
+    assert isinstance(protocol, ContractsProtocol)
+    return protocol
+
+
+def test_contracts_are_seeded_by_the_proposal_that_made_the_sub_teams(
+    contracts: ContractsProtocol, store: GitDocumentStore
+):
+    contracts.when_sub_teams_are_created(
+        SubTeamsCreated(TEAM, {"contracts": "Cart owns the cart page."})
+    )
+    # A later proposal that replaces no team adds to them, once.
+    for _ in range(2):
+        contracts.when_sub_teams_are_created(
+            SubTeamsCreated(TEAM, {"contracts": "Checkout owns the order."})
+        )
+
+    assert store.read("one", CONTRACTS) == (
+        "Cart owns the cart page.\n\nCheckout owns the order.\n"
+    )
+    assert store.read("two", CONTRACTS) is None
+
+
+def test_contracts_of_a_proposal_that_replaced_teams_take_the_place_of_the_old(
+    contracts: ContractsProtocol, store: GitDocumentStore
+):
+    store.write("one", CONTRACTS, "Cart owns the cart page.\n")
+
+    contracts.when_sub_teams_are_created(
+        SubTeamsCreated(TEAM, {"contracts": "Shop owns it all."}, replaced=True)
+    )
+
+    assert store.read("one", CONTRACTS) == "Shop owns it all.\n"
+
+
+def test_contracts_grow_by_what_a_reviewer_establishes_and_a_hand_over_replaces(
+    contracts: ContractsProtocol, store: GitDocumentStore
+):
+    store.write("one", CONTRACTS, "Cart owns the cart page.\n")
+
+    contracts.when_sub_team_work_is_accepted(
+        WorkAccepted(TEAM, {"contracts": "Prices are in cents."})
+    )
+
+    assert store.read("one", CONTRACTS) == (
+        "Cart owns the cart page.\n\nPrices are in cents.\n"
+    )
+
+    contracts.when_removed_team_is_handed_over(
+        HandedOver(TEAM, {"contracts": "Only the cart is left."})
+    )
+
+    assert store.read("one", CONTRACTS) == "Only the cart is left.\n"
+
+
+def test_contracts_are_told_only_of_what_is_given_for_them(
+    contracts: ContractsProtocol, store: GitDocumentStore
+):
+    contracts.when_sub_teams_are_created(SubTeamsCreated(TEAM, {"notes": "Other."}))
+    contracts.when_sub_team_work_is_accepted(WorkAccepted(TEAM, {"contracts": "  "}))
+
+    assert store.drafts("one") == {}
+
+
+def test_a_removed_teams_contracts_go_into_its_record_and_out_of_its_folder(
+    contracts: ContractsProtocol, store: GitDocumentStore, repo: Path
+):
+    GitStore(repo).write("services/api", "contracts.md", "Cart owns the cart page.\n")
+
+    kept = contracts.when_team_is_removed(TeamRemoved(TEAM))
+
+    assert kept == "Cart owns the cart page.\n"
+    assert store.read("one", CONTRACTS) is None
+    assert store.read("", CONTRACTS) == "Cart owns the cart page.\n"
+    # A plain document keeps nothing of itself and stays where it is.
+    plain = DocumentProtocolBase(contracts.document, store)
+    assert plain.when_team_is_removed(TeamRemoved(TEAM)) is None
+
+
+def test_the_store_tells_of_every_change_a_session_makes(repo: Path):
+    told: list[str] = []
+    runs = RunState(None)
+    store = GitDocumentStore(lambda: GitStore(repo), lambda: runs, told.append)
+
+    store.write("one", NOTES, "Mine.")
+    store.remove("one", NOTES)
+    store.discard("one", NOTES)
+
+    assert told == ["one", "one"]

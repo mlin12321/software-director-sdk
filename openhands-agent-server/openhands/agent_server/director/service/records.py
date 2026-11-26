@@ -2,7 +2,7 @@
 records and what they needed of each other."""
 
 import json
-from collections.abc import Collection, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from pathlib import Path
 from typing import Any, NamedTuple
 from uuid import uuid4
@@ -11,6 +11,13 @@ from pydantic import TypeAdapter
 
 from openhands.agent_server.director.boundary import (
     owns,
+)
+from openhands.agent_server.director.documents.events import (
+    HandedOver,
+    SubTeamsCreated,
+    TeamRef,
+    TeamRemoved,
+    WorkAccepted,
 )
 from openhands.agent_server.director.documents.store import DocRef
 from openhands.agent_server.director.git import (
@@ -914,6 +921,8 @@ class Records(ServiceState):
             self.documents.remove(session, ref)
         else:
             self.documents.write(session, ref, text)
+
+    def _document_changed(self, session: str) -> None:
         self._note_change(session)
 
     def _undraft(self, session: str, file: str) -> None:
@@ -1379,11 +1388,56 @@ class Records(ServiceState):
             if self.read_file(place, _spec_file(directory))
         ]
 
-    def add_to_contracts(self, place: SessionTeam, text: str) -> None:
-        """Add to the contracts between the sub-teams of ``place`` what its
-        IC found they may all rely on. It is the session's own until its
-        work is accepted, and the sub-teams read it from then."""
-        self._record_contracts(place, text, replace=False)
+    def team_ref(self, place: SessionTeam) -> TeamRef:
+        """A place as the documents its team keeps are told of it."""
+        return TeamRef(
+            id=place.id,
+            session=place.session,
+            folder=normalize_store_path(place.boundary.path),
+        )
+
+    def sub_teams_created(
+        self, place: SessionTeam, given: Mapping[str, str], replaced: bool
+    ) -> None:
+        """Tell the documents of ``place`` that it now has the sub-teams
+        a proposal named, with what the proposal gave for them."""
+        _ = self.team_memory  # refuses where the org has no team memory
+        created = SubTeamsCreated(self.team_ref(place), given, replaced)
+        for protocol in self.protocols_of(place):
+            protocol.when_sub_teams_are_created(created)
+
+    def sub_team_work_accepted(
+        self, place: SessionTeam, given: Mapping[str, str]
+    ) -> None:
+        """Tell the documents of ``place`` that its reviewer accepted the
+        work of a sub-team, with what the reviewer gave for them."""
+        _ = self.team_memory
+        accepted = WorkAccepted(self.team_ref(place), given)
+        for protocol in self.protocols_of(place):
+            protocol.when_sub_team_work_is_accepted(accepted)
+
+    def removed_team_handed_over(
+        self, place: SessionTeam, given: Mapping[str, str]
+    ) -> None:
+        """Tell the documents of ``place`` what the team above passed on
+        to it of the teams that were there before."""
+        _ = self.team_memory
+        handed = HandedOver(self.team_ref(place), given)
+        for protocol in self.protocols_of(place):
+            protocol.when_removed_team_is_handed_over(handed)
+
+    def team_removed(self, place: SessionTeam) -> dict[str, str]:
+        """Tell the documents of ``place`` that it is gone.
+
+        Returns:
+            What is kept of each in the team's record, by its name.
+        """
+        removed = TeamRemoved(self.team_ref(place))
+        kept = {
+            protocol.document.name: protocol.when_team_is_removed(removed)
+            for protocol in self.protocols_of(place)
+        }
+        return {name: text for name, text in kept.items() if text}
 
     def own_contracts(self, place: SessionTeam) -> str:
         """The contracts between the sub-teams of ``place``, as its session
@@ -1394,25 +1448,7 @@ class Records(ServiceState):
     def set_contracts(self, place: SessionTeam, text: str) -> None:
         """Put ``text`` in the place of the contracts between the sub-teams
         of ``place``, for its session until its work is accepted."""
-        self._record_contracts(place, text, replace=True)
-
-    def _record_contracts(
-        self, place: SessionTeam, contracts: str, replace: bool
-    ) -> None:
-        """Add the contracts of a split to those of the team's boundary,
-        or put them in their place when the split replaced teams. They are
-        the session's alone until its work is accepted."""
         file = _contracts_file(normalize_store_path(place.boundary.path))
-        earlier = self.read_file(place, file)
-        text = f"{contracts.strip()}\n"
-        if replace:
-            if earlier != text:
-                self._draft(place.session, file, text)
-            return
-        if earlier and text.strip() in earlier:
-            return
-        self._draft(
-            place.session,
-            file,
-            f"{earlier.rstrip()}\n\n{text}" if earlier and earlier.strip() else text,
-        )
+        text = f"{text.strip()}\n"
+        if self.read_file(place, file) != text:
+            self._draft(place.session, file, text)
