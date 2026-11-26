@@ -842,9 +842,12 @@ export interface DirectorFormerTeam {
   ended: 'replaced' | 'pruned' | 'not_taken';
   at: string;
   compacted_report?: string;
-  contracts?: string;
-  /** The spec a session wrote for it that the org did not take. */
-  spec?: string;
+  /**
+   * What is kept of its documents, by the name of each: what a document left
+   * of itself when the team went, and what a session wrote for it that the
+   * org did not take.
+   */
+  documents?: Record<string, string>;
   /** The title of the session it was a team of; `''` when none. */
   session?: string;
 }

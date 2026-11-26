@@ -546,9 +546,9 @@ async def test_a_team_both_made_something_else_of_waits_for_the_manager_above(
     written = service.team_memory.read("services/api/jobs/spec.md")
     assert written == (None if org_holds else "Run the refund jobs.")
     kept = service.team_memory.former(JOBS)
-    assert [(left.ended, left.above, left.spec) for left in kept] == (
-        [("not_taken", "services.api", "Run the refund jobs.")] if org_holds else []
-    )
+    assert [
+        (left.ended, left.above, left.documents.get("spec", "")) for left in kept
+    ] == ([("not_taken", "services.api", "Run the refund jobs.")] if org_holds else [])
 
 
 async def test_a_team_set_up_under_one_the_org_lost_goes_under_the_nearest_team(
@@ -783,7 +783,7 @@ async def test_what_a_session_wrote_for_a_team_that_was_replaced_is_not_the_new_
     [left] = service.team_memory.former("services.api")
     # It is kept for the team that has its directory now.
     assert (left.ended, left.above) == ("not_taken", "services.api")
-    assert left.spec == "# Refunds"
+    assert left.documents == {"spec": "# Refunds"}
     assert [report.text for report in left.reports] == ["Chose a ledger."]
     # The session no longer reads the other team's records as its own.
     assert service.reports_of(api_place(service, top)) == []
@@ -843,7 +843,10 @@ async def test_closing_a_session_keeps_what_waited_of_its_accepted_work(
     # for its own is that team's record.
     assert path_of(service, JOBS) == "services/api/workers"
     [left] = service.team_memory.former(JOBS)
-    assert (left.ended, left.spec) == ("not_taken", "Run the refund jobs.")
+    assert (left.ended, left.documents) == (
+        "not_taken",
+        {"spec": "Run the refund jobs."},
+    )
 
 
 async def test_a_team_a_session_prunes_is_the_orgs_until_its_work_is_accepted(
@@ -1334,7 +1337,7 @@ async def test_a_spec_written_for_a_team_the_org_lost_is_left_to_the_team_that_h
             ("services/api", "API")
         ]
     [left] = service.team_memory.former("services.api")
-    assert (left.ended, left.spec) == ("not_taken", "# Refunds")
+    assert (left.ended, left.documents) == ("not_taken", {"spec": "# Refunds"})
 
 
 async def test_a_manager_that_does_not_answer_is_asked_again_and_then_the_human(

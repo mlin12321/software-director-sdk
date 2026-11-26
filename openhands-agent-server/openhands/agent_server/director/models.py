@@ -614,14 +614,13 @@ class FormerTeam(BaseModel):
             "there were several. '' when it recorded nothing."
         ),
     )
-    contracts: str = Field(
-        default="", description="The contracts between its own sub-teams."
-    )
-    spec: str = Field(
-        default="",
+    documents: dict[str, str] = Field(
+        default_factory=dict,
         description=(
-            "The spec a session wrote for it that the org did not take. '' "
-            "for a team whose spec is in its directory."
+            "What is kept of its documents, by the name of each: what a "
+            "document left of itself when the team went, and what a session "
+            "wrote for it that the org did not take. A document that stays "
+            "in the team's directory is not among them."
         ),
     )
     session: str = Field(
@@ -632,6 +631,20 @@ class FormerTeam(BaseModel):
         default="", description="When the team was set up, which tells it apart."
     )
     threads: list[FormerThread] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _documents_of_a_record_kept_earlier(cls, data: Any) -> Any:
+        """Read a record kept when it had a field for its spec and one for
+        its contracts. For records kept before the rename; to be removed
+        once none is left."""
+        if isinstance(data, dict) and ("spec" in data or "contracts" in data):
+            data = dict(data)
+            old = {name: data.pop(name, "") for name in ("contracts", "spec")}
+            data.setdefault(
+                "documents", {name: text for name, text in old.items() if text}
+            )
+        return data
 
 
 class BoundaryContracts(BaseModel):
@@ -658,8 +671,7 @@ class FormerTeamSummary(BaseModel):
     ended: FormerEnd
     at: str
     compacted_report: str = ""
-    contracts: str = ""
-    spec: str = ""
+    documents: dict[str, str] = Field(default_factory=dict)
     session: str = ""
 
 

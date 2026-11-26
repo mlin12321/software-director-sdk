@@ -288,8 +288,9 @@ def left_behind(
         ]
         if children is not None:
             lines.insert(-2, _now_with(team, children))
-        if team.contracts.strip():
-            lines += ["The contracts between its sub-teams:", team.contracts.strip()]
+        for name, text in team.documents.items():
+            if text.strip():
+                lines += [f"Its {name}:", text.strip()]
         spec = (specs or {}).get(team.path, "").strip()
         if spec:
             lines += [
