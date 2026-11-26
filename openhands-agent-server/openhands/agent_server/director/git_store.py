@@ -7,7 +7,7 @@ builds a tree in a throwaway index file and lands with a compare-and-swap
 
 import json
 import tempfile
-from collections.abc import Callable, Collection, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from pathlib import Path
 from typing import NamedTuple
 
@@ -31,8 +31,12 @@ from openhands.sdk.errors import Invalid, NotSupported, OperationFailed
 MEMORY_REF = "refs/agents/memory"
 SPEC_FILE = "spec.md"
 CONTRACTS_FILE = "contracts.md"
-# One file of reports for each agent of a team: `<team id>/<role>.json`.
-REPORTS_DIR = ".reports"
+# What the members of a team recorded, in the team's folder beside its
+# other documents: one file for all of them.
+REPORTS_FILE = "report.json"
+# Where reports were kept before, one file for each member of a team:
+# `<team id>/<role>.json`. Only `migrate_reports` reads it.
+_OLD_REPORTS_DIR = ".reports"
 # One record for each team that was replaced or pruned:
 # `<team id>/<time>.json`.
 FORMER_DIR = ".former"
@@ -80,20 +84,20 @@ class Landing(NamedTuple):
     # The text a reviewer was shown of a file and decided to put the
     # session's in place of.
     seen: dict[str, str | None]
-    # What its agents recorded, by team and in the order it was written.
+    # What its agents recorded, by the folder of the team and in the order
+    # it was written.
     reports: dict[str, list[Report]]
     # The records of the teams it removed or that the org did not take.
     former: list[FormerTeam]
     # The teams whose own records go: another team has their id now, or
     # none.
     forget: list[str]
+    # The folders of those teams: what was recorded there goes with them.
+    forget_reports: list[str]
     # What became of the teams below a team, by that team.
     events: dict[str, list[TeamEvent]]
     # Its requests that went straight to a team.
     routed: list[RoutedRequest]
-    # The members the org's teams may have: a team that goes leaves no
-    # reports of any of them.
-    members: tuple[str, ...]
 
 
 class Staged(NamedTuple):
@@ -163,8 +167,17 @@ def _parse_reports(raw: str | None) -> list[Report]:
     return _REPORTS.validate_json(raw) if raw else []
 
 
-def _reports_file(node_id: str, role: str) -> str:
-    return f"{REPORTS_DIR}/{node_id}/{role}.json"
+def reports_file(folder: str) -> str:
+    """The file of what the members of the team of ``folder`` recorded."""
+    return _join(normalize_store_path(folder), REPORTS_FILE)
+
+
+def _is_reports(path: str) -> bool:
+    return path == REPORTS_FILE or path.endswith(f"/{REPORTS_FILE}")
+
+
+def _in_order(reports: list[Report]) -> list[Report]:
+    return sorted(reports, key=lambda report: report.at)
 
 
 def _former_file(node_id: str, at: str) -> str:
@@ -200,9 +213,8 @@ def _settle(path: str, ours: str | None, theirs: str | None) -> tuple[str | None
         # did is left out.
         return ours, True
     try:
-        if path.startswith(f"{REPORTS_DIR}/"):
-            reports = _union(_parse_reports(ours), _parse_reports(theirs))
-            reports.sort(key=lambda report: report.at)
+        if _is_reports(path):
+            reports = _in_order(_union(_parse_reports(ours), _parse_reports(theirs)))
             return _serialize(_REPORTS.dump_python(reports)), False
         if path.startswith(f"{HISTORY_DIR}/"):
             events = _union(_EVENTS.validate_json(ours), _EVENTS.validate_json(theirs))
@@ -235,30 +247,23 @@ def taking_in(
         def now(path: str) -> str | None:
             return out[path] if path in out else read(path)
 
-        for team in landing.forget:
-            for file in (
-                *(_reports_file(team, role) for role in landing.members),
-                _history_file(team),
-            ):
-                if read(file) is not None:
-                    out[file] = None
+        for file in (
+            *(reports_file(folder) for folder in landing.forget_reports),
+            *(_history_file(team) for team in landing.forget),
+        ):
+            if read(file) is not None:
+                out[file] = None
         for record in landing.former:
             path = _former_file(record.id, record.at)
             if read(path) is None:
                 out[path] = record.model_dump_json(indent=2) + "\n"
-        for team, reports in landing.reports.items():
-            wrote = (report.role for report in reports)
-            for role in dict.fromkeys((*landing.members, *wrote)):
-                path = _reports_file(team, role)
-                kept = _parse_reports(now(path))
-                known = {report.id for report in kept if report.id}
-                added = [
-                    report
-                    for report in reports
-                    if report.role == role and report.id not in known
-                ]
-                if added:
-                    out[path] = _serialize(_REPORTS.dump_python([*kept, *added]))
+        for folder, reports in landing.reports.items():
+            path = reports_file(folder)
+            kept = _parse_reports(now(path))
+            known = {report.id for report in kept if report.id}
+            added = [report for report in reports if report.id not in known]
+            if added:
+                out[path] = _serialize(_REPORTS.dump_python(_in_order([*kept, *added])))
         for team, events in landing.events.items():
             path = _history_file(team)
             raw = now(path)
@@ -321,10 +326,60 @@ class GitStore:
             lambda _read: [StoreChange(path, content)], f"memory: write {path}"
         )
 
-    def reports(self, node_id: str, role: str) -> list[Report]:
-        """What one agent of a team recorded, oldest first. They belong to
-        the team's agent, whichever conversation it has."""
-        return _parse_reports(self.read(_reports_file(node_id, role)))
+    def reports(self, folder: str, role: str | None = None) -> list[Report]:
+        """What the members of the team of ``folder`` recorded, oldest
+        first: all of it, or what the member ``role`` did. It belongs to
+        the team's member, whichever conversation it has."""
+        return [
+            report
+            for report in _parse_reports(self.read(reports_file(folder)))
+            if role is None or report.role == role
+        ]
+
+    def migrate_reports(self, folders: Mapping[str, str]) -> int:
+        """Move what was recorded under the old layout, a file for each
+        member of a team by the team's id, into the folder of each team.
+
+        Args:
+            folders: The folder of every team of the org, by its id. What
+                was kept for a team that is not among them is dropped: the
+                team is gone.
+
+        Returns:
+            How many files of the old layout there were.
+        """
+        old = self._files(_OLD_REPORTS_DIR)
+        if not old:
+            return 0
+
+        def mutate(read: StoreReader) -> list[StoreChange]:
+            moved: dict[str, list[Report]] = {}
+            for file in old:
+                team = file.removeprefix(f"{_OLD_REPORTS_DIR}/").rpartition("/")[0]
+                if team in folders:
+                    try:
+                        found = _parse_reports(read(file))
+                    except ValidationError:
+                        continue
+                    moved.setdefault(reports_file(folders[team]), []).extend(found)
+            changes = [StoreChange(file, None) for file in old]
+            for path, reports in moved.items():
+                try:
+                    kept = _parse_reports(read(path))
+                except ValidationError:
+                    kept = []
+                changes.append(
+                    StoreChange(
+                        path,
+                        _serialize(
+                            _REPORTS.dump_python(_in_order(_union(kept, reports)))
+                        ),
+                    )
+                )
+            return changes
+
+        self.commit(mutate, "memory: reports are kept in each team's folder")
+        return len(old)
 
     def former(self, node_id: str) -> list[FormerTeam]:
         """The records of the teams that were removed from a team id,
@@ -395,26 +450,34 @@ class GitStore:
 
     def replace_reports(
         self,
-        node_id: str,
+        folder: str,
         role: str,
         read_as: list[Report],
         reports: list[Report],
     ) -> bool:
-        """Put ``reports`` in place of an agent's, unless they changed since
-        they were read as ``read_as``.
+        """Put ``reports`` in place of what one member of a team recorded,
+        unless that changed since it was read as ``read_as``. What the
+        team's other members recorded stays.
 
         Returns:
             Whether they were replaced.
         """
-        path = _reports_file(node_id, role)
+        path = reports_file(folder)
         replaced = False
 
         def mutate(read: StoreReader) -> list[StoreChange]:
             nonlocal replaced
-            replaced = _parse_reports(read(path)) == read_as
+            kept = _parse_reports(read(path))
+            replaced = [report for report in kept if report.role == role] == read_as
             if not replaced:
                 return []
-            return [StoreChange(path, _serialize(_REPORTS.dump_python(reports)))]
+            others = [report for report in kept if report.role != role]
+            return [
+                StoreChange(
+                    path,
+                    _serialize(_REPORTS.dump_python(_in_order([*others, *reports]))),
+                )
+            ]
 
         self.commit(mutate, f"memory: compact {path}")
         return replaced

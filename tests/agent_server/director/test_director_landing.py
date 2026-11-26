@@ -133,13 +133,11 @@ async def test_what_a_session_records_is_the_teams_once_its_work_is_accepted(
     assert [r.text for r in service.reports_of(node(service, "root"))] == [
         "Chose REST."
     ]
-    assert service.team_memory.reports("root", "ic") == []
+    assert service.team_memory.reports("", "ic") == []
 
     await landed(service)
 
-    assert [r.text for r in service.team_memory.reports("root", "ic")] == [
-        "Chose REST."
-    ]
+    assert [r.text for r in service.team_memory.reports("", "ic")] == ["Chose REST."]
     assert service.own_reports(node(service, "root")) == []
 
 
@@ -168,7 +166,7 @@ async def test_what_is_recorded_while_work_lands_is_not_lost(
         writer.join()
 
     assert late
-    kept = service.team_memory.reports("root", "ic") + service.own_reports(root)
+    kept = service.team_memory.reports("", "ic") + service.own_reports(root)
     assert sorted(report.text for report in kept) == ["Chose JSON.", "Chose REST."]
 
 
@@ -199,11 +197,11 @@ async def test_what_a_reviewer_records_is_the_teams_once_the_work_is_accepted(
     assert asked is not None
     await use(service, asked, ReportTool, ReportAction(text="Read the diff twice."))
 
-    assert service.team_memory.reports("root", "ic") == []
+    assert service.team_memory.reports("", "ic") == []
 
     await use(service, asked, ReviewTeamTool, accept(node(service, "root").id))
 
-    assert [r.text for r in service.team_memory.reports("root", "ic")] == [
+    assert [r.text for r in service.team_memory.reports("", "ic")] == [
         "Read the diff twice."
     ]
 
@@ -448,7 +446,7 @@ async def test_work_is_accepted_and_a_team_the_org_lost_meanwhile_stays_gone(
     [left] = service.team_memory.former("services.api")
     assert (left.ended, left.above) == ("not_taken", "root")
     assert [report.text for report in left.reports] == ["Refunds are in."]
-    assert service.team_memory.reports("services.api", "ic") == []
+    assert service.team_memory.reports("services/api", "ic") == []
     assert "not_taken" in [e.kind for e in record_of(service, "root")]
 
 
@@ -612,7 +610,7 @@ async def test_contracts_and_notes_a_session_hands_over_are_the_orgs_on_accept(
 
     # Until its work is accepted they are the session's alone.
     assert service.team_memory.read(API_CONTRACTS) is None
-    assert service.team_memory.reports("services.api", "ic") == []
+    assert service.team_memory.reports("services/api", "ic") == []
     assert [c.contracts for c in service.contracts_of(place) if c.own] == [
         "Jobs are idempotent.\n"
     ]
@@ -623,7 +621,7 @@ async def test_contracts_and_notes_a_session_hands_over_are_the_orgs_on_accept(
     await session_accepted(service, top, conversation)
 
     assert service.team_memory.read(API_CONTRACTS) == "Jobs are idempotent.\n"
-    [note] = service.team_memory.reports("services.api", "ic")
+    [note] = service.team_memory.reports("services/api", "ic")
     assert (note.text, note.handed_over) == ("The old jobs team retried forever.", True)
     assert waiting(service, top) == []
 
@@ -773,7 +771,7 @@ async def test_what_a_session_wrote_for_a_team_that_was_replaced_is_not_the_new_
     await session_accepted(service, top, conversation)
 
     assert service.team_memory.read(API_SPEC) is None
-    assert service.team_memory.reports("services.api", "ic") == []
+    assert service.team_memory.reports("services/api", "ic") == []
     [left] = service.team_memory.former("services.api")
     # It is kept for the team that has its directory now.
     assert (left.ended, left.above) == ("not_taken", "services.api")
@@ -810,7 +808,7 @@ async def test_closing_a_session_leaves_the_org_nothing_it_never_had_accepted(
     await service.settled()
 
     assert service.team_memory.read(API_SPEC) is None
-    assert service.team_memory.reports("services.api", "ic") == []
+    assert service.team_memory.reports("services/api", "ic") == []
     # Nor is it on the org's record that it was closed.
     assert "session_closed" not in [e.kind for e in record_of(service, "root")]
     assert service.drafts(place.session) == {}
@@ -847,14 +845,14 @@ async def test_a_team_a_session_prunes_is_the_orgs_until_its_work_is_accepted(
     await landed(service)
     await service.settled()
     kept = Report(at="2026-11-01T00:00:00+00:00", role="ic", text="Chose REST.")
-    take_in(service.team_memory, reports={"services.api": [kept]})
+    take_in(service.team_memory, reports={"services/api": [kept]})
 
     await use(service, manager(service), PruneTeamTool, PRUNE_API)
     await service.settled()
 
     # Other sessions still have the team and all it recorded.
     assert service.org.team("services.api") is not None
-    assert service.team_memory.reports("services.api", "ic") == [kept]
+    assert service.team_memory.reports("services/api", "ic") == [kept]
     assert service.team_memory.former("services.api") == []
 
     await landed(service)
@@ -863,7 +861,7 @@ async def test_a_team_a_session_prunes_is_the_orgs_until_its_work_is_accepted(
     assert service.org.team("services.api") is None
     [record] = service.team_memory.former("services.api")
     assert (record.ended, record.reports) == ("pruned", [kept])
-    assert service.team_memory.reports("services.api", "ic") == []
+    assert service.team_memory.reports("services/api", "ic") == []
 
 
 async def test_an_ic_is_told_once_that_the_org_lacks_what_changed_after_an_accept(
@@ -1004,7 +1002,7 @@ async def test_settled_before_the_code_is_accepted_it_all_lands_in_one_step(
     settled = await use(service, asked, SettleTeamsTool, SettleTeamsAction())
     assert not settled.is_error and "when the IC" in settled.text
     assert path_of(service, JOBS) == "services/api/workers"
-    assert service.team_memory.reports("services.api", "ic") == []
+    assert service.team_memory.reports("services/api", "ic") == []
     before = refs(repo)
 
     await use(service, division_lead_ic(service, top), ReviewTeamTool, accept(top))
@@ -1627,3 +1625,20 @@ async def test_a_landing_that_cannot_be_committed_leaves_the_tree_as_it_was(
     lead = service.org.place(division_lead_of(service))
     assert lead is not None and lead.merge is not None
     await service.aclose()
+
+
+async def test_an_org_that_kept_reports_by_team_id_has_them_in_its_folders(
+    repo: Path, launcher: FakeLauncher
+):
+    service = await started(repo, launcher)
+    kept = Report(at="2026-11-01T00:00:00+00:00", role="ic", text="Chose REST.")
+    service.team_memory.write(".reports/root", "ic.json", f"[{kept.model_dump_json()}]")
+    await service.aclose()
+
+    again = DirectorService(
+        repo, save_delay=0, remembered=repo.parent / "state" / "director.json"
+    )
+
+    assert again.org.team("root") is not None
+    assert again.team_memory.reports("") == [kept]
+    assert again.team_memory.read(".reports/root/ic.json") is None

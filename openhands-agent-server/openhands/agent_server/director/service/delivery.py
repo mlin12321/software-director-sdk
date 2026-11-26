@@ -107,12 +107,12 @@ class Delivery(Records):
         # Its session's alone until the session's work is accepted.
         self._keep_report(place, report)
 
-    def reports_grew(self, node_id: str, role: str) -> None:
-        """Compact what one agent of a team recorded, if it has grown past
-        what the org set. Safe from any thread."""
-        reports = self._memory().reports(node_id, role)
+    def reports_grew(self, folder: str, role: str) -> None:
+        """Compact what one member of the team of ``folder`` recorded, if
+        it has grown past what the org set. Safe from any thread."""
+        reports = self._memory().reports(folder, role)
         if compaction.due(reports, self.settings.report_compaction_chars):
-            self._enqueue(lambda: self._compact(node_id, role), MODELS_LANE)
+            self._enqueue(lambda: self._compact(folder, role), MODELS_LANE)
 
     def joined(self, conversation_id: str) -> None:
         """Note that the human has written in an agent's conversation, so
@@ -478,14 +478,14 @@ class Delivery(Records):
         sessions = self._store.sessions() if self._store else []
         return next((s.conversation_id for s in sessions if s.conversation_id), None)
 
-    async def _compact(self, node_id: str, role: str) -> None:
+    async def _compact(self, folder: str, role: str) -> None:
         """Have a model rewrite one agent's reports shorter, if they are
         still too long."""
         asker = self._asker()
         if asker is None or self._paused is not None:
             return
         team_memory = self._memory()
-        reports = await asyncio.to_thread(team_memory.reports, node_id, role)
+        reports = await asyncio.to_thread(team_memory.reports, folder, role)
         if not compaction.due(reports, self.settings.report_compaction_chars):
             return
         answer = await self._ask(
@@ -493,12 +493,12 @@ class Delivery(Records):
         )
         shorter = compaction.compacted(answer or "", reports, _instant())
         if shorter is None:
-            logger.warning("No usable rewrite of the reports of %s %s", node_id, role)
+            logger.warning("No usable rewrite of the reports of %s %s", folder, role)
             return
         # Rewriting them changes what the org shares.
         await self._base(
             lambda: asyncio.to_thread(
-                team_memory.replace_reports, node_id, role, reports, shorter
+                team_memory.replace_reports, folder, role, reports, shorter
             )
         )
 
