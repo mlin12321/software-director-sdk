@@ -37,7 +37,7 @@ recursive-include openhands-workspace py.typed
 include openhands-agent-server/pyproject.toml
 recursive-include openhands-agent-server *.py
 recursive-include openhands-agent-server py.typed
-recursive-include openhands-agent-server/openhands/agent_server/director/types *.yaml
+recursive-include openhands-agent-server/openhands/agent_server/director/orgs *.yaml
 
 # Docker build files
 include openhands-agent-server/openhands/agent_server/docker/Dockerfile

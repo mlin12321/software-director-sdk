@@ -12,6 +12,7 @@ from pydantic import TypeAdapter
 from openhands.agent_server.director.boundary import (
     owns,
 )
+from openhands.agent_server.director.documents.store import DocRef
 from openhands.agent_server.director.git import (
     changed_together,
     tracked_files,
@@ -62,7 +63,6 @@ from openhands.agent_server.director.recovery import STEP_NAMES
 from openhands.agent_server.director.run_state import (
     CHECKS,
     EVENTS,
-    FILES,
     FORMER,
     JOINED,
     REPORTS,
@@ -900,37 +900,29 @@ class Records(ServiceState):
             For each file, its text (None where the session removed it)
             and the text it was written over (None where there was none).
         """
-        if not session:
-            return {}
-        prefix = f"{session}\n"
-        found = {}
-        for key, raw in self._runs().marked(FILES).items():
-            if key.startswith(prefix):
-                draft = json.loads(raw)
-                found[key.removeprefix(prefix)] = (draft["text"], draft["over"])
-        return found
+        return {
+            ref.path: (draft.text, draft.over)
+            for ref, draft in self.documents.drafts(session).items()
+        }
 
     def _draft(self, session: str, file: str, text: str | None) -> None:
         """Keep, for a session alone, what it makes of a file of team
-        memory. The text it is written over is the one the session first
-        wrote over, so that what the org made of it since is not lost
-        sight of."""
-        with self._keeping:
-            earlier = self.drafts(session).get(file)
-            over = earlier[1] if earlier else self.team_memory.read(file)
-            self._runs().mark(
-                FILES, f"{session}\n{file}", json.dumps({"text": text, "over": over})
-            )
+        memory."""
+        _ = self.team_memory  # refuses where the org has no team memory
+        ref = DocRef.at(file)
+        if text is None:
+            self.documents.remove(session, ref)
+        else:
+            self.documents.write(session, ref, text)
         self._note_change(session)
 
     def _undraft(self, session: str, file: str) -> None:
-        self._runs().unmark(FILES, f"{session}\n{file}")
+        self.documents.discard(session, DocRef.at(file))
 
     def read_file(self, node: OrgNode, file: str) -> str | None:
         """A file of team memory as the agents of ``node`` have it: what
         their session wrote there, else the org's."""
-        draft = self.drafts(session_of(node)).get(file)
-        return draft[0] if draft else self._memory().read(file)
+        return self.documents.read(session_of(node), DocRef.at(file))
 
     def contracts_of(self, node: OrgNode) -> list[BoundaryContracts]:
         """The contracts a team works to: the ones between it and the teams

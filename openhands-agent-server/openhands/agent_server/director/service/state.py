@@ -25,7 +25,6 @@ from openhands.agent_server.director.acp import (
 )
 from openhands.agent_server.director.agent_types import (
     DEFAULT_TYPE,
-    SHIPPED_TYPES,
     TYPES_FOLDER,
     Names,
     TeamTemplate,
@@ -36,6 +35,14 @@ from openhands.agent_server.director.confinement import (
     Confinement,
     checkout_root,
     is_in,
+)
+from openhands.agent_server.director.documents.declared import (
+    DOCUMENTS_FOLDER,
+    load_documents,
+)
+from openhands.agent_server.director.documents.store import (
+    DocumentStore,
+    GitDocumentStore,
 )
 from openhands.agent_server.director.git import (
     GitError,
@@ -95,6 +102,7 @@ from openhands.agent_server.director.org_store import (
     is_division_lead,
     session_team_id,
 )
+from openhands.agent_server.director.orgs import SHIPPED_DOCUMENTS, SHIPPED_TYPES
 from openhands.agent_server.director.prompts import role_text
 from openhands.agent_server.director.run_state import (
     MERGING,
@@ -442,6 +450,7 @@ class ServiceState:
         self._keeping_needs = threading.Lock()
         # Held while one of a session's own records is read and added to.
         self._keeping = threading.RLock()
+        self.documents: DocumentStore = GitDocumentStore(self._memory, self._runs)
         # Held while the tree is saved, and all through a landing, which
         # changes the tree and saves it with team memory in one step.
         self._saving = threading.RLock()
@@ -641,12 +650,14 @@ class ServiceState:
         and the ones beside ``director.yaml``. They are read again when a
         file among them is added, removed or changed, so a new type can be
         given to the next team without a restart."""
-        folders = [SHIPPED_TYPES]
+        folders = [*SHIPPED_TYPES]
+        documents = [SHIPPED_DOCUMENTS]
         if self._config_file:
             folders.append(self._config_file.parent / TYPES_FOLDER)
+            documents.append(self._config_file.parent / DOCUMENTS_FOLDER)
         files = sorted(
             path
-            for folder in folders
+            for folder in (*folders, *documents)
             if folder.is_dir()
             for path in folder.iterdir()
             if path.suffix in (".yaml", ".yml")
@@ -654,7 +665,9 @@ class ServiceState:
         seen = tuple((str(path), path.stat().st_mtime_ns) for path in files)
         with self._lock:
             if self._agent_types is None or seen != self._agent_types_seen:
-                self._agent_types = load_types(folders, DIRECTOR_TOOL_NAMES)
+                self._agent_types = load_types(
+                    folders, DIRECTOR_TOOL_NAMES, load_documents(documents)
+                )
                 self._agent_types_seen = seen
             return self._agent_types
 

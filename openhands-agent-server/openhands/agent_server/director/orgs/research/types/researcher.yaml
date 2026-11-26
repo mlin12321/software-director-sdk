@@ -72,7 +72,7 @@ agents:
             Prune a team that repeats what failed, that drifted into another team's
             direction, or whose direction the evidence has closed. This is ordinary,
             not rare; say why.
-primitives:
+documents:
     spec: >-
         The question, the method, how a result is measured, and what would
         count as refuting the hypothesis.

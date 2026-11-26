@@ -58,7 +58,7 @@ agents:
             machinery with a way to check it.
             Prune only a team that clearly cannot work: stuck, or repeating what
             fails.
-primitives:
+documents:
     spec: What the team's code measures or produces, and how to run it.
     contracts: >-
         What other teams may rely on: commands, file formats, where results are

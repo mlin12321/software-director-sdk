@@ -1,0 +1,5 @@
+# How a team works inside its folder. It is the team's own: no other team
+# reads it.
+name: spec
+holds: How your team works inside its folder.
+tool: write_spec

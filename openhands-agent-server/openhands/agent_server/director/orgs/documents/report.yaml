@@ -1,0 +1,5 @@
+# What the agents of a team record for themselves as they work. It is only
+# added to.
+name: report
+holds: A decision and why, a setback, what failed.
+tool: report
