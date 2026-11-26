@@ -5,7 +5,8 @@ rewrites has a module beside it with its protocol.
 """
 
 from openhands.agent_server.director.orgs.documents.contracts import ContractsProtocol
+from openhands.agent_server.director.orgs.documents.report import ReportProtocol
 from openhands.agent_server.director.orgs.documents.spec import SpecProtocol
 
 
-__all__ = ["ContractsProtocol", "SpecProtocol"]
+__all__ = ["ContractsProtocol", "ReportProtocol", "SpecProtocol"]

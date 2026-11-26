@@ -86,7 +86,15 @@ def test_where_documents_are_kept_knows_no_tool_type_or_tree():
     assert reached == {"git_store", "run_state"}
 
 
-@pytest.mark.parametrize("module", ["orgs/documents/contracts.py", "orgs/top_down.py"])
+@pytest.mark.parametrize(
+    "module",
+    [
+        "orgs/documents/contracts.py",
+        "orgs/documents/report.py",
+        "orgs/documents/spec.py",
+        "orgs/top_down.py",
+    ],
+)
 def test_what_a_document_does_reaches_the_director_only_through_documents(
     module: str,
 ):
