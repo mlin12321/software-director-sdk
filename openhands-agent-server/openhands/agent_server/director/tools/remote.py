@@ -12,11 +12,8 @@ from pydantic import BaseModel, Field, ValidationError
 
 from openhands.agent_server.director.agent_actions import Caller, acting, caller_of
 from openhands.agent_server.director.git import GitError
-from openhands.agent_server.director.service import (
-    HAND_OVER_TOOLS,
-    DirectorService,
-)
-from openhands.agent_server.director.tools.definition import DIRECTOR_TOOLS
+from openhands.agent_server.director.service import DirectorService
+from openhands.agent_server.director.tools.definition import DIRECTOR_TOOLS, tool_named
 from openhands.sdk.errors import DomainError, NotFound
 
 
@@ -39,7 +36,7 @@ class ToolAnswer(BaseModel):
 
 def _offered(service: DirectorService, caller: Caller) -> tuple[str, ...]:
     if caller.hand_over:
-        return HAND_OVER_TOOLS
+        return service.hand_over_tools
     return service.tools_for(caller.node, caller.role)
 
 
@@ -69,7 +66,7 @@ def call_tool(
     Raises:
         NotFound: The director has no such tool.
     """
-    tool = DIRECTOR_TOOLS.get(name)
+    tool = tool_named(name)
     if tool is None:
         raise NotFound(f"The director has no tool named {name!r}")
     try:

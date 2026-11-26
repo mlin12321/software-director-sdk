@@ -6,15 +6,17 @@ team does not allow, so a tool cannot reach past its own team.
 
 import json
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Literal
 from uuid import UUID, uuid4
 
+from pydantic import BaseModel
+
 from openhands.agent_server.director.boundary import owns
+from openhands.agent_server.director.documents.protocol import Writing
 from openhands.agent_server.director.git import head_of, uncommitted
 from openhands.agent_server.director.git_store import team_key
-from openhands.agent_server.director.memory_edit import EditCommand, edited
 from openhands.agent_server.director.models import (
     ContractsChoice,
     EscalationKind,
@@ -30,6 +32,7 @@ from openhands.agent_server.director.prompts import role_text
 from openhands.agent_server.director.service import (
     DirectorService,
 )
+from openhands.agent_server.director.service.state import team_ref
 from openhands.agent_server.director.split import (
     Proposed,
     ProposedTeam,
@@ -149,59 +152,41 @@ def node_context(service: DirectorService, caller: Caller) -> str:
     return json.dumps(context, indent=2)
 
 
-def write_spec(
-    service: DirectorService,
-    caller: Caller,
-    content: str,
-    *,
-    command: Literal["create", "str_replace", "insert"] = "create",
-    old_str: str = "",
-    new_str: str = "",
-    insert_line: int | None = None,
+def write_document(
+    service: DirectorService, caller: Caller, name: str, arguments: BaseModel
 ) -> str:
-    """Write the spec of the caller's boundary, or change one place in it,
-    as the file editor's command of that name does.
-
-    Args:
-        content: The whole spec, for ``create``.
-    """
-    _has(service, caller, "write_spec", "write its spec", aside=True)
-    if command != "create":
-        if content.strip():
-            raise Invalid(
-                f"`file_text` is the whole spec and goes with `create`; "
-                f"`{command}` takes `old_str`, `new_str` and `insert_line`"
-            )
-        own = next(
-            (spec for spec in service.specs_of(caller.node) if not spec.old), None
+    """Carry out a call of the tool of the document named ``name``: the
+    document's protocol does it, for the team of the caller."""
+    protocol = service.protocols.get(name)
+    if protocol is None:
+        raise Invalid(f"The org keeps no document named {name!r}")
+    _has(
+        service,
+        caller,
+        protocol.document.written_with,
+        f"write its {name}",
+        aside=protocol.usable_in_hand_over,
+    )
+    node = caller.node
+    written = protocol.write(
+        Writing(
+            team=team_ref(node),
+            member=caller.role,
+            arguments=arguments,
+            hand_over=caller.hand_over,
+            leads_session=is_division_lead(node),
+            words=asdict(service.team(node).names),
         )
-        if own is None:
-            raise Invalid("Your team has no spec to change yet: write it with `create`")
-        content = edited(
-            own.spec,
-            command,
-            old_str=old_str,
-            new_str=new_str,
-            insert_line=insert_line,
-            name="the spec",
-        )
-    elif old_str or new_str or insert_line is not None:
-        raise Invalid(
-            "`create` takes the whole spec in `file_text`; to change one "
-            "place use `str_replace` or `insert`"
-        )
-    if not content.strip():
-        raise Invalid("A spec cannot be empty")
-    path = caller.node.boundary.path
-    service.write_spec(caller.node, content)
-    summary = content.strip().splitlines()[0].lstrip("# ").strip()[:200]
-    # With a spec of its own, what teams before it left is no longer its guide.
-    service.org.update_place(caller.node.id, spec_summary=summary, old_specs=[])
+    )
+    if written.purpose is not None:
+        # With a document of its own that says what the team is for, what
+        # teams before it left is no longer its guide.
+        service.org.update_place(node.id, spec_summary=written.purpose, old_specs=[])
     if caller.hand_over:
-        service.note_hand_over(caller.node.id, spec=True)
+        service.note_hand_over(node.id, spec=True)
     else:
-        service.knows(caller.node.id, caller.role, "spec")
-    return f"Saved the spec of {path or 'the repository'}."
+        service.knows(node.id, caller.role, name)
+    return written.answer
 
 
 def _checked(
@@ -743,53 +728,6 @@ def settle_teams(
         ],
         note.strip(),
         contracts,
-    )
-
-
-def edit_contracts(
-    service: DirectorService,
-    caller: Caller,
-    command: EditCommand,
-    *,
-    old_str: str = "",
-    new_str: str = "",
-    insert_line: int | None = None,
-) -> str:
-    """Change one place in the contracts between the caller's sub-teams, or
-    add to them, as the file editor's command of that name does."""
-    names = service.team(caller.node).names
-    _has(
-        service, caller, "edit_contracts", "change the contracts between its sub-teams"
-    )
-    node = caller.node
-    if is_division_lead(node):
-        raise Invalid(
-            f"Contracts are not yours as the Division Lead {names.reviewer}: the "
-            "Division "
-            f"Lead {names.overseer} settles them"
-        )
-    if not service.org.below(node.id):
-        raise Invalid(
-            "Your team has no sub-teams, so it sets no contracts. The ones "
-            "you keep are the team's above; raise what must change in them "
-            "with raise_escalation."
-        )
-    now = service.own_contracts(node)
-    service.set_contracts(
-        node,
-        edited(
-            now,
-            command,
-            old_str=old_str,
-            new_str=new_str,
-            insert_line=insert_line,
-            name="the contracts",
-        ),
-    )
-    return (
-        "The contracts between your sub-teams are changed. Each sub-team is "
-        "told with its next message; write to one with msg_team if it must "
-        "know at once."
     )
 
 

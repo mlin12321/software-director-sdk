@@ -1,7 +1,11 @@
 """What the sub-teams of a team promise each other."""
 
 from collections.abc import Mapping
+from typing import Literal
 
+from pydantic import BaseModel, Field
+
+from openhands.agent_server.director.documents.declared import Document
 from openhands.agent_server.director.documents.events import (
     HandedOver,
     SubTeamsCreated,
@@ -10,14 +14,69 @@ from openhands.agent_server.director.documents.events import (
     WorkAccepted,
 )
 from openhands.agent_server.director.documents.protocol import (
+    INSERT_LINE,
+    NEW_STR,
+    OLD_STR,
     DocumentProtocolBase,
+    Writing,
+    Written,
     register_protocol,
 )
+from openhands.sdk.errors import Invalid
+
+
+class EditContractsArguments(BaseModel):
+    """Change one place in the contracts between your sub-teams, or add to
+    them.
+
+    The commands and arguments of the file editor, without `create`.
+    """
+
+    command: Literal["str_replace", "insert"] = Field(
+        description="`str_replace`: one place changes. `insert`: text is added."
+    )
+    old_str: str = Field(default="", description=OLD_STR)
+    new_str: str = Field(default="", description=NEW_STR)
+    insert_line: int | None = Field(default=None, ge=0, description=INSERT_LINE)
 
 
 class ContractsProtocol(DocumentProtocolBase):
     """Contracts are true of the teams they are between, so they become
     the org's when those teams do."""
+
+    @classmethod
+    def arguments_for(cls, document: Document) -> type[BaseModel]:  # noqa: ARG003
+        return EditContractsArguments
+
+    def write(self, writing: Writing) -> Written:
+        # Contracts are first written by the proposal that makes the
+        # sub-teams, so the tool only changes them.
+        given = writing.arguments
+        assert isinstance(given, EditContractsArguments)
+        words = writing.words
+        if writing.leads_session:
+            raise Invalid(
+                "Contracts are not yours as the Division Lead "
+                f"{words.get('reviewer', '')}: the Division "
+                f"Lead {words.get('overseer', '')} settles them"
+            )
+        if not self.tree.below(writing.team):
+            raise Invalid(
+                "Your team has no sub-teams, so it sets no contracts. The ones "
+                "you keep are the team's above; raise what must change in them "
+                "with raise_escalation."
+            )
+        ref = writing.team.keeps(self.document.name)
+        now = self.store.read(writing.team.session, ref) or ""
+        text = self.edited(now, given)
+        text = f"{text.strip()}\n"
+        if text != now:
+            self.store.write(writing.team.session, ref, text)
+        return Written(
+            "The contracts between your sub-teams are changed. Each sub-team is "
+            "told with its next message; write to one with msg_team if it must "
+            "know at once."
+        )
 
     def read_from(self, reader: TeamRef) -> list[TeamRef]:
         # A team keeps to the contracts the team above set between it and

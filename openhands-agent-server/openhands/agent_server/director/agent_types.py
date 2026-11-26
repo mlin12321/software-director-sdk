@@ -429,15 +429,16 @@ def read_type(
     """The type a file defines.
 
     Args:
-        tools: The names of the director's tools.
-        documents: The documents a team may keep, by name.
+        tools: The names of the director's own tools.
+        documents: The documents a team may keep, by name. Each brings
+            the tool it is written with.
 
     Raises:
         InvalidAgentType: The file is not a type, names a tool the
             director does not have or a document there is none of, or is
             not named as its type is.
     """
-    known = set(tools)
+    known = {*tools, *(found.written_with for found in documents.values())}
     try:
         loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
     except (OSError, yaml.YAMLError) as error:

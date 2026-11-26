@@ -7,7 +7,13 @@ that makes tools of the agent SDK out of them.
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, ClassVar, Self
 
+from openhands.agent_server.director.documents.declared import Document
+from openhands.agent_server.director.documents.protocol import (
+    DocumentProtocolBase,
+    when_declared,
+)
 from openhands.agent_server.director.tools import catalog
+from openhands.agent_server.director.tools.documents import document_tool
 from openhands.agent_server.director.tools.impl import (
     DirectorExecutor,
     DirectorObservation,
@@ -69,36 +75,6 @@ class ReadTeamContextTool(_DirectorTool[ReadTeamContextAction]):
 
 
 register_tool(ReadTeamContextTool.name, ReadTeamContextTool)
-
-
-class WriteSpecAction(catalog.WriteSpecArguments, Action):
-    __doc__ = catalog.WriteSpecArguments.__doc__
-
-
-class WriteSpecTool(_DirectorTool[WriteSpecAction]):
-    spec = catalog.WRITE_SPEC
-
-    @classmethod
-    def action(cls):
-        return WriteSpecAction
-
-
-register_tool(WriteSpecTool.name, WriteSpecTool)
-
-
-class EditContractsAction(catalog.EditContractsArguments, Action):
-    __doc__ = catalog.EditContractsArguments.__doc__
-
-
-class EditContractsTool(_DirectorTool[EditContractsAction]):
-    spec = catalog.EDIT_CONTRACTS
-
-    @classmethod
-    def action(cls):
-        return EditContractsAction
-
-
-register_tool(EditContractsTool.name, EditContractsTool)
 
 
 class MsgManagerAction(catalog.MsgManagerArguments, Action):
@@ -330,8 +306,6 @@ DIRECTOR_TOOLS: dict[str, type[_DirectorTool]] = {
     tool.name: tool
     for tool in (
         ReadTeamContextTool,
-        WriteSpecTool,
-        EditContractsTool,
         MsgManagerTool,
         ProposeTeamsTool,
         MsgIcTool,
@@ -349,3 +323,52 @@ DIRECTOR_TOOLS: dict[str, type[_DirectorTool]] = {
         HandOverTool,
     )
 }
+
+
+def _camel(name: str) -> str:
+    return "".join(part.capitalize() for part in name.split("_"))
+
+
+def tool_of(spec: ToolSpec) -> type[_DirectorTool]:
+    """The tool of the agent SDK that ``spec`` is, registered under its
+    name. A tool is made once: told again with what it takes unchanged,
+    it only takes on what it now says."""
+    made = DIRECTOR_TOOLS.get(spec.name)
+    if made is not None and made.spec.arguments is spec.arguments:
+        made.spec = spec
+        return made
+    if made is not None:
+        raise ValueError(f"The director already has a tool named {spec.name!r}")
+    action = type(
+        f"{_camel(spec.name)}Action",
+        (spec.arguments, Action),
+        {"__doc__": spec.arguments.__doc__, "__module__": __name__},
+    )
+    tool = type(
+        f"{_camel(spec.name)}Tool",
+        (_DirectorTool,),
+        {
+            "name": spec.name,
+            "spec": spec,
+            "action": classmethod(lambda cls: action),  # noqa: ARG005
+            "__module__": __name__,
+        },
+    )
+    register_tool(spec.name, tool)
+    DIRECTOR_TOOLS[spec.name] = tool
+    return tool
+
+
+def tool_named(name: str) -> type[_DirectorTool] | None:
+    """The director's tool of that name, its own or a document's."""
+    return DIRECTOR_TOOLS.get(name)
+
+
+def _tool_of_document(document: Document, protocol: type[DocumentProtocolBase]) -> None:
+    # A document written with a tool of the director's own brings none.
+    if document.written_with not in catalog.DIRECTOR_TOOL_SPECS:
+        tool_of(document_tool(document, protocol))
+
+
+# The tools an org's documents bring are made as the org is read.
+when_declared(_tool_of_document)

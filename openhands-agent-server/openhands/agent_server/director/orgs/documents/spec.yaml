@@ -3,3 +3,11 @@
 name: spec
 holds: How your team works inside its folder.
 tool: write_spec
+says: >-
+    IC only. Write the spec of your folder, how your team works inside it,
+    with the commands of your file editor: `create` with the whole of it in
+    `file_text`, `str_replace` to change one place, `insert` to add text
+    after a line. It is kept outside the working tree and is your team's
+    own; sub-teams see only the contracts of the split that made them. What
+    teams promise each other goes in contracts, not here.
+protocol: spec

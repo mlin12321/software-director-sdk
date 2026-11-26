@@ -55,7 +55,6 @@ from openhands.agent_server.director.service.delivery import Delivery
 from openhands.agent_server.director.service.state import (
     _REASON_KEPT,
     _STARTED_WITH,
-    HAND_OVER_TOOLS,
     LEFT_REFS,
     _agent_title,
     _base_of,
@@ -704,7 +703,7 @@ class Teams(Delivery):
                 self._confine, place.id, self.team(place).writer, conversation_id
             )
             adapt = await asyncio.to_thread(
-                self._adapter, conversation_id, HAND_OVER_TOOLS
+                self._adapter, conversation_id, self.hand_over_tools
             )
 
             async def start() -> StartedAgent:

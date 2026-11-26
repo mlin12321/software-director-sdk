@@ -6,6 +6,12 @@ names a protocol in its YAML file, a subclass registered under that name.
 """
 
 from abc import ABC
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
+from functools import cache
+from typing import Any, ClassVar, Literal
+
+from pydantic import BaseModel, Field, create_model
 
 from openhands.agent_server.director.documents.declared import Document
 from openhands.agent_server.director.documents.events import (
@@ -17,15 +23,112 @@ from openhands.agent_server.director.documents.events import (
 )
 from openhands.agent_server.director.documents.store import DocumentStore
 from openhands.agent_server.director.documents.tree import Tree
+from openhands.agent_server.director.memory_edit import edited
+from openhands.sdk.errors import Invalid
 
 
 class UnknownProtocol(ValueError):
     """A document names a protocol nobody registered."""
 
 
+@dataclass(frozen=True)
+class Writing:
+    """One call of a document's tool.
+
+    Attributes:
+        team: The team of the member that called.
+        member: The member, by the name its team's type gives it.
+        arguments: What the tool was called with.
+        hand_over: Whether it called from its hand-over conversation.
+        leads_session: Whether its team only reviews the work of a session.
+        words: What the members of its team are called, for an answer.
+    """
+
+    team: TeamRef
+    member: str
+    arguments: BaseModel
+    hand_over: bool = False
+    leads_session: bool = False
+    words: Mapping[str, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class Written:
+    """What came of a call of a document's tool.
+
+    Attributes:
+        answer: What the member that called is answered.
+        purpose: What the team is for, in a line, where the document now
+            says so; None where it says nothing of it.
+    """
+
+    answer: str
+    purpose: str | None = None
+
+
+OLD_STR = (
+    "For `str_replace`: the text now there, exactly as it stands and there only once."
+)
+NEW_STR = (
+    "For `str_replace`: what `old_str` is to read, empty to remove it. For "
+    "`insert`: the text to insert."
+)
+INSERT_LINE = (
+    "For `insert`: the line `new_str` goes after; 0 is the top. Left out: at the end."
+)
+
+
+def _camel(name: str) -> str:
+    return "".join(part.capitalize() for part in name.replace("-", "_").split("_"))
+
+
+@cache
+def editor_arguments(tool: str, name: str) -> type[BaseModel]:
+    """What the tool ``tool`` of a plain document named ``name`` takes: the
+    commands and arguments of the file editor."""
+    return create_model(
+        f"{_camel(tool)}Arguments",
+        __doc__=(
+            f"Write the {name} of your team's folder, or change one place in it."
+            "\n\nThe commands and arguments of the file editor."
+        ),
+        command=(
+            Literal["create", "str_replace", "insert"],
+            Field(
+                default="create",
+                description=(
+                    f"`create`: `file_text` is the whole {name}. `str_replace`: one "
+                    "place changes. `insert`: text is added after a line."
+                ),
+            ),
+        ),
+        file_text=(
+            str,
+            Field(
+                default="", description=f"For `create`: the whole {name}, in Markdown."
+            ),
+        ),
+        old_str=(str, Field(default="", description=OLD_STR)),
+        new_str=(str, Field(default="", description=NEW_STR)),
+        insert_line=(
+            int | None,
+            Field(default=None, ge=0, description=INSERT_LINE),
+        ),
+    )
+
+
 class DocumentProtocolBase(ABC):
     """What one document does. Every answer here is the plain one, and a
     subclass gives another only where its document differs."""
+
+    usable_in_hand_over: ClassVar[bool] = False
+    """Whether its tool also works in a hand-over conversation."""
+
+    @classmethod
+    def arguments_for(cls, document: Document) -> type[BaseModel]:
+        """What the tool of ``document`` takes. The plain answer: the
+        commands and arguments of the file editor."""
+        return editor_arguments(document.written_with, document.name)
 
     def __init__(self, document: Document, store: DocumentStore, tree: Tree) -> None:
         """
@@ -37,6 +140,64 @@ class DocumentProtocolBase(ABC):
         self.document = document
         self.store = store
         self.tree = tree
+
+    def write(self, writing: Writing) -> Written:
+        """Carry out a call of the document's tool.
+
+        The plain document is rewritten whole, or changed in one place,
+        for the session of the team alone until its work is accepted.
+
+        Raises:
+            Invalid: The call cannot be carried out as it was made.
+        """
+        name = self.document.name
+        given = writing.arguments
+        command: Any = getattr(given, "command", "create")
+        text = getattr(given, "file_text", "")
+        old_str = getattr(given, "old_str", "")
+        new_str = getattr(given, "new_str", "")
+        insert_line = getattr(given, "insert_line", None)
+        ref = writing.team.keeps(name)
+        if command != "create":
+            if text.strip():
+                raise Invalid(
+                    f"`file_text` is the whole {name} and goes with `create`; "
+                    f"`{command}` takes `old_str`, `new_str` and `insert_line`"
+                )
+            own = self.store.read(writing.team.session, ref)
+            if own is None:
+                raise Invalid(
+                    f"Your team has no {name} to change yet: write it with `create`"
+                )
+            text = self.edited(own, given)
+        elif old_str or new_str or insert_line is not None:
+            raise Invalid(
+                f"`create` takes the whole {name} in `file_text`; to change one "
+                "place use `str_replace` or `insert`"
+            )
+        if not text.strip():
+            raise Invalid(f"A {name} cannot be empty")
+        self.store.write(writing.team.session, ref, text)
+        return Written(
+            f"Saved the {name} of {writing.team.folder or 'the repository'}."
+        )
+
+    def edited(self, text: str, arguments: BaseModel) -> str:
+        """``text`` after the command of the file editor that ``arguments``
+        holds: `str_replace` or `insert`.
+
+        Raises:
+            Invalid: The editor refuses the change.
+        """
+        command: Any = getattr(arguments, "command", "")
+        return edited(
+            text,
+            command,
+            old_str=getattr(arguments, "old_str", ""),
+            new_str=getattr(arguments, "new_str", ""),
+            insert_line=getattr(arguments, "insert_line", None),
+            name=f"the {self.document.name}",
+        )
 
     def read_from(self, reader: TeamRef) -> list[TeamRef]:
         """The teams whose document of this kind the team ``reader``
@@ -84,6 +245,23 @@ def register_protocol(name: str, protocol: type[DocumentProtocolBase]) -> None:
     _PROTOCOLS[name] = protocol
 
 
+def protocol_class(document: Document) -> type[DocumentProtocolBase]:
+    """The class of what ``document`` does.
+
+    Raises:
+        UnknownProtocol: It names a protocol nobody registered.
+    """
+    if document.protocol is None:
+        return DocumentProtocolBase
+    protocol = _PROTOCOLS.get(document.protocol)
+    if protocol is None:
+        raise UnknownProtocol(
+            f"The document {document.name!r} names the protocol "
+            f"{document.protocol!r}, and there is none of that name"
+        )
+    return protocol
+
+
 def protocol_of(
     document: Document, store: DocumentStore, tree: Tree
 ) -> DocumentProtocolBase:
@@ -92,12 +270,35 @@ def protocol_of(
     Raises:
         UnknownProtocol: It names a protocol nobody registered.
     """
-    if document.protocol is None:
-        return DocumentProtocolBase(document, store, tree)
-    protocol = _PROTOCOLS.get(document.protocol)
-    if protocol is None:
-        raise UnknownProtocol(
-            f"The document {document.name!r} names the protocol "
-            f"{document.protocol!r}, and there is none of that name"
-        )
-    return protocol(document, store, tree)
+    return protocol_class(document)(document, store, tree)
+
+
+# Who is told of each document an org declares, and the ones told so far.
+# The service that reads an org's documents does not know what gives its
+# agents their tools; that part listens here.
+_declared: dict[str, tuple[Document, type[DocumentProtocolBase]]] = {}
+_listeners: list[Callable[[Document, type[DocumentProtocolBase]], None]] = []
+
+
+def declare(document: Document) -> None:
+    """Tell of a document an org keeps, so that its tool can be made.
+
+    Raises:
+        UnknownProtocol: It names a protocol nobody registered.
+        ValueError: Its tool cannot be made: another of that name takes
+            something else.
+    """
+    found = (document, protocol_class(document))
+    for tell in _listeners:
+        tell(*found)
+    _declared[document.name] = found
+
+
+def when_declared(
+    tell: Callable[[Document, type[DocumentProtocolBase]], None],
+) -> None:
+    """Have ``tell`` called with every document declared, the ones before
+    now as well."""
+    _listeners.append(tell)
+    for found in list(_declared.values()):
+        tell(*found)

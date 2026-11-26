@@ -87,7 +87,6 @@ from openhands.agent_server.director.service.state import (
     NOT_STARTED,
     TOGETHER_WORTH_SAYING,
     ServiceState,
-    _contracts_file,
     _spec_file,
     team_ref,
 )
@@ -1029,12 +1028,6 @@ class Records(ServiceState):
             return None
         return draft[0], draft[1]
 
-    def write_spec(self, place: SessionTeam, content: str) -> None:
-        """Write the spec of a place's directory. It is kept for the
-        session alone until its work is accepted."""
-        file = _spec_file(normalize_store_path(place.boundary.path))
-        self._draft(place.session, file, content)
-
     def specs_inherited(self, top: SessionTeam) -> list[tuple[str, str, str, str]]:
         """The specs a session wrote for teams the org had when it began
         and has no more.
@@ -1461,17 +1454,3 @@ class Records(ServiceState):
             for protocol in self.protocols_of(place)
         }
         return {name: text for name, text in kept.items() if text}
-
-    def own_contracts(self, place: SessionTeam) -> str:
-        """The contracts between the sub-teams of ``place``, as its session
-        has them; '' when there are none."""
-        file = _contracts_file(normalize_store_path(place.boundary.path))
-        return self.read_file(place, file) or ""
-
-    def set_contracts(self, place: SessionTeam, text: str) -> None:
-        """Put ``text`` in the place of the contracts between the sub-teams
-        of ``place``, for its session until its work is accepted."""
-        file = _contracts_file(normalize_store_path(place.boundary.path))
-        text = f"{text.strip()}\n"
-        if self.read_file(place, file) != text:
-            self._draft(place.session, file, text)

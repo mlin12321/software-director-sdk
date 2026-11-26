@@ -45,6 +45,13 @@ class Document(BaseModel):
             "The name of the tool its team writes it with. Empty: `write_<name>`."
         ),
     )
+    says: str = Field(
+        default="",
+        description=(
+            "What the agents that have its tool are told the tool is for. "
+            "Empty: that it writes the document."
+        ),
+    )
     protocol: str | None = Field(
         default=None,
         description=(
@@ -67,6 +74,15 @@ class Document(BaseModel):
     def written_with(self) -> str:
         """The name of the tool its team writes it with."""
         return self.tool or f"write_{self.name.replace('-', '_')}"
+
+    @property
+    def tool_summary(self) -> str:
+        """What the agents that have its tool are told it is for."""
+        return " ".join(self.says.split()) or (
+            f"Write your team's {self.name}: {self.holds.strip()} `create` "
+            "with the whole of it in `file_text`, `str_replace` to change "
+            "one place, `insert` to add text after a line."
+        )
 
 
 def read_document(path: Path) -> Document:

@@ -16,11 +16,9 @@ from openhands.agent_server.director.service import DirectorService
 from openhands.agent_server.director.tools import (
     RaiseEscalationTool,
     SubmitReviewTool,
-    WriteSpecTool,
 )
 from openhands.agent_server.director.tools.definition import (
     RaiseEscalationAction,
-    WriteSpecAction,
 )
 from tests.agent_server.director.conftest import (
     API,
@@ -39,6 +37,10 @@ from tests.agent_server.director.conftest import (
     split_root,
     started,
     use,
+)
+from tests.agent_server.director.document_tools import (
+    WriteSpecAction,
+    WriteSpecTool,
 )
 
 

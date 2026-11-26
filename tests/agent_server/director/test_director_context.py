@@ -22,14 +22,12 @@ from openhands.agent_server.director.tools import (
     ReportTool,
     ReviewTeamTool,
     SubmitReviewTool,
-    WriteSpecTool,
 )
 from openhands.agent_server.director.tools.definition import (
     MsgIcAction,
     PruneTeamAction,
     RaiseEscalationAction,
     ReportAction,
-    WriteSpecAction,
 )
 from openhands.sdk.conversation.state import ConversationExecutionStatus
 from tests.agent_server.director.conftest import (
@@ -48,6 +46,10 @@ from tests.agent_server.director.conftest import (
     started,
     use,
     woken,
+)
+from tests.agent_server.director.document_tools import (
+    WriteSpecAction,
+    WriteSpecTool,
 )
 
 

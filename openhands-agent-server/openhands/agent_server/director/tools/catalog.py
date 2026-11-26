@@ -37,43 +37,6 @@ _INSERT_LINE = (
 )
 
 
-class WriteSpecArguments(BaseModel):
-    """Write the spec of your team's folder, or change one place in it.
-
-    The commands and arguments of the file editor.
-    """
-
-    command: Literal["create", "str_replace", "insert"] = Field(
-        default="create",
-        description=(
-            "`create`: `file_text` is the whole spec. `str_replace`: one "
-            "place changes. `insert`: text is added after a line."
-        ),
-    )
-    file_text: str = Field(
-        default="",
-        description="For `create`: the whole spec, in Markdown.",
-    )
-    old_str: str = Field(default="", description=_OLD_STR)
-    new_str: str = Field(default="", description=_NEW_STR)
-    insert_line: int | None = Field(default=None, ge=0, description=_INSERT_LINE)
-
-
-class EditContractsArguments(BaseModel):
-    """Change one place in the contracts between your sub-teams, or add to
-    them.
-
-    The commands and arguments of the file editor, without `create`.
-    """
-
-    command: Literal["str_replace", "insert"] = Field(
-        description="`str_replace`: one place changes. `insert`: text is added."
-    )
-    old_str: str = Field(default="", description=_OLD_STR)
-    new_str: str = Field(default="", description=_NEW_STR)
-    insert_line: int | None = Field(default=None, ge=0, description=_INSERT_LINE)
-
-
 class MsgManagerArguments(BaseModel):
     """Write to your team's Manager."""
 
@@ -308,46 +271,6 @@ READ_TEAM_CONTEXT = ToolSpec(
     read_only=True,
 )
 
-WRITE_SPEC = ToolSpec(
-    name="write_spec",
-    summary="IC only. Write the spec of your folder, how your team works inside "
-    "it, with the commands of your file editor: `create` with the whole "
-    "of it in `file_text`, `str_replace` to change one place, `insert` "
-    "to add text after a line. It is kept "
-    "outside the working tree and is your team's "
-    "own; sub-teams see only the contracts of the split that made them. "
-    "What teams promise each other goes in contracts, not here.",
-    arguments=WriteSpecArguments,
-    act=lambda service, caller, action: agent_actions.write_spec(
-        service,
-        caller,
-        action.file_text,
-        command=action.command,
-        old_str=action.old_str,
-        new_str=action.new_str,
-        insert_line=action.insert_line,
-    ),
-)
-
-EDIT_CONTRACTS = ToolSpec(
-    name="edit_contracts",
-    summary="IC only, with sub-teams. Change the contracts between your "
-    "sub-teams with the commands of your file editor: `str_replace` to "
-    "change one place, `insert` to add text after a line, or at the end "
-    "with no `insert_line`. The contracts are kept outside the working "
-    "tree. Every sub-team reads them and is told of the change with its "
-    "next message.",
-    arguments=EditContractsArguments,
-    act=lambda service, caller, action: agent_actions.edit_contracts(
-        service,
-        caller,
-        action.command,
-        old_str=action.old_str,
-        new_str=action.new_str,
-        insert_line=action.insert_line,
-    ),
-)
-
 MSG_MANAGER = ToolSpec(
     name="msg_manager",
     summary="IC only, with sub-teams. Write to your team's Manager, in your own "
@@ -569,8 +492,6 @@ DIRECTOR_TOOL_SPECS: dict[str, ToolSpec] = {
     spec.name: spec
     for spec in (
         READ_TEAM_CONTEXT,
-        WRITE_SPEC,
-        EDIT_CONTRACTS,
         MSG_MANAGER,
         PROPOSE_TEAMS,
         MSG_IC,
