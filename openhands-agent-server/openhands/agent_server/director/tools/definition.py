@@ -1,25 +1,18 @@
-"""Actions and tool definitions of the director's agent tools."""
+"""The director's tools as an agent of the server is given them.
 
-from collections.abc import Callable, Sequence
-from typing import TYPE_CHECKING, ClassVar, Literal, Self
+What each tool takes and does is in ``catalog``; this is the one module
+that makes tools of the agent SDK out of them.
+"""
 
-from pydantic import Field
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, ClassVar, Self
 
-from openhands.agent_server.director import agent_actions
-from openhands.agent_server.director.agent_actions import Caller
-from openhands.agent_server.director.models import (
-    ContractsChoice,
-    EscalationKind,
-    ReviewFinding,
-    SpecChoice,
-    TeamChoice,
-)
-from openhands.agent_server.director.service import DirectorService
-from openhands.agent_server.director.split import ProposedTeam
+from openhands.agent_server.director.tools import catalog
 from openhands.agent_server.director.tools.impl import (
     DirectorExecutor,
     DirectorObservation,
 )
+from openhands.agent_server.director.tools.spec import ToolSpec
 from openhands.sdk.tool.registry import register_tool
 from openhands.sdk.tool.tool import Action, ToolAnnotations, ToolDefinition
 
@@ -28,296 +21,16 @@ if TYPE_CHECKING:
     from openhands.sdk.conversation.state import ConversationState
 
 
-class ReadTeamContextAction(Action):
-    """Read who you are in the org and what concerns your team."""
-
-
-_OLD_STR = (
-    "For `str_replace`: the text now there, exactly as it stands and there only once."
-)
-_NEW_STR = (
-    "For `str_replace`: what `old_str` is to read, empty to remove it. For "
-    "`insert`: the text to insert."
-)
-_INSERT_LINE = (
-    "For `insert`: the line `new_str` goes after; 0 is the top. Left out: at the end."
-)
-
-
-class WriteSpecAction(Action):
-    """Write the spec of your team's folder, or change one place in it.
-
-    The commands and arguments of the file editor.
-    """
-
-    command: Literal["create", "str_replace", "insert"] = Field(
-        default="create",
-        description=(
-            "`create`: `file_text` is the whole spec. `str_replace`: one "
-            "place changes. `insert`: text is added after a line."
-        ),
-    )
-    file_text: str = Field(
-        default="",
-        description="For `create`: the whole spec, in Markdown.",
-    )
-    old_str: str = Field(default="", description=_OLD_STR)
-    new_str: str = Field(default="", description=_NEW_STR)
-    insert_line: int | None = Field(default=None, ge=0, description=_INSERT_LINE)
-
-
-class EditContractsAction(Action):
-    """Change one place in the contracts between your sub-teams, or add to
-    them.
-
-    The commands and arguments of the file editor, without `create`.
-    """
-
-    command: Literal["str_replace", "insert"] = Field(
-        description="`str_replace`: one place changes. `insert`: text is added."
-    )
-    old_str: str = Field(default="", description=_OLD_STR)
-    new_str: str = Field(default="", description=_NEW_STR)
-    insert_line: int | None = Field(default=None, ge=0, description=_INSERT_LINE)
-
-
-class MsgManagerAction(Action):
-    """Write to your team's Manager."""
-
-    text: str = Field(description="The message, in your own words.")
-
-
-class ProposeTeamsAction(Action):
-    """Propose sub-teams to your team's Manager."""
-
-    teams: list[ProposedTeam] = Field(
-        min_length=1,
-        description=(
-            "The sub-teams. Each owns one folder strictly inside what your "
-            "team may write; no two may overlap. A team whose folder covers "
-            "sub-teams you already have replaces them, and so does one that "
-            "takes part of an existing sub-team's folder; what the new "
-            "teams leave of it is yours again."
-        ),
-    )
-    contracts: str = Field(
-        default="",
-        description=(
-            "What the sub-teams must keep between them: types, endpoints, "
-            "file formats. They cannot see each other's work or your spec, "
-            "so this must hold everything they have to respect. What teams "
-            "promise each other is written only here, not in a spec."
-        ),
-    )
-    keep: list[str] = Field(
-        default_factory=list,
-        description=(
-            "When you already have sub-teams: the name of every one that "
-            "stays as it is. Leave empty when you have none."
-        ),
-    )
-    text: str = Field(
-        default="", description="Why you want these teams, for your Manager."
-    )
-
-
-class MsgIcAction(Action):
-    """Write to an IC."""
-
-    text: str = Field(description="The message, in your own words.")
-    team: str = Field(
-        default="",
-        description=(
-            "The id of a team directly below yours, to write to its "
-            "IC. Leave empty for your own team's IC."
-        ),
-    )
-
-
-class ApproveTeamsAction(Action):
-    """Approve the sub-teams your IC proposed, as written."""
-
-
-class SettleTeamsAction(Action):
-    """Settle the sub-teams of a session that wait for you."""
-
-    teams: list[TeamChoice] = Field(
-        default_factory=list,
-        description=(
-            "For teams that wait: 'org' where what the org has now holds, "
-            "'session' where the team becomes what the session made of it, "
-            "which you may put under another team of the org or name "
-            "otherwise. Unnamed, a team becomes what the session made of it."
-        ),
-    )
-    contracts: list[ContractsChoice] = Field(
-        default_factory=list,
-        description=(
-            "For contracts that wait: which holds for each folder. "
-            "Unnamed, the session's hold."
-        ),
-    )
-    note: str = Field(
-        default="",
-        description="Why, in a sentence or two; the session's IC is told.",
-    )
-
-
-class DeclineTeamsAction(Action):
-    """Decline the sub-teams your IC proposed."""
-
-    reason: str = Field(
-        description=(
-            "Why they are declined and what would change your mind; your IC "
-            "is told, and it is kept in the record."
-        )
-    )
-
-
-class RaiseEscalationAction(Action):
-    """Raise something your team cannot settle itself."""
-
-    category: EscalationKind | Literal["misrouted"] = Field(
-        description=(
-            "`critical_issue`: the work cannot continue. `design_decision`: a "
-            "choice that reaches beyond your folder. `misrouted`: what the "
-            "human sent your team directly is not your team's; it goes to "
-            "the team above and you do not wait on it."
-        )
-    )
-    title: str
-    detail: str = Field(
-        default="", description="What you need decided, and the options you see."
-    )
-
-
-class ResolveEscalationAction(Action):
-    """Settle an escalation your team holds, or pass it up."""
-
-    team: str = Field(description="The team that raised the escalation.")
-    escalation_id: str
-    action: Literal["settle", "pass_up"]
-    text: str = Field(
-        description=(
-            "Your answer to the team that raised it, or the reason you cannot "
-            "settle it."
-        )
-    )
-
-
-class SubmitReviewAction(Action):
-    """Submit your team's work for review."""
-
-    summary: str = Field(description="What your team delivered.")
-
-
-class ReviewTeamAction(Action):
-    """Decide on the work a team below yours submitted."""
-
-    team: str = Field(description="A team directly below yours.")
-    decision: Literal["accept", "reject"]
-    findings: list[ReviewFinding] = Field(
-        default_factory=list,
-        description="What must change; required to reject.",
-    )
-    needed_above: str = Field(
-        default="",
-        description=(
-            "Only when a team above yours waits on this work: which one and "
-            "for what. Leave empty otherwise."
-        ),
-    )
-    reconciled: str = Field(
-        default="",
-        description=(
-            "Only when you were told this work meets other work that was "
-            "merged since it began: what you decided, having read both. It "
-            "holds for what you were shown: if that changed since, you are "
-            "shown it again. Leave empty otherwise."
-        ),
-    )
-    specs: list[SpecChoice] = Field(
-        default_factory=list,
-        description=(
-            "Only when you accept the work of a session: for the spec of a "
-            "folder in it, whether the org's stays, the session's holds, "
-            "or a text you write from both does. Unnamed, the session's "
-            "holds."
-        ),
-    )
-    contracts: str = Field(
-        default="",
-        description=(
-            "Only when you accept: what this work establishes that every "
-            "team below yours may rely on from now, a line for each. It is "
-            "added to the contracts between your sub-teams, which each of "
-            "them reads. Leave empty otherwise."
-        ),
-    )
-
-
-class ReportAction(Action):
-    """Record a design decision, a setback or a reflection."""
-
-    text: str = Field(description="What to record, in plain English.")
-
-
-class MsgTeamAction(Action):
-    """Write to the IC of a team below yours."""
-
-    team: str = Field(description="The id of a team directly below yours.")
-    text: str = Field(description="The message, in your own words.")
-
-
-class HandOverAction(Action):
-    """Pass on to a team below yours what the teams before it left."""
-
-    team: str = Field(description="The id of a team directly below yours.")
-    notes: str = Field(
-        default="",
-        description=(
-            "What of the removed teams' reports this team should know, in "
-            "your own words or quoted. Kept with its reports."
-        ),
-    )
-    contracts: str = Field(
-        default="",
-        description=(
-            "The contracts this team's own sub-teams must keep between "
-            "them. Takes the place of the ones it has. Only for a team that "
-            "has, or took over, sub-teams."
-        ),
-    )
-
-
-class StopTeamAction(Action):
-    """Stop a team below yours that has gone on too long without progress."""
-
-    team: str = Field(description="The id of a team directly below yours.")
-    reason: str = Field(description="Why the team is stopped; your Manager is told.")
-
-
-class PruneTeamAction(Action):
-    """Remove a team below yours that is grossly inefficient."""
-
-    team: str = Field(description="A team directly below yours.")
-    reason: str = Field(description="Why the team is removed; its IC above is told.")
-
-
 class _DirectorTool[ActionT: Action](ToolDefinition[ActionT, DirectorObservation]):
     """A tool bound to the conversation of the agent that owns it."""
 
     # Given by the director to the agents it starts, not picked from the catalog.
     user_selectable: ClassVar[bool] = False
-    summary: ClassVar[str]
-    read_only: ClassVar[bool] = False
+    spec: ClassVar[ToolSpec]
 
     @classmethod
     def action(cls) -> type[ActionT]:
-        raise NotImplementedError
-
-    @classmethod
-    def act(cls) -> Callable[[DirectorService, Caller, ActionT], str]:
+        """What the tool takes, as an action of the agent SDK."""
         raise NotImplementedError
 
     @classmethod
@@ -326,14 +39,14 @@ class _DirectorTool[ActionT: Action](ToolDefinition[ActionT, DirectorObservation
             raise ValueError(f"{cls.__name__} does not accept parameters")
         return [
             cls(
-                description=cls.summary,
+                description=cls.spec.summary,
                 action_type=cls.action(),
                 observation_type=DirectorObservation,
-                executor=DirectorExecutor(conv_state.id, cls.act()),
+                executor=DirectorExecutor(conv_state.id, cls.spec.act),
                 annotations=ToolAnnotations(
-                    readOnlyHint=cls.read_only,
+                    readOnlyHint=cls.spec.read_only,
                     destructiveHint=False,
-                    idempotentHint=cls.read_only,
+                    idempotentHint=cls.spec.read_only,
                     openWorldHint=False,
                 ),
             )
@@ -343,454 +56,274 @@ class _DirectorTool[ActionT: Action](ToolDefinition[ActionT, DirectorObservation
 register_tool(_DirectorTool.name, _DirectorTool)
 
 
+class ReadTeamContextAction(catalog.ReadTeamContextArguments, Action):
+    __doc__ = catalog.ReadTeamContextArguments.__doc__
+
+
 class ReadTeamContextTool(_DirectorTool[ReadTeamContextAction]):
-    summary = (
-        "Read your place in the org: your team, role and folder, your spec, "
-        "the contracts you keep and what your team has reported, your sub-teams "
-        "and their status, a split that "
-        "is waiting, and the escalations you raised or must settle."
-    )
-    read_only = True
+    spec = catalog.READ_TEAM_CONTEXT
 
     @classmethod
     def action(cls):
         return ReadTeamContextAction
 
-    @classmethod
-    def act(cls):
-        return lambda service, caller, _action: agent_actions.node_context(
-            service, caller
-        )
-
 
 register_tool(ReadTeamContextTool.name, ReadTeamContextTool)
 
 
+class WriteSpecAction(catalog.WriteSpecArguments, Action):
+    __doc__ = catalog.WriteSpecArguments.__doc__
+
+
 class WriteSpecTool(_DirectorTool[WriteSpecAction]):
-    summary = (
-        "IC only. Write the spec of your folder, how your team works inside "
-        "it, with the commands of your file editor: `create` with the whole "
-        "of it in `file_text`, `str_replace` to change one place, `insert` "
-        "to add text after a line. It is kept "
-        "outside the working tree and is your team's "
-        "own; sub-teams see only the contracts of the split that made them. "
-        "What teams promise each other goes in contracts, not here."
-    )
+    spec = catalog.WRITE_SPEC
 
     @classmethod
     def action(cls):
         return WriteSpecAction
 
-    @classmethod
-    def act(cls):
-        return lambda service, caller, action: agent_actions.write_spec(
-            service,
-            caller,
-            action.file_text,
-            command=action.command,
-            old_str=action.old_str,
-            new_str=action.new_str,
-            insert_line=action.insert_line,
-        )
-
 
 register_tool(WriteSpecTool.name, WriteSpecTool)
 
 
+class EditContractsAction(catalog.EditContractsArguments, Action):
+    __doc__ = catalog.EditContractsArguments.__doc__
+
+
 class EditContractsTool(_DirectorTool[EditContractsAction]):
-    summary = (
-        "IC only, with sub-teams. Change the contracts between your "
-        "sub-teams with the commands of your file editor: `str_replace` to "
-        "change one place, `insert` to add text after a line, or at the end "
-        "with no `insert_line`. The contracts are kept outside the working "
-        "tree. Every sub-team reads them and is told of the change with its "
-        "next message."
-    )
+    spec = catalog.EDIT_CONTRACTS
 
     @classmethod
     def action(cls):
         return EditContractsAction
 
-    @classmethod
-    def act(cls):
-        return lambda service, caller, action: agent_actions.edit_contracts(
-            service,
-            caller,
-            action.command,
-            old_str=action.old_str,
-            new_str=action.new_str,
-            insert_line=action.insert_line,
-        )
-
 
 register_tool(EditContractsTool.name, EditContractsTool)
 
 
+class MsgManagerAction(catalog.MsgManagerArguments, Action):
+    __doc__ = catalog.MsgManagerArguments.__doc__
+
+
 class MsgManagerTool(_DirectorTool[MsgManagerAction]):
-    summary = (
-        "IC only, with sub-teams. Write to your team's Manager, in your own "
-        "words: say how the teams below are doing, say when one struggles "
-        "and you cannot fix it, or when two of them are at odds. To propose "
-        "sub-teams use propose_teams."
-    )
+    spec = catalog.MSG_MANAGER
 
     @classmethod
     def action(cls):
         return MsgManagerAction
 
-    @classmethod
-    def act(cls):
-        return lambda service, caller, action: agent_actions.msg_manager(
-            service, caller, action.text
-        )
-
 
 register_tool(MsgManagerTool.name, MsgManagerTool)
 
 
+class ProposeTeamsAction(catalog.ProposeTeamsArguments, Action):
+    __doc__ = catalog.ProposeTeamsArguments.__doc__
+
+
 class ProposeTeamsTool(_DirectorTool[ProposeTeamsAction]):
-    summary = (
-        "IC only. Propose sub-teams to your team's Manager. The proposal is "
-        "checked at once, and nothing is set up until the Manager approves; "
-        "you are told either way."
-    )
+    spec = catalog.PROPOSE_TEAMS
 
     @classmethod
     def action(cls):
         return ProposeTeamsAction
 
-    @classmethod
-    def act(cls):
-        return lambda service, caller, action: agent_actions.propose_teams(
-            service,
-            caller,
-            action.teams,
-            action.contracts,
-            action.keep,
-            action.text,
-        )
-
 
 register_tool(ProposeTeamsTool.name, ProposeTeamsTool)
 
 
+class MsgIcAction(catalog.MsgIcArguments, Action):
+    __doc__ = catalog.MsgIcArguments.__doc__
+
+
 class MsgIcTool(_DirectorTool[MsgIcAction]):
-    summary = (
-        "Manager only. Write to your team's IC, or to the IC of a team "
-        "directly below: feedback, a decision, what you are about to "
-        "change. A message decides nothing: sub-teams your IC proposed "
-        "still wait for approve_teams or decline_teams."
-    )
+    spec = catalog.MSG_IC
 
     @classmethod
     def action(cls):
         return MsgIcAction
 
-    @classmethod
-    def act(cls):
-        return lambda service, caller, action: agent_actions.msg_ic(
-            service, caller, action.text, action.team
-        )
-
 
 register_tool(MsgIcTool.name, MsgIcTool)
 
 
+class MsgTeamAction(catalog.MsgTeamArguments, Action):
+    __doc__ = catalog.MsgTeamArguments.__doc__
+
+
 class MsgTeamTool(_DirectorTool[MsgTeamAction]):
-    summary = (
-        "IC only. Write to the IC of a team directly below yours: its task, "
-        "a hint, a correction, a change of priority. A team that was set up "
-        "and not started yet starts with the first message, which is its "
-        "task. Its IC does not answer in a message; it acts on what you "
-        "wrote or raises an escalation. Writing to a team you stopped sets "
-        "it going again."
-    )
+    spec = catalog.MSG_TEAM
 
     @classmethod
     def action(cls):
         return MsgTeamAction
 
-    @classmethod
-    def act(cls):
-        return lambda service, caller, action: agent_actions.msg_team(
-            service, caller, action.team, action.text
-        )
-
 
 register_tool(MsgTeamTool.name, MsgTeamTool)
 
 
-class HandOverTool(_DirectorTool[HandOverAction]):
-    summary = (
-        "IC only. After teams below yours were replaced or pruned, pass on "
-        "to a team directly below what it should know of what they left: "
-        "notes from their reports, and the contracts its own sub-teams must "
-        "keep. Nothing of a removed team reaches another team unless you do "
-        "this. It starts nothing and can be done again."
-    )
-
-    @classmethod
-    def action(cls):
-        return HandOverAction
-
-    @classmethod
-    def act(cls):
-        return lambda service, caller, action: agent_actions.hand_over(
-            service, caller, action.team, action.notes, action.contracts
-        )
-
-
-register_tool(HandOverTool.name, HandOverTool)
+class StopTeamAction(catalog.StopTeamArguments, Action):
+    __doc__ = catalog.StopTeamArguments.__doc__
 
 
 class StopTeamTool(_DirectorTool[StopTeamAction]):
-    summary = (
-        "IC only. A last resort, to be used very sparingly: stop a team "
-        "directly below yours that has gone on too long without progress "
-        "and that a message did not help. Its agents and those of every "
-        "team below it end the step they are in and are sent nothing until "
-        "you write to the team with msg_team. Your Manager is told and may "
-        "remove the team."
-    )
+    spec = catalog.STOP_TEAM
 
     @classmethod
     def action(cls):
         return StopTeamAction
 
-    @classmethod
-    def act(cls):
-        return lambda service, caller, action: agent_actions.stop_team(
-            service, caller, action.team, action.reason
-        )
-
 
 register_tool(StopTeamTool.name, StopTeamTool)
 
 
+class ApproveTeamsAction(catalog.ApproveTeamsArguments, Action):
+    __doc__ = catalog.ApproveTeamsArguments.__doc__
+
+
 class ApproveTeamsTool(_DirectorTool[ApproveTeamsAction]):
-    summary = (
-        "Manager only. Approve the sub-teams your IC proposed. They are set "
-        "up exactly as its message wrote them; you cannot change them here. "
-        "To decline them use decline_teams."
-    )
+    spec = catalog.APPROVE_TEAMS
 
     @classmethod
     def action(cls):
         return ApproveTeamsAction
 
-    @classmethod
-    def act(cls):
-        return lambda service, caller, _action: agent_actions.approve_teams(
-            service, caller
-        )
-
 
 register_tool(ApproveTeamsTool.name, ApproveTeamsTool)
 
 
-class SettleTeamsTool(_DirectorTool[SettleTeamsAction]):
-    summary = (
-        "Division Lead Manager only. Settle the teams and contracts that "
-        "both a session and other accepted work changed: for each, the "
-        "org's or the session's; a team taken from the session may go "
-        "under another team or get another name; contracts may be a text "
-        "you write. It becomes the org's once the session's code is "
-        "accepted and it is the session's turn."
-    )
-
-    @classmethod
-    def action(cls):
-        return SettleTeamsAction
-
-    @classmethod
-    def act(cls):
-        return lambda service, caller, action: agent_actions.settle_teams(
-            service, caller, action.teams, action.note, action.contracts
-        )
-
-
-register_tool(SettleTeamsTool.name, SettleTeamsTool)
+class DeclineTeamsAction(catalog.DeclineTeamsArguments, Action):
+    __doc__ = catalog.DeclineTeamsArguments.__doc__
 
 
 class DeclineTeamsTool(_DirectorTool[DeclineTeamsAction]):
-    summary = (
-        "Manager only. Decline the sub-teams your IC proposed, saying why. "
-        "Nothing is set up, your IC is told the reason, and the reason is "
-        "kept in the record, where it is shown when the same folders "
-        "are proposed again. Also the way to ask for a different division: "
-        "say what to change, and your IC proposes again."
-    )
+    spec = catalog.DECLINE_TEAMS
 
     @classmethod
     def action(cls):
         return DeclineTeamsAction
 
-    @classmethod
-    def act(cls):
-        return lambda service, caller, action: agent_actions.decline_teams(
-            service, caller, action.reason
-        )
-
 
 register_tool(DeclineTeamsTool.name, DeclineTeamsTool)
 
 
+class SettleTeamsAction(catalog.SettleTeamsArguments, Action):
+    __doc__ = catalog.SettleTeamsArguments.__doc__
+
+
+class SettleTeamsTool(_DirectorTool[SettleTeamsAction]):
+    spec = catalog.SETTLE_TEAMS
+
+    @classmethod
+    def action(cls):
+        return SettleTeamsAction
+
+
+register_tool(SettleTeamsTool.name, SettleTeamsTool)
+
+
+class RaiseEscalationAction(catalog.RaiseEscalationArguments, Action):
+    __doc__ = catalog.RaiseEscalationArguments.__doc__
+
+
 class RaiseEscalationTool(_DirectorTool[RaiseEscalationAction]):
-    summary = (
-        "Raise something you cannot settle yourself. An IC's goes to the IC "
-        "of the team above and a Manager's to the Manager there, which "
-        "settles it or passes it up; it reaches the human only when no team "
-        "could. A team is shown as blocked while its IC waits on one."
-    )
+    spec = catalog.RAISE_ESCALATION
 
     @classmethod
     def action(cls):
         return RaiseEscalationAction
 
-    @classmethod
-    def act(cls):
-        return lambda service, caller, action: agent_actions.raise_escalation(
-            service,
-            caller,
-            action.category,
-            action.title,
-            action.detail,
-        )
-
 
 register_tool(RaiseEscalationTool.name, RaiseEscalationTool)
 
 
+class ResolveEscalationAction(catalog.ResolveEscalationArguments, Action):
+    __doc__ = catalog.ResolveEscalationArguments.__doc__
+
+
 class ResolveEscalationTool(_DirectorTool[ResolveEscalationAction]):
-    summary = (
-        "Settle an escalation that the agent of your own role in a team "
-        "below raised and your team holds, with your answer; or pass it one "
-        "team up with the reason you cannot settle it."
-    )
+    spec = catalog.RESOLVE_ESCALATION
 
     @classmethod
     def action(cls):
         return ResolveEscalationAction
 
-    @classmethod
-    def act(cls):
-        return lambda service, caller, action: agent_actions.resolve_escalation(
-            service,
-            caller,
-            action.team,
-            action.escalation_id,
-            action.action,
-            action.text,
-        )
-
 
 register_tool(ResolveEscalationTool.name, ResolveEscalationTool)
 
 
+class SubmitReviewAction(catalog.SubmitReviewArguments, Action):
+    __doc__ = catalog.SubmitReviewArguments.__doc__
+
+
 class SubmitReviewTool(_DirectorTool[SubmitReviewAction]):
-    summary = (
-        "IC only. Submit your team's work when it is complete: commit it "
-        "first, say what you delivered, then stop. The IC of the team above "
-        "reviews it and you are woken with the outcome. Work of your "
-        "sub-teams that you accepted goes with it."
-    )
+    spec = catalog.SUBMIT_REVIEW
 
     @classmethod
     def action(cls):
         return SubmitReviewAction
 
-    @classmethod
-    def act(cls):
-        return lambda service, caller, action: agent_actions.submit_review(
-            service, caller, action.summary
-        )
-
 
 register_tool(SubmitReviewTool.name, SubmitReviewTool)
 
 
+class ReviewTeamAction(catalog.ReviewTeamArguments, Action):
+    __doc__ = catalog.ReviewTeamArguments.__doc__
+
+
 class ReviewTeamTool(_DirectorTool[ReviewTeamAction]):
-    summary = (
-        "IC only. Accept the work a team directly below yours submitted, or "
-        "reject it with what must change. Accepted work of a team with its "
-        "own worktree is merged into your checkout. If your team changed "
-        "nothing itself, accepted work goes on up without another review. "
-        "Work is accepted in the order it was submitted. Work that changed "
-        "files which also changed in your checkout since it began is not "
-        "merged until you say in `reconciled` what you decided about them. "
-        "Work that does not merge by itself is laid out for you to merge. "
-        "Of a session's work you may decide each spec in `specs`."
-    )
+    spec = catalog.REVIEW_TEAM
 
     @classmethod
     def action(cls):
         return ReviewTeamAction
 
-    @classmethod
-    def act(cls):
-        return lambda service, caller, action: agent_actions.review_team(
-            service,
-            caller,
-            action.team,
-            action.decision,
-            action.findings,
-            action.needed_above,
-            action.reconciled,
-            action.specs,
-            action.contracts,
-        )
-
 
 register_tool(ReviewTeamTool.name, ReviewTeamTool)
 
 
+class ReportAction(catalog.ReportArguments, Action):
+    __doc__ = catalog.ReportArguments.__doc__
+
+
 class ReportTool(_DirectorTool[ReportAction]):
-    summary = (
-        "Record something worth keeping: a design decision and its reason, "
-        "a setback, an approach that failed and why, a reflection. Only you "
-        "and the other agent of your team read it. Reports are only added "
-        "to; once they grow long they are rewritten shorter for you."
-    )
+    spec = catalog.REPORT
 
     @classmethod
     def action(cls):
         return ReportAction
 
-    @classmethod
-    def act(cls):
-        return lambda service, caller, action: agent_actions.report(
-            service, caller, action.text
-        )
-
 
 register_tool(ReportTool.name, ReportTool)
 
 
+class PruneTeamAction(catalog.PruneTeamArguments, Action):
+    __doc__ = catalog.PruneTeamArguments.__doc__
+
+
 class PruneTeamTool(_DirectorTool[PruneTeamAction]):
-    summary = (
-        "Manager only. Remove a team directly below yours that is grossly "
-        "inefficient, with every team below it. Rare, and never a "
-        "precaution: wait until the team has had enough tasks to judge it "
-        "by. Its agents are deleted and the uncommitted changes in its "
-        "folder are discarded (git keeps a copy). The folder goes back "
-        "to your team's IC, who is told why."
-    )
+    spec = catalog.PRUNE_TEAM
 
     @classmethod
     def action(cls):
         return PruneTeamAction
 
-    @classmethod
-    def act(cls):
-        return lambda service, caller, action: agent_actions.prune_team(
-            service,
-            caller,
-            action.team,
-            action.reason,
-        )
-
 
 register_tool(PruneTeamTool.name, PruneTeamTool)
+
+
+class HandOverAction(catalog.HandOverArguments, Action):
+    __doc__ = catalog.HandOverArguments.__doc__
+
+
+class HandOverTool(_DirectorTool[HandOverAction]):
+    spec = catalog.HAND_OVER
+
+    @classmethod
+    def action(cls):
+        return HandOverAction
+
+
+register_tool(HandOverTool.name, HandOverTool)
 
 
 DIRECTOR_TOOLS: dict[str, type[_DirectorTool]] = {

@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from openhands.agent_server.director.models import ReviewFinding
 from openhands.agent_server.director.service import DirectorService
 from openhands.agent_server.director.tools import (
     ReviewTeamTool,
@@ -15,7 +16,6 @@ from openhands.agent_server.director.tools import (
 from openhands.agent_server.director.tools.definition import (
     EditContractsAction,
     EditContractsTool,
-    ReviewFinding,
     ReviewTeamAction,
     SubmitReviewAction,
     WriteSpecAction,
