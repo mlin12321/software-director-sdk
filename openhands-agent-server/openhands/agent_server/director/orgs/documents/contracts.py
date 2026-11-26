@@ -1,7 +1,7 @@
 """What the sub-teams of a team promise each other."""
 
-from collections.abc import Mapping
-from typing import Literal
+from collections.abc import Mapping, Sequence
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -18,6 +18,7 @@ from openhands.agent_server.director.documents.protocol import (
     NEW_STR,
     OLD_STR,
     DocumentProtocolBase,
+    Shown,
     Writing,
     Written,
     register_protocol,
@@ -77,6 +78,16 @@ class ContractsProtocol(DocumentProtocolBase):
             "told with its next message; write to one with msg_team if it must "
             "know at once."
         )
+
+    def told_to_reader(self, shown: Sequence[Shown]) -> dict[str, Any]:
+        return {
+            "contracts_with_the_teams_beside_you": [
+                found.text for found in shown if not found.own
+            ],
+            "contracts_between_your_sub_teams": [
+                found.text for found in shown if found.own
+            ],
+        }
 
     def read_from(self, reader: TeamRef) -> list[TeamRef]:
         # A team keeps to the contracts the team above set between it and

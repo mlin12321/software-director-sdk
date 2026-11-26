@@ -9,6 +9,7 @@ from uuid import UUID, uuid4
 
 import pytest
 
+from openhands.agent_server.director.documents.store import DocRef
 from openhands.agent_server.director.git import git
 from openhands.agent_server.director.headline import TeamSummary
 from openhands.agent_server.director.merge_back import merge_back
@@ -857,6 +858,29 @@ async def test_a_spec_a_session_writes_is_its_own_until_its_work_is_accepted(
     assert service.team_memory.read("services/api/spec.md") == "# Refunds"
     api = service.org.team(API)
     assert api is not None and api.spec_summary == "Refunds"
+
+
+async def test_any_document_a_session_writes_is_merged_with_its_accepted_work(
+    service: DirectorService, repo: Path, tmp_path: Path
+):
+    # Nothing in merging is particular to the documents the shipped orgs
+    # keep: one of any name goes the same way.
+    top = (await opened(service)).session.teams[0].id
+    glossary = DocRef("services/api", "glossary")
+
+    service.documents.write(node(service, top).session, glossary, "A run is a job.")
+
+    assert service.team_memory.read(glossary.path) is None
+    assert service.documents.read(node(service, top).session, glossary) == (
+        "A run is a job."
+    )
+    assert service.documents.read("", glossary) is None
+
+    commit(own_checkout(service, repo, tmp_path, top), ROUTES, "refunds\n")
+    await use(service, ic(service, top), SubmitReviewTool, DONE)
+    await use(service, division_lead_ic(service, top), ReviewTeamTool, accept(top))
+
+    assert service.team_memory.read(glossary.path) == "A run is a job."
 
 
 async def test_a_spec_written_over_one_that_changed_meanwhile_is_reconciled(

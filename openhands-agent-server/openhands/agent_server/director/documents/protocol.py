@@ -6,7 +6,7 @@ names a protocol in its YAML file, a subclass registered under that name.
 """
 
 from abc import ABC
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from functools import cache
 from typing import Any, ClassVar, Literal
@@ -50,6 +50,23 @@ class Writing:
     hand_over: bool = False
     leads_session: bool = False
     words: Mapping[str, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class Shown:
+    """A document as a team that reads it is shown it.
+
+    Attributes:
+        folder: The folder of the team that keeps it.
+        name: The name of the document.
+        text: What it says, as the reader's session has it.
+        own: Whether the team that reads it is the one that keeps it.
+    """
+
+    folder: str
+    name: str
+    text: str
+    own: bool
 
 
 @dataclass(frozen=True)
@@ -181,6 +198,20 @@ class DocumentProtocolBase(ABC):
         return Written(
             f"Saved the {name} of {writing.team.folder or 'the repository'}."
         )
+
+    def told_to_reader(self, shown: Sequence[Shown]) -> dict[str, Any]:
+        """What the context of an agent says of this document: the parts
+        it adds to it, by the name of each. The agent is told of a part
+        again whenever it changes.
+
+        Args:
+            shown: The documents of this kind the agent's team reads, as
+                ``read_from`` names them; none that is empty.
+
+        The plain answer: its team's own, under the document's name.
+        """
+        own = next((found.text for found in shown if found.own), None)
+        return {self.document.name: own}
 
     def edited(self, text: str, arguments: BaseModel) -> str:
         """``text`` after the command of the file editor that ``arguments``

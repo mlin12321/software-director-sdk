@@ -103,3 +103,36 @@ async def test_only_what_a_document_allows_is_offered_in_a_hand_over(
     # The spec may be written by the member that takes over what a removed
     # team left; a plain document may not.
     assert service.hand_over_tools == ("read_team_context", "hand_over", "write_spec")
+
+
+async def test_a_team_is_told_the_documents_its_type_keeps_under_their_names(
+    service: DirectorService,
+):
+    root = node(service, "root")
+    before = service.context_of(root, "bench")
+    call_tool(
+        service,
+        UUID(bench(service)),
+        "write_glossary",
+        {"file_text": "A run is a job."},
+    )
+
+    after = service.context_of(root, "bench")
+
+    assert "glossary" in before and before["glossary"] is None
+    assert after["glossary"] == "A run is a job."
+    # Its type keeps the glossary alone.
+    assert "spec" not in after
+
+
+async def test_a_team_is_told_nothing_of_a_document_it_does_not_keep(
+    repo: Path, launcher: FakeLauncher
+):
+    service = await an_org(repo, launcher)
+
+    context = service.context_of(node(service, "root"), "ic")
+
+    assert "glossary" not in context and "report" not in context
+    assert context["spec"] is None
+    assert context["contracts_between_your_sub_teams"] == []
+    await service.aclose()

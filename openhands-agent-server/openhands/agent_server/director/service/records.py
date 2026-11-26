@@ -18,6 +18,7 @@ from openhands.agent_server.director.documents.events import (
     TeamRemoved,
     WorkAccepted,
 )
+from openhands.agent_server.director.documents.protocol import Shown
 from openhands.agent_server.director.documents.store import DocRef
 from openhands.agent_server.director.git import (
     changed_together,
@@ -150,17 +151,9 @@ _CHANGES_THE_ORG: frozenset[TeamEventKind] = frozenset(
 )
 
 
-class Shown(NamedTuple):
-    """A document as a team that reads it is shown it."""
-
-    folder: str
-    """The folder of the team that keeps it."""
-    name: str
-    text: str
-    own: bool
-    """Whether the team that reads it is the one that keeps it."""
-
-
+# The document a team's ``old_specs`` are what was left of, until what is
+# left behind carries the name of its document.
+LEFT_BEHIND = "spec"
 # The name of the document the wire still calls a team's contracts.
 CONTRACTS = "contracts"
 
@@ -642,9 +635,7 @@ class Records(ServiceState):
                 left, which is otherwise only named.
         """
         store = self.org
-        contracts = self.contracts_of(place)
         specs = self.specs_of(place)
-        own_spec = next((spec for spec in specs if not spec.old), None)
         to_settle = [
             {
                 "team_id": other.id,
@@ -687,7 +678,7 @@ class Records(ServiceState):
                 "branch": place.branch,
                 "isolation": place.isolation,
             },
-            "spec": own_spec.spec if own_spec else None,
+            **self.documents_told(place),
             "specs_left_by_teams_before_you": [
                 {
                     "directory": spec.path or "the repository",
@@ -696,12 +687,6 @@ class Records(ServiceState):
                 }
                 for spec in specs
                 if spec.old
-            ],
-            "contracts_with_the_teams_beside_you": [
-                agreed.contracts for agreed in contracts if not agreed.own
-            ],
-            "contracts_between_your_sub_teams": [
-                agreed.contracts for agreed in contracts if agreed.own
             ],
             "reports_of_your_team": [
                 {
@@ -957,11 +942,29 @@ class Records(ServiceState):
             if shown.name == CONTRACTS
         ]
 
+    def documents_told(self, node: OrgNode) -> dict[str, Any]:
+        """What the context of a team's agents says of the documents it
+        reads, as each document has it said: the ones its type keeps, in
+        the order the type lists them, and any other it is shown one of."""
+        shown = self.documents_shown(node)
+        kept = self.protocols_of(node)
+        others = [
+            protocol for protocol in self.protocols.values() if protocol not in kept
+        ]
+        told: dict[str, Any] = {}
+        for protocol in (*kept, *others):
+            name = protocol.document.name
+            of_it = [found for found in shown if found.name == name]
+            if of_it or protocol in kept:
+                told |= protocol.told_to_reader(of_it)
+        return told
+
     def documents_shown(self, node: OrgNode) -> list[Shown]:
         """Every document a team reads, as its session has it: of each
         kind of document, the ones of the teams its protocol names, where
         the org allows it."""
         reader = team_ref(node)
+        left = {normalize_store_path(old.path) for old in node.old_specs}
         found: dict[DocRef, Shown] = {}
         for protocol in self.protocols.values():
             name = protocol.document.name
@@ -970,6 +973,10 @@ class Records(ServiceState):
                 # A session opened at the top team has that team's own
                 # place above it: one folder, shown once.
                 if ref in found or not self.kind.allows_read(reader, owner, name):
+                    continue
+                # What a team before this one left in the folder is not
+                # this team's own until it writes one itself.
+                if name == LEFT_BEHIND and ref.folder in left:
                     continue
                 text = self.documents.read(reader.session, ref)
                 if text:
