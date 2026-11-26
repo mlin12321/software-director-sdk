@@ -1181,8 +1181,8 @@ class Reviews(Requests):
         self._after_landing(top, landed, merge.note if merge and org else "")
 
     def _after_landing(self, top: SessionTeam, landed: Landed, note: str) -> None:
-        for team_id, role in landed.records.grown:
-            self.reports_grew(team_id, role)
+        for folder, role in landed.records.grown:
+            self.reports_grew(folder, role)
         now = self.org.place(top.id)
         if (
             self._merge_of(top) is None
@@ -1296,8 +1296,8 @@ class Reviews(Requests):
                     ],
                 ),
             )
-        for team_id, role in landed.records.grown:
-            self.reports_grew(team_id, role)
+        for folder, role in landed.records.grown:
+            self.reports_grew(folder, role)
         self._record_not_taken(top, landed)
 
     def _sent_back(self, top: SessionTeam) -> None:

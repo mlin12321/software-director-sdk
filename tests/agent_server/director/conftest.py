@@ -649,9 +649,9 @@ def take_in(
             reports=reports or {},
             former=[],
             forget=[],
+            forget_reports=[],
             events=events or {},
             routed=[],
-            members=("ic", "manager"),
         ),
         "memory: for a test",
     )

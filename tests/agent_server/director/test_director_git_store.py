@@ -112,6 +112,38 @@ def test_an_absolute_looking_file_stays_inside_the_scope(board: GitStore):
     assert board.read("svc/a/etc/passwd") == "x"
 
 
+def test_what_one_member_recorded_is_replaced_and_the_others_is_kept(board: GitStore):
+    theirs = Report(at="2026-11-01T00:00:01+00:00", role="manager", text="Split.")
+    take_in(board, reports={"api": [a_report("Long."), theirs]})
+    shorter = [a_report("Short.").model_copy(update={"compacted": True})]
+
+    assert board.replace_reports("api", "ic", board.reports("api", "ic"), shorter)
+
+    assert board.reports("api") == [*shorter, theirs]
+    assert board.read("api/report.json") is not None
+
+
+def test_reports_kept_by_team_id_are_moved_into_each_teams_folder(board: GitStore):
+    first = Report(at="2026-11-01T00:00:00+00:00", role="ic", text="Chose SQLite.")
+    second = Report(at="2026-11-02T00:00:00+00:00", role="manager", text="Split.")
+    gone = Report(at="2026-11-03T00:00:00+00:00", role="ic", text="Of a lost team.")
+    for file, report in (
+        ("api/ic.json", first),
+        ("api/manager.json", second),
+        ("gone/ic.json", gone),
+    ):
+        board.write(".reports", file, f"[{report.model_dump_json()}]")
+
+    assert board.migrate_reports({"api": "services/api", "root": ""}) == 3
+
+    assert board.reports("services/api") == [first, second]
+    assert board.reports("services/api", "manager") == [second]
+    assert board.read(".reports/api/ic.json") is None
+    assert board.read(".reports/gone/ic.json") is None
+    # There is nothing left to move.
+    assert board.migrate_reports({"api": "services/api"}) == 0
+
+
 def test_reports_are_replaced_only_as_they_were_read(board: GitStore):
     take_in(board, reports={"api": [a_report("Long.")]})
     read = board.reports("api", "ic")
@@ -129,6 +161,7 @@ def a_landing(
     reports: dict[str, list[Report]] | None = None,
     former: list[FormerTeam] | None = None,
     forget: list[str] | None = None,
+    forget_reports: list[str] | None = None,
     events: dict[str, list[TeamEvent]] | None = None,
     routed: list[RoutedRequest] | None = None,
 ) -> Landing:
@@ -138,9 +171,9 @@ def a_landing(
         reports or {},
         former or [],
         forget or [],
+        forget_reports or [],
         events or {},
         routed or [],
-        ("ic", "manager"),
     )
 
 
@@ -251,7 +284,13 @@ def test_a_team_that_is_forgotten_leaves_its_record_and_none_of_its_reports(
     mine = [a_report("The new team's.").model_copy(update={"id": "r1"})]
 
     board.take_in(
-        a_landing(reports={"api": mine}, former=[record], forget=["api"]), "accepted"
+        a_landing(
+            reports={"api": mine},
+            former=[record],
+            forget=["api"],
+            forget_reports=["api"],
+        ),
+        "accepted",
     )
     board.take_in(a_landing(former=[record.model_copy(update={"title": "x"})]), "again")
 

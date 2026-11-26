@@ -258,9 +258,9 @@ class Records(ServiceState):
                 reports={},
                 former=[],
                 forget=[],
+                forget_reports=[],
                 events={team_id: [event.model_copy(update={"unaccepted": False})]},
                 routed=[],
-                members=self.member_names(),
             ),
             f"memory: history of {team_id}",
         )
@@ -880,12 +880,7 @@ class Records(ServiceState):
         """What the two agents of a team recorded, oldest first. Reports
         are the team's: an agent started again reads what it wrote before."""
         team_memory = self._memory()
-        reports = [
-            report
-            for role in self.type_of(node).agents
-            for report in team_memory.reports(team_id_of(node), role)
-            if self.is_orgs(node)
-        ]
+        reports = team_memory.reports(node.boundary.path) if self.is_orgs(node) else []
         return sorted([*reports, *self.own_reports(node)], key=lambda report: report.at)
 
     def own_reports(self, node: OrgNode) -> list[Report]:
@@ -1240,17 +1235,20 @@ class Records(ServiceState):
                 files[file] = (chosen[file], self._memory().read(file))
             else:
                 files[file] = (text, over)
+        # By the folder of each team, where what it recorded is kept.
         reports: dict[str, list[Report]] = {}
         for place in places:
             if place.team_id not in waits and place.id not in left:
-                reports[place.team_id] = self.own_reports(place)
+                at = normalize_store_path(place.boundary.path)
+                reports[at] = [*reports.get(at, []), *self.own_reports(place)]
         if review is not None:
             # What its reviewers recorded is the team's they review from.
-            at = (
-                review.team_id
+            home = (
+                review
                 if self.is_orgs(review)
-                else self._home_of(top, review.boundary.path)
+                else store.team(self._home_of(top, review.boundary.path))
             )
+            at = normalize_store_path((home or review).boundary.path)
             reports[at] = sorted(
                 [*reports.get(at, []), *self.own_reports(review)],
                 key=lambda report: report.at,
@@ -1278,7 +1276,7 @@ class Records(ServiceState):
         removed = [
             record for record in self.former_drafts(session) if record.id not in waits
         ]
-        former, forget = [], []
+        former, forget, forget_reports = [], [], []
         for record in removed:
             team = store.team(record.id)
             if team is not None and team.since == record.since:
@@ -1289,6 +1287,7 @@ class Records(ServiceState):
                 ours = next((p for p in places if p.team_id == record.id), None)
                 if team is None or (ours is not None and ours.since == team.since):
                     forget.append(record.id)
+                    forget_reports.append(record.path)
         of_team = {place.team_id: place for place in places}
         events: dict[str, list[TeamEvent]] = {}
         kept_events: list[str] = []
@@ -1329,9 +1328,9 @@ class Records(ServiceState):
                 reports={team: kept for team, kept in reports.items() if kept},
                 former=[*former, *not_taken],
                 forget=forget,
+                forget_reports=forget_reports,
                 events=events,
                 routed=list(routed.values()),
-                members=self.member_names(),
             ),
             f"memory: the accepted work of session {session}",
             tree,

@@ -175,7 +175,7 @@ def test_returns_what_applies_to_the_nodes_boundary_and_what_its_agents_reported
     earlier = Report(
         at="2026-11-01T00:00:00+00:00", role="manager", text="Two sub-teams."
     )
-    take_in(board, reports={"a": [later, earlier], "b": [later]})
+    take_in(board, reports={"svc/a": [later, earlier], "svc/b": [later]})
 
     response = make_client(repo).get("/api/director/org/nodes/a/memory")
 
