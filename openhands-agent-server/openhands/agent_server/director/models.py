@@ -647,13 +647,44 @@ class FormerTeamSummary(BaseModel):
     session: str = ""
 
 
+class TeamDocument(BaseModel):
+    """A document a team reads, as the team memory has it."""
+
+    name: str = Field(description="The name of the document, as the org declares it.")
+    holds: str = Field(
+        default="", description="What the document holds for a team of this type."
+    )
+    path: str = Field(description="The folder of the team that keeps it.")
+    text: str
+    own: bool = Field(
+        description=(
+            "True for the one the team itself keeps and writes. False for one "
+            "a team above keeps for it, and for one a team before it left."
+        )
+    )
+    left: bool = Field(
+        default=False,
+        description=(
+            "True for one a team before this one left in its folder. It says "
+            "how that team worked and is to be rewritten."
+        ),
+    )
+    left_by: str | None = Field(
+        default=None,
+        description="The title of the team that left it, when known.",
+    )
+
+
 class NodeMemory(BaseModel):
     """Everything in the team memory that concerns one team."""
 
-    specs: list[InheritedSpec] = Field(
-        description="The spec of the team's own boundary, when it has one."
+    documents: list[TeamDocument] = Field(
+        default_factory=list,
+        description=(
+            "The documents the team reads: the ones it keeps, in the order "
+            "its type lists them, then any other it is shown."
+        ),
     )
-    contracts: list[BoundaryContracts] = Field(default_factory=list)
     reports: list[Report] = Field(
         default_factory=list,
         description="What the team's own two agents recorded, oldest first.",

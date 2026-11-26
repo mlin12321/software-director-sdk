@@ -702,13 +702,11 @@ def get_org_history(
 def get_node_memory(
     node_id: str, service: DirectorService = Depends(get_director_service)
 ) -> NodeMemory:
-    """Get what a team works to: the spec of its boundary, the contracts
-    between its sub-teams and the ones the team above set for it, and
-    what its two agents reported."""
+    """Get what a team works to: the documents it reads, its own and the
+    ones a team above keeps for it, and what its agents reported."""
     node = _require_any(service, node_id)
     return NodeMemory(
-        specs=service.specs_of(node),
-        contracts=service.contracts_of(node),
+        documents=service.documents_of(node),
         reports=service.reports_of(node),
         former_teams=[
             FormerTeamSummary.model_validate(former.model_dump())

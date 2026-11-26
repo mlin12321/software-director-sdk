@@ -718,17 +718,26 @@ export interface DirectorStopped {
   running: string[];
 }
 
-export interface DirectorInheritedSpec {
+/** A document a team reads, as the team memory has it. */
+export interface DirectorTeamDocument {
+  /** The name of the document, as the org declares it. */
+  name: string;
+  /** What the document holds for a team of this type. */
+  holds?: string;
+  /** The folder of the team that keeps it. */
   path: string;
-  spec: string;
-  /** False for the spec of the team's own boundary, which its IC writes. */
-  readonly: boolean;
+  text: string;
   /**
-   * True for a spec a team before this one left: it says how that team
-   * worked and is to be rewritten.
+   * True for the one the team itself keeps and writes; false for one a team
+   * above keeps for it, and for one a team before it left.
    */
-  old: boolean;
-  /** The title of the team that left an old spec, when known. */
+  own: boolean;
+  /**
+   * True for one a team before this one left in its folder: it says how
+   * that team worked and is to be rewritten.
+   */
+  left?: boolean;
+  /** The title of the team that left it, when known. */
   left_by?: string | null;
 }
 
@@ -738,18 +747,6 @@ export interface DirectorOldSpec {
   path: string;
   /** The title of the team that left it, when known. */
   team: string | null;
-}
-
-/** What the sub-teams of one boundary must keep between them. */
-export interface DirectorBoundaryContracts {
-  /** The boundary that was split. */
-  path: string;
-  contracts: string;
-  /**
-   * True for the contracts between the team's own sub-teams; false for the
-   * ones the team above set, which the team keeps with the teams beside it.
-   */
-  own: boolean;
 }
 
 export type DirectorTeamEventKind =
@@ -847,9 +844,11 @@ export interface DirectorFormerTeam {
 }
 
 export interface DirectorNodeMemory {
-  /** The spec of the team's own boundary, when it has one. */
-  specs: DirectorInheritedSpec[];
-  contracts?: DirectorBoundaryContracts[];
+  /**
+   * The documents the team reads: the ones it keeps, in the order its type
+   * lists them, then any other it is shown.
+   */
+  documents?: DirectorTeamDocument[];
   /** What the team's own two agents recorded, oldest first. */
   reports?: DirectorReport[];
   /** The teams removed from directly below it, oldest first. */

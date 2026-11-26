@@ -187,7 +187,7 @@ describe('DirectorClient', () => {
   });
 
   it('calls the node routes with the node id escaped and the session key', async () => {
-    const fetchMock = mockFetch(() => jsonResponse({ specs: [], reports: [] }));
+    const fetchMock = mockFetch(() => jsonResponse({ documents: [], reports: [] }));
     const client = new DirectorClient({ host: 'http://example.com/', apiKey: 'secret' });
 
     await client.getNode('payments/api');
@@ -201,7 +201,7 @@ describe('DirectorClient', () => {
       'GET http://example.com/api/director/org/nodes/payments.api/ownership',
     ]);
     expect(calls[0][1].headers['X-Session-API-Key']).toBe('secret');
-    expect(memory).toEqual({ specs: [], reports: [] });
+    expect(memory).toEqual({ documents: [], reports: [] });
   });
 
   it('reads the threads of a node', async () => {
