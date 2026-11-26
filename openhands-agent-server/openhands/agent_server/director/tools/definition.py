@@ -257,21 +257,6 @@ class ReviewTeamTool(_DirectorTool[ReviewTeamAction]):
 register_tool(ReviewTeamTool.name, ReviewTeamTool)
 
 
-class ReportAction(catalog.ReportArguments, Action):
-    __doc__ = catalog.ReportArguments.__doc__
-
-
-class ReportTool(_DirectorTool[ReportAction]):
-    spec = catalog.REPORT
-
-    @classmethod
-    def action(cls):
-        return ReportAction
-
-
-register_tool(ReportTool.name, ReportTool)
-
-
 class PruneTeamAction(catalog.PruneTeamArguments, Action):
     __doc__ = catalog.PruneTeamArguments.__doc__
 
@@ -318,7 +303,6 @@ DIRECTOR_TOOLS: dict[str, type[_DirectorTool]] = {
         ResolveEscalationTool,
         SubmitReviewTool,
         ReviewTeamTool,
-        ReportTool,
         PruneTeamTool,
         HandOverTool,
     )

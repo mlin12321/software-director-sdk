@@ -148,3 +148,23 @@ async def test_a_team_is_told_nothing_of_a_document_it_does_not_keep(
     assert context["spec"] is None
     assert context["contracts_between_your_sub_teams"] == []
     await service.aclose()
+
+
+async def test_a_report_is_an_entry_its_teams_members_are_told(
+    repo: Path, launcher: FakeLauncher
+):
+    service = await an_org(repo, launcher)
+    root = node(service, "root")
+    ic = agent_conversation(root, "ic")
+    assert ic is not None
+
+    recorded = call_tool(service, UUID(ic), "report", {"text": " Chose SQLite. "})
+    empty = call_tool(service, UUID(ic), "report", {"text": "  "})
+
+    assert not recorded.is_error
+    assert empty.is_error and "cannot be empty" in empty.text
+    [told] = service.context_of(root, "manager")["reports_of_your_team"]
+    assert (told["by"], told["text"]) == ("ic", "Chose SQLite.")
+    [kept] = service.own_reports(root)
+    assert kept.session_id == root.session and kept.at and kept.id
+    await service.aclose()

@@ -38,7 +38,7 @@ from openhands.agent_server.director.run_state import (
     WAITING,
     Intent,
 )
-from openhands.agent_server.director.service.records import Records, session_of
+from openhands.agent_server.director.service.records import Records
 from openhands.agent_server.director.service.state import (
     MODELS_LANE,
     ORG_LANE,
@@ -49,7 +49,6 @@ from openhands.agent_server.director.service.state import (
 )
 from openhands.agent_server.event_service import ConversationRunLimitExceeded
 from openhands.sdk.errors import (
-    Invalid,
     NotFound,
     Unavailable,
 )
@@ -86,26 +85,6 @@ class Delivery(Records):
         """
         if conversation_id is not None:
             self._post(conversation_id, from_director(text), at_once=at_once)
-
-    def report(self, place: SessionTeam, role: str, text: str) -> None:
-        """Record something for the two agents of a team. Safe from any
-        thread.
-
-        Raises:
-            Invalid: There is nothing to record.
-        """
-        text = text.strip()
-        if not text:
-            raise Invalid("A report cannot be empty")
-        report = Report(
-            at=_instant(),
-            role=role,
-            text=text,
-            session=self.org.session_title(place),
-            session_id=session_of(place),
-        )
-        # Its session's alone until the session's work is accepted.
-        self._keep_report(place, report)
 
     def reports_grew(self, folder: str, role: str) -> None:
         """Compact what one member of the team of ``folder`` recorded, if

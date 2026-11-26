@@ -54,6 +54,9 @@ from tests.agent_server.director.conftest import (
     shipped_tools,
     tasked,
 )
+from tests.agent_server.director.document_tools import (
+    report,
+)
 
 
 @pytest.fixture
@@ -190,7 +193,7 @@ async def test_a_team_started_again_is_briefed_with_what_it_reported(
     await service.settled()
     await woken_manager(service)
     root = node(service, "root")
-    service.report(root, "manager", "The API team needs a schema first.")
+    report(service, root, "manager", "The API team needs a schema first.")
 
     briefing, _ = service._briefing(root, "ic", "Build")
 

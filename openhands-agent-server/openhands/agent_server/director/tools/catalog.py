@@ -212,12 +212,6 @@ class ReviewTeamArguments(BaseModel):
     )
 
 
-class ReportArguments(BaseModel):
-    """Record a design decision, a setback or a reflection."""
-
-    text: str = Field(description="What to record, in plain English.")
-
-
 class MsgTeamArguments(BaseModel):
     """Write to the IC of a team below yours."""
 
@@ -444,18 +438,6 @@ REVIEW_TEAM = ToolSpec(
     ),
 )
 
-REPORT = ToolSpec(
-    name="report",
-    summary="Record something worth keeping: a design decision and its reason, "
-    "a setback, an approach that failed and why, a reflection. Only you "
-    "and the other agent of your team read it. Reports are only added "
-    "to; once they grow long they are rewritten shorter for you.",
-    arguments=ReportArguments,
-    act=lambda service, caller, action: agent_actions.report(
-        service, caller, action.text
-    ),
-)
-
 PRUNE_TEAM = ToolSpec(
     name="prune_team",
     summary="Manager only. Remove a team directly below yours that is grossly "
@@ -504,7 +486,6 @@ DIRECTOR_TOOL_SPECS: dict[str, ToolSpec] = {
         RESOLVE_ESCALATION,
         SUBMIT_REVIEW,
         REVIEW_TEAM,
-        REPORT,
         PRUNE_TEAM,
         HAND_OVER,
     )

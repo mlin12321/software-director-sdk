@@ -23,7 +23,6 @@ from openhands.agent_server.director.launch import StartedAgent
 from openhands.agent_server.director.models import (
     AgentRef,
     OrgNode,
-    Report,
     SessionTeam,
     Stopped,
     ThreadMessage,
@@ -52,6 +51,7 @@ from openhands.agent_server.director.run_state import (
     Intent,
 )
 from openhands.agent_server.director.service.delivery import Delivery
+from openhands.agent_server.director.service.records import REPORT
 from openhands.agent_server.director.service.state import (
     _REASON_KEPT,
     _STARTED_WITH,
@@ -599,17 +599,7 @@ class Teams(Delivery):
         there before it: notes, kept with the team's reports, and the
         contracts its own sub-teams must keep. Both are the session's alone
         until its work is accepted. Starts nothing. Safe from any thread."""
-        if notes.strip():
-            self._keep_report(
-                team,
-                Report(
-                    at=_instant(),
-                    role=self.team(team).writer,
-                    text=notes.strip(),
-                    handed_over=True,
-                ),
-            )
-        self.removed_team_handed_over(team, {"contracts": contracts})
+        self.removed_team_handed_over(team, {REPORT: notes, "contracts": contracts})
 
     def _task_of(self, place: SessionTeam) -> str:
         """What a team that is started again is to do, from what the org

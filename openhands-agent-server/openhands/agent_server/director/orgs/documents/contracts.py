@@ -79,7 +79,11 @@ class ContractsProtocol(DocumentProtocolBase):
             "know at once."
         )
 
-    def told_to_reader(self, shown: Sequence[ShownDocument]) -> dict[str, Any]:
+    def told_to_reader(
+        self,
+        reader: TeamRef,  # noqa: ARG002
+        shown: Sequence[ShownDocument],
+    ) -> dict[str, Any]:
         return {
             "contracts_with_the_teams_beside_you": [
                 found.text for found in shown if not found.own

@@ -32,7 +32,6 @@ from openhands.agent_server.director.tools import (
     ProposeTeamsTool,
     PruneTeamTool,
     ReadTeamContextTool,
-    ReportTool,
     StopTeamTool,
 )
 from openhands.agent_server.director.tools.definition import (
@@ -42,7 +41,6 @@ from openhands.agent_server.director.tools.definition import (
     ProposeTeamsAction,
     PruneTeamAction,
     ReadTeamContextAction,
-    ReportAction,
     StopTeamAction,
 )
 from openhands.agent_server.director_router import get_node_memory
@@ -72,6 +70,8 @@ from tests.agent_server.director.conftest import (
     use,
 )
 from tests.agent_server.director.document_tools import (
+    ReportAction,
+    ReportTool,
     WriteSpecAction,
     WriteSpecTool,
 )

@@ -30,7 +30,6 @@ from openhands.agent_server.director.tools import (
     PruneTeamTool,
     RaiseEscalationTool,
     ReadTeamContextTool,
-    ReportTool,
     ResolveEscalationTool,
     ReviewTeamTool,
     SubmitReviewTool,
@@ -42,7 +41,6 @@ from openhands.agent_server.director.tools.definition import (
     ProposeTeamsAction,
     PruneTeamAction,
     ReadTeamContextAction,
-    ReportAction,
     ResolveEscalationAction,
     ReviewTeamAction,
     SubmitReviewAction,
@@ -76,6 +74,8 @@ from tests.agent_server.director.conftest import (
     woken,
 )
 from tests.agent_server.director.document_tools import (
+    ReportAction,
+    ReportTool,
     WriteSpecAction,
     WriteSpecTool,
 )

@@ -3,26 +3,7 @@
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
-from openhands.agent_server.director.documents.store import DocumentRef
-
-
-@dataclass(frozen=True)
-class TeamRef:
-    """The team a document is told of: the work of one team in a session.
-
-    Attributes:
-        id: The id of the session's place of the team.
-        session: The session the work is of.
-        folder: The team's folder, where its documents are kept.
-    """
-
-    id: str
-    session: str
-    folder: str
-
-    def keeps(self, name: str) -> DocumentRef:
-        """The team's document of that name."""
-        return DocumentRef(self.folder, name)
+from openhands.agent_server.director.documents.store import TeamRef
 
 
 @dataclass(frozen=True)
@@ -62,10 +43,12 @@ class RemovedTeamHandedOver:
     Attributes:
         team: The team it was passed on to.
         given: What was given for documents, by the name of each.
+        writer: The member of that team that works in its folder.
     """
 
     team: TeamRef
     given: Mapping[str, str] = field(default_factory=dict)
+    writer: str = ""
 
 
 @dataclass(frozen=True)

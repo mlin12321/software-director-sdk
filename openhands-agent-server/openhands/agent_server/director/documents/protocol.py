@@ -201,12 +201,17 @@ class DocumentProtocolBase(ABC):
             f"Saved the {name} of {call.team.folder or 'the repository'}."
         )
 
-    def told_to_reader(self, shown: Sequence[ShownDocument]) -> dict[str, Any]:
+    def told_to_reader(
+        self,
+        reader: TeamRef,  # noqa: ARG002
+        shown: Sequence[ShownDocument],
+    ) -> dict[str, Any]:
         """What the context of an agent says of this document: the parts
         it adds to it, by the name of each. The agent is told of a part
         again whenever it changes.
 
         Args:
+            reader: The team whose agent is told.
             shown: The documents of this kind the agent's team reads, as
                 ``read_from`` names them; none that is empty.
 

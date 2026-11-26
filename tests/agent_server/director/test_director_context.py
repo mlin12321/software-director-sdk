@@ -19,7 +19,6 @@ from openhands.agent_server.director.tools import (
     MsgIcTool,
     PruneTeamTool,
     RaiseEscalationTool,
-    ReportTool,
     ReviewTeamTool,
     SubmitReviewTool,
 )
@@ -27,7 +26,6 @@ from openhands.agent_server.director.tools.definition import (
     MsgIcAction,
     PruneTeamAction,
     RaiseEscalationAction,
-    ReportAction,
 )
 from openhands.sdk.conversation.state import ConversationExecutionStatus
 from tests.agent_server.director.conftest import (
@@ -48,6 +46,8 @@ from tests.agent_server.director.conftest import (
     woken,
 )
 from tests.agent_server.director.document_tools import (
+    ReportAction,
+    ReportTool,
     WriteSpecAction,
     WriteSpecTool,
 )

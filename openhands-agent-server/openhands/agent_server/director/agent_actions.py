@@ -731,13 +731,6 @@ def settle_teams(
     )
 
 
-def report(service: DirectorService, caller: Caller, text: str) -> str:
-    """Record something for the two agents of the caller's team."""
-    _not_aside(caller)
-    service.report(caller.node, caller.role, text)
-    return "Recorded for you and the other agent of your team."
-
-
 def _team_named(
     service: DirectorService, caller: Caller, name: str
 ) -> SessionTeam | None:

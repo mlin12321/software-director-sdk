@@ -39,6 +39,7 @@ from tests.agent_server.director.conftest import (
     started,
     use,
 )
+from tests.agent_server.director.document_tools import report
 
 
 API, WEB = "services.api", "apps.web"
@@ -249,7 +250,7 @@ async def test_a_pushed_org_is_whole_in_another_clone_except_for_its_sessions(
 ):
     here = await started(repo, launcher)
     await split_root(here)
-    here.report(node(here, API), "ic", "Never log card numbers")
+    report(here, node(here, API), "ic", "Never log card numbers")
     await landed(here)
 
     pushed = await here.push_org("origin")

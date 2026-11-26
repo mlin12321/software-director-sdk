@@ -15,6 +15,9 @@ from tests.agent_server.director.conftest import (
     node,
     root_conversation,
 )
+from tests.agent_server.director.document_tools import (
+    report,
+)
 
 
 def reports(*lengths: int, compacted: int = 0) -> list[Report]:
@@ -69,15 +72,15 @@ async def test_long_reports_are_rewritten_by_a_model_once_they_are_the_teams(
     service = await reporting_service(repo, launcher)
     try:
         root = node(service, "root")
-        service.report(root, "ic", "a" * 600)
+        report(service, root, "ic", "a" * 600)
         service.tell_overseer(root.id, "Look in on your team.")
         await service.settled()
-        service.report(root, "manager", "m" * 600)
-        service.report(root, "ic", "b" * 600)
+        report(service, root, "manager", "m" * 600)
+        report(service, root, "ic", "b" * 600)
         await service.settled()
         asked_before = len(launcher.asked)
         await landed(service)
-        service.report(root, "ic", "Then this.")
+        report(service, root, "ic", "Then this.")
         await service.settled()
         kept = service.reports_of(root)
     finally:
@@ -100,7 +103,7 @@ async def test_an_answer_that_is_no_shorter_leaves_the_reports_as_they_are(
     service = await reporting_service(repo, launcher)
     try:
         root = node(service, "root")
-        service.report(root, "ic", "a" * 1_200)
+        report(service, root, "ic", "a" * 1_200)
         await landed(service)
         kept = service.reports_of(root)
     finally:

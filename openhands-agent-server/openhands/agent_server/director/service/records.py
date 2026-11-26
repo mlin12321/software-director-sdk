@@ -22,7 +22,7 @@ from openhands.agent_server.director.documents.protocol import (
     DocumentProtocolBase,
     ShownDocument,
 )
-from openhands.agent_server.director.documents.store import DocumentRef
+from openhands.agent_server.director.documents.store import DocumentRef, TeamRef
 from openhands.agent_server.director.git import (
     changed_together,
     tracked_files,
@@ -92,6 +92,7 @@ from openhands.agent_server.director.service.state import (
     NOT_STARTED,
     TOGETHER_WORTH_SAYING,
     ServiceState,
+    _instant,
     _spec_file,
     team_ref,
 )
@@ -99,7 +100,7 @@ from openhands.agent_server.director.split import (
     home_of_lost,
     is_inside,
 )
-from openhands.sdk.errors import NotFound
+from openhands.sdk.errors import NotFound, NotSupported
 from openhands.sdk.logger import get_logger
 
 
@@ -139,16 +140,6 @@ class Taken(NamedTuple):
     left: list[str]
 
 
-def _written_by(report: Report, session: str) -> str:
-    """Who wrote a report, as the agents of a team in the session with the
-    id ``session`` are told."""
-    if report.handed_over:
-        return "ic_of_the_team_above"
-    if report.session_id == session:
-        return report.role
-    return f"{report.role} in {report.session!r}"
-
-
 # The events of a session that change what the org has of its teams.
 _CHANGES_THE_ORG: frozenset[TeamEventKind] = frozenset(
     {"set_up", "replaced", "pruned", "moved"}
@@ -158,6 +149,8 @@ _CHANGES_THE_ORG: frozenset[TeamEventKind] = frozenset(
 # The document a team's ``old_specs`` are what was left of, until what is
 # left behind carries the name of its document.
 LEFT_BEHIND = "spec"
+# The one log the director keeps: what a team's members recorded.
+REPORT = "report"
 # The name of the document the wire still calls a team's contracts.
 CONTRACTS = "contracts"
 
@@ -692,14 +685,6 @@ class Records(ServiceState):
                 for spec in specs
                 if spec.old
             ],
-            "reports_of_your_team": [
-                {
-                    "by": _written_by(report, session_of(place)),
-                    "at": report.at,
-                    "text": report.text,
-                }
-                for report in self.reports_of(place)
-            ],
             "sub_teams": [
                 {
                     "team_id": child.id,
@@ -891,6 +876,38 @@ class Records(ServiceState):
         kept = self._runs().marked(REPORTS).get(node.id)
         return _REPORTS.validate_json(kept) if kept else []
 
+    def entries(self, team: TeamRef, name: str) -> list[Report]:
+        """The one log the director keeps for a team, as the store of
+        documents is asked for it: what its members recorded."""
+        place = self.org.place(team.id)
+        return self.reports_of(place) if place and name == REPORT else []
+
+    def append(self, team: TeamRef, name: str, entry: Report) -> None:
+        """Add to what the members of a team recorded, as the store of
+        documents is asked to.
+
+        Raises:
+            NotSupported: It is another log than the one the director keeps.
+            NotFound: The team is no place of a session.
+        """
+        if name != REPORT:
+            raise NotSupported(f"The director keeps no log named {name!r}")
+        place = self.org.place(team.id)
+        if place is None:
+            raise NotFound(f"There is no team {team.id}")
+        said_where = (
+            {}
+            if entry.handed_over
+            else {
+                "session": self.org.session_title(place),
+                "session_id": session_of(place),
+            }
+        )
+        # Its session's alone until the session's work is accepted.
+        self._keep_report(
+            place, entry.model_copy(update={"at": entry.at or _instant(), **said_where})
+        )
+
     def _keep_report(self, place: SessionTeam, report: Report) -> None:
         named = report.model_copy(update={"id": report.id or uuid4().hex})
         with self._keeping:
@@ -952,7 +969,7 @@ class Records(ServiceState):
             name = protocol.document.name
             of_it = [found for found in shown if found.name == name]
             if of_it or protocol in kept:
-                told |= protocol.told_to_reader(of_it)
+                told |= protocol.told_to_reader(team_ref(node), of_it)
         return told
 
     def _protocols_for(self, node: OrgNode) -> list[DocumentProtocolBase]:
@@ -1491,7 +1508,9 @@ class Records(ServiceState):
         """Tell the documents of ``place`` what the team above passed on
         to it of the teams that were there before."""
         _ = self.team_memory
-        handed = RemovedTeamHandedOver(team_ref(place), given)
+        handed = RemovedTeamHandedOver(
+            team_ref(place), given, writer=self.team(place).writer
+        )
         for protocol in self.protocols_of(place):
             protocol.when_removed_team_is_handed_over(handed)
 
