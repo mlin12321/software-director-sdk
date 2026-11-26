@@ -11,10 +11,12 @@ from openhands.agent_server.director.documents.declared import Document
 from openhands.agent_server.director.documents.events import (
     HandedOver,
     SubTeamsCreated,
+    TeamRef,
     TeamRemoved,
     WorkAccepted,
 )
 from openhands.agent_server.director.documents.store import DocumentStore
+from openhands.agent_server.director.documents.tree import Tree
 
 
 class UnknownProtocol(ValueError):
@@ -25,14 +27,25 @@ class DocumentProtocolBase(ABC):
     """What one document does. Every answer here is the plain one, and a
     subclass gives another only where its document differs."""
 
-    def __init__(self, document: Document, store: DocumentStore) -> None:
+    def __init__(self, document: Document, store: DocumentStore, tree: Tree) -> None:
         """
         Args:
             document: The document this is the protocol of.
             store: Where documents are kept.
+            tree: Where each team stands among the others.
         """
         self.document = document
         self.store = store
+        self.tree = tree
+
+    def read_from(self, reader: TeamRef) -> list[TeamRef]:
+        """The teams whose document of this kind the team ``reader``
+        reads as a matter of course, in the order it is shown them. It is
+        worked out from the tree whenever it is asked and never kept, so
+        it holds for a team wherever it has been moved.
+
+        The plain answer: its own and no other team's."""
+        return [reader]
 
     def waits_for_team_changes(self) -> bool:
         """Whether what a session wrote of this document becomes the
@@ -71,18 +84,20 @@ def register_protocol(name: str, protocol: type[DocumentProtocolBase]) -> None:
     _PROTOCOLS[name] = protocol
 
 
-def protocol_of(document: Document, store: DocumentStore) -> DocumentProtocolBase:
+def protocol_of(
+    document: Document, store: DocumentStore, tree: Tree
+) -> DocumentProtocolBase:
     """What ``document`` does: the protocol it names, or the plain one.
 
     Raises:
         UnknownProtocol: It names a protocol nobody registered.
     """
     if document.protocol is None:
-        return DocumentProtocolBase(document, store)
+        return DocumentProtocolBase(document, store, tree)
     protocol = _PROTOCOLS.get(document.protocol)
     if protocol is None:
         raise UnknownProtocol(
             f"The document {document.name!r} names the protocol "
             f"{document.protocol!r}, and there is none of that name"
         )
-    return protocol(document, store)
+    return protocol(document, store, tree)

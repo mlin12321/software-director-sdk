@@ -15,7 +15,6 @@ from openhands.agent_server.director.boundary import (
 from openhands.agent_server.director.documents.events import (
     HandedOver,
     SubTeamsCreated,
-    TeamRef,
     TeamRemoved,
     WorkAccepted,
 )
@@ -90,6 +89,7 @@ from openhands.agent_server.director.service.state import (
     ServiceState,
     _contracts_file,
     _spec_file,
+    team_ref,
 )
 from openhands.agent_server.director.split import (
     home_of_lost,
@@ -149,6 +149,21 @@ def _written_by(report: Report, session: str) -> str:
 _CHANGES_THE_ORG: frozenset[TeamEventKind] = frozenset(
     {"set_up", "replaced", "pruned", "moved"}
 )
+
+
+class Shown(NamedTuple):
+    """A document as a team that reads it is shown it."""
+
+    folder: str
+    """The folder of the team that keeps it."""
+    name: str
+    text: str
+    own: bool
+    """Whether the team that reads it is the one that keeps it."""
+
+
+# The name of the document the wire still calls a team's contracts.
+CONTRACTS = "contracts"
 
 
 class Records(ServiceState):
@@ -937,19 +952,35 @@ class Records(ServiceState):
         """The contracts a team works to: the ones between it and the teams
         beside it, set by the team above, and the ones between its own
         sub-teams."""
-        above = self.org.get(node.parent_id) if node.parent_id else None
-        own = normalize_store_path(node.boundary.path)
-        paths = [
-            normalize_store_path(place.boundary.path)
-            for place in (above, node)
-            if place
-        ]
         return [
-            BoundaryContracts(path=path, contracts=text, own=path == own)
-            # A session opened at the top team has that team's own place above.
-            for path in dict.fromkeys(paths)
-            if (text := self.read_file(node, _contracts_file(path)))
+            BoundaryContracts(path=shown.folder, contracts=shown.text, own=shown.own)
+            for shown in self.documents_shown(node)
+            if shown.name == CONTRACTS
         ]
+
+    def documents_shown(self, node: OrgNode) -> list[Shown]:
+        """Every document a team reads, as its session has it: of each
+        kind of document, the ones of the teams its protocol names, where
+        the org allows it."""
+        reader = team_ref(node)
+        found: dict[DocRef, Shown] = {}
+        for protocol in self.protocols.values():
+            name = protocol.document.name
+            for owner in protocol.read_from(reader):
+                ref = owner.keeps(name)
+                # A session opened at the top team has that team's own
+                # place above it: one folder, shown once.
+                if ref in found or not self.kind.allows_read(reader, owner, name):
+                    continue
+                text = self.documents.read(reader.session, ref)
+                if text:
+                    found[ref] = Shown(
+                        folder=ref.folder,
+                        name=name,
+                        text=text,
+                        own=ref.folder == reader.folder,
+                    )
+        return list(found.values())
 
     def specs_of(self, node: OrgNode) -> list[InheritedSpec]:
         """The spec of a team's own boundary and the ones teams before it
@@ -1388,21 +1419,13 @@ class Records(ServiceState):
             if self.read_file(place, _spec_file(directory))
         ]
 
-    def team_ref(self, place: SessionTeam) -> TeamRef:
-        """A place as the documents its team keeps are told of it."""
-        return TeamRef(
-            id=place.id,
-            session=place.session,
-            folder=normalize_store_path(place.boundary.path),
-        )
-
     def sub_teams_created(
         self, place: SessionTeam, given: Mapping[str, str], replaced: bool
     ) -> None:
         """Tell the documents of ``place`` that it now has the sub-teams
         a proposal named, with what the proposal gave for them."""
         _ = self.team_memory  # refuses where the org has no team memory
-        created = SubTeamsCreated(self.team_ref(place), given, replaced)
+        created = SubTeamsCreated(team_ref(place), given, replaced)
         for protocol in self.protocols_of(place):
             protocol.when_sub_teams_are_created(created)
 
@@ -1412,7 +1435,7 @@ class Records(ServiceState):
         """Tell the documents of ``place`` that its reviewer accepted the
         work of a sub-team, with what the reviewer gave for them."""
         _ = self.team_memory
-        accepted = WorkAccepted(self.team_ref(place), given)
+        accepted = WorkAccepted(team_ref(place), given)
         for protocol in self.protocols_of(place):
             protocol.when_sub_team_work_is_accepted(accepted)
 
@@ -1422,7 +1445,7 @@ class Records(ServiceState):
         """Tell the documents of ``place`` what the team above passed on
         to it of the teams that were there before."""
         _ = self.team_memory
-        handed = HandedOver(self.team_ref(place), given)
+        handed = HandedOver(team_ref(place), given)
         for protocol in self.protocols_of(place):
             protocol.when_removed_team_is_handed_over(handed)
 
@@ -1432,7 +1455,7 @@ class Records(ServiceState):
         Returns:
             What is kept of each in the team's record, by its name.
         """
-        removed = TeamRemoved(self.team_ref(place))
+        removed = TeamRemoved(team_ref(place))
         kept = {
             protocol.document.name: protocol.when_team_is_removed(removed)
             for protocol in self.protocols_of(place)

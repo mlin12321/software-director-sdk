@@ -28,7 +28,13 @@ from openhands.agent_server.director.documents.store import (
     GitDocumentStore,
 )
 from openhands.agent_server.director.git_store import GitStore
-from openhands.agent_server.director.orgs import SHIPPED_DOCUMENTS, SHIPPED_TYPES
+from openhands.agent_server.director.org import OrgBase
+from openhands.agent_server.director.orgs import (
+    SHIPPED_DOCUMENTS,
+    SHIPPED_TYPES,
+    ResearchOrg,
+    SoftwareOrg,
+)
 from openhands.agent_server.director.orgs.documents import ContractsProtocol
 from openhands.agent_server.director.run_state import RunState
 from openhands.agent_server.director.service import DirectorService
@@ -36,6 +42,35 @@ from openhands.agent_server.director.service.state import DIRECTOR_TOOL_NAMES
 
 
 NOTES = DocRef("services/api", "notes")
+
+
+class FakeTree:
+    """Teams by the id of the team above each."""
+
+    def __init__(self, above: dict[str, str | None]) -> None:
+        self._above = above
+
+    def ref(self, team: str) -> TeamRef:
+        return TeamRef(id=team, session="one", folder=team.replace(".", "/"))
+
+    def above(self, team: TeamRef) -> TeamRef | None:
+        above = self._above.get(team.id)
+        return self.ref(above) if above else None
+
+    def below(self, team: TeamRef) -> list[TeamRef]:
+        return [
+            self.ref(name) for name, above in self._above.items() if above == team.id
+        ]
+
+
+TREE = FakeTree(
+    {
+        "services": None,
+        "services.api": "services",
+        "services.web": "services",
+        "services.api.auth": "services.api",
+    }
+)
 
 
 @pytest.fixture
@@ -177,7 +212,7 @@ def test_a_document_without_a_protocol_is_a_plain_text(
 ):
     (tmp_path / "notes.yaml").write_text("holds: Notes.\n")
 
-    protocol = protocol_of(read_document(tmp_path / "notes.yaml"), store)
+    protocol = protocol_of(read_document(tmp_path / "notes.yaml"), store, TREE)
 
     assert type(protocol) is DocumentProtocolBase
     assert not protocol.waits_for_team_changes()
@@ -191,12 +226,12 @@ def test_a_document_does_what_the_protocol_it_names_does(
     (tmp_path / "glossary.yaml").write_text("holds: Terms.\nprotocol: contracts\n")
     (tmp_path / "plan.yaml").write_text("holds: The plan.\nprotocol: nobodys\n")
 
-    protocol = protocol_of(read_document(tmp_path / "glossary.yaml"), store)
+    protocol = protocol_of(read_document(tmp_path / "glossary.yaml"), store, TREE)
 
     assert isinstance(protocol, ContractsProtocol)
     assert protocol.waits_for_team_changes()
     with pytest.raises(UnknownProtocol, match="nobodys"):
-        protocol_of(read_document(tmp_path / "plan.yaml"), store)
+        protocol_of(read_document(tmp_path / "plan.yaml"), store, TREE)
 
 
 def test_the_director_asks_a_files_document_what_it_does(repo: Path):
@@ -217,7 +252,7 @@ CONTRACTS = DocRef("services/api", "contracts")
 @pytest.fixture
 def contracts(store: GitDocumentStore) -> ContractsProtocol:
     document = load_documents([SHIPPED_DOCUMENTS])["contracts"]
-    protocol = protocol_of(document, store)
+    protocol = protocol_of(document, store, TREE)
     assert isinstance(protocol, ContractsProtocol)
     return protocol
 
@@ -292,7 +327,7 @@ def test_a_removed_teams_contracts_go_into_its_record_and_out_of_its_folder(
     assert store.read("one", CONTRACTS) is None
     assert store.read("", CONTRACTS) == "Cart owns the cart page.\n"
     # A plain document keeps nothing of itself and stays where it is.
-    plain = DocumentProtocolBase(contracts.document, store)
+    plain = DocumentProtocolBase(contracts.document, store, TREE)
     assert plain.when_team_is_removed(TeamRemoved(TEAM)) is None
 
 
@@ -306,3 +341,51 @@ def test_the_store_tells_of_every_change_a_session_makes(repo: Path):
     store.discard("one", NOTES)
 
     assert told == ["one", "one"]
+
+
+def test_a_plain_document_is_read_by_the_team_that_keeps_it_and_no_other(
+    store: GitDocumentStore, tmp_path: Path
+):
+    (tmp_path / "notes.yaml").write_text("holds: Notes.\n")
+    plain = protocol_of(read_document(tmp_path / "notes.yaml"), store, TREE)
+
+    assert plain.read_from(TREE.ref("services.api")) == [TREE.ref("services.api")]
+
+
+def test_a_team_reads_the_contracts_of_the_team_above_and_its_own(
+    contracts: ContractsProtocol,
+):
+    assert contracts.read_from(TREE.ref("services.api")) == [
+        TREE.ref("services"),
+        TREE.ref("services.api"),
+    ]
+    # Not those two teams up, nor those of the team beside it.
+    assert contracts.read_from(TREE.ref("services.api.auth")) == [
+        TREE.ref("services.api"),
+        TREE.ref("services.api.auth"),
+    ]
+    assert contracts.read_from(TREE.ref("services")) == [TREE.ref("services")]
+
+
+def test_an_org_refuses_nothing_unless_its_kind_says_so():
+    class AnyOrg(OrgBase):
+        pass
+
+    org = AnyOrg(TREE)
+
+    assert org.allows_read(TREE.ref("services"), TREE.ref("services.api"), "notes")
+    assert org.allows_read(TREE.ref("services.api"), TREE.ref("services.web"), "notes")
+
+
+@pytest.mark.parametrize("kind", [SoftwareOrg, ResearchOrg])
+def test_in_the_shipped_orgs_what_is_written_is_read_down_the_tree_only(
+    kind: type[OrgBase],
+):
+    org = kind(TREE)
+    api, auth = TREE.ref("services.api"), TREE.ref("services.api.auth")
+
+    assert org.allows_read(api, api, "spec")
+    assert org.allows_read(api, TREE.ref("services"), "contracts")
+    assert org.allows_read(auth, TREE.ref("services"), "contracts")
+    assert not org.allows_read(api, auth, "contracts")
+    assert not org.allows_read(api, TREE.ref("services.web"), "contracts")

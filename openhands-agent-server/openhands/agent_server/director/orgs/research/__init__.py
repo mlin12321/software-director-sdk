@@ -2,10 +2,10 @@
 
 from pathlib import Path
 
-from openhands.agent_server.director.org import OrgBase
+from openhands.agent_server.director.orgs.top_down import TopDownOrg
 
 
-class ResearchOrg(OrgBase):
+class ResearchOrg(TopDownOrg):
     """Teams that each own a research direction, and teams that build what
     their experiments run on."""
 
