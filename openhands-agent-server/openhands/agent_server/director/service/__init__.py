@@ -235,7 +235,7 @@ class DirectorService(Sync):
                     isolation="shared",
                     agent_type=root_type,
                     headline=named.headline,
-                    spec_summary=_summary_of(request.task),
+                    purpose=_summary_of(request.task),
                     since=_instant(),
                 )
             )

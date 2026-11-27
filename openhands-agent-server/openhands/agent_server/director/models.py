@@ -1,8 +1,8 @@
 """Wire models for the director API."""
 
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from openhands.agent_server.models import StartConversationRequest
 
@@ -326,7 +326,13 @@ class OrgNodeInput(BaseModel):
             "the team's task and its latest report."
         ),
     )
-    spec_summary: str = ""
+    purpose: str = Field(
+        default="",
+        description=(
+            "What the team is for, in a line: from its task, and from then "
+            "on from whichever of its documents says so."
+        ),
+    )
     old_specs: list[OldSpec] = Field(
         default_factory=list,
         description=(
@@ -357,6 +363,16 @@ class OrgNodeInput(BaseModel):
             "directory, so a team that replaces another has its id."
         ),
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _purpose_of_a_team_saved_earlier(cls, data: Any) -> Any:
+        """Read a team saved when its purpose was called ``spec_summary``.
+        For orgs saved before the rename; to be removed once none is left."""
+        if isinstance(data, dict) and "spec_summary" in data:
+            data = dict(data)
+            data.setdefault("purpose", data.pop("spec_summary"))
+        return data
 
 
 class OrgNode(OrgNodeInput):

@@ -144,7 +144,7 @@ async def test_the_ic_writes_the_spec_its_sub_teams_inherit(service: DirectorSer
     )
 
     assert not written.is_error and refused.is_error
-    assert node(service, "root").spec_summary == "Checkout"
+    assert node(service, "root").purpose == "Checkout"
     read = await use(service, ic(service), ReadTeamContextTool, ReadTeamContextAction())
     assert "integer cents" in json.loads(read.text)["spec"]
     # It is the team's once the work it was written with is accepted.

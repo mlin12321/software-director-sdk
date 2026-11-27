@@ -489,7 +489,7 @@ def replaced_job(
         "starts when your main conversation gives it its task.",
         *(
             f"- {team.title} (id {team.id}, {team.boundary.path}): "
-            f"{team.spec_summary or 'no purpose given'}"
+            f"{team.purpose or 'no purpose given'}"
             for team in teams
         ),
         "",

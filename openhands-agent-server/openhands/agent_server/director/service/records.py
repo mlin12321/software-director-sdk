@@ -701,7 +701,7 @@ class Records(ServiceState):
                     "path": child.boundary.path,
                     "status": child.status if child.agents else NOT_STARTED,
                     "headline": child.headline,
-                    "summary": child.spec_summary,
+                    "summary": child.purpose,
                     "review": child.review.state if child.review else None,
                     "stopped": child.stopped.reason if child.stopped else None,
                 }
@@ -1298,7 +1298,7 @@ class Records(ServiceState):
                 title=place.title,
                 above=self._home_of(top, place.boundary.path),
                 path=place.boundary.path,
-                purpose=run.marked(TASK).get(place.id, place.spec_summary),
+                purpose=run.marked(TASK).get(place.id, place.purpose),
                 ended="not_taken",
                 at=stamp,
                 review=place.review.state if place.review else None,
@@ -1413,9 +1413,7 @@ class Records(ServiceState):
                 and file.endswith(SPEC_FILE)
                 and files[file][0] is not None
             ):
-                store.update_team(
-                    owner.team_id, spec_summary=owner.spec_summary, old_specs=[]
-                )
+                store.update_team(owner.team_id, purpose=owner.purpose, old_specs=[])
         for place in left.values():
             for file in self.drafts(session):
                 # What waits for the org's part of the landing stays a draft.
