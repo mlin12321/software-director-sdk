@@ -10,11 +10,6 @@ from openhands.agent_server.director.documents.declared import (
     load_documents,
     read_document,
 )
-from openhands.agent_server.director.documents.events import (
-    SubTeamsProposed,
-    TeamRef,
-    TeamRemoved,
-)
 from openhands.agent_server.director.documents.protocol import DocumentProtocolBase
 from openhands.agent_server.director.documents.registry import (
     UnknownProtocol,
@@ -28,6 +23,11 @@ from openhands.agent_server.director.documents.store import (
     DocumentDraft,
     DocumentRef,
     GitDocumentStore,
+    TeamRef,
+)
+from openhands.agent_server.director.documents.team_documents import (
+    Reader,
+    TeamDocuments,
 )
 from openhands.agent_server.director.documents.writer import (
     DocumentWriterBase,
@@ -268,18 +268,24 @@ def contracts(store: GitDocumentStore) -> ContractsProtocol:
     return protocol
 
 
+def of_teams(contracts: ContractsProtocol, store: GitDocumentStore) -> TeamDocuments:
+    return TeamDocuments(store, {"contracts": contracts}, OrgBase(TREE))
+
+
 def test_contracts_must_be_written_before_sub_teams_are_proposed(
     contracts: ContractsProtocol, store: GitDocumentStore
 ):
+    documents = of_teams(contracts, store)
+    team = Reader(team=TEAM, keeps=("contracts",))
     with pytest.raises(Invalid, match="write_contracts"):
-        contracts.before_sub_teams_are_proposed(SubTeamsProposed(TEAM))
+        documents.before_sub_teams_are_proposed(team)
 
     store.write("one", CONTRACTS, "Cart owns the cart page.\n")
 
-    contracts.before_sub_teams_are_proposed(SubTeamsProposed(TEAM))
-    # A plain document refuses nothing.
-    plain = DocumentProtocolBase(contracts.document, store, TREE)
-    plain.before_sub_teams_are_proposed(SubTeamsProposed(TEAM))
+    documents.before_sub_teams_are_proposed(team)
+    # A team whose type keeps no contracts is refused nothing.
+    store.discard("one", CONTRACTS)
+    documents.before_sub_teams_are_proposed(Reader(team=TEAM))
 
 
 def test_a_removed_teams_contracts_go_into_its_record_and_out_of_its_folder(
@@ -287,14 +293,13 @@ def test_a_removed_teams_contracts_go_into_its_record_and_out_of_its_folder(
 ):
     GitStore(repo).write("services/api", "contracts.md", "Cart owns the cart page.\n")
 
-    kept = contracts.when_team_is_removed(TeamRemoved(TEAM))
+    kept = of_teams(contracts, store).when_team_is_removed(
+        Reader(team=TEAM, keeps=("contracts",))
+    )
 
-    assert kept == "Cart owns the cart page.\n"
+    assert kept == {"contracts": "Cart owns the cart page.\n"}
     assert store.read("one", CONTRACTS) is None
     assert store.read("", CONTRACTS) == "Cart owns the cart page.\n"
-    # A plain document keeps nothing of itself and stays where it is.
-    plain = DocumentProtocolBase(contracts.document, store, TREE)
-    assert plain.when_team_is_removed(TeamRemoved(TEAM)) is None
 
 
 def test_the_store_tells_of_every_change_a_session_makes(repo: Path):

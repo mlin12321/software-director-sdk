@@ -52,7 +52,6 @@ def test_what_a_tool_is_knows_no_tool_of_the_directors():
         "org.py",
         "documents/store.py",
         "documents/declared.py",
-        "documents/events.py",
         "documents/protocol.py",
         "documents/schema.py",
         "documents/writer.py",

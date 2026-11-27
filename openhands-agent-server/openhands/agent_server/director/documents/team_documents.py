@@ -9,10 +9,6 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, NamedTuple
 
-from openhands.agent_server.director.documents.events import (
-    SubTeamsProposed,
-    TeamRemoved,
-)
 from openhands.agent_server.director.documents.protocol import DocumentProtocolBase
 from openhands.agent_server.director.documents.schema import (
     DocumentsBriefed,
@@ -28,6 +24,7 @@ from openhands.agent_server.director.models import LeftoverDocument, TeamDocumen
 from openhands.agent_server.director.org import OrgBase
 from openhands.agent_server.director.prompts import left_document
 from openhands.agent_server.director.scope import is_inside
+from openhands.sdk.errors import Invalid
 
 
 @dataclass(frozen=True)
@@ -263,28 +260,43 @@ class TeamDocuments:
         return found
 
     def before_sub_teams_are_proposed(self, reader: Reader) -> None:
-        """Ask the documents of a team whether its writer may propose
-        sub-teams now.
+        """Refuse a team's writer a proposal of sub-teams while a document
+        its team needs first is not written.
 
         Raises:
-            Invalid: One of them is not ready, with what to do first.
+            Invalid: With the document to write and the tool for it.
         """
-        proposed = SubTeamsProposed(reader.team)
+        team = reader.team
         for protocol in self.kept_by(reader):
-            protocol.before_sub_teams_are_proposed(proposed)
+            document = protocol.document
+            if not protocol.needed_before_sub_teams:
+                continue
+            written = self.store.read(team.session, team.keeps(document.name))
+            if not (written or "").strip():
+                raise Invalid(
+                    f"Your team has no {document.name} yet, and its sub-teams "
+                    f"need it from the start. Write it with "
+                    f"`{document.written_with}`, then propose again."
+                )
 
     def when_team_is_removed(self, reader: Reader) -> dict[str, str]:
-        """Tell the documents of a team that it is gone.
+        """Take out of a removed team's folder the documents that do not
+        stay there for the team that has the folder next.
 
         Returns:
-            What is kept of each in the team's record, by its name.
+            What each said, by its name, for the team's record.
         """
-        removed = TeamRemoved(reader.team)
-        kept = {
-            protocol.document.name: protocol.when_team_is_removed(removed)
-            for protocol in self.kept_by(reader)
-        }
-        return {name: text for name, text in kept.items() if text}
+        team = reader.team
+        kept: dict[str, str] = {}
+        for protocol in self.kept_by(reader):
+            if protocol.stays_when_team_is_removed:
+                continue
+            ref = team.keeps(protocol.document.name)
+            text = self.store.read(team.session, ref)
+            if text:
+                self.store.remove(team.session, ref)
+                kept[protocol.document.name] = text
+        return kept
 
     def draft(self, team: TeamRef, name: str) -> tuple[str, str | None] | None:
         """The document named ``name`` a session wrote for one of its

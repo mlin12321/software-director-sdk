@@ -12,17 +12,12 @@ from collections.abc import Sequence
 from typing import Any, ClassVar
 
 from openhands.agent_server.director.documents.declared import Document
-from openhands.agent_server.director.documents.events import (
-    SubTeamsProposed,
-    TeamRef,
-    TeamRemoved,
-)
 from openhands.agent_server.director.documents.schema import (
     BriefedPart,
     DocumentsBriefed,
     ShownDocument,
 )
-from openhands.agent_server.director.documents.store import DocumentStore
+from openhands.agent_server.director.documents.store import DocumentStore, TeamRef
 from openhands.agent_server.director.documents.tree import TeamTree
 from openhands.agent_server.director.documents.writer import (
     DocumentWriterBase,
@@ -31,8 +26,8 @@ from openhands.agent_server.director.documents.writer import (
 
 
 class DocumentProtocolBase(ABC):
-    """What one document is: who reads it, what they are told of it, and
-    what it does as its team changes. Every answer here is the plain one,
+    """What one document is: a few facts the director reads, who reads the
+    document, and what they are told of it. Every answer here is the plain one,
     and a subclass gives another only where its document differs."""
 
     usable_in_hand_over: ClassVar[bool] = False
@@ -44,7 +39,11 @@ class DocumentProtocolBase(ABC):
     session's changes to the teams are settled, and not with its code."""
     stays_when_team_is_removed: ClassVar[bool] = False
     """Whether the one a removed team wrote stays in its folder, for the
-    team that has the folder next to read as an old one."""
+    team that has the folder next to read as an old one. Otherwise it goes
+    out of the folder and into the record of the team that is gone."""
+    needed_before_sub_teams: ClassVar[bool] = False
+    """Whether a team must have written it before its writer may propose
+    sub-teams."""
     writer_class: ClassVar[type[DocumentWriterBase]] = EditorWriter
     """What carries out a call of its tool."""
 
@@ -102,24 +101,3 @@ class DocumentProtocolBase(ABC):
         above where the document is ``read_by_sub_teams``."""
         above = self.tree.above(reader) if self.read_by_sub_teams else None
         return [reader] if above is None else [above, reader]
-
-    def before_sub_teams_are_proposed(self, proposed: SubTeamsProposed) -> None:
-        """The team's writer is about to propose sub-teams. The one step a
-        document may refuse; the plain document refuses nothing.
-
-        Raises:
-            Invalid: The document is not ready for the team to have
-                sub-teams, with what the writer is to do first.
-        """
-
-    def when_team_is_removed(
-        self,
-        removed: TeamRemoved,  # noqa: ARG002
-    ) -> str | None:
-        """The team was replaced or pruned.
-
-        Returns:
-            What is kept of the document in the record of the team that
-            is gone; None for nothing.
-        """
-        return None

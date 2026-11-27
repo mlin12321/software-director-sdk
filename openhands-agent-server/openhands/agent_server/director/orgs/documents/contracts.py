@@ -3,11 +3,6 @@
 from collections.abc import Sequence
 from typing import Any, ClassVar
 
-from openhands.agent_server.director.documents.events import (
-    SubTeamsProposed,
-    TeamRef,
-    TeamRemoved,
-)
 from openhands.agent_server.director.documents.protocol import DocumentProtocolBase
 from openhands.agent_server.director.documents.registry import register_protocol
 from openhands.agent_server.director.documents.schema import (
@@ -17,6 +12,7 @@ from openhands.agent_server.director.documents.schema import (
     DocumentToolResult,
     ShownDocument,
 )
+from openhands.agent_server.director.documents.store import TeamRef
 from openhands.agent_server.director.documents.writer import (
     DocumentWriterBase,
     EditorWriter,
@@ -61,6 +57,9 @@ class ContractsProtocol(DocumentProtocolBase):
     # those left is passed on.
     usable_in_hand_over: ClassVar[bool] = True
     waits_for_team_changes: ClassVar[bool] = True
+    # Sub-teams cannot see each other's work: what they must keep between
+    # them has to be there before they are.
+    needed_before_sub_teams: ClassVar[bool] = True
     writer_class: ClassVar[type[DocumentWriterBase]] = ContractsWriter
 
     def told_to_reader(
@@ -88,26 +87,6 @@ class ContractsProtocol(DocumentProtocolBase):
             )
             for found in briefed.shown
         ]
-
-    def before_sub_teams_are_proposed(self, proposed: SubTeamsProposed) -> None:
-        # Sub-teams cannot see each other's work: what they must keep
-        # between them has to be there before they are.
-        ref = proposed.team.keeps(self.document.name)
-        written = self.store.read(proposed.team.session, ref)
-        if not (written or "").strip():
-            raise Invalid(
-                "Your team has no contracts yet. Write what the sub-teams must "
-                f"keep between them with `{self.document.written_with}`, then "
-                "propose again."
-            )
-
-    def when_team_is_removed(self, removed: TeamRemoved) -> str | None:
-        # The folder is left without the contracts of a team that is gone.
-        ref = removed.team.keeps(self.document.name)
-        contracts = self.store.read(removed.team.session, ref)
-        if contracts:
-            self.store.remove(removed.team.session, ref)
-        return contracts or None
 
 
 register_protocol("contracts", ContractsProtocol)
