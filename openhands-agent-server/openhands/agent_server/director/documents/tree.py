@@ -2,7 +2,7 @@
 
 from typing import Protocol
 
-from openhands.agent_server.director.documents.events import TeamRef
+from openhands.agent_server.director.documents.store import TeamRef
 
 
 class TeamTree(Protocol):

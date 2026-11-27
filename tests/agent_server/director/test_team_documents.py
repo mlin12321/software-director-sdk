@@ -1,6 +1,8 @@
 """The documents of an org as a team reads them, with no service: a store
 that keeps texts in a dict and the protocols an org declared."""
 
+import pytest
+
 from openhands.agent_server.director.documents.declared import Document
 from openhands.agent_server.director.documents.protocol import DocumentProtocolBase
 from openhands.agent_server.director.documents.store import (
@@ -18,6 +20,7 @@ from openhands.agent_server.director.documents.team_documents import (
 )
 from openhands.agent_server.director.models import LeftoverDocument
 from openhands.agent_server.director.org import OrgBase
+from openhands.sdk.errors import Invalid
 
 
 SESSION = "s1"
@@ -175,3 +178,35 @@ def test_what_a_session_wrote_over_a_text_the_org_changed_since_is_named():
     assert of_teams.changed_elsewhere(SESSION) == [
         Changed("notes", "services/api", "Orders and carts.", "Refunds.")
     ]
+
+
+def test_a_removed_teams_document_that_does_not_stay_goes_into_its_record():
+    of_teams, store = documents()
+    store.org[API.keeps("notes")] = "How it worked."
+    store.org[API.keeps("rules")] = "Between its teams."
+
+    kept = of_teams.when_team_is_removed(reader(API))
+
+    # The one that stays is where it was, for the next team in the folder.
+    assert kept == {"rules": "Between its teams."}
+    assert store.read(SESSION, API.keeps("rules")) is None
+    assert store.read(SESSION, API.keeps("notes")) == "How it worked."
+
+
+def test_a_document_needed_before_sub_teams_refuses_a_proposal_until_written():
+    class Needed(Rules):
+        needed_before_sub_teams = True
+
+    of_teams, store = documents()
+    of_teams.protocols = {
+        "rules": Needed(
+            Document(name="rules", description="What."), store, RootAboveApi()
+        )
+    }
+
+    of_teams.before_sub_teams_are_proposed(Reader(team=API, keeps=("notes",)))
+    with pytest.raises(Invalid, match="no rules yet.*`write_rules`"):
+        of_teams.before_sub_teams_are_proposed(reader(API))
+
+    store.write(SESSION, API.keeps("rules"), "Ids are integers.")
+    of_teams.before_sub_teams_are_proposed(reader(API))

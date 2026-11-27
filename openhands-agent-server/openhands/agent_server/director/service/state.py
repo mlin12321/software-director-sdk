@@ -40,7 +40,6 @@ from openhands.agent_server.director.documents.declared import (
     DOCUMENTS_FOLDER,
     load_documents,
 )
-from openhands.agent_server.director.documents.events import TeamRef
 from openhands.agent_server.director.documents.protocol import DocumentProtocolBase
 from openhands.agent_server.director.documents.registry import (
     UnknownProtocol,
@@ -50,6 +49,7 @@ from openhands.agent_server.director.documents.registry import (
 from openhands.agent_server.director.documents.store import (
     DocumentStore,
     GitDocumentStore,
+    TeamRef,
 )
 from openhands.agent_server.director.documents.team_documents import (
     Reader,
