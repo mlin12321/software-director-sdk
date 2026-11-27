@@ -4142,11 +4142,19 @@ def _scripted_org_llm(
         if last.role == "user" and "Your hand-over mode has ended" in text:
             return tool_call("submit_review", {"summary": "Shown, not served."})
         if last.role == "user" and "You are the IC of the team 'Checkout'" in text:
+            # The contracts first: sub-teams are not proposed without them.
+            return tool_call(
+                "write_contracts",
+                {
+                    "command": "create",
+                    "file_text": "POST /checkout returns an order id\n",
+                },
+            )
+        if last.role == "tool" and "the ones you propose read these contracts" in text:
             return tool_call(
                 "propose_teams",
                 {
                     "text": "Two teams can build this side by side.",
-                    "contracts": "POST /checkout returns an order id",
                     "teams": [
                         {
                             "name": "API",
