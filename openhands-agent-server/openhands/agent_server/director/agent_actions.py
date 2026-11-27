@@ -178,11 +178,11 @@ def write_document(
             words=asdict(service.team(node).names),
         )
     )
-    if written.purpose is not None:
+    if written.summary is not None:
         # With a document of its own that says what the team is for, what
         # teams before it left is no longer its guide.
         service.org.update_place(
-            node.id, purpose=written.purpose, leftover_documents=[]
+            node.id, summary=written.summary, leftover_documents=[]
         )
     if caller.hand_over:
         service.note_hand_over(node.id, spec=True)

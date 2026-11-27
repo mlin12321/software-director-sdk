@@ -69,7 +69,7 @@ class Delivery(Records):
         """Have a team's headline rewritten after it reported. Any thread."""
         place = self.org.place(place_id)
         if place is not None:
-            task = f"{place.purpose}\n\nLatest report of the team: {report}"
+            task = f"{place.summary}\n\nLatest report of the team: {report}"
             self._enqueue(
                 lambda: self._summarize(place_id, task), f"headline:{place_id}"
             )

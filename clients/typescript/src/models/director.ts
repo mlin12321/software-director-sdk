@@ -216,7 +216,7 @@ export interface DirectorOrgNode {
    * What the team is for, in a line: from its task, and from then on from
    * whichever of its documents says so.
    */
-  purpose: string;
+  summary: string;
   /**
    * Documents that teams before this one left in its directory. One is old
    * until the team writes its own of that name.

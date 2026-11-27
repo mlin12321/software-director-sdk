@@ -186,7 +186,7 @@ class Sessions(Splits):
                     branch=branch,
                     agents=[],
                     status="idle",
-                    purpose=above.purpose,
+                    summary=above.summary,
                     since=above.since,
                 ),
                 *(
@@ -213,7 +213,7 @@ class Sessions(Splits):
                         headline=provisional_summary(text).headline
                         if current.id == team.id
                         else current.headline,
-                        purpose=current.purpose,
+                        summary=current.summary,
                         leftover_documents=current.leftover_documents,
                         since=current.since,
                     )
@@ -411,7 +411,7 @@ class Sessions(Splits):
                 agents=[],
                 status="idle",
                 headline=node.headline,
-                purpose=higher.purpose,
+                summary=higher.summary,
                 leftover_documents=higher.leftover_documents,
                 since=higher.since,
             ),
@@ -430,7 +430,7 @@ class Sessions(Splits):
                 branch=reviewed_from.branch,
                 agents=[],
                 status="idle",
-                purpose=above.purpose,
+                summary=above.summary,
                 since=above.since,
             ),
             [
@@ -449,7 +449,7 @@ class Sessions(Splits):
                     agents=[],
                     status="idle",
                     headline=current.headline,
-                    purpose=current.purpose,
+                    summary=current.summary,
                     leftover_documents=current.leftover_documents,
                     since=current.since,
                 )

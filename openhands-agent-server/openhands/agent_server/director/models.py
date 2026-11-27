@@ -327,7 +327,7 @@ class OrgNodeInput(BaseModel):
             "the team's task and its latest report."
         ),
     )
-    purpose: str = Field(
+    summary: str = Field(
         default="",
         description=(
             "What the team is for, in a line: from its task, and from then "

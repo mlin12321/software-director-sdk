@@ -883,14 +883,14 @@ def test_setting_an_agent_that_is_not_there_is_refused(working: OrgStore):
 
 
 def test_updating_a_team_keeps_its_other_fields(store: OrgStore):
-    store.update_team("a1", purpose="stuck on the schema")
+    store.update_team("a1", summary="stuck on the schema")
 
     node = store.team("a1")
     assert node is not None
-    assert node.purpose == "stuck on the schema"
+    assert node.summary == "stuck on the schema"
     assert (node.boundary.path, node.parent_id) == ("svc/a/one", "a")
     with pytest.raises(NotFound):
-        store.update_team("missing", purpose="x")
+        store.update_team("missing", summary="x")
 
 
 def test_updating_a_place_keeps_its_other_fields(working: OrgStore):

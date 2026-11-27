@@ -857,7 +857,7 @@ async def test_a_spec_a_session_writes_is_its_own_until_its_work_is_accepted(
 
     assert service.team_memory.read("services/api/spec.md") == "# Refunds"
     api = service.org.team(API)
-    assert api is not None and api.purpose == "Refunds"
+    assert api is not None and api.summary == "Refunds"
 
 
 async def test_any_document_a_session_writes_is_merged_with_its_accepted_work(

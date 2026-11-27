@@ -595,7 +595,7 @@ async def test_a_hand_over_conversation_hands_over_and_writes_the_spec_and_no_mo
     assert not handed.is_error and not spec.is_error
     [report] = service.reports_of(node(service, API))
     assert (report.text, report.handed_over) == ("Keep SQLite.", True)
-    assert node(service, "root").purpose == "Shop"
+    assert node(service, "root").summary == "Shop"
     assert json.loads(read.text)["former_teams"][0]["reports_as_one"]
     for answer in refused:
         assert answer.is_error and "for the hand-over alone" in answer.text
