@@ -88,7 +88,7 @@ class Teams(Delivery):
             team_types=self.team_types,
             team_documents=lambda: self.team_documents,
             launcher=self._require_launcher,
-            context_of=self.context_of,
+            context_of=self.team_context.context_of,
             tell_of_failure=self.tell_of_failure,
         )
 
@@ -468,8 +468,8 @@ class Teams(Delivery):
         limit = self.org_settings.settings.manager_check_accepted_reviews
         if not limit:
             return
-        with self._counting:
-            counted = self._counted(place_id)
+        with self.check_counts.lock:
+            counted = self.check_counts.counted(place_id)
             counted["accepted"] += 1
             due = counted["accepted"] >= limit
             if due:
@@ -495,8 +495,8 @@ class Teams(Delivery):
         team = self.org.place(below_id)
         if not limit or team is None:
             return
-        with self._counting:
-            counted = self._counted(place_id)
+        with self.check_counts.lock:
+            counted = self.check_counts.counted(place_id)
             raised = counted["escalations"].get(below_id, 0) + 1
             due = raised >= limit
             told = dict(counted["escalations"], **{below_id: raised})
@@ -695,7 +695,7 @@ class Teams(Delivery):
         )
         if started is not None:
             # A team of the same name before it left nothing to count on.
-            self._work_accepted(started)
+            self.check_counts.work_accepted(started)
             if above is not None and not opens:
                 with suppress(GitError, OSError):
                     left = await asyncio.to_thread(

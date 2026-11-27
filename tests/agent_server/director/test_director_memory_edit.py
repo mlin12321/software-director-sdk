@@ -81,7 +81,7 @@ async def test_accepting_work_can_add_to_the_contracts_every_sub_team_reads(
     assert "Tables reads what Harness writes" in contracts
     assert contracts.rstrip().endswith(finding)
     # The team beside it reads it as a contract it works to.
-    beside = service.context_of(node(service, "harness"), "ic")
+    beside = service.team_context.context_of(node(service, "harness"), "ic")
     assert finding in "\n".join(beside["contracts_with_the_teams_beside_you"])
 
 

@@ -154,7 +154,7 @@ async def test_a_team_put_in_another_teams_directory_gets_none_of_its_memory(
     orders = node(service, API)
     assert orders.title == "Orders" and orders.agents == []
     assert service.reports_of(orders) == []
-    assert service.threads_of(orders) == []
+    assert service.team_context.threads_of(orders) == []
     assert service.org_state.run_state().marked(TASK)[orders.id] == "Keep the orders"
     [former] = former_of(service, API)
     assert (former.title, former.ended, former.path) == (
@@ -191,7 +191,7 @@ async def test_the_spec_of_the_team_before_stays_and_is_shown_as_old(
     briefing = launcher.derived[-1].task
     assert "A spec left by a team before you (API), in services/api" in briefing
     assert "# API by hand" in briefing and "Chose SQLite." not in briefing
-    context = service.context_of(node(service, API), "ic")
+    context = service.team_context.context_of(node(service, API), "ic")
     assert context["spec"] is None
     assert context["documents_left_by_teams_before_you"] == [
         {
@@ -282,7 +282,7 @@ async def test_the_ic_is_told_who_has_each_replaced_teams_directory_now(
         assert team.leftover_documents == [
             LeftoverDocument(name="spec", path="services/api", team="API")
         ]
-    below = service.context_of(node(service, "root"), "ic")["sub_teams"]
+    below = service.team_context.context_of(node(service, "root"), "ic")["sub_teams"]
     assert {team["team"]: team["status"] for team in below} == {
         "Web": "idle",
         "HTTP": "not_started",
@@ -323,7 +323,7 @@ async def test_a_pruned_team_is_recorded_and_its_spec_is_old_for_the_team_above(
     assert node(service, "root").leftover_documents == [
         LeftoverDocument(name="spec", path="services/api", team="API")
     ]
-    context = service.context_of(node(service, "root"), "ic")
+    context = service.team_context.context_of(node(service, "root"), "ic")
     [left] = context["documents_left_by_teams_before_you"]
     assert (left["document"], left["text"]) == ("spec", "# API by hand")
     # The record is the session's own until its work is accepted.
@@ -376,7 +376,7 @@ async def test_what_was_said_to_a_manager_is_archived_with_its_team(
 
     [former] = former_of(service, API)
     assert f".threads/{api}/{api}.json" in [thread.file for thread in former.threads]
-    assert service.threads_of(node(service, API)) == []
+    assert service.team_context.threads_of(node(service, API)) == []
 
 
 async def test_the_ic_that_proposed_is_given_what_the_replaced_team_left(
@@ -431,7 +431,7 @@ async def test_what_the_ic_hands_over_is_in_the_new_teams_briefing(
 
     briefing = launcher.derived[-1].task
     assert "API chose SQLite; keep it." in briefing
-    context = service.context_of(node(service, API), "ic")
+    context = service.team_context.context_of(node(service, API), "ic")
     [told] = context["handed_over_to_your_team"]
     assert (told["by"], told["text"]) == (
         "the IC of Checkout",
@@ -441,7 +441,7 @@ async def test_what_the_ic_hands_over_is_in_the_new_teams_briefing(
     todo = context["what_to_do_with_what_was_handed_over"]
     assert "`report` what of it your team must remember" in todo
     assert "`write_contracts`" in todo
-    assert "handed_over_to_your_team" not in service.context_of(
+    assert "handed_over_to_your_team" not in service.team_context.context_of(
         node(service, API), "manager"
     )
 
@@ -488,7 +488,9 @@ async def test_a_team_that_is_handed_contracts_writes_them_itself(
 
     # Nothing is written for the team: it is told, and writes its own.
     assert own_contracts(service, node(service, WEB)) == ""
-    [told] = service.context_of(node(service, WEB), "ic")["handed_over_to_your_team"]
+    [told] = service.team_context.context_of(node(service, WEB), "ic")[
+        "handed_over_to_your_team"
+    ]
     assert told["text"] == text
 
     await write_contracts(service, text, WEB)
@@ -525,9 +527,9 @@ async def test_what_a_removed_team_kept_of_its_documents_is_in_its_record(
     assert former.documents == {"contracts": "Order has an id.\n"}
     [told] = [
         team
-        for team in service.context_of(node(service, "root"), "ic", in_full=True)[
-            "former_teams"
-        ]
+        for team in service.team_context.context_of(
+            node(service, "root"), "ic", in_full=True
+        )["former_teams"]
         if team["team_id"] == API
     ]
     assert told["documents"] == former.documents
@@ -560,9 +562,13 @@ async def test_an_ic_can_read_again_what_removed_teams_left(
     assert (former["team"], former["ended"]) == ("API", "replaced")
     assert former["reports_as_one"] == "Chose SQLite.\n\nDropped the cache."
     # What is told with every message names the team and no more.
-    [named] = service.context_of(node(service, "root"), "ic")["former_teams"]
+    [named] = service.team_context.context_of(node(service, "root"), "ic")[
+        "former_teams"
+    ]
     assert sorted(named) == ["at", "directory", "ended", "team", "team_id"]
-    assert "former_teams" not in service.context_of(node(service, "root"), "manager")
+    assert "former_teams" not in service.team_context.context_of(
+        node(service, "root"), "manager"
+    )
 
 
 async def test_a_hand_over_is_a_side_conversation_of_the_ic_with_its_own_briefing(

@@ -339,4 +339,6 @@ async def test_a_review_request_says_what_the_human_asked_the_team_directly(
     launcher.answers[USAGE_ID] = TO_DB
     sent = await ask(service, "Add an index on orders.")
 
-    assert service.asked_of(node(service, sent.node_id)) == ["Add an index on orders."]
+    assert service.team_context.asked_of(node(service, sent.node_id)) == [
+        "Add an index on orders."
+    ]

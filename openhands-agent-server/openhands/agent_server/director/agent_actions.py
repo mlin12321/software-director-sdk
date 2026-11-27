@@ -140,7 +140,7 @@ def _writes(service: DirectorService, caller: Caller, what: str) -> None:
 
 def node_context(service: DirectorService, caller: Caller) -> str:
     """Who the agent is and everything of the org that concerns its team."""
-    context = service.context_of(caller.node, caller.role, in_full=True)
+    context = service.team_context.context_of(caller.node, caller.role, in_full=True)
     names = service.team_types.team(caller.node).names
     kind = service.team_types.type_of(caller.node).text_for(caller.role)
     # The briefing said these once; they are given again only when asked for.
@@ -328,7 +328,7 @@ def propose_teams(
         "declines them, with your reason. They wait on you until you call "
         f"one of the two; msg_ic asks your {names.writer} something first."
     )
-    facts = service.facts_of_proposal(node, proposal)
+    facts = service.team_context.facts_of_proposal(node, proposal)
     if facts:
         note += f"\n\n{facts}"
     read = service.team_documents.read_by_sub_teams(service.team_types.reader_of(node))

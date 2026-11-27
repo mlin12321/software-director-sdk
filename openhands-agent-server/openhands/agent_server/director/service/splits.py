@@ -302,7 +302,7 @@ class Splits(Watch):
                 run.mark(TASK, team.id, child.task)
                 made = store.place(team.id)
                 if made is not None:
-                    self._work_accepted(made)
+                    self.check_counts.work_accepted(made)
                     self.team_history.record_event(
                         place_id, "set_up", made, child.task[:200]
                     )
@@ -318,8 +318,8 @@ class Splits(Watch):
                         review_request(
                             below,
                             below.review,
-                            self._so_far(below),
-                            self.asked_of(below),
+                            self.team_context.so_far(below),
+                            self.team_context.asked_of(below),
                             self.review_instructions(self.team_types.type_of(below)),
                             self.team_types.kept_documents(above).read_by_sub_teams,
                         ),
@@ -656,7 +656,7 @@ class Splits(Watch):
         for kind in (TASK, PROGRESS, CHECKS):
             run.unmark(kind, team.id)
         self.session_drafts.forget_reports(team.id)
-        self._work_accepted(team)
+        self.check_counts.work_accepted(team)
         return record
 
     def _discard_work(self, teams: list[SessionTeam], stamp: str) -> str | None:

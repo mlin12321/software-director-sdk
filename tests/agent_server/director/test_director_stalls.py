@@ -308,13 +308,19 @@ async def test_an_ic_writes_to_the_ic_of_a_team_below_and_to_no_other(
     assert "The IC of the team above (Checkout) writes:" in told
     assert "Use the orders table that exists." in told
     for team in ("root", API):
-        [thread] = [t for t in service.threads_of(node(service, team)) if t.ic_to_ic]
+        [thread] = [
+            t
+            for t in service.team_context.threads_of(node(service, team))
+            if t.ic_to_ic
+        ]
         assert (thread.manager_node_id, thread.ic_node_id) == (
             node(service, "root").id,
             node(service, API).id,
         )
         assert [message.text for message in thread.messages] == [hint.text]
-    assert not any(t.ic_to_ic for t in service.threads_of(node(service, WEB)))
+    assert not any(
+        t.ic_to_ic for t in service.team_context.threads_of(node(service, WEB))
+    )
 
 
 async def test_a_stopped_team_rests_with_all_below_it_and_is_sent_nothing(

@@ -218,7 +218,7 @@ async def test_what_agents_write_to_each_other_is_never_the_orgs(
 
     await landed(service)
 
-    [thread] = service.threads_of(node(service, "root"))
+    [thread] = service.team_context.threads_of(node(service, "root"))
     assert [message.text for message in thread.messages] == ["Split in two?"]
     kept = run_git(repo, "ls-tree", "-r", "--name-only", "refs/agents/memory")
     assert ".threads" not in kept

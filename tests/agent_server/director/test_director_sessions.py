@@ -203,8 +203,8 @@ async def test_a_conversation_the_human_writes_in_is_marked_and_named(
         UUID(routed.conversation_id),
     ]
     assert launcher.titles[UUID(top)] == "API · Refunds (IC)"
-    assert service.place_of(top).human_joined
-    assert not service.place_of(ic(service, API) or "").human_joined
+    assert service.team_context.place_of(top).human_joined
+    assert not service.team_context.place_of(ic(service, API) or "").human_joined
     with pytest.raises(NotFound):
         service.joined(str(uuid4()))
 
@@ -241,14 +241,14 @@ async def test_a_conversation_links_to_the_ones_a_level_from_it(
     await service.settled()
 
     def links(conversation_id: str | None) -> list[tuple[str, str, str, str]]:
-        place = service.place_of(conversation_id or "")
+        place = service.team_context.place_of(conversation_id or "")
         return [
             (link.relation, link.node_id, link.role, link.session)
             for link in place.links
         ]
 
-    root = service.place_of(ic(service) or "")
-    in_session = service.place_of(ic(service, top) or "")
+    root = service.team_context.place_of(ic(service) or "")
+    in_session = service.team_context.place_of(ic(service, top) or "")
 
     assert (root.node_id, root.role, root.session_id) == ("root", "ic", first.id)
     # The IC a session was opened with reaches the IC that reviewed it, its
@@ -483,13 +483,13 @@ async def test_the_sessions_of_a_team_know_of_each_other_and_share_accepted_repo
     )
 
     def reports(place: str) -> list[tuple[str, str]]:
-        context = service.context_of(node(service, place), "ic")
+        context = service.team_context.context_of(node(service, place), "ic")
         return [
             (report["by"], report["text"]) for report in context["reports_of_your_team"]
         ]
 
-    other = service.context_of(node(service, API), "ic")
-    session = service.context_of(node(service, top), "ic")
+    other = service.team_context.context_of(node(service, API), "ic")
+    session = service.team_context.context_of(node(service, top), "ic")
 
     # What a session records is its own until its work is accepted.
     assert reports(API) == [("ic", "Routes are typed.")]
@@ -523,7 +523,7 @@ async def test_a_report_of_another_session_with_the_same_title_is_not_ones_own(
 
     second = (await opened(service)).session.teams[0].id
 
-    context = service.context_of(node(service, second), "ic")
+    context = service.team_context.context_of(node(service, second), "ic")
     assert [report["by"] for report in context["reports_of_your_team"]] == [
         "ic in 'Refunds'"
     ]
@@ -537,7 +537,7 @@ async def test_a_session_opened_below_the_top_has_its_teams_contracts(
 
     top = (await opened(service)).session.teams[0].id
 
-    context = service.context_of(node(service, top), "ic")
+    context = service.team_context.context_of(node(service, top), "ic")
     assert context["contracts_with_the_teams_beside_you"] == ["API serves JSON to Web."]
 
 

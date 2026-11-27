@@ -612,7 +612,7 @@ class Sessions(Splits):
                 if team is not None:
                     for kind in (TASK, PROGRESS, CHECKS):
                         run.unmark(kind, team.id)
-                    self._work_accepted(team)
+                    self.check_counts.work_accepted(team)
             if top is not None:
                 await self.work_queue.run_in(
                     BASE_LANE, lambda: asyncio.to_thread(self._settle_on_close, top)

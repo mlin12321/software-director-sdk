@@ -109,25 +109,14 @@ from openhands.sdk.logger import get_logger
 logger = get_logger(__name__)
 
 ROOT_ID = "root"
-# How a team that was set up and given no task reads to the IC above.
-NOT_STARTED = "not_started"
 # What follows a team's purpose in its task once something started it.
 _STARTED_WITH = "\n\nWhat your team is started with:\n"
-# How many of the latest events of its sub-teams an agent reads at once.
-# How many of the human's direct requests to the teams below an IC is told.
-ASKED_TOLD = 10
-HISTORY_TOLD = 30
 # How long tree changes are gathered before they are saved as one commit.
 SAVE_DELAY_SECONDS = 2.0
 # How long to wait before starting an agent again when the server is full.
 RUN_LIMIT_RETRY_SECONDS = 5.0
 # How often the director looks for teams that show no progress.
 STALL_POLL_SECONDS = 60.0
-# How many commits must have changed two proposed directories together
-# before a Manager is told: a first commit of everything says nothing.
-TOGETHER_WORTH_SAYING = 3
-# How many earlier declines for the same directories a proposal is shown with.
-DECLINED_TOLD = 3
 # How long a model may take to name a team before the team keeps the name
 # it has; a session's first IC is not briefed until then.
 SUMMARY_TIMEOUT_SECONDS = 20.0
@@ -353,7 +342,6 @@ class ServiceState:
         # Held while what waits of a session's work is read and changed.
         self._weighing = threading.RLock()
         self._adding_manager = threading.Lock()
-        self._counting = threading.Lock()
         self._stall_poll = stall_poll
         self._stall_timer: asyncio.Task[None] | None = None
         self._store: OrgStore | None = None

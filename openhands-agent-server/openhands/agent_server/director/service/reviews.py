@@ -268,8 +268,8 @@ class Reviews(Teams):
                     self.team_history.record_need(place, path.strip(), NEED_FINDING)
         limit = self.org_settings.settings.manager_check_ic_setbacks
         if limit and place.parent_id is not None and review.round % limit == 0:
-            with self._counting:
-                counted = self._counted(place.parent_id)
+            with self.check_counts.lock:
+                counted = self.check_counts.counted(place.parent_id)
             self._wake_manager(
                 place.parent_id,
                 f"your {names.reviewer} has sent the work of {place.title!r} back "
@@ -348,8 +348,8 @@ class Reviews(Teams):
                     + review_request(
                         team,
                         team.review,
-                        self._so_far(team),
-                        self.asked_of(team),
+                        self.team_context.so_far(team),
+                        self.team_context.asked_of(team),
                         self.review_instructions(self.team_types.type_of(team)),
                         self.team_types.kept_documents(node).read_by_sub_teams,
                     )
@@ -1967,7 +1967,7 @@ class Reviews(Teams):
             base_commit=tip or place.base_commit,
         )
         self.progressed(above.id)
-        self._work_accepted(place)
+        self.check_counts.work_accepted(place)
         if meets is not None or resolved:
             self.team_history.record_event(
                 above.id,
@@ -2232,7 +2232,7 @@ class Reviews(Teams):
             ),
             base_commit=tip or place.base_commit,
         )
-        self._work_accepted(place)
+        self.check_counts.work_accepted(place)
         if opens:
             await asyncio.to_thread(
                 self._land_accepted, store.place(place_id) or place, None

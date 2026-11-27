@@ -74,7 +74,7 @@ class Delivery(Records):
             team_types=self.team_types,
             launcher=self._require_launcher,
             is_running=lambda: self._loop is not None,
-            context_of=self.context_of,
+            context_of=self.team_context.context_of,
             is_stopped=self._is_stopped,
             lane_of=lane_for,
             take_up=lambda intent_id, lane: self.resumable_work.take_up(

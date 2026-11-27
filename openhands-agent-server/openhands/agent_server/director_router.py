@@ -521,7 +521,7 @@ def get_conversation_place(
     session's IC is the one below. A client shows them as links from one
     conversation to the next.
     """
-    return service.place_of(conversation_id)
+    return service.team_context.place_of(conversation_id)
 
 
 @director_router.post(
@@ -547,7 +547,7 @@ def join_conversation(
     nothing.
     """
     service.joined(conversation_id)
-    return service.place_of(conversation_id)
+    return service.team_context.place_of(conversation_id)
 
 
 @director_router.get("/org/sessions", response_model=list[Session])
@@ -733,7 +733,7 @@ def get_node_messages(
         # Nobody works at a team of the org itself, so nothing was said there.
         _require_node(service, node_id)
         return []
-    return service.threads_of(place)
+    return service.team_context.threads_of(place)
 
 
 @director_router.get(
