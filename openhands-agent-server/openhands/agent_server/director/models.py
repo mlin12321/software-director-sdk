@@ -1,8 +1,8 @@
 """Wire models for the director API."""
 
-from typing import Any, Literal
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field
 
 from openhands.agent_server.models import StartConversationRequest
 
@@ -363,16 +363,6 @@ class OrgNodeInput(BaseModel):
             "directory, so a team that replaces another has its id."
         ),
     )
-
-    @model_validator(mode="before")
-    @classmethod
-    def _purpose_of_a_team_saved_earlier(cls, data: Any) -> Any:
-        """Read a team saved when its purpose was called ``spec_summary``.
-        For orgs saved before the rename; to be removed once none is left."""
-        if isinstance(data, dict) and "spec_summary" in data:
-            data = dict(data)
-            data.setdefault("purpose", data.pop("spec_summary"))
-        return data
 
 
 class OrgNode(OrgNodeInput):
@@ -1491,15 +1481,6 @@ class MergeItem(BaseModel):
     document: str = Field(
         default="", description="Only with `document`: the name of the document."
     )
-
-    @model_validator(mode="before")
-    @classmethod
-    def _kind_of_an_item_kept_earlier(cls, data: Any) -> Any:
-        """Read an item kept when a document's name was its kind. For
-        merges that waited before the rename; to be removed once none does."""
-        if isinstance(data, dict) and data.get("kind") in ("spec", "contracts"):
-            data = {**data, "document": data["kind"], "kind": "document"}
-        return data
 
     @property
     def waits_with_teams(self) -> bool:
