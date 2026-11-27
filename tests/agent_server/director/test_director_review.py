@@ -11,6 +11,7 @@ import pytest
 
 from openhands.agent_server.director.models import (
     CreateOrgRequest,
+    SplitChild,
 )
 from openhands.agent_server.director.service import DirectorService
 from openhands.agent_server.director.tools import (
@@ -32,11 +33,14 @@ from openhands.sdk.event import ActionEvent
 from openhands.tools.file_editor.definition import FileEditorAction
 from tests.agent_server.director.conftest import (
     API,
+    APPROVE,
     DONE,
     FINDING,
     SCHEMA,
     WRITE_UP,
+    ApproveTeamsTool,
     FakeLauncher,
+    ProposeTeamsTool,
     accept,
     api_submits,
     commit,
@@ -45,6 +49,7 @@ from tests.agent_server.director.conftest import (
     in_own_worktree,
     manager,
     node,
+    proposing,
     reject,
     requests,
     reviewer_wakes,
@@ -54,6 +59,7 @@ from tests.agent_server.director.conftest import (
     split_root,
     use,
     woken,
+    write_contracts,
 )
 from tests.agent_server.director.document_tools import (
     ReviewTeamAction,
@@ -641,6 +647,40 @@ async def test_a_top_team_that_changed_nothing_is_accepted_when_all_below_is(
         "apps.web",
         SCHEMA,
     ]
+
+
+async def test_a_file_in_the_folder_of_a_team_never_given_work_is_not_the_ics_own(
+    service: DirectorService, launcher: FakeLauncher, repo: Path
+):
+    await split_root(service)
+    await write_contracts(service, "Order has an id.", "services.api")
+    await use(
+        service,
+        ic(service, "services.api"),
+        ProposeTeamsTool,
+        proposing(
+            [
+                SplitChild(
+                    title="Schema", path="services/api/schema", task="Define orders"
+                ),
+                SplitChild(title="Jobs", path="services/api/jobs", task="Run jobs"),
+            ],
+        ),
+    )
+    await use(service, manager(service, "services.api"), ApproveTeamsTool, APPROVE)
+    # Only one of the two is given work.
+    service.tell_writer(node(service, SCHEMA).id, "Begin.")
+    await service.settled()
+    # What a run of the tests leaves in the other's folder.
+    (repo / "services" / "api" / "jobs").mkdir(parents=True)
+    (repo / "services" / "api" / "jobs" / "cache.pyc").write_text("")
+
+    await schema_is_accepted(service, repo)
+
+    # The IC changed nothing itself: the accepted work goes up.
+    api = node(service, "services.api")
+    assert api.review is not None and api.review.passed_up
+    assert "without another review" in launcher.messages_to(ic(service, api.id))[-1]
 
 
 @pytest.mark.parametrize("committed", [True, False])

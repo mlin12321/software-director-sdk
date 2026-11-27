@@ -1678,3 +1678,27 @@ async def test_a_landing_that_cannot_be_committed_leaves_the_tree_as_it_was(
     lead = service.org.place(division_lead_of(service))
     assert lead is not None and lead.merge is not None
     await service.aclose()
+
+
+async def test_a_team_set_up_in_place_of_one_whose_folder_it_holds_is_the_orgs(
+    service: DirectorService,
+):
+    await split_root(service)
+    await landed(service)
+    org_gains(service, "services.api.workers.fast", "services/api/workers/fast")
+    opened = await service.open_session(
+        OpenSessionRequest(text="Widen it.", node_id="services.api")
+    )
+    await service.settled()
+    top, conversation = opened.session.teams[0].id, opened.conversation_id
+    session = api_place(service, top).session
+    # The session replaces the team with one that owns the folder above.
+    service.org.remove(f"services.api.workers.fast@{session}")
+    sets_up_jobs(service, top, "services/api/workers", "services.api.workers")
+
+    await session_accepted(service, top, conversation)
+
+    assert service.org.team("services.api.workers.fast") is None
+    wider = service.org.team("services.api.workers")
+    assert wider is not None and wider.parent_id == "services.api"
+    assert waiting(service, top) == []

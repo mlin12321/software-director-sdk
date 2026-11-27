@@ -3,7 +3,7 @@
 import asyncio
 import hashlib
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import NamedTuple
@@ -495,6 +495,7 @@ class Reviews(Requests):
         team_id: str,
         under: str | None = None,
         title: str | None = None,
+        leaving: Collection[str] = (),
     ) -> bool:
         """Make a team of the org what a session has at it. A team the org
         lost is never put back for it: where the team above it is not in
@@ -504,6 +505,9 @@ class Reviews(Requests):
         Args:
             under: The team of the org its Manager put it under instead.
             title: What its Manager called it instead.
+            leaving: The teams the same landing removes from the org: a
+                team set up in place of one may have a directory that
+                holds the old one's, or lies in it.
 
         Returns:
             Whether the org has it now.
@@ -527,6 +531,7 @@ class Reviews(Requests):
         home = store.team(above_id)
         if home is None or any(
             other.id != team_id
+            and other.id not in leaving
             and (
                 (held := normalize_store_path(other.boundary.path)) == path
                 # Beside a team one of whose directories holds the other's.
@@ -1162,6 +1167,14 @@ class Reviews(Requests):
             decided = {item.key: item for item in items if item.kind == "team"}
             taken: list[str] = []
             kept = [team for team, item in decided.items() if item.use != "session"]
+            leaving = [
+                *(team for team, side in take.items() if side is None),
+                *(
+                    team
+                    for team, item in decided.items()
+                    if item.use == "session" and team not in places
+                ),
+            ]
             # Those above before those below, and what goes after what moved.
             for team in places:
                 settled = team in decided and decided[team].use == "session"
@@ -1173,17 +1186,11 @@ class Reviews(Requests):
                         team,
                         item.under if item and settled else None,
                         item.named if item and settled else None,
+                        leaving,
                     )
                     if settled:
                         (taken if done else kept).append(team)
-            for team in [
-                *(team for team, side in take.items() if side is None),
-                *(
-                    team
-                    for team, item in decided.items()
-                    if item.use == "session" and team not in places
-                ),
-            ]:
+            for team in leaving:
                 store.remove(team)
                 if team in decided:
                     taken.append(team)
@@ -2134,7 +2141,9 @@ class Reviews(Requests):
             return
         ic = self.writer_conversation(place)
         above = store.place(place.parent_id) if place.parent_id else None
-        own = await asyncio.to_thread(self._own_changes, place, teams)
+        # A file in a sub-team's folder is that team's, also while the team
+        # has not been given work.
+        own = await asyncio.to_thread(self._own_changes, place, store.below(place_id))
         if own is None:
             return
         # The work of a session meets what other sessions delivered: where
