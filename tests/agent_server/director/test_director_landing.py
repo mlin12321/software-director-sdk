@@ -140,7 +140,7 @@ async def test_what_a_session_records_is_the_teams_once_its_work_is_accepted(
     await landed(service)
 
     assert [r.text for r in service.team_memory.reports("", "ic")] == ["Chose REST."]
-    assert service.own_reports(node(service, "root")) == []
+    assert service.session_records.reports(node(service, "root").id) == []
 
 
 async def test_what_is_recorded_while_work_lands_is_not_lost(
@@ -168,7 +168,9 @@ async def test_what_is_recorded_while_work_lands_is_not_lost(
         writer.join()
 
     assert late
-    kept = service.team_memory.reports("", "ic") + service.own_reports(root)
+    kept = service.team_memory.reports("", "ic") + service.session_records.reports(
+        root.id
+    )
     assert sorted(report.text for report in kept) == ["Chose JSON.", "Chose REST."]
 
 
@@ -188,7 +190,7 @@ async def test_what_became_of_a_sessions_teams_is_on_record_once_it_is_accepted(
     kept = service.team_memory.history("root")
     assert {"set_up", "accepted"} <= {event.kind for event in kept}
     assert not any(event.unaccepted for event in kept)
-    assert service.own_events(top.session, "root") == []
+    assert service.session_records.events(top.session, "root") == []
 
 
 async def test_what_a_reviewer_records_is_the_teams_once_the_work_is_accepted(
@@ -442,7 +444,7 @@ async def test_work_is_accepted_and_a_team_the_org_lost_meanwhile_stays_gone(
     place = service.org.place(top)
     assert place is not None and place.review is not None
     assert place.review.state == "accepted"
-    assert service.own_reports(place) == []
+    assert service.session_records.reports(place.id) == []
     # What it recorded is not dropped with the team: it is that team's
     # record, with the nearest team that holds its directory.
     [left] = service.team_memory.former("services.api")

@@ -621,7 +621,7 @@ async def test_a_hand_over_conversation_hands_over_and_writes_the_spec_and_no_mo
 
     assert not handed.is_error and not spec.is_error
     assert service.reports_of(node(service, API)) == []
-    [told] = service.handed_over_to(node(service, API))
+    [told] = service.session_records.handed_over_to(node(service, API).id)
     assert told["text"] == "Keep SQLite."
     assert node(service, "root").summary == "Shop"
     assert json.loads(read.text)["former_teams"][0]["reports_as_one"]

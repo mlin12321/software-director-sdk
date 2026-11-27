@@ -7,8 +7,6 @@ from pathlib import Path
 from typing import Any, NamedTuple
 from uuid import uuid4
 
-from pydantic import TypeAdapter
-
 from openhands.agent_server.director.boundary import (
     owns,
 )
@@ -32,7 +30,6 @@ from openhands.agent_server.director.models import (
     ConversationPlace,
     ConversationRelation,
     FormerTeam,
-    FormerThread,
     HistoryEvent,
     LeftoverDocument,
     OrgHistory,
@@ -44,7 +41,6 @@ from openhands.agent_server.director.models import (
     TeamEvent,
     TeamEventKind,
     Thread,
-    ThreadMessage,
 )
 from openhands.agent_server.director.org_store import (
     is_division_lead,
@@ -64,17 +60,13 @@ from openhands.agent_server.director.prompts import (
 from openhands.agent_server.director.recovery import STEP_NAMES
 from openhands.agent_server.director.run_state import (
     CHECKS,
-    EVENTS,
-    FORMER,
-    HANDED,
     JOINED,
-    REPORTS,
-    ROUTED,
-    SENT,
     TASK,
-    THREADS,
     USE,
     Intent,
+)
+from openhands.agent_server.director.service.session_record_service import (
+    thread_name,
 )
 from openhands.agent_server.director.service.state import (
     _REASON_KEPT,
@@ -97,9 +89,6 @@ from openhands.sdk.logger import get_logger
 
 
 logger = get_logger(__name__)
-_REPORTS = TypeAdapter(list[Report])
-_EVENTS = TypeAdapter(list[TeamEvent])
-_MESSAGES = TypeAdapter(list[ThreadMessage])
 
 
 def _directory_of(file: str) -> str:
@@ -116,12 +105,6 @@ def session_in(node_id: str) -> str:
     """The session the id of a place names; '' for the id of a team of the
     org."""
     return node_id.split("@")[1] if "@" in node_id else ""
-
-
-def thread_name(writer_node_id: str, ic_node_id: str, ic_to_ic: bool) -> str:
-    """What names the messages of one agent to another."""
-    kind = ".threads-ic" if ic_to_ic else ".threads"
-    return f"{kind}/{writer_node_id}/{ic_node_id}.json"
 
 
 class Inherited(NamedTuple):
@@ -199,10 +182,7 @@ class Records(ServiceState):
             return
         event = self._event(kind, team, detail, paths, other, other_gone)
         event = event.model_copy(update={"base": between[0], "head": between[1]})
-        key = f"{session}\n{team_key(above_id)}"
-        with self._keeping:
-            events = [*self.own_events(session, team_key(above_id)), event]
-            self._runs().mark(EVENTS, key, _EVENTS.dump_json(events).decode())
+        self.session_records.keep_event(session, team_key(above_id), event)
         if kind in _CHANGES_THE_ORG:
             self._note_change(session)
 
@@ -254,12 +234,6 @@ class Records(ServiceState):
             f"memory: history of {team_id}",
         )
 
-    def own_events(self, session: str, team: str) -> list[TeamEvent]:
-        """What a session kept of what became of the teams below a team
-        since its work was last accepted."""
-        kept = self._runs().marked(EVENTS).get(f"{session}\n{team}")
-        return _EVENTS.validate_json(kept) if kept else []
-
     def history_of(self, node_id: str) -> list[TeamEvent]:
         """What became of the teams directly below a team, oldest first:
         the org's record, and for a place what its session kept since."""
@@ -270,7 +244,7 @@ class Records(ServiceState):
             else []
         )
         session = session_in(node_id)
-        own = self.own_events(session, team_key(node_id)) if session else []
+        own = self.session_records.events(session, team_key(node_id)) if session else []
         return [*org, *own]
 
     def record_need(self, team: SessionTeam, path: str, how: str) -> None:
@@ -325,10 +299,7 @@ class Records(ServiceState):
             read = (head, team_memory.routed())
             with self._lock:
                 self._routed_read = read
-        own = [
-            RoutedRequest.model_validate_json(raw)
-            for raw in self._runs().marked(ROUTED).values()
-        ]
+        own = self.session_records.routed()
         return sorted([*read[1], *own], key=lambda request: request.at)
 
     def keep_routed(
@@ -350,9 +321,7 @@ class Records(ServiceState):
                 "id": uuid4().hex,
             }
         )
-        self._runs().mark(
-            ROUTED, f"{team.session}\n{request.id}", request.model_dump_json()
-        )
+        self.session_records.keep_routed(team.session, request)
         self.record_event(
             team.parent_id,
             "asked" if kind == "asked" else "misrouted",
@@ -578,44 +547,12 @@ class Records(ServiceState):
                 (True, [*down, *up]),
             )
             for writer, ic in pairs
-            if (messages := self._thread(writer, ic, ic_to_ic))
+            if (
+                messages := self.session_records.thread(
+                    thread_name(writer, ic, ic_to_ic)
+                )
+            )
         ]
-
-    def _thread(
-        self, writer_node_id: str, ic_node_id: str, ic_to_ic: bool
-    ) -> list[ThreadMessage]:
-        """What a Manager and an IC have said to each other, oldest first;
-        with ``ic_to_ic``, what the IC of the team above wrote to an IC.
-        It is kept with the session and is never the org's."""
-        name = thread_name(writer_node_id, ic_node_id, ic_to_ic)
-        kept = self._runs().marked(THREADS).get(name)
-        return _MESSAGES.validate_json(kept) if kept else []
-
-    def _keep_message(
-        self,
-        writer_node_id: str,
-        ic_node_id: str,
-        message: ThreadMessage,
-        *,
-        ic_to_ic: bool = False,
-    ) -> None:
-        name = thread_name(writer_node_id, ic_node_id, ic_to_ic)
-        with self._keeping:
-            messages = [*self._thread(writer_node_id, ic_node_id, ic_to_ic), message]
-            self._runs().mark(THREADS, name, _MESSAGES.dump_json(messages).decode())
-
-    def _take_threads(self, place: str) -> list[FormerThread]:
-        """Take out what the agents at a session's place wrote and were
-        written, so that a later team at the same place does not find it."""
-        run = self._runs()
-        taken = [
-            FormerThread(file=name, messages=_MESSAGES.validate_json(raw))
-            for name, raw in run.marked(THREADS).items()
-            if place in (Path(name).parent.name, Path(name).stem)
-        ]
-        for thread in taken:
-            run.unmark(THREADS, thread.file)
-        return taken
 
     def context_of(
         self, place: SessionTeam, role: str, *, in_full: bool = False
@@ -759,7 +696,7 @@ class Records(ServiceState):
         works = role == self.team(place).writer
         if works and store.below(place.id):
             context["asked_directly_of_teams_below"] = self.asked_below(place)
-        if works and (handed := self.handed_over_to(place)):
+        if works and (handed := self.session_records.handed_over_to(place.id)):
             context["handed_over_to_your_team"] = handed
             # It is the team's to write into its own documents.
             todo = rules_said(
@@ -821,7 +758,7 @@ class Records(ServiceState):
         the ones its own session removed and the org does not know of yet."""
         own = [
             former
-            for former in self.former_drafts(session_of(node))
+            for former in self.session_records.former(session_of(node))
             if former.above == team_key(node.id)
         ]
         return [*self._former_below(self.team_memory, node.id), *own]
@@ -849,15 +786,14 @@ class Records(ServiceState):
         # Times are kept to the second: of events in one second the later
         # recorded comes first, and a page never ends inside a second, so
         # that reading on from its last time misses none.
-        for key, raw in self._runs().marked(EVENTS).items():
-            team_id = key.partition("\n")[2]
+        for (_, team_id), kept in self.session_records.events_by_team().items():
             events += [
                 HistoryEvent(
                     **event.model_dump(),
                     above_id=team_id,
                     above=teams.get(team_id, ""),
                 )
-                for event in _EVENTS.validate_json(raw)
+                for event in kept
                 if event.kind != "needed" and (before is None or event.at < before)
             ]
         events.reverse()
@@ -879,15 +815,8 @@ class Records(ServiceState):
         are the team's: an agent started again reads what it wrote before."""
         team_memory = self._memory()
         reports = team_memory.reports(node.boundary.path) if self.is_orgs(node) else []
-        return sorted([*reports, *self.own_reports(node)], key=lambda report: report.at)
-
-    def own_reports(self, node: OrgNode) -> list[Report]:
-        """What the agents of a session's place recorded since the session's
-        work was last accepted. It is the session's alone until its work
-        is accepted again, and the team's from then on. Nothing for a team
-        of the org."""
-        kept = self._runs().marked(REPORTS).get(node.id)
-        return _REPORTS.validate_json(kept) if kept else []
+        own = self.session_records.reports(node.id)
+        return sorted([*reports, *own], key=lambda report: report.at)
 
     def entries(self, team: TeamRef, name: str) -> list[Report]:
         """The one log the director keeps for a team, as the store of
@@ -913,15 +842,10 @@ class Records(ServiceState):
             "session_id": session_of(place),
         }
         # Its session's alone until the session's work is accepted.
-        self._keep_report(
-            place, entry.model_copy(update={"at": entry.at or _instant(), **said_where})
+        self.session_records.keep_report(
+            place.id,
+            entry.model_copy(update={"at": entry.at or _instant(), **said_where}),
         )
-
-    def _keep_report(self, place: SessionTeam, report: Report) -> None:
-        named = report.model_copy(update={"id": report.id or uuid4().hex})
-        with self._keeping:
-            reports = [*self.own_reports(place), named]
-            self._runs().mark(REPORTS, place.id, _REPORTS.dump_json(reports).decode())
 
     def drafts(self, session: str) -> dict[str, tuple[str | None, str | None]]:
         """The files of team memory a session wrote, which are its own
@@ -957,18 +881,11 @@ class Records(ServiceState):
         their session wrote there, else the org's."""
         return self.documents.read(session_of(node), DocumentRef.at(file))
 
-    def handed_over_to(self, node: OrgNode) -> list[dict[str, str]]:
-        """What the team above said to this team of the teams that were
-        there before it: who said it, when, and the text."""
-        kept = self._runs().marked(HANDED).get(node.id)
-        return json.loads(kept) if kept else []
-
     def documents_passed_to(self, node: OrgNode) -> list[ShownDocument]:
         """The documents another team passed to this one to read, as they
         are now in the session they were passed in."""
-        kept = self._runs().marked(SENT).get(node.id)
         found = []
-        for folder, name in json.loads(kept) if kept else []:
+        for folder, name in self.session_records.passed_to(node.id):
             text = self.documents.read(session_of(node), DocumentRef(folder, name))
             if text:
                 found.append(
@@ -1029,26 +946,10 @@ class Records(ServiceState):
             path, self.org.teams(), session.above_id if session else top.team_id
         )
 
-    def former_drafts(self, session: str) -> list[FormerTeam]:
-        """The records of the teams a session removed, which are its own
-        until its work is accepted."""
-        if not session:
-            return []
-        return [
-            FormerTeam.model_validate_json(raw)
-            for key, raw in self._runs().marked(FORMER).items()
-            if key.startswith(f"{session}\n")
-        ]
-
-    def _keep_former(self, session: str, record: FormerTeam) -> None:
-        self._runs().mark(
-            FORMER, f"{session}\n{record.id}\n{record.at}", record.model_dump_json()
-        )
-
     def _land_records(self, top: SessionTeam, *args: Any, **kwargs: Any) -> Taken:
         """:meth:`_land_kept`, with nothing written to the session's records
         between reading them and clearing them: it would be lost."""
-        with self._keeping:
+        with self.session_records.unchanged():
             return self._land_kept(top, *args, **kwargs)
 
     def _land_kept(
@@ -1138,7 +1039,10 @@ class Records(ServiceState):
         for place in places:
             if place.team_id not in waits and place.id not in left:
                 at = normalize_store_path(place.boundary.path)
-                reports[at] = [*reports.get(at, []), *self.own_reports(place)]
+                reports[at] = [
+                    *reports.get(at, []),
+                    *self.session_records.reports(place.id),
+                ]
         if review is not None:
             # What its reviewers recorded is the team's they review from.
             home = (
@@ -1148,7 +1052,7 @@ class Records(ServiceState):
             )
             at = normalize_store_path((home or review).boundary.path)
             reports[at] = sorted(
-                [*reports.get(at, []), *self.own_reports(review)],
+                [*reports.get(at, []), *self.session_records.reports(review.id)],
                 key=lambda report: report.at,
             )
         not_taken = [
@@ -1161,17 +1065,21 @@ class Records(ServiceState):
                 ended="not_taken",
                 at=stamp,
                 review=place.review.state if place.review else None,
-                reports=self.own_reports(place),
-                compacted_report="\n\n".join(r.text for r in self.own_reports(place)),
+                reports=self.session_records.reports(place.id),
+                compacted_report="\n\n".join(
+                    r.text for r in self.session_records.reports(place.id)
+                ),
                 documents=of_left.get(place.id, {}),
                 session=store.session_title(place),
                 since=place.since,
             )
             for place in left.values()
-            if self.own_reports(place) or place.id in of_left
+            if self.session_records.reports(place.id) or place.id in of_left
         ]
         removed = [
-            record for record in self.former_drafts(session) if record.id not in waits
+            record
+            for record in self.session_records.former(session)
+            if record.id not in waits
         ]
         former, forget, forget_reports = [], [], []
         for record in removed:
@@ -1188,10 +1096,8 @@ class Records(ServiceState):
         of_team = {place.team_id: place for place in places}
         events: dict[str, list[TeamEvent]] = {}
         kept_events: list[str] = []
-        for key, raw in run.marked(EVENTS).items():
-            if not key.startswith(f"{session}\n"):
-                continue
-            team_id = key.partition("\n")[2]
+        for (_, kept_for), kept in self.session_records.events_by_team(session).items():
+            team_id = kept_for
             place = of_team.get(team_id)
             if team_id in waits:
                 continue
@@ -1200,10 +1106,9 @@ class Records(ServiceState):
             elif store.team(team_id) is None:
                 team_id = self._home_of(top, top.boundary.path)
             events.setdefault(team_id, []).extend(
-                event.model_copy(update={"unaccepted": False})
-                for event in _EVENTS.validate_json(raw)
+                event.model_copy(update={"unaccepted": False}) for event in kept
             )
-            kept_events.append(key)
+            kept_events.append(kept_for)
         for record in not_taken:
             place = next(p for p in left.values() if p.team_id == record.id)
             events.setdefault(record.above, []).append(
@@ -1213,11 +1118,7 @@ class Records(ServiceState):
                     "what its session wrote for it is kept in its record",
                 ).model_copy(update={"unaccepted": False})
             )
-        routed = {
-            key: RoutedRequest.model_validate_json(raw)
-            for key, raw in run.marked(ROUTED).items()
-            if key.startswith(f"{session}\n")
-        }
+        routed = self.session_records.routed(session)
         conflicts = self._commit_landing(
             Landing(
                 files=files,
@@ -1227,18 +1128,18 @@ class Records(ServiceState):
                 forget=forget,
                 forget_reports=forget_reports,
                 events=events,
-                routed=list(routed.values()),
+                routed=routed,
             ),
             f"memory: the accepted work of session {session}",
             tree,
         )
-        for key in kept_events:
-            run.unmark(EVENTS, key)
-        for key in routed:
-            run.unmark(ROUTED, key)
+        for kept_for in kept_events:
+            self.session_records.forget_events(session, kept_for)
+        for request in routed:
+            self.session_records.forget_routed(session, request)
         if review is not None:
-            run.unmark(REPORTS, review.id)
-            run.unmark(SENT, review.id)
+            self.session_records.forget_reports(review.id)
+            self.session_records.forget_passed(review.id)
         for file in files:
             if file in conflicts:
                 continue
@@ -1299,10 +1200,10 @@ class Records(ServiceState):
                     self._undraft(session, file)
         for place in places:
             if place.team_id not in waits:
-                run.unmark(REPORTS, place.id)
-                run.unmark(SENT, place.id)
+                self.session_records.forget_reports(place.id)
+                self.session_records.forget_passed(place.id)
         for record in removed:
-            run.unmark(FORMER, f"{session}\n{record.id}\n{record.at}")
+            self.session_records.forget_former(session, record)
         grown: list[tuple[str, str]] = [
             (team, role)
             for team, kept in reports.items()
@@ -1321,24 +1222,19 @@ class Records(ServiceState):
         run = self._runs()
         session = top.session
         places = store.session(session)
-        reports = sum(len(self.own_reports(place)) for place in places)
+        reports = sum(len(self.session_records.reports(place.id)) for place in places)
         files = sorted(self.drafts(session))
-        records = self.former_drafts(session)
+        records = self.session_records.former(session)
         for place in places:
-            run.unmark(REPORTS, place.id)
-            run.unmark(SENT, place.id)
-            run.unmark(HANDED, place.id)
+            self.session_records.forget_reports(place.id)
+            self.session_records.forget_passed(place.id)
+            self.session_records.forget_handed_over(place.id)
             self._drop_merge_checkout(place.id)
         for file in files:
             self._undraft(session, file)
-        for record in records:
-            run.unmark(FORMER, f"{session}\n{record.id}\n{record.at}")
-        for kind in (EVENTS, ROUTED):
-            for key in run.marked(kind):
-                if key.startswith(f"{session}\n"):
-                    run.unmark(kind, key)
+        self.session_records.forget_session(session)
         for place in places:
-            self._take_threads(place.id)
+            self.session_records.take_threads(place.id)
         run.unmark(USE, session)
         return ", ".join(
             said
@@ -1357,13 +1253,11 @@ class Records(ServiceState):
         teams that were there before it. The team is told with its next
         message, or in its briefing, and no document is written by this.
         Safe from any thread."""
-        with self._keeping:
-            run = self._runs()
-            kept = run.marked(HANDED).get(place.id)
-            said = json.loads(kept) if kept else []
-            entry = {
+        self.session_records.keep_handed_over(
+            place.id,
+            {
                 "by": f"the {self.team(above).title(member)} of {above.title}",
                 "at": utc_now(),
                 "text": text,
-            }
-            run.mark(HANDED, place.id, json.dumps([*said, entry]))
+            },
+        )

@@ -44,7 +44,6 @@ from openhands.agent_server.director.run_state import (
     CHECKS,
     HANDING,
     PROGRESS,
-    REPORTS,
     TASK,
     TOLD,
     Intent,
@@ -349,7 +348,7 @@ class Splits(Watch):
         with suppress(GitError, OSError):
             await asyncio.to_thread(self._confine, place_id)
         # The record each replaced team left last: the one just made.
-        kept = self.former_drafts(place.session)
+        kept = self.session_records.former(place.session)
         former = [
             records[-1]
             for team_id in proposal.replaces
@@ -474,7 +473,7 @@ class Splits(Watch):
             return
         former = [
             record
-            for record in self.former_drafts(above.session if above else "")
+            for record in self.session_records.former(above.session if above else "")
             if record.id == team_key(place_id) and record.at == plan.stamp
         ]
         self.notify(
@@ -515,7 +514,7 @@ class Splits(Watch):
         # The records are the session's own until its work is accepted.
         former = [
             record
-            for record in self.former_drafts(place.session)
+            for record in self.session_records.former(place.session)
             if (record.id, record.at) in wanted
         ]
         stays = self.kept_documents(place).stay_when_removed
@@ -616,7 +615,7 @@ class Splits(Watch):
         teams that come after it, and forget what was counted for it. A
         team of the same name or directory then starts from nothing but
         what the old team left in its folder. Doing it again changes nothing."""
-        kept = self.former_drafts(team.session)
+        kept = self.session_records.former(team.session)
         record = next((f for f in kept if f.id == team.team_id and f.at == at), None)
         if record is None:
             reports = await asyncio.to_thread(self.reports_of, team)
@@ -640,13 +639,14 @@ class Splits(Watch):
                 documents={name: text for name, text in kept.items() if text},
                 session=self.org.session_title(team),
                 since=team.since,
-                threads=self._take_threads(team.id),
+                threads=self.session_records.take_threads(team.id),
             )
             # The record is the session's until its work is accepted.
-            self._keep_former(team.session, record)
+            self.session_records.keep_former(team.session, record)
         run = self._runs()
-        for kind in (TASK, PROGRESS, CHECKS, REPORTS):
+        for kind in (TASK, PROGRESS, CHECKS):
             run.unmark(kind, team.id)
+        self.session_records.forget_reports(team.id)
         self._work_accepted(team)
         return record
 

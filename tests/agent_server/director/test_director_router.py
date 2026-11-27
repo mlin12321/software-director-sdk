@@ -26,6 +26,9 @@ from openhands.agent_server.director.org_store import OrgStore
 from openhands.agent_server.director.service import (
     DirectorService,
 )
+from openhands.agent_server.director.service.session_record_service import (
+    thread_name,
+)
 from openhands.agent_server.server_context import server_context_of
 from openhands.sdk.conversation.state import ConversationExecutionStatus
 from openhands.sdk.errors import NotFound
@@ -218,9 +221,11 @@ async def test_returns_the_threads_a_places_agents_take_part_in(running, repo: P
     told = ThreadMessage(
         at="2026-11-02T00:00:00+00:00", sender="manager", text="Status?"
     )
-    service._keep_message(top, top, asked)
-    service._keep_message(top, "below@other", told)
-    service._keep_message("above@other", "below@other", told)
+    service.session_records.keep_message(thread_name(top, top, False), asked)
+    service.session_records.keep_message(thread_name(top, "below@other", False), told)
+    service.session_records.keep_message(
+        thread_name("above@other", "below@other", False), told
+    )
 
     response = await client.get(f"/api/director/org/nodes/{top}/messages")
     at_the_team = await client.get("/api/director/org/nodes/root/messages")
