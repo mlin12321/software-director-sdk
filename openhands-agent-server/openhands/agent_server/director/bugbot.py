@@ -7,9 +7,6 @@ OpenHands' public code review skill. They go to the IC above, with the
 write-up, and that IC applies them when it reviews.
 """
 
-from pathlib import Path
-
-from openhands.agent_server.director.git import GitError, git, pathspec
 from openhands.sdk.logger import get_logger
 from openhands.sdk.skills import KeywordTrigger, Skill, TaskTrigger, load_public_skills
 
@@ -68,22 +65,6 @@ def _keywords(skill: Skill) -> list[str]:
     if isinstance(trigger, TaskTrigger):
         return trigger.triggers
     return []
-
-
-def changed_files(checkout: Path, base: str, directory: str) -> str | None:
-    """git's list of what a team committed under ``directory`` since
-    ``base``, with the lines added and removed in each file.
-
-    Returns:
-        '' when nothing changed; None when git cannot tell.
-    """
-    try:
-        return git(
-            checkout, ["diff", "--stat=200", base, "HEAD", "--"] + [pathspec(directory)]
-        ).rstrip()
-    except (GitError, OSError):
-        logger.warning("Could not diff %s against %s", checkout, base, exc_info=True)
-        return None
 
 
 def write_up_question(files: str, asked: str = "") -> str:

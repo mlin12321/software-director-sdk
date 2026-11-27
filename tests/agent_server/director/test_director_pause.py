@@ -9,6 +9,7 @@ from uuid import UUID
 import pytest
 from pydantic import ValidationError
 
+from openhands.agent_server.director.environment.git import GitCheckouts
 from openhands.agent_server.director.intents import Accept, Prune, Split
 from openhands.agent_server.director.models import (
     DirectorSettingsUpdate,
@@ -20,7 +21,7 @@ from openhands.agent_server.director.org_persistence import (
     save_org,
 )
 from openhands.agent_server.director.org_store import OrgStore, team_id_of
-from openhands.agent_server.director.recovery import describe, restore_worktrees
+from openhands.agent_server.director.recovery import describe
 from openhands.agent_server.director.run_state import (
     RUNNING,
     SESSION,
@@ -739,8 +740,8 @@ def test_a_worktree_that_is_gone_is_made_again_from_its_branch(repo: Path):
     store.update_place("api@s", worktree_path=str(worktree), branch="team/api")
     store.update_place("web@s", worktree_path=f"{worktree}-web", branch="team/web")
 
-    told = describe(RunState(None), store, {}, repo)
-    restore_worktrees(repo, store.places(), "")
+    told = describe(RunState(None), store, {}, repo, GitCheckouts())
+    GitCheckouts().restore(repo, store.places(), "")
 
     assert [(item.node_id, item.kind) for item in told] == [
         ("api@s", "continue"),

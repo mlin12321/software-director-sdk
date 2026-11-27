@@ -8,7 +8,6 @@ from typing import Any
 from uuid import UUID
 
 from openhands.agent_server.director.boundary import nearest_team, worded
-from openhands.agent_server.director.git import is_git_repository
 from openhands.agent_server.director.headline import provisional_summary, summary_of
 from openhands.agent_server.director.intents import LandOrg
 from openhands.agent_server.director.launch import TeamLauncher
@@ -51,7 +50,6 @@ from openhands.agent_server.director.service.state import (
     MERGE_WAITS,
     ORG_WAITS,
     ROOT_ID,
-    checkout_root,
 )
 from openhands.agent_server.director.service.sync import Sync
 from openhands.agent_server.director.service.team_messaging_service import failure_waits
@@ -207,9 +205,9 @@ class DirectorService(Sync):
                 raise Unavailable(
                     f"An org needs a git repository; {workspace} is not one"
                 )
-        elif not await asyncio.to_thread(is_git_repository, workspace):
+        elif not await asyncio.to_thread(self.checkouts.is_repository, workspace):
             raise Unavailable(f"An org needs a git repository; {workspace} is not one")
-        repository = await asyncio.to_thread(checkout_root, str(workspace))
+        repository = await asyncio.to_thread(self.checkouts.root_of, workspace)
         if conversation.conversation_runtime == "docker":
             raise Unprocessable(
                 "An org's agents run in the server's own process, not in Docker"

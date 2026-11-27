@@ -8,6 +8,9 @@ from uuid import uuid4
 
 import pytest
 
+from openhands.agent_server.director.environment.git import (
+    GitCodingEnvironment,
+)
 from openhands.agent_server.director.git_store import GitStore
 from openhands.agent_server.director.intents import LaunchMember
 from openhands.agent_server.director.org_store import OrgStore
@@ -56,7 +59,9 @@ class Delivery:
         self.taken_up: list[tuple[int, str]] = []
         self.queue = WorkQueueService(default_lane="org")
         self.org_state = OrgStateService(
-            repo_dir=lambda: directory, clock=lambda: datetime.now(UTC)
+            repo_dir=lambda: directory,
+            clock=lambda: datetime.now(UTC),
+            environment=GitCodingEnvironment(),
         )
         self.service = MessageDeliveryService(
             org=lambda: self.store,

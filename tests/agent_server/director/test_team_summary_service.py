@@ -8,6 +8,9 @@ from uuid import uuid4
 
 import pytest
 
+from openhands.agent_server.director.environment.git import (
+    GitCodingEnvironment,
+)
 from openhands.agent_server.director.git_store import GitStore
 from openhands.agent_server.director.headline import TeamSummary
 from openhands.agent_server.director.org_store import OrgStore
@@ -63,7 +66,9 @@ class Summaries:
         )
         self.queue = WorkQueueService(default_lane="org")
         self.org_state = OrgStateService(
-            repo_dir=lambda: repo, clock=lambda: datetime.now(UTC)
+            repo_dir=lambda: repo,
+            clock=lambda: datetime.now(UTC),
+            environment=GitCodingEnvironment(),
         )
         self.service = TeamSummaryService(
             org=lambda: self.store,

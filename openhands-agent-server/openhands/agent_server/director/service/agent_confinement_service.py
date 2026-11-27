@@ -14,12 +14,12 @@ from uuid import UUID
 from openhands.agent_server.conversation_service import ToolParams
 from openhands.agent_server.director.acp import conversation_of
 from openhands.agent_server.director.boundary import scope_within
-from openhands.agent_server.director.confinement import (
-    Confinement,
-    checkout_root,
+from openhands.agent_server.director.confinement import Confinement
+from openhands.agent_server.director.environment import EnvironmentFailed
+from openhands.agent_server.director.environment.checkouts import (
+    Checkouts,
+    MergeCheckout,
 )
-from openhands.agent_server.director.git import GitError
-from openhands.agent_server.director.merge_checkout import MergeCheckout
 from openhands.agent_server.director.models import (
     AgentKind,
     SessionTeam,
@@ -79,6 +79,8 @@ class AgentConfinementService:
     """Where this server answers; None for the address it is bound to."""
     org: Callable[[], OrgStore]
     """The org whose agents are held."""
+    checkouts: Checkouts
+    """Where each team's work is and how it moves."""
     team_types: TeamTypeService
     """What a team's type says of who writes and who reviews."""
     run_state: Callable[[], RunState]
@@ -190,7 +192,7 @@ class AgentConfinementService:
             checkout="" if hand_over else place.worktree_path,
             edits=role == kind.writer,
         )
-        repo_checkout = checkout_root(str(self.repo_dir()))
+        repo_checkout = self.checkouts.root_of(str(self.repo_dir()))
         return replace(
             within,
             # It writes in its boundary from its main conversation alone;
@@ -204,7 +206,7 @@ class AgentConfinementService:
             # branch they have it.
             branch=place.branch or ""
             if place.worktree_path
-            and checkout_root(place.worktree_path) != repo_checkout
+            and self.checkouts.root_of(place.worktree_path) != repo_checkout
             else "",
             # Its git commits nothing in a sub-team's directory; it may still
             # write in that of a team that has not started.
@@ -259,7 +261,7 @@ class AgentConfinementService:
             for agent in node.agents:
                 try:
                     self.confine(node.id, agent.role)
-                except (GitError, OSError):
+                except (EnvironmentFailed, OSError):
                     logger.exception("Could not write the shell of team %s", node.id)
 
     def forget_shells(self, team: SessionTeam) -> None:

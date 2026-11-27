@@ -4,10 +4,9 @@ checkout of the team above."""
 import sys
 from collections.abc import Iterator
 from contextlib import contextmanager, suppress
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
 
+from openhands.agent_server.director.environment.checkouts import MergeBack
 from openhands.agent_server.director.git import (
     DIRECTOR_IDENTITY,
     GitError,
@@ -27,23 +26,6 @@ if sys.platform != "win32":
     import fcntl
 
 _MERGE_TIMEOUT_SECONDS = 120
-
-
-@dataclass(frozen=True)
-class MergeBack:
-    """How bringing a team's commits into the checkout above went.
-
-    ``merged``: they are in it now. ``nothing``: they already were.
-    ``conflicts``: ``files`` do not merge. ``outside``: the team committed
-    ``files`` that are not in its directory, or that it may not write there.
-    ``refused``: git would not merge into the checkout as it is; ``detail``
-    says why.
-    """
-
-    outcome: Literal["merged", "nothing", "conflicts", "outside", "refused"]
-    tip: str = ""
-    files: tuple[str, ...] = ()
-    detail: str = ""
 
 
 @contextmanager

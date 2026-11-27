@@ -12,35 +12,18 @@ from uuid import UUID
 from pydantic import TypeAdapter
 
 from openhands.agent_server.director import bugbot
-from openhands.agent_server.director.boundary import owns
 from openhands.agent_server.director.documents.store import DocumentRef
-from openhands.agent_server.director.git import (
-    GitError,
-    branch_of,
-    git,
-    head_of,
-    holds_commit,
-    pathspec,
-    ref_stamp,
-    save_and_discard,
-    uncommitted,
+from openhands.agent_server.director.environment import EnvironmentFailed
+from openhands.agent_server.director.environment.checkouts import (
+    MergeBack,
+    MergeCheckout,
+    Unfinished,
+    time_stamp,
 )
 from openhands.agent_server.director.git_store import (
     normalize_store_path,
 )
 from openhands.agent_server.director.intents import Accept, LandOrg, RequestReview
-from openhands.agent_server.director.merge_back import (
-    MergeBack,
-    merge_back,
-    merge_message,
-    take_merge,
-)
-from openhands.agent_server.director.merge_checkout import (
-    MergeCheckout,
-    Unfinished,
-    finish,
-    prepare,
-)
 from openhands.agent_server.director.models import (
     DocumentChoice,
     Merge,
@@ -58,7 +41,6 @@ from openhands.agent_server.director.org_store import (
     is_division_lead,
     utc_now,
 )
-from openhands.agent_server.director.ownership import can_merge_in_memory, conflicts
 from openhands.agent_server.director.prompts import (
     NEED_FINDING,
     accept_in_order,
@@ -73,7 +55,6 @@ from openhands.agent_server.director.prompts import (
     still_undecided,
     teams_settled,
 )
-from openhands.agent_server.director.reconcile import changes_of
 from openhands.agent_server.director.run_state import (
     CLEARING,
     DECIDED,
@@ -83,7 +64,6 @@ from openhands.agent_server.director.run_state import (
     TURN,
     Intent,
 )
-from openhands.agent_server.director.service.agent_start_service import head_name_of
 from openhands.agent_server.director.service.session_landing_service import (
     Taken,
 )
@@ -93,7 +73,6 @@ from openhands.agent_server.director.service.state import (
     ASIDE_REFS,
     MERGE_WAITS,
     ORG_WAITS,
-    checkout_root,
 )
 from openhands.agent_server.director.service.team_history_service import ASKED_KEPT
 from openhands.agent_server.director.service.teams import Teams
@@ -1441,27 +1420,10 @@ class Reviews(Teams):
             of; None when the work meets nothing.
 
         Raises:
-            GitError: A checkout could not be read.
+            EnvironmentFailed: A checkout could not be read.
         """
-        team, checkout = Path(place.worktree_path), Path(above.worktree_path)
-        changes = (
-            changes_of(checkout, team)
-            if checkout_root(str(team)) != checkout_root(str(checkout))
-            else None
-        )
-        files = []
-        if changes is not None:
-            ours = head_of(checkout)
-            # Lines that do not merge, and files outside the team's
-            # directory, go back to the team when it is merged; there is
-            # nothing for the reviewer to weigh in them.
-            unmergeable = (
-                conflicts(checkout, ours, changes.tip)
-                if ours and can_merge_in_memory(checkout)
-                else ()
-            )
-            if not unmergeable:
-                files = [path for path in changes.both if owns(place, path)]
+        changes = self.checkouts.overlap(place, above)
+        files = changes.files if changes else []
         opens = self.org.opens_session(place)
         changed = self.team_documents.changed_elsewhere(place.session) if opens else []
         inherited = self.session_documents.documents_inherited(place) if opens else []
@@ -1478,7 +1440,7 @@ class Reviews(Teams):
             names=self.team_types.team(place).names,
             reports=self.team_types.kept_documents(above).reports,
         )
-        there = git(checkout, ["ls-tree", "HEAD", "--", *files]) if files else ""
+        there = changes.seen if changes else ""
         compared = json.dumps(
             [changes.tip if changes else "", there, changed, *inherited]
         )
@@ -1609,61 +1571,12 @@ class Reviews(Teams):
             )
         try:
             meets = self._to_reconcile(place, above)
-        except (GitError, OSError):
+        except (EnvironmentFailed, OSError):
             # Merging says what is wrong with the checkouts.
             return
         refusal = self._not_reconciled(place, meets, reconciled)
         if refusal is not None:
             raise Conflict(refusal)
-
-    def work_astray(self, place: SessionTeam) -> str | None:
-        """Why what a team's checkout is on is not all of its work, if it
-        is not.
-
-        The work of a team is what the branch of its checkout holds. The
-        agents' own git keeps a checkout on that branch, but an agent can
-        reach another git, so the director looks for itself before work is
-        submitted and before it is accepted: the checkout is on its branch,
-        and what was accepted from the teams that share it is in it.
-
-        Returns:
-            What to tell whoever asked, in words for an agent; None when
-            the work is all there.
-        """
-        if not place.worktree_path:
-            return None
-        checkout = Path(place.worktree_path)
-        ours = checkout_root(place.worktree_path) != checkout_root(str(self._repo_dir))
-        on = branch_of(checkout)
-        # The repository's own checkout is the human's, on any branch.
-        if ours and place.branch and on != place.branch:
-            return (
-                f"The checkout of {place.title!r} is "
-                + (f"on the branch {on!r}" if on else "on no branch")
-                + f", and its work is taken from {place.branch!r}. Run any git "
-                "command there: the checkout goes back to its branch. Then "
-                "bring over what was committed elsewhere"
-                + (f" with `git merge {on}`" if on else "")
-                + " and submit again."
-            )
-        for team in self.org.below(place.id):
-            review = team.review
-            if (
-                review is None
-                or review.state != "accepted"
-                or not review.commit
-                or checkout_root(team.worktree_path) != checkout_root(str(checkout))
-            ):
-                continue
-            if not holds_commit(checkout, review.commit):
-                return (
-                    f"The accepted work of {team.title!r} (commit "
-                    f"{review.commit[:10]}) is not in what the checkout of "
-                    f"{place.title!r} is on: it was left on another branch. "
-                    f"Bring it in with `git merge {review.commit[:10]}`, then "
-                    "submit again."
-                )
-        return None
 
     def _not_reconciled(
         self, place: SessionTeam, meets: Meets | None, reconciled: str
@@ -1755,12 +1668,7 @@ class Reviews(Teams):
         ic = self.team_types.writer_conversation(place)
         if ic is None or not place.base_commit:
             return ""
-        files = await asyncio.to_thread(
-            bugbot.changed_files,
-            Path(place.worktree_path),
-            place.base_commit,
-            place.boundary.path,
-        )
+        files = await asyncio.to_thread(self.checkouts.changes_listed, place)
         if not files:
             return ""
         asked = self.team_types.type_of(place).review.write_up
@@ -1834,20 +1742,22 @@ class Reviews(Teams):
             )
             return
         where = place.boundary.path or "the repository"
-        team, checkout = Path(place.worktree_path), Path(above.worktree_path)
+        team = Path(place.worktree_path)
         merged = False
         resolved: tuple[str, ...] = ()
         opens = store.opens_session(place)
         try:
             meets = await asyncio.to_thread(self._to_reconcile, place, above)
-        except (GitError, OSError):
+        except (EnvironmentFailed, OSError):
             meets = None
         refusal = self._not_reconciled(place, meets, reconciled)
         if refusal is not None:
             # Something came into the checkout between the review and now.
             self.message_delivery.notify(reviewer, refusal)
             return
-        astray = await asyncio.to_thread(self.work_astray, place)
+        astray = await asyncio.to_thread(
+            self.checkouts.astray, place, store.below(place.id), self._repo_dir
+        )
         if astray is not None:
             # Accepted, part of the work would not be in what is merged.
             self.message_delivery.notify(
@@ -1856,7 +1766,7 @@ class Reviews(Teams):
                 "Send it back with `review_team` and that as what to change.",
             )
             return
-        if checkout_root(str(team)) != checkout_root(str(checkout)):
+        if self.checkouts.is_apart(place, above):
             elsewhere = await asyncio.to_thread(self._elsewhere, place, above)
             if elsewhere is not None:
                 started_on, on = elsewhere
@@ -1884,13 +1794,9 @@ class Reviews(Teams):
                 await asyncio.to_thread(self._put_aside, above, place)
             try:
                 result = await asyncio.to_thread(
-                    merge_back,
-                    checkout,
-                    team,
-                    place.boundary,
-                    self._merged_as(place),
+                    self.checkouts.merge, place, above, self._merged_as(place)
                 )
-            except (GitError, OSError) as error:
+            except (EnvironmentFailed, OSError) as error:
                 self.message_delivery.notify(
                     reviewer,
                     f"The work of {place.title!r} could not be merged into your "
@@ -1968,7 +1874,7 @@ class Reviews(Teams):
                     "reviewed it finished the merge in these files, which are "
                     f"now as it left them: {', '.join(resolved)}",
                 )
-        tip = await asyncio.to_thread(head_of, team)
+        tip = await asyncio.to_thread(self.checkouts.version, team)
         store.set_review(
             place_id,
             place.review.model_copy(update={"state": "accepted", "at": utc_now()}),
@@ -2036,7 +1942,7 @@ class Reviews(Teams):
             nothing to take yet.
         """
         checkout = Path(above.worktree_path)
-        ours = head_of(checkout)
+        ours = self.checkouts.version(checkout)
         merge = self.merge_checkout(place.id)
         if (
             ours is None
@@ -2051,8 +1957,8 @@ class Reviews(Teams):
                 where=str(where), ours=ours, tip=found.tip, files=list(found.files)
             )
             try:
-                prepare(self._repo_dir, where, ours, found.tip)
-            except (GitError, OSError) as error:
+                self.checkouts.lay_out_merge(self._repo_dir, where, ours, found.tip)
+            except (EnvironmentFailed, OSError) as error:
                 return (
                     f"The work of {place.title!r} does not merge with your "
                     f"checkout ({', '.join(found.files)}), and the merge could "
@@ -2061,58 +1967,24 @@ class Reviews(Teams):
             self.org_state.run_state().mark(MERGING, place.id, merge.model_dump_json())
             return merge_prepared(place, merge.where, merge.files)
         try:
-            commit = finish(
-                merge, merge_message(self._merged_as(place), place.boundary.path)
+            commit = self.checkouts.finish_merge(
+                merge, self._merged_as(place), place.boundary.path
             )
         except Unfinished as error:
             return (
                 f"The merge of the work of {place.title!r} in {merge.where} is "
                 f"not taken yet, and the work still waits for you: {error}"
             )
-        except (GitError, OSError) as error:
+        except (EnvironmentFailed, OSError) as error:
             return (
                 f"The merge of the work of {place.title!r} in {merge.where} "
                 f"could not be committed: {error}"
             )
-        taken = take_merge(checkout, commit)
+        taken = self.checkouts.take_merge(checkout, commit)
         if taken.outcome != "merged":
             return taken
         self._drop_merge_checkout(place.id)
         return MergeBack("merged", found.tip, tuple(merge.files))
-
-    def _own_changes(
-        self, place: SessionTeam, teams: list[SessionTeam]
-    ) -> list[str] | None:
-        """The files a team changed itself since its work was last taken
-        up, committed or not: those in its directory that are in no
-        sub-team's.
-
-        Returns:
-            None when git cannot tell.
-        """
-        if not place.base_commit:
-            return None
-        checkout = Path(place.worktree_path)
-        try:
-            names = git(
-                checkout,
-                ["diff", "--name-only", "-z", place.base_commit, "HEAD", "--"]
-                + [pathspec(place.boundary.path)],
-            ).split("\0")
-            names += uncommitted(checkout, place.boundary.path)
-        except (GitError, OSError):
-            return None
-        given = [team.boundary.path for team in teams]
-        return sorted(
-            {
-                name
-                for name in names
-                if name
-                and not any(
-                    name == path or name.startswith(f"{path}/") for path in given
-                )
-            }
-        )
 
     def _elsewhere(
         self, place: SessionTeam, above: SessionTeam
@@ -2124,7 +1996,7 @@ class Reviews(Teams):
         started_on = session.branch if session else ""
         if not is_division_lead(above) or not started_on:
             return None
-        on = head_name_of(above.worktree_path)
+        on = self.checkouts.branch(above.worktree_path)
         return None if on == started_on else (started_on, on)
 
     async def _pass_up(self, place_id: str, *, acted: bool) -> None:
@@ -2169,7 +2041,9 @@ class Reviews(Teams):
         above = store.place(place.parent_id) if place.parent_id else None
         # A file in a sub-team's folder is that team's, also while the team
         # has not been given work.
-        own = await asyncio.to_thread(self._own_changes, place, store.below(place_id))
+        own = await asyncio.to_thread(
+            self.checkouts.own_changes, place, store.below(place_id)
+        )
         if own is None:
             return
         # The work of a session meets what other sessions delivered: where
@@ -2184,7 +2058,7 @@ class Reviews(Teams):
                     or await asyncio.to_thread(self._elsewhere, place, above)
                     is not None
                 )
-            except (GitError, OSError):
+            except (EnvironmentFailed, OSError):
                 meets = True
         if own or above is None or meets:
             if not acted:
@@ -2201,18 +2075,18 @@ class Reviews(Teams):
                     + "Call `submit_review` when your team's work is complete.",
                 )
             return
-        team, checkout = Path(place.worktree_path), Path(above.worktree_path)
-        if checkout_root(str(team)) != checkout_root(str(checkout)):
+        team = Path(place.worktree_path)
+        if self.checkouts.is_apart(place, above):
             try:
                 result = await asyncio.to_thread(
-                    merge_back, checkout, team, place.boundary, place.title
+                    self.checkouts.merge, place, above, place.title
                 )
                 problem = (
                     f"{result.outcome}: {', '.join(result.files) or result.detail}"
                     if result.outcome in ("refused", "conflicts", "outside")
                     else None
                 )
-            except (GitError, OSError) as error:
+            except (EnvironmentFailed, OSError) as error:
                 problem = str(error)
             if problem is not None:
                 self.message_delivery.notify(
@@ -2225,7 +2099,7 @@ class Reviews(Teams):
                     "when it accepts the work.",
                 )
                 return
-        tip = await asyncio.to_thread(head_of, team)
+        tip = await asyncio.to_thread(self.checkouts.version, team)
         store.set_review(
             place_id,
             Review(
@@ -2262,12 +2136,12 @@ class Reviews(Teams):
         directory of a team with a checkout of its own, where it would stop
         the team's accepted work from coming in, and tell the IC above."""
         checkout, path = Path(above.worktree_path), team.boundary.path
-        ref = f"{ASIDE_REFS}/{team.id}/{ref_stamp()}"
+        ref = f"{ASIDE_REFS}/{team.id}/{time_stamp()}"
         try:
-            files = uncommitted(checkout, path)
-            if not files or save_and_discard(checkout, path, ref) is None:
+            files = self.checkouts.uncommitted(checkout, path)
+            if not files or self.checkouts.set_aside(checkout, path, ref) is None:
                 return
-        except (GitError, OSError):
+        except (EnvironmentFailed, OSError):
             logger.exception("Could not put aside what is in %s", path)
             return
         self.message_delivery.notify(

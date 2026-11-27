@@ -23,6 +23,7 @@ class Sessions(Splits):
         """Chooses the team a request goes straight to. Built here, where
         everything it is given is defined."""
         return RequestRoutingService(
+            checkouts=self.checkouts,
             org=lambda: self.org,
             model_calls=self.model_calls,
             checkout=lambda: self._repo_dir,
@@ -39,6 +40,7 @@ class Sessions(Splits):
     def session_lifecycle(self) -> SessionLifecycleService:
         """What opens and closes the human's sessions."""
         return SessionLifecycleService(
+            checkouts=self.checkouts,
             org=lambda: self.org,
             repo_dir=lambda: self._repo_dir,
             org_state=self.org_state,

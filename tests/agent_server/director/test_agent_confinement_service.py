@@ -7,6 +7,9 @@ from uuid import uuid4
 import pytest
 
 from openhands.agent_server.director.acp import agent_token
+from openhands.agent_server.director.environment.git import (
+    GitCheckouts,
+)
 from openhands.agent_server.director.merge_checkout import MergeCheckout
 from openhands.agent_server.director.models import SessionTeam
 from openhands.agent_server.director.org_store import OrgStore
@@ -41,6 +44,7 @@ def service_for(
         store.upsert(node)
     kept = run or RunState(None)
     return AgentConfinementService(
+        checkouts=GitCheckouts(),
         repo_dir=lambda: repo,
         worktree_root=None,
         find_sandbox=lambda: sandbox,

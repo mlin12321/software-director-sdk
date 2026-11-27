@@ -10,10 +10,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from openhands.agent_server.director.git import (
-    GitError,
-    common_dir,
-    is_git_repository,
+from openhands.agent_server.director.environment import (
+    CodingEnvironment,
+    EnvironmentFailed,
 )
 from openhands.agent_server.director.models import (
     OrgStateEvent,
@@ -58,6 +57,9 @@ class OrgStateService:
     repo_dir: Callable[[], Path]
     """The repository the org is in, settled before it is given."""
     clock: Callable[[], datetime]
+    environment: CodingEnvironment
+    """Says whether a directory is a repository, and where in it the
+    run state is kept."""
     """The time, for counting how long a team has shown no progress."""
     running: set[str] = field(default_factory=set, init=False)
     """The conversations last recorded as running."""
@@ -88,11 +90,11 @@ class OrgStateService:
     def open(self, repo_dir: Path) -> RunState:
         """The run state kept in a repository, for the caller to close.
         One that cannot be opened is kept in memory only."""
-        if not is_git_repository(repo_dir):
+        if not self.environment.checkouts.is_repository(repo_dir):
             return RunState(None)
         try:
-            return RunState(common_dir(repo_dir) / _RUN_STATE)
-        except (GitError, OSError, RunStateError, sqlite3.Error):
+            return RunState(self.environment.state_dir(repo_dir) / _RUN_STATE)
+        except (EnvironmentFailed, OSError, RunStateError, sqlite3.Error):
             logger.exception("Run state of %s is kept in memory only", repo_dir)
             return RunState(None)
 

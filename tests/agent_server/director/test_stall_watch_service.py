@@ -8,6 +8,9 @@ from typing import Any, cast
 
 import pytest
 
+from openhands.agent_server.director.environment.git import (
+    GitCheckouts,
+)
 from openhands.agent_server.director.models import DirectorSettings
 from openhands.agent_server.director.service.model_call_service import (
     ModelCallService,
@@ -32,6 +35,7 @@ def watch(looked: list[str], **given: Any) -> StallWatchService:
         hard_check_in_minutes=given.get("hard", 30),
     )
     return StallWatchService(
+        checkouts=GitCheckouts(),
         org=org,
         has_org=lambda: given.get("has_org", True),
         settings=lambda: settings,

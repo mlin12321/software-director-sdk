@@ -15,7 +15,7 @@ from openhands.agent_server.director.context import (
     steady,
     update_block,
 )
-from openhands.agent_server.director.git import GitError
+from openhands.agent_server.director.environment import EnvironmentFailed
 from openhands.agent_server.director.launch import TeamLauncher
 from openhands.agent_server.director.models import SessionTeam
 from openhands.agent_server.director.org_store import AGENT_LOST, OrgStore
@@ -239,7 +239,7 @@ class MessageDeliveryService:
             return
         try:
             now = steady(self.context_of(place, role))
-        except (GitError, OSError):
+        except (EnvironmentFailed, OSError):
             return
         told = json.loads(before) | {key: now[key] for key in keys if key in now}
         run.mark(TOLD, conversation_id, json.dumps(told))
@@ -278,7 +278,7 @@ class MessageDeliveryService:
         node, role = found
         try:
             now = steady(self.context_of(node, role))
-        except (GitError, OSError):
+        except (EnvironmentFailed, OSError):
             return text, None
         if again:
             said = again_block(self.team_types.role_text(node, role), now)

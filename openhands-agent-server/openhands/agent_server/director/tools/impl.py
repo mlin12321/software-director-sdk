@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 from uuid import UUID
 
 from openhands.agent_server.director.agent_actions import Caller, acting
-from openhands.agent_server.director.git import GitError
+from openhands.agent_server.director.environment import EnvironmentFailed
 from openhands.agent_server.director.runtime import current_director
 from openhands.agent_server.director.service import DirectorService
 from openhands.sdk.errors import DomainError
@@ -44,5 +44,5 @@ class DirectorExecutor[ActionT: Action](ToolExecutor[ActionT, DirectorObservatio
             service = current_director()
             caller = acting(service, self.conversation_id)
             return DirectorObservation.from_text(self._act(service, caller, action))
-        except (DomainError, GitError) as error:
+        except (DomainError, EnvironmentFailed) as error:
             return DirectorObservation.from_text(str(error), is_error=True)

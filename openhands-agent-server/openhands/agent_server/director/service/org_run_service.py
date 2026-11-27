@@ -9,8 +9,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from uuid import UUID, uuid4
 
-from openhands.agent_server.director.changes import require_editable, write_by_hand
-from openhands.agent_server.director.confinement import apart
+from openhands.agent_server.director.environment.checkouts import Checkouts
 from openhands.agent_server.director.intents import Brief, StartTeam
 from openhands.agent_server.director.launch import TeamLauncher
 from openhands.agent_server.director.models import (
@@ -35,7 +34,6 @@ from openhands.agent_server.director.recovery import (
     describe,
     has_work,
     put_aside_stale,
-    restore_worktrees,
 )
 from openhands.agent_server.director.run_state import (
     HELD,
@@ -119,6 +117,8 @@ class OrgRunService:
 
     org: Callable[[], OrgStore]
     """The org that is run."""
+    checkouts: Checkouts
+    """Where each team's work is and how it moves."""
     find_org: Callable[[], OrgStore | None]
     """The org if it was loaded already, for a status that arrives early."""
     repo_dir: Callable[[], Path]
@@ -218,7 +218,7 @@ class OrgRunService:
             run = self.org_state.run_state()
             await asyncio.to_thread(self._put_aside_stale)
             await asyncio.to_thread(
-                restore_worktrees, self.repo_dir(), store.places(), self.home()
+                self.checkouts.restore, self.repo_dir(), store.places(), self.home()
             )
             dropped = self.org_state.dropped()
             was_running = run.marked(RUNNING)
@@ -288,7 +288,9 @@ class OrgRunService:
             if launcher is not None
             else {}
         )
-        items = await asyncio.to_thread(describe, run, store, statuses, self.repo_dir())
+        items = await asyncio.to_thread(
+            describe, run, store, statuses, self.repo_dir(), self.checkouts
+        )
         return Recovery(
             paused=self.org_state.paused,
             items=[*items, *self.org_state.dropped()],
@@ -309,7 +311,7 @@ class OrgRunService:
         if place is None:
             raise NotFound(f"Unknown team: {place_id}")
         sub_teams = store.below(place_id)
-        require_editable(place, sub_teams, path)
+        self.checkouts.require_editable(place, sub_teams, path)
         agents = [
             UUID(agent.conversation_id)
             for agent in place.agents
@@ -323,7 +325,9 @@ class OrgRunService:
                     f"An agent of team {place.title!r} is working. Pause the "
                     "org or wait for it to finish, then save again."
                 )
-        edit = await asyncio.to_thread(write_by_hand, place, sub_teams, path, content)
+        edit = await asyncio.to_thread(
+            self.checkouts.write_by_hand, place, sub_teams, path, content
+        )
         ic = self.team_types.writer_conversation(place)
         if edit.commit is not None and ic is not None and self.loop() is not None:
             self.message_delivery.notify(
@@ -382,7 +386,9 @@ class OrgRunService:
         # A session's IC that never started has no checkout yet: it gets
         # one of its own, never the one of the team it works beside.
         own_checkout = not leads and not (
-            above is not None and store.opens_session(place) and not apart(place, above)
+            above is not None
+            and store.opens_session(place)
+            and not self.checkouts.is_apart(place, above)
         )
         if conversation is not None and not own_checkout:
             raise Conflict(
@@ -400,7 +406,7 @@ class OrgRunService:
                 "conversation."
             )
         await asyncio.to_thread(
-            restore_worktrees, self.repo_dir(), [place], self.home()
+            self.checkouts.restore, self.repo_dir(), [place], self.home()
         )
         ic_id = uuid4()
         task = await asyncio.to_thread(

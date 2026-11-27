@@ -17,6 +17,7 @@ class Splits(Watch):
     def team_splits(self) -> TeamSplitService:
         """What carries out what was approved or decided about teams."""
         return TeamSplitService(
+            checkouts=self.checkouts,
             org=lambda: self.org,
             org_state=self.org_state,
             org_save=self.org_save,

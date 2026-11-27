@@ -21,6 +21,7 @@ class Sync(Sessions):
     def org_run(self) -> OrgRunService:
         """What pauses and resumes the org and follows its agents."""
         return OrgRunService(
+            checkouts=self.checkouts,
             org=lambda: self.org,
             find_org=lambda: self._store,
             repo_dir=lambda: self._repo_dir,

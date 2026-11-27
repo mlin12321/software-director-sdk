@@ -8,6 +8,10 @@ from uuid import uuid4
 import pytest
 
 from openhands.agent_server.director.documents.team_documents import TeamDocuments
+from openhands.agent_server.director.environment.git import (
+    GitCheckouts,
+    GitCodingEnvironment,
+)
 from openhands.agent_server.director.git_store import GitStore
 from openhands.agent_server.director.org_store import OrgStore
 from openhands.agent_server.director.prompts import NEED_WRITE
@@ -56,7 +60,9 @@ class Context:
         self.agent = str(uuid4())
         self.store.set_agent(A, "ic", conversation_id=self.agent)
         self.org_state = OrgStateService(
-            repo_dir=lambda: repo, clock=lambda: datetime.now(UTC)
+            repo_dir=lambda: repo,
+            clock=lambda: datetime.now(UTC),
+            environment=GitCodingEnvironment(),
         )
         session_drafts = SessionDraftService(run_state=self.org_state.run_state)
         self.history = TeamHistoryService(
@@ -67,6 +73,7 @@ class Context:
             org_changed=lambda session: None,
         )
         self.service = TeamContextService(
+            checkouts=GitCheckouts(),
             org=lambda: self.store,
             org_state=self.org_state,
             org_settings=OrgSettingsService(

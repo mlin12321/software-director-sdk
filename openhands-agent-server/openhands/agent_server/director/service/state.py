@@ -16,10 +16,6 @@ from openhands.agent_server.director.agent_types import (
     DEFAULT_TYPE,
     TeamTemplate,
 )
-from openhands.agent_server.director.confinement import (
-    checkout_root,
-    is_in,
-)
 from openhands.agent_server.director.documents.store import (
     DocumentStore,
     GitDocumentStore,
@@ -29,16 +25,14 @@ from openhands.agent_server.director.documents.team_documents import (
     TeamDocuments,
 )
 from openhands.agent_server.director.documents.tree import TeamTree
-from openhands.agent_server.director.git import (
-    enclosing_repository,
-    is_git_repository,
-)
+from openhands.agent_server.director.environment import Checkouts, CodingEnvironment
+from openhands.agent_server.director.environment.checkouts import MergeCheckout
+from openhands.agent_server.director.environment.git import GitCodingEnvironment
 from openhands.agent_server.director.git_store import (
     GitStore,
 )
 from openhands.agent_server.director.intents import Accept, LandOrg
 from openhands.agent_server.director.launch import TeamLauncher
-from openhands.agent_server.director.merge_checkout import MergeCheckout, discard
 from openhands.agent_server.director.models import (
     OrgSummary,
     TeamMatch,
@@ -227,7 +221,11 @@ class ServiceState:
         self._lock = threading.Lock()
         self._clock = clock
         self._run_limit_retry = run_limit_retry
-        self.org_state = OrgStateService(repo_dir=lambda: self.repo_dir, clock=clock)
+        self.environment: CodingEnvironment = GitCodingEnvironment()
+        self.checkouts: Checkouts = self.environment.checkouts
+        self.org_state = OrgStateService(
+            repo_dir=lambda: self.repo_dir, clock=clock, environment=self.environment
+        )
         self.start_line = StartLineService(
             org=lambda: self.org, org_state=self.org_state, retry=run_limit_retry
         )
@@ -259,6 +257,7 @@ class ServiceState:
             org=lambda: self.org,
             team_types=self.team_types,
             run_state=self.org_state.run_state,
+            checkouts=self.checkouts,
         )
         self.org_settings = OrgSettingsService(
             config_file=config_file,
@@ -363,7 +362,7 @@ class ServiceState:
             Unavailable: The director's directory is not a git repository.
         """
         _ = self.org  # settles which repository the org is in
-        if not is_git_repository(self._repo_dir):
+        if not self.checkouts.is_repository(self._repo_dir):
             raise Unavailable(
                 f"The director has no team memory: {self._repo_dir} is not a git "
                 "repository. Point OH_DIRECTOR_REPO_PATH at one."
@@ -386,7 +385,7 @@ class ServiceState:
             node_count=len(store),
             repo_path=str(self._repo_dir),
             directory=self._home(),
-            is_git_repository=is_git_repository(self._repo_dir),
+            is_git_repository=self.checkouts.is_repository(self._repo_dir),
             boundary_enforcement=(
                 "sandbox" if self.confinement.is_sandboxed else "checks"
             ),
@@ -433,7 +432,7 @@ class ServiceState:
     def _drop_merge_checkout(self, place_id: str) -> None:
         merge = self.merge_checkout(place_id)
         if merge is not None:
-            discard(self._repo_dir, Path(merge.where))
+            self.checkouts.drop_merge(self._repo_dir, Path(merge.where))
             self.org_state.run_state().unmark(MERGING, place_id)
 
     def search(self, query: str, limit: int) -> list[TeamMatch]:
@@ -464,11 +463,11 @@ class ServiceState:
         """
         if self.org.root_id is not None:
             return self._repo_dir
-        if not is_git_repository(self._directory):
+        if not self.checkouts.is_repository(self._directory):
             raise Unavailable(
                 f"An org needs a git repository; {self._directory} is not one"
             )
-        return checkout_root(str(self._directory))
+        return self.checkouts.root_of(str(self._directory))
 
     def _instance(self) -> str:
         """Names this server, to tell its run state from another's."""
@@ -491,7 +490,7 @@ class ServiceState:
         """The directory the server was started for, relative to the org's
         repository; '' when it is not below its root."""
         home = Path(os.path.realpath(self._directory))
-        top = checkout_root(str(self._repo_dir))
+        top = self.checkouts.root_of(str(self._repo_dir))
         return home.relative_to(top).as_posix() if top in home.parents else ""
 
     def _repo_relative(self, path: str) -> str:
@@ -506,8 +505,8 @@ class ServiceState:
             except DomainError as error:
                 raise Unprocessable(str(error)) from error
         target = Path(os.path.realpath(path))
-        top = checkout_root(str(self._repo_dir))
-        if not is_in(target, top):
+        top = self.checkouts.root_of(str(self._repo_dir))
+        if not target.is_relative_to(top):
             raise Unprocessable(f"{path} is outside the org's repository {top}")
         relative = target.relative_to(top).as_posix()
         return "" if relative == "." else relative
@@ -540,11 +539,11 @@ class ServiceState:
             Whether one was found. The director then works in its repository.
         """
         repository: Path | None = directory
-        while repository is not None and is_git_repository(repository):
+        while repository is not None and self.checkouts.is_repository(repository):
             if not climb and not (repository / ".git").exists():
                 return False
             if load_org(create_org_board(repository), store):
-                self._repo_dir = checkout_root(str(repository))
+                self._repo_dir = self.checkouts.root_of(str(repository))
                 logger.info("Director loaded %d teams from %s", len(store), repository)
                 kept = self.org_state.open(self._repo_dir)
                 try:
@@ -557,7 +556,7 @@ class ServiceState:
                 return True
             if not climb:
                 return False
-            repository = enclosing_repository(repository)
+            repository = self.checkouts.enclosing(repository)
         return False
 
     def _join(self, workspace: Path, climb: bool = True) -> bool:

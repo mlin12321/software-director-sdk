@@ -9,8 +9,8 @@ from itertools import count
 from pathlib import Path
 from uuid import UUID, uuid4
 
-from openhands.agent_server.director.confinement import apart
-from openhands.agent_server.director.git import GitError, git, head_of, ref_stamp
+from openhands.agent_server.director.environment import EnvironmentFailed
+from openhands.agent_server.director.environment.checkouts import Checkouts, time_stamp
 from openhands.agent_server.director.headline import provisional_summary
 from openhands.agent_server.director.intents import Brief, CloseSession
 from openhands.agent_server.director.launch import TeamLauncher
@@ -51,8 +51,6 @@ from openhands.agent_server.director.service.agent_confinement_service import (
 from openhands.agent_server.director.service.agent_start_service import (
     AgentStartService,
     agent_title,
-    base_of,
-    head_name_of,
 )
 from openhands.agent_server.director.service.check_count_service import (
     CheckCountService,
@@ -129,6 +127,8 @@ class SessionLifecycleService:
 
     org: Callable[[], OrgStore]
     """The org the sessions work in."""
+    checkouts: Checkouts
+    """Where each team's work is and how it moves."""
     repo_dir: Callable[[], Path]
     """The repository the org is in."""
     org_state: OrgStateService
@@ -240,7 +240,7 @@ class SessionLifecycleService:
         )
         run = self.org_state.run_state()
         checkout = str(self.repo_dir())
-        branch = await asyncio.to_thread(head_name_of, checkout)
+        branch = await asyncio.to_thread(self.checkouts.branch, checkout)
         lead_id = division_lead_id(above.id, session_id)
         ids = {current.id: session_team_id(current.id, session_id) for current in shape}
         top = store.open_session(
@@ -414,8 +414,11 @@ class SessionLifecycleService:
             top.id,
             worktree_path=started.workspace,
             isolation=started.isolation if apart else "shared",
-            branch=await asyncio.to_thread(head_name_of, started.workspace),
-            base_commit=await asyncio.to_thread(base_of, started.workspace),
+            branch=await asyncio.to_thread(self.checkouts.branch, started.workspace),
+            base_commit=await asyncio.to_thread(
+                self.checkouts.version, started.workspace
+            )
+            or "",
             boundary_enforcement=self.confinement.enforcement(started.kind),
         )
         self.checkout_for_session(top.id)
@@ -635,7 +638,7 @@ class SessionLifecycleService:
                 parent=session.above_id,
                 teams=[team.id for team in teams],
                 conversations=conversations_of(teams),
-                stamp=ref_stamp(),
+                stamp=time_stamp(),
                 # A session none of whose work was accepted is not on the
                 # org's record, and so neither is its end. Decided now:
                 # what the session kept to itself goes before its end is
@@ -668,7 +671,7 @@ class SessionLifecycleService:
             kept = None
             # A session whose IC never started has no checkout of its own:
             # what is in the checkout above is not its work.
-            if started and top and above and apart(top, above):
+            if started and top and above and self.checkouts.is_apart(top, above):
                 kept = await asyncio.to_thread(
                     self._keep_unmerged, top, above, plan.stamp
                 )
@@ -734,16 +737,13 @@ class SessionLifecycleService:
         Returns:
             The ref it is kept under; None when everything was merged.
         """
-        own, checkout = Path(top.worktree_path), Path(above.worktree_path)
         ref = f"{SESSION_REFS}/{top.session}/{stamp}"
         try:
-            tip, merged_into = head_of(own), head_of(checkout)
-            if tip is None or merged_into is None:
+            if not self.checkouts.keep_unmerged(
+                top.worktree_path, above.worktree_path, ref
+            ):
                 return None
-            if tip in git(checkout, ["merge-base", "--all", tip, merged_into]).split():
-                return None
-            git(checkout, ["update-ref", ref, tip])
-        except (GitError, OSError):
+        except (EnvironmentFailed, OSError):
             logger.exception("Could not keep the work of session %s", top.session)
             return None
         return ref

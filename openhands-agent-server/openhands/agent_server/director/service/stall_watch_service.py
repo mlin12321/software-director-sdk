@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from openhands.agent_server.director.git import last_commit_in
+from openhands.agent_server.director.environment.checkouts import Checkouts
 from openhands.agent_server.director.models import DirectorSettings, SessionTeam
 from openhands.agent_server.director.org_store import OrgStore, is_division_lead
 from openhands.agent_server.director.prompts import (
@@ -56,6 +56,8 @@ class StallWatchService:
 
     org: Callable[[], OrgStore]
     """The org's tree, as it is when asked."""
+    checkouts: Checkouts
+    """Where each team's work is and how it moves."""
     has_org: Callable[[], bool]
     """Whether an org is loaded: none is loaded only to look at it."""
     settings: Callable[[], DirectorSettings]
@@ -170,7 +172,7 @@ class StallWatchService:
             now = self.clock()
             seen = progress_of(marks.get(team.id))
             head = await asyncio.to_thread(
-                last_commit_in, Path(team.worktree_path), team.boundary.path
+                self.checkouts.last_change, Path(team.worktree_path), team.boundary.path
             )
             if "at" not in seen:
                 # Seen for the first time.
