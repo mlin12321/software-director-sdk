@@ -1,6 +1,6 @@
 """Wire models for the director API."""
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -977,6 +977,14 @@ class OrgSettings(BaseModel):
             "director finds. A team that exists keeps its type."
         ),
     )
+    close_unattended_sessions: bool | None = Field(
+        default=None,
+        description=(
+            "Whether a session no human opened (an automation did, for an "
+            "event) is closed once its work is accepted and merged. Left "
+            "out, it is."
+        ),
+    )
 
 
 class MemberInfo(BaseModel):
@@ -1018,6 +1026,13 @@ class OrgSettingsState(BaseModel):
     )
     allowed_agent_types: list[str] = Field(
         description="The agent types a new team may be; empty allows every one."
+    )
+    close_unattended_sessions: bool = Field(
+        default=True,
+        description=(
+            "Whether a session no human opened is closed once its work is "
+            "accepted and merged."
+        ),
     )
     own: OrgSettings = Field(description="What the org sets for itself.")
     agent_types: list[AgentTypeInfo] = Field(
@@ -1357,6 +1372,72 @@ class OpenSessionRequest(BaseModel):
     )
 
 
+class EventSource(BaseModel):
+    """What sent an event to the org."""
+
+    name: str = Field(
+        default="",
+        description="What sent it, in words for a person: 'Jira', 'nightly'.",
+    )
+    automation_id: str = ""
+    run_id: str = ""
+    event_key: str = Field(
+        default="",
+        description=(
+            "Names what happened. An event whose key the org has seen opens "
+            "no second session; without a key every event opens one."
+        ),
+    )
+
+
+class OrgEventRequest(BaseModel):
+    """Something that happened outside the org and that it is to work on: a
+    ticket that was filed, an alert, a schedule that came due."""
+
+    text: str = Field(
+        min_length=1,
+        description="What is asked of the org, as a person would ask it.",
+    )
+    title: str = Field(
+        default="",
+        description="What to call the session; taken from the text when empty.",
+    )
+    path: str | None = Field(
+        default=None,
+        description=(
+            "The directory the event is about, as for a message. The "
+            "director chooses a team at or below the one it gives."
+        ),
+    )
+    payload: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "The event as it was received. The team that takes the request "
+            "is shown it below the text, shortened when it is long."
+        ),
+    )
+    source: EventSource = Field(default_factory=EventSource)
+
+
+class EventSession(BaseModel):
+    """The session an event opened, or had opened already."""
+
+    session_id: str
+    node_id: str = Field(
+        default="", description="The place that received it; '' once it is closed."
+    )
+    team: str = Field(default="", description="The title of that team.")
+    conversation_id: str = Field(
+        default="", description="The conversation of the IC there."
+    )
+    duplicate: bool = Field(
+        default=False,
+        description="The event had been sent before and opened this session then.",
+    )
+    chosen_by: ChosenBy = "path"
+    reason: str = ""
+
+
 class DocumentChoice(BaseModel):
     """What is decided about a document of a directory that the session
     and the org each made something else of."""
@@ -1618,15 +1699,47 @@ class Usage(BaseModel):
         )
 
 
+class RequestSource(BaseModel):
+    """Who asked for a session's work. A human by default; an automation
+    when something that happened outside (a ticket filed, a schedule) did."""
+
+    kind: Literal["human", "automation"] = "human"
+    name: str = Field(
+        default="",
+        description="What sent it, in words for a person: 'Jira', 'nightly'.",
+    )
+    automation_id: str = Field(
+        default="", description="The automation that sent it, where it has an id."
+    )
+    run_id: str = Field(
+        default="", description="The run of that automation, where it has an id."
+    )
+    event_key: str = Field(
+        default="",
+        description=(
+            "Names what happened, so that the same event sent twice opens "
+            "one session: a ticket's key, a delivery's id."
+        ),
+    )
+
+    @property
+    def unattended(self) -> bool:
+        """Whether nobody is there to read the session or close it."""
+        return self.kind != "human"
+
+
 class SessionInput(BaseModel):
-    """A line of work the human opened at a team. All work of an org is
-    done in sessions."""
+    """A line of work opened at a team, by the human or for an event. All
+    work of an org is done in sessions."""
 
     id: str
     title: str
     team_id: str = Field(description="The team it was opened at.")
     above_id: str = Field(description="The team whose IC reviews its work.")
     request: str = Field(default="", description="What the human asked of it.")
+    source: RequestSource = Field(
+        default_factory=RequestSource, description="Who asked for it."
+    )
     opened_at: str = Field(default="", description="ISO 8601 timestamp.")
     branch: str = Field(
         default="",
@@ -1760,6 +1873,9 @@ class RoutedRequest(BaseModel):
     text: str
     chosen_by: ChosenBy = "model"
     reason: str = ""
+    source: RequestSource = Field(
+        default_factory=RequestSource, description="Who asked."
+    )
     id: str = Field(
         default="",
         description="Names the request, so that it is kept for the org once.",

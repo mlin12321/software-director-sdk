@@ -1,5 +1,6 @@
 """What the director tells the agents of an org."""
 
+import json
 import textwrap
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -1229,6 +1230,40 @@ def handed_up(sent: SessionTeam, text: str, why: str, *, names: Names) -> str:
         "nothing for it: give it a task with `msg_team` if part of it is "
         "theirs. If it is not your team's either, raise it as `misrouted`.)"
     )
+
+
+# How much of an event as it was received the team that takes it is shown.
+EVENT_PAYLOAD_SHOWN = 6000
+
+
+def event_request(
+    text: str, sender: str, payload: Mapping[str, Any] | None, *, closes: bool
+) -> str:
+    """What a session opened for an event is asked: the request, that no
+    human sent it, and the event as it was received.
+
+    Args:
+        sender: What sent it, in words; '' when it did not say.
+        closes: Whether the session is closed once its work is accepted.
+    """
+    said = (
+        f"\n\n[director] No human sent this request: {sender or 'an automation'} "
+        "did, for something that happened outside the org. Nobody reads this "
+        "conversation while you work. Decide what you reasonably can and say "
+        "in your work what you decided; raise an escalation only for what a "
+        "human must decide, and expect it to wait."
+        + (
+            " The session is closed once its work is accepted and merged."
+            if closes
+            else ""
+        )
+    )
+    if not payload:
+        return text + said
+    shown = json.dumps(payload, indent=2, sort_keys=True, default=str)
+    if len(shown) > EVENT_PAYLOAD_SHOWN:
+        shown = shown[:EVENT_PAYLOAD_SHOWN] + "\n… (shortened)"
+    return f"{text}{said}\n\nThe event as it was received:\n```json\n{shown}\n```"
 
 
 def session_brief(

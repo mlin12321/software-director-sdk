@@ -872,6 +872,49 @@ async def test_the_conversation_of_an_agent_of_the_org_cannot_be_forked(running,
     assert child.status_code == 409
 
 
+async def test_an_event_opens_a_session_over_the_api(running, repo):
+    client, _, service = running
+    await client.post("/api/director/org", json=org_body(repo))
+    await service.work_queue.settled()
+    event = {
+        "text": "Orders are slow: add an index.",
+        "payload": {"issue": {"key": "SHOP-7"}},
+        "source": {"name": "Jira", "event_key": "SHOP-7"},
+    }
+
+    opened = await client.post("/api/director/org/events", json=event)
+    again = await client.post("/api/director/org/events", json=event)
+
+    assert opened.status_code == 200
+    session = opened.json()
+    assert (session["duplicate"], again.json()["duplicate"]) == (False, True)
+    assert again.json()["session_id"] == session["session_id"]
+    listed = (await client.get("/api/director/org/sessions")).json()
+    [found] = [s for s in listed if s["id"] == session["session_id"]]
+    assert found["source"] == {
+        "kind": "automation",
+        "name": "Jira",
+        "automation_id": "",
+        "run_id": "",
+        "event_key": "SHOP-7",
+    }
+    settings = (await client.get("/api/director/org/settings")).json()
+    assert settings["close_unattended_sessions"] is True
+    kept = await client.patch(
+        "/api/director/org/settings", json={"close_unattended_sessions": False}
+    )
+    assert kept.json()["close_unattended_sessions"] is False
+
+
+async def test_an_event_is_refused_over_the_api_where_there_is_no_org(running):
+    client, _, _ = running
+
+    refused = await client.post("/api/director/org/events", json={"text": "Do it."})
+
+    assert refused.status_code == 503
+    assert "no org" in refused.json()["detail"]
+
+
 def test_the_routes_closed_to_org_agents_are_routes_of_a_conversation():
     """They are named, not decorated: a route OpenHands renames would
     otherwise be open to an agent of the org without a word."""

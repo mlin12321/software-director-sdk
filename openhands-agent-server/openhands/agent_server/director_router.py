@@ -29,6 +29,7 @@ from openhands.agent_server.director.models import (
     DirectorSettingsState,
     DirectorSettingsUpdate,
     EditFileRequest,
+    EventSession,
     FileEdit,
     FileSides,
     FormerTeamSummary,
@@ -36,6 +37,7 @@ from openhands.agent_server.director.models import (
     NodeOwnership,
     OpenedSession,
     OpenSessionRequest,
+    OrgEventRequest,
     OrgHistory,
     OrgMerge,
     OrgNode,
@@ -462,6 +464,44 @@ async def get_recovery(
     empty.
     """
     return await service.org_run.recovery()
+
+
+@director_router.post(
+    "/org/events",
+    response_model=EventSession,
+    responses=error_responses(
+        {
+            Conflict: (
+                "No team of the org can take the event, the org has as many "
+                "sessions open as it may, or it has no conversation to start "
+                "one from"
+            ),
+            Invalid: "The path is outside the org's repository",
+            Unavailable: (
+                "There is no org, it is paused, or the director is not "
+                "running agents; the event can be sent again"
+            ),
+        }
+    ),
+)
+async def open_session_for_event(
+    request: OrgEventRequest,
+    service: DirectorService = Depends(get_director_service),
+) -> EventSession:
+    """Open a session for something that happened outside the org.
+
+    For what no human sends: a ticket that was filed, an alert, a schedule
+    that came due. An automation receives the event, says in `text` what is
+    asked, and posts it here. The director chooses the team as it does for
+    a message sent with `auto`, opens a session there and gives its IC the
+    text with the event as it was received (`payload`).
+
+    An event that names itself (`source.event_key`) opens one session
+    however often it is sent; the answer then has `duplicate`. The session
+    is closed once its work is accepted and merged, unless the org's
+    `close_unattended_sessions` is off.
+    """
+    return await service.session_lifecycle.open_from_event(request)
 
 
 @director_router.post(

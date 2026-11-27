@@ -13,6 +13,8 @@ import type {
   DirectorOrgSummary,
   DirectorOpenedSession,
   DirectorRoutedMessage,
+  DirectorEventSession,
+  DirectorOrgEventRequest,
   DirectorSession,
   DirectorSessionTeam,
   DirectorConversationPlace,
@@ -226,6 +228,27 @@ export class DirectorClient {
   async routeMessage(request: RouteMessageRequest): Promise<DirectorRoutedMessage> {
     const response = await this.client.post<DirectorRoutedMessage>(
       `${DIRECTOR_PATH}/org/messages`,
+      request
+    );
+    return response.data;
+  }
+
+  /**
+   * Open a session for something that happened outside the org: a ticket
+   * that was filed, an alert, a schedule that came due.
+   *
+   * The director chooses the team as for a message sent with `auto`. An
+   * event that names itself (`source.event_key`) opens one session however
+   * often it is sent. The session is closed once its work is accepted,
+   * unless the org's `close_unattended_sessions` is off.
+   *
+   * @throws HttpError 503 when there is no org or it is paused (send the
+   *   event again later); 409 when no team can take it or the org has as
+   *   many sessions open as it may.
+   */
+  async openSessionForEvent(request: DirectorOrgEventRequest): Promise<DirectorEventSession> {
+    const response = await this.client.post<DirectorEventSession>(
+      `${DIRECTOR_PATH}/org/events`,
       request
     );
     return response.data;

@@ -17,7 +17,7 @@ from openhands.agent_server.director.environment.records import (
     RecordStore,
     normalize_store_path,
 )
-from openhands.agent_server.director.intents import LandOrg
+from openhands.agent_server.director.intents import CloseSession, LandOrg
 from openhands.agent_server.director.models import (
     DocumentChoice,
     Merge,
@@ -1209,6 +1209,22 @@ class SessionMergeService:
             )
         self._record_not_taken(top, landed)
         self.org_turn()
+        self._close_unattended(top)
+
+    def _close_unattended(self, top: SessionTeam) -> None:
+        """Close a session no human opened once all of its work is the
+        org's: nobody is there to close it, and left open it counts against
+        the sessions the org may have. The org's settings can keep it."""
+        session = self.org().session_of(top)
+        if (
+            session is None
+            or not session.source.unattended
+            or not self.org_settings.closes_unattended
+            # What it makes of the org's teams still waits to be settled.
+            or self.merge_of(top) is not None
+        ):
+            return
+        self.resumable_work.begin(top.id, CloseSession())
 
     def _record_not_taken(self, top: SessionTeam, landed: Landed) -> None:
         """Keep on record what a session wrote of a document that the org

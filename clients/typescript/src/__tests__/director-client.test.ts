@@ -103,6 +103,32 @@ describe('DirectorClient', () => {
     });
   });
 
+  it('opens a session for an event', async () => {
+    const opened = {
+      session_id: 's1a2b3c',
+      node_id: 'services.api@s1a2b3c',
+      team: 'API',
+      conversation_id: 'c-1',
+      duplicate: false,
+      chosen_by: 'model',
+      reason: 'It is about orders.',
+    };
+    const fetchMock = mockFetch(() => jsonResponse(opened));
+    const client = new DirectorClient({ host: 'http://example.com' });
+    const event = {
+      text: 'Orders are slow',
+      payload: { issue: { key: 'SHOP-7' } },
+      source: { name: 'Jira', event_key: 'SHOP-7' },
+    };
+
+    const result = await client.openSessionForEvent(event);
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(`${init.method} ${url}`).toBe('POST http://example.com/api/director/org/events');
+    expect(JSON.parse(init.body)).toEqual(event);
+    expect(result).toEqual(opened);
+  });
+
   it('opens a session at a team, lists the open ones and closes one', async () => {
     const session = {
       id: 's1a2b3c',

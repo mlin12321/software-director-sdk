@@ -19,10 +19,13 @@ from openhands.agent_server.director.models import (
     Boundary,
     ChosenBy,
     CreateOrgRequest,
+    EventSession,
     OpenedSession,
     OpenSessionRequest,
+    OrgEventRequest,
     OrgNode,
     OrgNodeInput,
+    RequestSource,
     RoutedMessage,
     RoutedRequest,
     RouteMessageRequest,
@@ -40,6 +43,7 @@ from openhands.agent_server.director.org_store import (
     session_team_id,
 )
 from openhands.agent_server.director.prompts import (
+    event_request,
     handed_up,
     misrouted_notice,
     session_brief,
@@ -49,6 +53,7 @@ from openhands.agent_server.director.run_state import (
     PROGRESS,
     TASK,
     TOLD,
+    TRIGGERED,
     Intent,
 )
 from openhands.agent_server.director.service.agent_confinement_service import (
@@ -129,6 +134,9 @@ _TITLE_LENGTH = 60
 # The id of the org's top team.
 ROOT_ID = "root"
 
+# How many events the org remembers having opened a session for.
+_EVENT_KEYS_KEPT = 1000
+
 
 @dataclass
 class SessionLifecycleService:
@@ -173,6 +181,7 @@ class SessionLifecycleService:
     """Takes up what an org that is joined had begun."""
     _create_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False)
     _first_message_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False)
+    _event_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False)
 
     async def open_session(
         self,
@@ -180,6 +189,7 @@ class SessionLifecycleService:
         conversation: StartConversationRequest | None = None,
         *,
         rename: bool = False,
+        source: RequestSource | None = None,
     ) -> OpenedSession:
         """Open a session at a team and start it with the human's request.
 
@@ -194,6 +204,7 @@ class SessionLifecycleService:
             conversation: The conversation the human started the request
                 in, which becomes the session's IC. Without it the IC is
                 derived from one the org has already.
+            source: Who asked, when it was not the human.
 
         Raises:
             NotFound: The team does not exist.
@@ -262,6 +273,7 @@ class SessionLifecycleService:
                 team_id=team.id,
                 above_id=above.id,
                 request=text[:ASKED_KEPT],
+                source=source or RequestSource(),
                 opened_at=datetime.now(UTC).isoformat(),
                 branch="" if branch == "HEAD" else branch,
                 cost_allowance=self.org_settings.settings.session_cost_limit,
@@ -920,6 +932,122 @@ class SessionLifecycleService:
             reason=reason,
         )
 
+    async def _team_for(
+        self, text: str, path: str | None, *, auto: bool
+    ) -> tuple[OrgNode, str, ChosenBy, str]:
+        """The team a request goes to: the one nearest to ``path``, or with
+        ``auto`` the one the director chooses at or below it.
+
+        Returns:
+            The team, the directory the request is about, how the team was
+            found and why.
+
+        Raises:
+            Unprocessable: The path is outside the org's repository.
+            Conflict: No team of the org can take it.
+        """
+        store = self.org_load.org
+        about = await asyncio.to_thread(
+            lambda: (
+                self.org_load.home()
+                if path is None
+                else self.org_load.repo_relative(path)
+            )
+        )
+        node = nearest_team(store.teams(), about)
+        if node is None:
+            raise Conflict(
+                "No team of the org can take a message about "
+                f"{about or 'the repository'!r}"
+            )
+        if not (auto and self.org_settings.settings.route_requests):
+            return node, about, "path", ""
+        choice = await self.request_routing.choose_team(text, node)
+        return store.team(choice.node_id) or node, about, choice.by, choice.reason
+
+    async def open_from_event(self, request: OrgEventRequest) -> EventSession:
+        """Open a session for something that happened outside the org.
+
+        The team is chosen as for a message the human sends with ``auto``:
+        by the files the text names and by what a model makes of it, at or
+        below the team ``path`` gives. Nobody is there to start an org, to
+        resume one or to make room for the session, so an event that cannot
+        open one is refused, for what sent it to send again.
+
+        Raises:
+            Unavailable: There is no org, it is paused, or the director is
+                not running.
+            Unprocessable: The path is outside the org's repository.
+            Conflict: No team can take it, the org has as many sessions
+                open as it may, or no conversation to start the session from.
+        """
+        self.launcher()
+        store = await asyncio.to_thread(lambda: self.org_load.org)
+        if store.root_id is None:
+            raise Unavailable("There is no org for the event to open a session in")
+        if self.org_state.paused is not None:
+            raise Unavailable(
+                "The org is paused; send the event again once it is resumed"
+            )
+        run = self.org_state.run_state()
+        key = request.source.event_key
+        async with self._event_lock:
+            seen = run.marked(TRIGGERED).get(key) if key else None
+            if seen is not None:
+                places = store.session(seen)
+                top = places[0] if places else None
+                return EventSession(
+                    session_id=seen,
+                    node_id=top.id if top else "",
+                    team=top.title if top else "",
+                    conversation_id=(
+                        self.team_types.writer_conversation(top) or "" if top else ""
+                    ),
+                    duplicate=True,
+                )
+            node, _, chosen_by, reason = await self._team_for(
+                request.text, request.path, auto=True
+            )
+            source = RequestSource(kind="automation", **request.source.model_dump())
+            opened = await self.open_session(
+                OpenSessionRequest(
+                    text=event_request(
+                        request.text,
+                        source.name,
+                        request.payload,
+                        closes=self.org_settings.closes_unattended,
+                    ),
+                    title=request.title,
+                    node_id=node.id,
+                ),
+                source=source,
+            )
+            if key:
+                kept = {**run.marked(TRIGGERED), key: opened.session.id}
+                # The oldest are forgotten: an event is not sent again for long.
+                run.replace_marks(
+                    TRIGGERED, dict(list(kept.items())[-_EVENT_KEYS_KEPT:])
+                )
+        top = opened.session.teams[0]
+        if chosen_by not in ("path", "top"):
+            await asyncio.to_thread(
+                self.team_history.keep_routed,
+                "asked",
+                top,
+                request.text,
+                chosen_by,
+                reason,
+                source,
+            )
+        return EventSession(
+            session_id=opened.session.id,
+            node_id=top.id,
+            team=top.title,
+            conversation_id=opened.conversation_id,
+            chosen_by=chosen_by,
+            reason=reason,
+        )
+
     async def route_message(self, request: RouteMessageRequest) -> RoutedMessage:
         """Open a session for what the human asks, or with ``session_id``
         say it in the session that is open.
@@ -971,27 +1099,12 @@ class SessionLifecycleService:
                         started_org=True,
                     )
                 await self.org_run.came_back()
-        path = await asyncio.to_thread(
-            lambda: (
-                self.org_load.home()
-                if request.path is None
-                else self.org_load.repo_relative(request.path)
-            )
+        node, path, chosen_by, reason = await self._team_for(
+            request.text, request.path, auto=request.auto
         )
-        node = nearest_team(store.teams(), path)
-        if node is None:
-            raise Conflict(
-                "No team of the org can take a message about "
-                f"{path or 'the repository'!r}"
-            )
         text = request.text
-        chosen_by: ChosenBy = "path"
-        reason = ""
-        if request.auto and self.org_settings.settings.route_requests:
-            choice = await self.request_routing.choose_team(text, node)
-            chosen_by, reason = choice.by, choice.reason
-            node = store.team(choice.node_id) or node
-        elif path != node.boundary.path:
+        routed = request.auto and self.org_settings.settings.route_requests
+        if not routed and path != node.boundary.path:
             text = f"{text}\n\n(The human sent this from {path}.)"
         opened = await self.open_session(
             OpenSessionRequest(text=text, node_id=node.id), request.conversation
