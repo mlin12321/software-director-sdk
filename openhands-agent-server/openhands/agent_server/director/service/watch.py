@@ -18,7 +18,10 @@ from openhands.agent_server.director.org_store import (
 from openhands.agent_server.director.run_state import (
     USE,
 )
-from openhands.agent_server.director.service.reviews import Reviews
+from openhands.agent_server.director.service.review_service import ReviewService
+from openhands.agent_server.director.service.session_merge_service import (
+    SessionMergeService,
+)
 from openhands.agent_server.director.service.stall_watch_service import (
     StallWatchService,
 )
@@ -26,16 +29,72 @@ from openhands.agent_server.director.service.state import (
     LIMIT_WAITS,
     STALL_LANE,
 )
+from openhands.agent_server.director.service.teams import Teams
 from openhands.sdk.errors import (
     Conflict,
     NotFound,
 )
 
 
-class Watch(Reviews):
+class Watch(Teams):
     """Stops teams, counts what sessions use, and carries what an agent
     cannot settle to the agent that can. What looks for teams without
     progress is a service it holds."""
+
+    @cached_property
+    def session_merges(self) -> SessionMergeService:
+        """What a session's accepted work makes of the org."""
+        return SessionMergeService(
+            org=lambda: self.org,
+            team_memory=self._memory,
+            team_documents=lambda: self.team_documents,
+            clock=self._clock,
+            org_state=self.org_state,
+            org_save=self.org_save,
+            org_settings=self.org_settings,
+            team_types=self.team_types,
+            team_history=self.team_history,
+            team_summaries=self.team_summaries,
+            team_messaging=self.team_messaging,
+            message_delivery=self.message_delivery,
+            resumable_work=self.resumable_work,
+            session_documents=self.session_documents,
+            session_landing=self.session_landing,
+            merge_checkout=self.merge_checkout,
+            next_submission=self.next_submission,
+        )
+
+    @cached_property
+    def reviews(self) -> ReviewService:
+        """A team's work on its way up: submitted, sent back, accepted,
+        merged."""
+        return ReviewService(
+            org=lambda: self.org,
+            repo_dir=lambda: self._repo_dir,
+            checkouts=self.checkouts,
+            team_documents=lambda: self.team_documents,
+            launcher=self._require_launcher,
+            find_review_instructions=self.find_review_instructions,
+            org_state=self.org_state,
+            org_save=self.org_save,
+            org_settings=self.org_settings,
+            team_types=self.team_types,
+            team_history=self.team_history,
+            team_context=self.team_context,
+            team_messaging=self.team_messaging,
+            message_delivery=self.message_delivery,
+            resumable_work=self.resumable_work,
+            work_queue=self.work_queue,
+            check_counts=self.check_counts,
+            confinement=self.confinement,
+            model_calls=self.model_calls,
+            session_documents=self.session_documents,
+            session_merges=self.session_merges,
+            merge_checkout=self.merge_checkout,
+            drop_merge_checkout=self._drop_merge_checkout,
+            next_submission=self.next_submission,
+            changed_since_accept=self._changed_since_accept,
+        )
 
     @cached_property
     def stall_watch(self) -> StallWatchService:
@@ -51,10 +110,10 @@ class Watch(Reviews):
             paused=lambda: self.org_state.paused is not None,
             running=lambda: self.org_state.running,
             model_calls=self.model_calls,
-            check_managers=self._check_managers,
+            check_managers=self.session_merges.check_managers,
             work_queue=self.work_queue,
             progressed=self.team_messaging.progressed,
-            release_reviews=self._release_reviews,
+            release_reviews=self.reviews.release_held,
             record_event=self.team_history.record_event,
             tell_writer=self.team_messaging.tell_writer,
             tell_above=self.team_messaging.tell_above,
@@ -80,7 +139,7 @@ class Watch(Reviews):
         history = "".join(f"\nPassed up by {entry}" for entry in passed_up)
         if escalation.raised_by == self.team_types.team(raiser).writer:
             # It is woken now anyway, so it gets what waits for its review too.
-            self.release_reviews(holder_id)
+            self.reviews.release_reviews(holder_id)
             self.team_messaging.count_escalation_from_below(holder_id, through.id)
         raised_by = escalation.raised_by
         text = (
@@ -126,7 +185,7 @@ class Watch(Reviews):
         self.org_save.save_soon()
         self.team_history.record_event(team.parent_id, "stopped", team, reason)
         # A stopped team is waited for no longer by the reviews beside it.
-        self.release_reviews(team.parent_id)
+        self.reviews.release_reviews(team.parent_id)
         if team.parent_id is not None:
             self.team_messaging.tell_manager(
                 team.parent_id,

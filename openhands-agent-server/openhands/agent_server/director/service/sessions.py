@@ -63,7 +63,6 @@ class Sessions(Splits):
             request_routing=lambda: self.request_routing,
             launcher=self._require_launcher,
             checkout_for_session=self._checkout_for_session,
-            settle_on_close=self._settle_on_close,
-            org_turn=self._org_turn,
-            tell_turns=self._tell_turns,
+            reviews=self.reviews,
+            session_merges=self.session_merges,
         )

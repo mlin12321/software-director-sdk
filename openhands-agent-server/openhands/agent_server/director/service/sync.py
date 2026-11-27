@@ -45,7 +45,7 @@ class Sync(Sessions):
             working=self._working,
             lane_of=lane_for,
             task_of=self._task_of,
-            release_reviews=self.release_reviews,
+            reviews=self.reviews,
             changed_since_accept=self._changed_since_accept,
         )
 

@@ -35,9 +35,7 @@ from openhands.agent_server.director.prompts import (
 from openhands.agent_server.director.routing import USAGE_ID
 from openhands.agent_server.director.run_state import SESSION
 from openhands.agent_server.director.service import DirectorService
-from openhands.agent_server.director.service.state import (
-    MERGE_WAITS,
-)
+from openhands.agent_server.director.service.review_service import MERGE_WAITS
 from openhands.agent_server.director.tools import (
     PruneTeamTool,
     RaiseEscalationTool,
@@ -1522,22 +1520,22 @@ async def test_an_acceptance_cut_off_before_its_landing_lands_when_it_is_run_aga
     await use(service, ic(service), WriteSpecTool, WriteSpecAction(file_text="# Spec"))
     await use(service, ic(service), SubmitReviewTool, DONE)
     top = node(service, "root")
-    land = service._land_accepted
+    land = service.session_merges.land_accepted
 
     def cut_off(*args: object) -> None:
         raise RuntimeError("the server ends here")
 
-    monkeypatch.setattr(service, "_land_accepted", cut_off)
+    monkeypatch.setattr(service.session_merges, "land_accepted", cut_off)
     await use(service, division_lead_ic(service), ReviewTeamTool, accept(top.id))
     await service.settled()
-    monkeypatch.setattr(service, "_land_accepted", land)
+    monkeypatch.setattr(service.session_merges, "land_accepted", land)
 
     # What a restart does with the step that was still open.
     service.resumable_work.begin(top.id, Accept(needed_above="", base=True))
     await service.settled()
 
     assert service.team_memory.read("spec.md") == "# Spec"
-    assert service._in_order() == []
+    assert service.session_merges._in_order() == []
 
 
 async def test_work_that_waited_for_the_human_is_merged_as_its_reviewer_decided(

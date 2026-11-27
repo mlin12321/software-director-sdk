@@ -977,8 +977,8 @@ async def test_work_is_not_accepted_past_earlier_work_that_still_waits(
 
     # Both were checked before either was carried out.
     for team in (first, second):
-        service.check_accept(team, "")
-        service.accept_review(team, "")
+        service.reviews.check_accept(team, "")
+        service.reviews.accept_review(team, "")
     await service.settled()
 
     states = [node(service, team).review for team in (first, second)]

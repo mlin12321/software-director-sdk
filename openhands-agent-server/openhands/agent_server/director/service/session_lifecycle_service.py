@@ -70,11 +70,15 @@ from openhands.agent_server.director.service.request_routing_service import (
 from openhands.agent_server.director.service.resumable_work_service import (
     ResumableWorkService,
 )
+from openhands.agent_server.director.service.review_service import ReviewService
 from openhands.agent_server.director.service.session_document_service import (
     SessionDocumentService,
 )
 from openhands.agent_server.director.service.session_draft_service import (
     SessionDraftService,
+)
+from openhands.agent_server.director.service.session_merge_service import (
+    SessionMergeService,
 )
 from openhands.agent_server.director.service.team_history_service import (
     ASKED_KEPT,
@@ -155,12 +159,8 @@ class SessionLifecycleService:
     """What reaches the conversations; raises where there is none."""
     checkout_for_session: Callable[[str], None]
     """Gives the team a session is opened at the checkout it works in."""
-    settle_on_close: Callable[[SessionTeam], None]
-    """Settles what waits for a review of a session that is closed."""
-    org_turn: Callable[[], None]
-    """Has the next session whose work waits take its turn to land."""
-    tell_turns: Callable[[], None]
-    """Tells the sessions that wait where they stand in line."""
+    reviews: ReviewService
+    session_merges: SessionMergeService
 
     async def open_session(
         self,
@@ -694,7 +694,8 @@ class SessionLifecycleService:
                     self.check_counts.work_accepted(team)
             if top is not None:
                 await self.work_queue.run_in(
-                    BASE_LANE, lambda: asyncio.to_thread(self.settle_on_close, top)
+                    BASE_LANE,
+                    lambda: asyncio.to_thread(self.session_merges.settle_on_close, top),
                 )
                 gone = await asyncio.to_thread(self.session_documents.leave, top)
                 # Once: a step cut off after it would record it again.
@@ -722,8 +723,8 @@ class SessionLifecycleService:
                     )
                     intent = run.step_done(intent, "told")
             store.close_session(plan.session)
-            await asyncio.to_thread(self.org_turn)
-            self.tell_turns()
+            await asyncio.to_thread(self.session_merges.org_turn)
+            self.reviews.tell_turns()
             await self.org_save.save()
             intent = run.step_done(intent, "removed")
         self.message_delivery.stop_waiting(intent.id)

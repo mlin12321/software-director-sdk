@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import Literal
 from uuid import UUID, uuid4
 
-from openhands.agent_server.director.agent_types import TeamTemplate
 from openhands.agent_server.director.documents.store import DocumentRef
 from openhands.agent_server.director.documents.team_documents import TeamDocuments
 from openhands.agent_server.director.environment import EnvironmentFailed
@@ -78,6 +77,7 @@ from openhands.agent_server.director.service.resumable_work_service import (
     Held,
     ResumableWorkService,
 )
+from openhands.agent_server.director.service.review_service import ReviewService
 from openhands.agent_server.director.service.session_document_service import (
     SessionDocumentService,
 )
@@ -192,8 +192,7 @@ class TeamSplitService:
     """What reaches the conversations; raises where there is none."""
     is_running: Callable[[], bool]
     """Whether the director is running agents on this server."""
-    review_instructions: Callable[[TeamTemplate], str]
-    """What the IC above checks the work of a team of a type by."""
+    reviews: ReviewService
     retry: float
     """How many seconds lie between two tries to start a hand-over."""
 
@@ -441,7 +440,9 @@ class TeamSplitService:
                             below.review,
                             self.team_context.so_far(below),
                             self.team_context.asked_of(below),
-                            self.review_instructions(self.team_types.type_of(below)),
+                            self.reviews.review_instructions(
+                                self.team_types.type_of(below)
+                            ),
                             self.team_types.kept_documents(above).read_by_sub_teams,
                         ),
                     )

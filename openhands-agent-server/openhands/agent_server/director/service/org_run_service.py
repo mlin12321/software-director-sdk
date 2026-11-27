@@ -59,6 +59,7 @@ from openhands.agent_server.director.service.org_state_service import OrgStateSe
 from openhands.agent_server.director.service.resumable_work_service import (
     ResumableWorkService,
 )
+from openhands.agent_server.director.service.review_service import ReviewService
 from openhands.agent_server.director.service.stall_watch_service import (
     STALL_WAITS,
 )
@@ -151,8 +152,7 @@ class OrgRunService:
     """The lane a step is carried out in."""
     task_of: Callable[[SessionTeam], str]
     """What a team that is started again is to do."""
-    release_reviews: Callable[[str | None], None]
-    """Hands the reviews that wait to the team that is free for them."""
+    reviews: ReviewService
     changed_since_accept: dict[str, bool]
     """The sessions that changed something of the org's after their work
     was accepted, and whether their IC was told to submit it. Shared
@@ -254,7 +254,7 @@ class OrgRunService:
             )
         for place_id in run.marked(HELD):
             submitted = store.place(place_id)
-            self.release_reviews(submitted.parent_id if submitted else None)
+            self.reviews.release_reviews(submitted.parent_id if submitted else None)
         for conversation_id, note in again.items():
             self.work_queue.enqueue(
                 lambda conversation_id=conversation_id, note=note: (
@@ -599,12 +599,12 @@ class OrgRunService:
                 self._runs_again(now, role)
             if now.status == "blocked" and was != "blocked":
                 # A blocked team is no longer waited for.
-                self.release_reviews(node.parent_id)
+                self.reviews.release_reviews(node.parent_id)
             if (
                 role == self.team_types.team(node).writer
                 and status == ConversationExecutionStatus.RUNNING
             ):
-                self.release_reviews(node.id)
+                self.reviews.release_reviews(node.id)
             if status != ConversationExecutionStatus.RUNNING:
                 self._remind_to_submit(node.session)
 
