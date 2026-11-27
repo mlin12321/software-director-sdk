@@ -20,7 +20,7 @@ from openhands.agent_server.director.models import (
 from openhands.agent_server.director.pricing import priced
 from openhands.agent_server.director.run_state import USE
 from openhands.agent_server.director.service import DirectorService
-from openhands.agent_server.director.service.state import LIMIT_WAITS
+from openhands.agent_server.director.service.session_limit_service import LIMIT_WAITS
 from openhands.agent_server.models import StartConversationRequest
 from openhands.sdk import LLM, Agent
 from openhands.sdk.agent import ACPAgent
@@ -62,7 +62,7 @@ def uses(launcher: FakeLauncher, conversation: str | None, *used: float) -> None
 
 async def counted(service: DirectorService) -> Session:
     """The director adds up what was used, as its timer does."""
-    await service._count_use()
+    await service.session_limits.count_use()
     await service.settled()
     [session] = service.org.sessions()
     return session

@@ -58,10 +58,6 @@ from openhands.agent_server.director.run_state import (
 from openhands.agent_server.director.service.agent_confinement_service import (
     AgentConfinementService,
 )
-from openhands.agent_server.director.service.agent_start_service import (
-    REASON_KEPT,
-    AgentStartService,
-)
 from openhands.agent_server.director.service.check_count_service import (
     CheckCountService,
 )
@@ -88,7 +84,11 @@ from openhands.agent_server.director.service.team_context_service import (
     TeamContextService,
 )
 from openhands.agent_server.director.service.team_history_service import (
+    REASON_KEPT,
     TeamHistoryService,
+)
+from openhands.agent_server.director.service.team_member_start_service import (
+    TeamMemberStartService,
 )
 from openhands.agent_server.director.service.team_messaging_service import (
     TeamMessagingService,
@@ -179,7 +179,7 @@ class TeamSplitService:
     team_summaries: TeamSummaryService
     team_messaging: TeamMessagingService
     message_delivery: MessageDeliveryService
-    agent_start: AgentStartService
+    member_start: TeamMemberStartService
     check_counts: CheckCountService
     confinement: AgentConfinementService
     session_documents: SessionDocumentService
@@ -704,11 +704,11 @@ class TeamSplitService:
                 # One hand-over at a time: the one before it ends here.
                 with suppress(NotFound):
                     await self.launcher().pause(UUID(before))
-        if await self.agent_start.start_hand_over(place, conversation, job):
+        if await self.member_start.start_hand_over(place, conversation, job):
             return
         # Once more, after what a full server is given to make room.
         await asyncio.sleep(self.retry)
-        if await self.agent_start.start_hand_over(place, conversation, job):
+        if await self.member_start.start_hand_over(place, conversation, job):
             return
         run.unmark(HANDING, place.id)
         # The mode stays on the IC as lost, for whoever looks at the team.

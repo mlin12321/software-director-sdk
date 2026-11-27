@@ -32,8 +32,8 @@ from openhands.agent_server.director.service.team_messaging_service import (
     TeamMessagingService,
 )
 from openhands.sdk.conversation.state import ConversationExecutionStatus
-from tests.agent_server.director.test_agent_start_service import ROOT, A, Starts
 from tests.agent_server.director.test_team_documents import RootAboveApi
+from tests.agent_server.director.test_team_member_start_service import ROOT, A, Starts
 
 
 NOW = datetime(2026, 1, 2, tzinfo=UTC)
@@ -55,6 +55,7 @@ class Messaging(Starts):
         )
         self.joined: list[str] = []
         self.messaging = TeamMessagingService(
+            release_reviews=lambda place_id: None,
             org=lambda: self.store,
             org_state=self.org_state,
             org_settings=OrgSettingsService(
@@ -76,7 +77,7 @@ class Messaging(Starts):
                 org=lambda: self.store, run_state=self.org_state.run_state
             ),
             message_delivery=self.message_delivery,
-            agent_start=self.service,
+            member_start=self.service,
             resumable_work=ResumableWorkService(
                 run_state=self.org_state.run_state,
                 work_queue=self.queue,

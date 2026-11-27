@@ -5,6 +5,7 @@ from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 from uuid import uuid4
 
 import pytest
@@ -21,9 +22,8 @@ from openhands.agent_server.director.run_state import TOLD
 from openhands.agent_server.director.service.agent_confinement_service import (
     AgentConfinementService,
 )
-from openhands.agent_server.director.service.agent_start_service import (
-    AgentStartService,
-    agent_title,
+from openhands.agent_server.director.service.check_count_service import (
+    CheckCountService,
 )
 from openhands.agent_server.director.service.message_delivery_service import (
     MessageDeliveryService,
@@ -32,6 +32,13 @@ from openhands.agent_server.director.service.org_save_service import OrgSaveServ
 from openhands.agent_server.director.service.org_state_service import OrgStateService
 from openhands.agent_server.director.service.start_line_service import (
     StartLineService,
+)
+from openhands.agent_server.director.service.team_member_start_service import (
+    TeamMemberStartService,
+)
+from openhands.agent_server.director.service.team_summary_service import (
+    TeamSummaryService,
+    agent_title,
 )
 from openhands.agent_server.director.service.team_type_service import (
     TeamTypeService,
@@ -115,7 +122,13 @@ class Starts:
             default_lane="org",
             retry=0,
         )
-        self.service = AgentStartService(
+        self.service = TeamMemberStartService(
+            check_counts=CheckCountService(
+                org=lambda: self.store, run_state=self.org_state.run_state
+            ),
+            team_summaries=cast(TeamSummaryService, None),
+            work_queue=self.queue,
+            progressed=lambda *said, **named: None,
             checkouts=GitCheckouts(),
             org=lambda: self.store,
             repo_dir=lambda: repo,

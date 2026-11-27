@@ -21,7 +21,6 @@ from openhands.agent_server.director.org_store import (
     division_lead_id,
     instant,
 )
-from openhands.agent_server.director.service.agent_start_service import agent_title
 from openhands.agent_server.director.service.model_call_service import (
     ModelCallService,
 )
@@ -44,6 +43,20 @@ from openhands.sdk.logger import get_logger
 
 
 logger = get_logger(__name__)
+
+
+def agent_title(
+    team: str, name: str, session: str = "", *, division_lead: bool = False
+) -> str:
+    """What an agent's conversation is called. The session is named unless
+    it is called what its team is, and the agents a session's work is
+    reviewed by are called its Division Leads.
+
+    Args:
+        name: What the agent's member is called.
+    """
+    where = f"{team} · {session}" if session and session != team else team
+    return f"{where} ({'Division Lead ' + name if division_lead else name})"
 
 
 @dataclass

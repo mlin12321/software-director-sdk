@@ -48,10 +48,6 @@ from openhands.agent_server.director.run_state import (
 from openhands.agent_server.director.service.agent_confinement_service import (
     AgentConfinementService,
 )
-from openhands.agent_server.director.service.agent_start_service import (
-    AgentStartService,
-    agent_title,
-)
 from openhands.agent_server.director.service.check_count_service import (
     CheckCountService,
 )
@@ -84,12 +80,16 @@ from openhands.agent_server.director.service.team_history_service import (
     ASKED_KEPT,
     TeamHistoryService,
 )
+from openhands.agent_server.director.service.team_member_start_service import (
+    TeamMemberStartService,
+)
 from openhands.agent_server.director.service.team_messaging_service import (
     TeamMessagingService,
 )
 from openhands.agent_server.director.service.team_split_service import TeamSplitService
 from openhands.agent_server.director.service.team_summary_service import (
     TeamSummaryService,
+    agent_title,
 )
 from openhands.agent_server.director.service.team_type_service import TeamTypeService
 from openhands.agent_server.director.service.work_queue_service import (
@@ -143,7 +143,7 @@ class SessionLifecycleService:
     team_summaries: TeamSummaryService
     team_messaging: TeamMessagingService
     message_delivery: MessageDeliveryService
-    agent_start: AgentStartService
+    member_start: TeamMemberStartService
     check_counts: CheckCountService
     confinement: AgentConfinementService
     session_documents: SessionDocumentService
@@ -157,8 +157,6 @@ class SessionLifecycleService:
     :meth:`hand_on`, so it is asked for when it is needed."""
     launcher: Callable[[], TeamLauncher]
     """What reaches the conversations; raises where there is none."""
-    checkout_for_session: Callable[[str], None]
-    """Gives the team a session is opened at the checkout it works in."""
     reviews: ReviewService
     session_merges: SessionMergeService
 
@@ -219,7 +217,7 @@ class SessionLifecycleService:
         above = store.team(team.parent_id) if team.parent_id else team
         if above is None:
             raise NotFound(f"Unknown team: {team.parent_id}")
-        if conversation is None and await self.agent_start.template() is None:
+        if conversation is None and await self.member_start.template() is None:
             raise Conflict(
                 "No conversation of the org runs on this server to start the "
                 f"session's {self.team_types.type_of(team).names.writer} from. Send "
@@ -421,7 +419,7 @@ class SessionLifecycleService:
             or "",
             boundary_enforcement=self.confinement.enforcement(started.kind),
         )
-        self.checkout_for_session(top.id)
+        self.member_start.checkout_for_session(top.id)
         self.team_messaging.progressed(top.id)
         self.message_delivery.joined(str(ic_id))
         self.work_queue.enqueue(

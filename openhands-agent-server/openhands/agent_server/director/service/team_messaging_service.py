@@ -16,6 +16,7 @@ from openhands.agent_server.director.intents import LaunchMember, StartTeam
 from openhands.agent_server.director.launch import TeamLauncher
 from openhands.agent_server.director.models import (
     AgentRef,
+    Escalation,
     OrgNode,
     SessionTeam,
     Stopped,
@@ -42,9 +43,6 @@ from openhands.agent_server.director.run_state import (
     RUNNING,
     TASK,
 )
-from openhands.agent_server.director.service.agent_start_service import (
-    AgentStartService,
-)
 from openhands.agent_server.director.service.check_count_service import (
     CheckCountService,
 )
@@ -69,12 +67,16 @@ from openhands.agent_server.director.service.stall_watch_service import (
 from openhands.agent_server.director.service.team_history_service import (
     TeamHistoryService,
 )
+from openhands.agent_server.director.service.team_member_start_service import (
+    TeamMemberStartService,
+)
 from openhands.agent_server.director.service.team_type_service import (
     TeamTypeService,
 )
 from openhands.agent_server.director.service.work_queue_service import WorkQueueService
 from openhands.sdk.conversation.state import ConversationExecutionStatus
 from openhands.sdk.errors import (
+    Conflict,
     Invalid,
     NotFound,
 )
@@ -122,7 +124,7 @@ class TeamMessagingService:
     """What a Manager's checks count."""
     message_delivery: MessageDeliveryService
     """Sends an agent a message."""
-    agent_start: AgentStartService
+    member_start: TeamMemberStartService
     """Says where a member that has no conversation yet is derived from."""
     resumable_work: ResumableWorkService
     """Begins the step that starts a member."""
@@ -133,6 +135,10 @@ class TeamMessagingService:
     joined: Callable[[str], None]
     """Notes that the human has written in a conversation."""
     clock: Callable[[], datetime]
+    release_reviews: Callable[[str | None], None]
+    """Hands the reviews that wait at a team to its IC
+    (:meth:`ReviewService.release_reviews`); a function, because that
+    service holds this one."""
     """The time, for when a team last made progress."""
     _adding_manager: threading.Lock = field(default_factory=threading.Lock, init=False)
 
@@ -483,9 +489,9 @@ class TeamMessagingService:
                     StartTeam(
                         task=f"{purpose}{STARTED_WITH}{text}",
                         purpose=purpose,
-                        parent=self.agent_start.derived_from(place),
+                        parent=self.member_start.derived_from(place),
                         checkout=place.worktree_path
-                        if self.agent_start.in_place(place)
+                        if self.member_start.in_place(place)
                         else None,
                     ),
                 )
@@ -711,3 +717,80 @@ class TeamMessagingService:
         if wrote is not None and wrote not in done["written"]:
             done["written"].append(wrote)
         run.mark(HANDING, place_id, json.dumps(done))
+
+    def hand_escalation(
+        self,
+        holder_id: str,
+        raiser: SessionTeam,
+        through: SessionTeam,
+        escalation: Escalation,
+        passed_up: list[str],
+    ) -> None:
+        """Tell the agent that now holds an escalation. Safe from any thread.
+
+        Args:
+            through: The team directly below the holder that it comes from:
+                the one that raised it, or the one that passed it up.
+        """
+        holder = self.org().place(holder_id)
+        if holder is None:
+            return
+        history = "".join(f"\nPassed up by {entry}" for entry in passed_up)
+        if escalation.raised_by == self.team_types.team(raiser).writer:
+            # It is woken now anyway, so it gets what waits for its review too.
+            self.release_reviews(holder_id)
+            self.count_escalation_from_below(holder_id, through.id)
+        raised_by = escalation.raised_by
+        text = (
+            f"The {self.team_types.team(raiser).title(raised_by)} of team "
+            f"{raiser.title!r} (id {raiser.id}) escalates {escalation.title!r} "
+            f"(escalation {escalation.id}):\n"
+            f"{escalation.detail or '(no detail)'}{history}\n"
+            "Settle it with resolve_escalation if you can; pass it up only with "
+            "the reason you cannot."
+        )
+        self.tell(
+            holder_id, self.team_types.team(holder).answers(escalation.raised_by), text
+        )
+
+    def stop_team(self, place_id: str, reason: str) -> None:
+        """Stop a team for the IC of the team above: its agents and those
+        of every team below it end the step they are in and are sent
+        nothing until that IC writes to the team. Safe from any thread.
+
+        Raises:
+            NotFound: The team does not exist.
+            Conflict: It is stopped already.
+        """
+        names = self.team_types.names_at(place_id)
+        store = self.org()
+        team = store.place(place_id)
+        if team is None:
+            raise NotFound(f"Team {place_id} does not exist")
+        if team.stopped is not None:
+            raise Conflict(f"Team {place_id} is stopped already")
+        running = [
+            conversation_id
+            for conversation_id in self.org().conversations_below(team)
+            if conversation_id in self.org_state.running
+        ]
+        store.set_stopped(
+            place_id, Stopped(at=utc_now(), reason=reason, running=sorted(running))
+        )
+        if self.work_queue.is_open:
+            self.work_queue.enqueue(lambda: self.stop(place_id), place_id)
+        self.org_save.save_soon()
+        self.team_history.record_event(team.parent_id, "stopped", team, reason)
+        # A stopped team is waited for no longer by the reviews beside it.
+        self.release_reviews(team.parent_id)
+        if team.parent_id is not None:
+            self.tell_manager(
+                team.parent_id,
+                f"Your {names.writer} stopped the team {team.title!r} (id {team.id}): "
+                f"{reason}\nIts agents are at rest and nothing is sent to "
+                f"them. It goes on when your {names.writer} writes to it with "
+                "msg_team. "
+                "Nothing is asked of you. If it should not go on at all, you "
+                f"may remove it with prune_team, or have your {names.writer} propose "
+                "teams that take its place.",
+            )

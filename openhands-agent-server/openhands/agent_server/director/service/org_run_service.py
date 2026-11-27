@@ -44,10 +44,6 @@ from openhands.agent_server.director.run_state import (
 from openhands.agent_server.director.service.agent_confinement_service import (
     AgentConfinementService,
 )
-from openhands.agent_server.director.service.agent_start_service import (
-    AgentStartService,
-    agent_title,
-)
 from openhands.agent_server.director.service.message_delivery_service import (
     MessageDeliveryService,
 )
@@ -64,12 +60,16 @@ from openhands.agent_server.director.service.stall_watch_service import (
     STALL_WAITS,
 )
 from openhands.agent_server.director.service.start_line_service import StartLineService
+from openhands.agent_server.director.service.team_member_start_service import (
+    TeamMemberStartService,
+)
 from openhands.agent_server.director.service.team_messaging_service import (
     STARTED_WITH,
     TeamMessagingService,
     failure_waits,
 )
 from openhands.agent_server.director.service.team_split_service import TeamSplitService
+from openhands.agent_server.director.service.team_summary_service import agent_title
 from openhands.agent_server.director.service.team_type_service import TeamTypeService
 from openhands.agent_server.director.service.work_queue_service import (
     ORG_LANE,
@@ -131,7 +131,7 @@ class OrgRunService:
     message_delivery: MessageDeliveryService
     team_messaging: TeamMessagingService
     team_types: TeamTypeService
-    agent_start: AgentStartService
+    member_start: TeamMemberStartService
     confinement: AgentConfinementService
     resumable_work: ResumableWorkService
     work_queue: WorkQueueService
@@ -150,8 +150,6 @@ class OrgRunService:
     """Records that the org is run by this server."""
     lane_of: Callable[[Intent], str]
     """The lane a step is carried out in."""
-    task_of: Callable[[SessionTeam], str]
-    """What a team that is started again is to do."""
     reviews: ReviewService
     changed_since_accept: dict[str, bool]
     """The sessions that changed something of the org's after their work
@@ -381,7 +379,7 @@ class OrgRunService:
                 f"The {names.writer} of team {place.title} has a conversation here"
             )
         conversation = request.conversation
-        like = self.agent_start.derived_from(place) if leads else place.parent_id
+        like = self.member_start.derived_from(place) if leads else place.parent_id
         above = store.place(like) if like else None
         # A session's IC that never started has no checkout yet: it gets
         # one of its own, never the one of the team it works beside.
@@ -397,8 +395,8 @@ class OrgRunService:
             )
         if (
             conversation is None
-            and await self.agent_start.started_ic(above) is None
-            and await self.agent_start.template() is None
+            and await self.member_start.started_ic(above) is None
+            and await self.member_start.template() is None
         ):
             raise Conflict(
                 "No conversation of the org runs on this server to start "
@@ -410,7 +408,11 @@ class OrgRunService:
         )
         ic_id = uuid4()
         task = await asyncio.to_thread(
-            lambda: self.team_messaging.purpose(place) if leads else self.task_of(place)
+            lambda: (
+                self.team_messaging.purpose(place)
+                if leads
+                else self.member_start.task_of(place)
+            )
         )
         if said:
             task = (
@@ -433,7 +435,7 @@ class OrgRunService:
                     task=task,
                     parent=like,
                     checkout=place.worktree_path
-                    if own_checkout or self.agent_start.in_place(place)
+                    if own_checkout or self.member_start.in_place(place)
                     else None,
                 ),
             )

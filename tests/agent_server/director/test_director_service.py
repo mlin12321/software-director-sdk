@@ -196,7 +196,7 @@ async def test_a_team_started_again_is_briefed_with_what_it_reported(
     root = node(service, "root")
     report(service, root, "manager", "The API team needs a schema first.")
 
-    briefing, _ = service.agent_start.briefing(root, "ic", "Build")
+    briefing, _ = service.member_start.briefing(root, "ic", "Build")
 
     assert "Manager, " in briefing
     assert "The API team needs a schema first." in briefing
