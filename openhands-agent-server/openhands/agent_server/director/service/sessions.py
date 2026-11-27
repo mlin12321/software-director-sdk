@@ -2,6 +2,7 @@
 
 import asyncio
 from datetime import UTC, datetime
+from functools import cached_property
 from itertools import count
 from pathlib import Path
 from uuid import UUID, uuid4
@@ -29,6 +30,7 @@ from openhands.agent_server.director.org_store import (
 )
 from openhands.agent_server.director.prompts import (
     handed_up,
+    misrouted_notice,
     session_brief,
 )
 from openhands.agent_server.director.run_state import (
@@ -37,6 +39,9 @@ from openhands.agent_server.director.run_state import (
     TASK,
     TOLD,
     Intent,
+)
+from openhands.agent_server.director.service.request_routing_service import (
+    RequestRoutingService,
 )
 from openhands.agent_server.director.service.splits import Splits
 from openhands.agent_server.director.service.state import (
@@ -71,6 +76,21 @@ _TITLE_LENGTH = 60
 
 class Sessions(Splits):
     """Opens and closes the human's sessions."""
+
+    @cached_property
+    def request_routing(self) -> RequestRoutingService:
+        """Chooses the team a request goes straight to. Built here, where
+        everything it is given is defined."""
+        return RequestRoutingService(
+            org=lambda: self.org,
+            model_calls=self.model_calls,
+            checkout=lambda: self._repo_dir,
+            purpose=self._purpose,
+            routed_requests=self.routed_requests,
+            keep_routed=self.keep_routed,
+            hand_on=self._hand_on,
+            paused=lambda: self._paused is not None,
+        )
 
     def sessions(self) -> list[Session]:
         """The sessions that are open, oldest first."""
@@ -125,7 +145,7 @@ class Sessions(Splits):
             if team is None:
                 raise NotFound(f"Unknown team: {request.node_id}")
         elif self.settings.route_requests and store.sub_teams(root.id):
-            choice = await self.choose_team(text, root)
+            choice = await self.request_routing.choose_team(text, root)
             chosen_by, reason = choice.by, choice.reason
             team = store.team(choice.node_id) or root
         else:
@@ -332,12 +352,20 @@ class Sessions(Splits):
     def _hand_on(
         self, place: SessionTeam, above: SessionTeam, request: RoutedRequest, why: str
     ) -> str:
-        """Nobody works above the team a session was opened at, so a
-        request that team says is not its own goes one team up the org, in
-        a session of its own, and to the human only from the top."""
+        """Give a request a team said is not its own to the IC above it.
+
+        Nobody works above the team a session was opened at, so what that
+        team hands back goes one team up the org, in a session of its own,
+        and to the human only from the top."""
         names = self.team(place).names
         if not is_division_lead(above):
-            return super()._hand_on(place, above, request, why)
+            self.tell_writer(
+                above.id, misrouted_notice(place, request.text, why, names=names)
+            )
+            return (
+                f"Handed to the {names.writer} of the team above ({above.title}). "
+                "It is no longer yours; go on with your own work."
+            )
         own = self.org.team(place.team_id)
         higher = self.org.team(own.parent_id or "") if own else None
         try:

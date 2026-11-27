@@ -476,7 +476,7 @@ def raise_escalation(
         raise Invalid("An escalation needs a title")
     if kind == "misrouted":
         _writes(service, caller, "say a request is not its team's")
-        return service.not_ours(
+        return service.request_routing.not_ours(
             caller.node, ": ".join(filter(None, (title.strip(), detail.strip())))
         )
     store = service.org

@@ -86,7 +86,6 @@ from openhands.agent_server.director.run_state import (
 from openhands.agent_server.director.service.records import (
     Taken,
 )
-from openhands.agent_server.director.service.requests import Requests
 from openhands.agent_server.director.service.state import (
     _LANE,
     _REST_CHECK_SECONDS,
@@ -99,6 +98,7 @@ from openhands.agent_server.director.service.state import (
     _branch_of,
     checkout_root,
 )
+from openhands.agent_server.director.service.teams import Teams
 from openhands.agent_server.director.split import (
     Shape,
     Side,
@@ -185,7 +185,7 @@ def _same(item: MergeItem) -> tuple[str | None, ...]:
     )
 
 
-class Reviews(Requests):
+class Reviews(Teams):
     """Carries a team's work through its review."""
 
     def request_review(self, place_id: str) -> None:

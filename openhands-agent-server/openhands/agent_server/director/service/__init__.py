@@ -279,7 +279,9 @@ class DirectorService(Sync):
         chosen_by: ChosenBy = "path"
         reason = ""
         if self.settings.route_requests and len(places) > 1:
-            choice = await self.choose_team(text, top, within=session_id)
+            choice = await self.request_routing.choose_team(
+                text, top, within=session_id
+            )
             chosen_by, reason = choice.by, choice.reason
             place = store.instance(choice.node_id, session_id) or top
         conversation_id = await asyncio.to_thread(
@@ -367,7 +369,7 @@ class DirectorService(Sync):
         chosen_by: ChosenBy = "path"
         reason = ""
         if request.auto and self.settings.route_requests:
-            choice = await self.choose_team(text, node)
+            choice = await self.request_routing.choose_team(text, node)
             chosen_by, reason = choice.by, choice.reason
             node = store.team(choice.node_id) or node
         elif path != node.boundary.path:

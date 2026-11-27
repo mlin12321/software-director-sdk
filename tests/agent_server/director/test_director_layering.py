@@ -80,7 +80,13 @@ def test_the_directors_own_parts_do_not_know_the_shipped_orgs_or_the_service(
     assert not reached
 
 
-@pytest.mark.parametrize("module", ["service/model_call_service.py"])
+SERVICES_THE_DIRECTOR_HOLDS = [
+    "service/model_call_service.py",
+    "service/request_routing_service.py",
+]
+
+
+@pytest.mark.parametrize("module", SERVICES_THE_DIRECTOR_HOLDS)
 def test_a_service_the_director_holds_is_not_given_the_director(module: str):
     # A part of the service is given what it needs and is held by the
     # service; it does not reach back into the mixins that hold it.
@@ -89,8 +95,13 @@ def test_a_service_the_director_holds_is_not_given_the_director(module: str):
         for name in _imports(module)
         if name.startswith("openhands.agent_server.director.service")
     }
+    held = {
+        "openhands.agent_server.director." + path.removesuffix(".py").replace("/", ".")
+        for path in SERVICES_THE_DIRECTOR_HOLDS
+    }
 
-    assert not reached
+    # One such service may hold another, as the agent server's own do.
+    assert reached <= held
     assert "DirectorService" not in (DIRECTOR / module).read_text(encoding="utf-8")
 
 
