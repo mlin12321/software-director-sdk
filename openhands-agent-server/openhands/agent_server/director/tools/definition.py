@@ -15,6 +15,7 @@ from openhands.agent_server.director.documents.protocol import (
     DocumentProtocolBase,
     when_declared,
 )
+from openhands.agent_server.director.models import DocumentChoice
 from openhands.agent_server.director.tools import catalog
 from openhands.agent_server.director.tools.documents import document_tool
 from openhands.agent_server.director.tools.impl import (
@@ -370,7 +371,14 @@ def _ask_for(asked: DocumentArgument) -> None:
     if asked.name in takes.model_fields:
         raise ValueError(f"{asked.tool} already takes {asked.name!r}")
     added: dict[str, Any] = {
-        asked.name: (str, Field(default="", description=asked.description))
+        asked.name: (
+            (
+                list[DocumentChoice],
+                Field(default_factory=list, description=asked.description),
+            )
+            if asked.per_folder
+            else (str, Field(default="", description=asked.description))
+        )
     }
     extended = create_model(
         takes.__name__,

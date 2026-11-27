@@ -3,6 +3,7 @@
 import asyncio
 import hashlib
 import json
+from collections.abc import Mapping
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import NamedTuple
@@ -42,7 +43,7 @@ from openhands.agent_server.director.merge_checkout import (
     prepare,
 )
 from openhands.agent_server.director.models import (
-    ContractsChoice,
+    DocumentChoice,
     Merge,
     MergeItem,
     OrgNodeInput,
@@ -875,14 +876,14 @@ class Reviews(Requests):
         review_id: str,
         teams: list[TeamChoice],
         note: str,
-        contracts: list[ContractsChoice] | None = None,
+        choices: Mapping[str, list[DocumentChoice]] | None = None,
     ) -> str:
         """Settle what a session's work makes of the org's teams and
         contracts that waits at its Division Lead place. A team
         becomes what the session has unless ``teams`` says the org's
         stays; taken from the session, it may be put under another team
-        of the org or called otherwise. Of contracts that wait, the
-        session's hold unless ``contracts`` says otherwise. Nothing is the
+        of the org or called otherwise. Of a document that waits, the
+        session's holds unless ``choices`` says otherwise. Nothing is the
         org's by this alone: it lands when the session's code is accepted
         and it is its turn. Safe from any thread.
 
@@ -916,16 +917,26 @@ class Reviews(Requests):
             placed = {choice.team: choice for choice in teams}
             for choice in teams:
                 self._check_placement(top, choice)
-            agreed = [item.key for item in waiting if item.waits_with_teams]
+            agreed = [
+                (item.document, item.key) for item in waiting if item.waits_with_teams
+            ]
             chosen = {
-                normalize_store_path(choice.path): choice for choice in contracts or []
+                (document, normalize_store_path(choice.path)): choice
+                for document, of_it in (choices or {}).items()
+                for choice in of_it
             }
-            unknown = [path for path in chosen if path not in agreed]
-            if unknown:
-                raise Invalid(
-                    f"No contracts wait for: {', '.join(unknown)}. The folders "
-                    f"whose contracts wait: {', '.join(agreed) or 'none'}"
-                )
+            for document in {document for document, _ in chosen}:
+                unknown = [
+                    path
+                    for named, path in chosen
+                    if named == document and (named, path) not in agreed
+                ]
+                wait = [path for named, path in agreed if named == document]
+                if unknown:
+                    raise Invalid(
+                        f"No {document} wait for: {', '.join(unknown)}. The folders "
+                        f"whose {document} wait: {', '.join(wait) or 'none'}"
+                    )
             others = [item for item in merge.items if item.gate == "ic"]
             _, now = self._manager_items(top, merge.items)
             if {_same(item) for item in now} != {_same(item) for item in waiting}:
@@ -945,7 +956,11 @@ class Reviews(Requests):
                 )
             settled = []
             for item in waiting:
-                choice = chosen.get(item.key) if item.waits_with_teams else None
+                choice = (
+                    chosen.get((item.document, item.key))
+                    if item.waits_with_teams
+                    else None
+                )
                 place = placed.get(item.key) if item.kind == "team" else None
                 take: Take = "session"
                 if place is not None:

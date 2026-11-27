@@ -12,6 +12,7 @@ from openhands.agent_server.director.documents.protocol import (
     DocumentProtocolBase,
     declare,
     document_arguments,
+    document_choices,
     documents_given,
     register_protocol,
 )
@@ -192,6 +193,16 @@ def test_the_directors_tools_ask_for_what_the_shipped_documents_say():
     assert set(asked("propose_teams")) == {"contracts"}
     assert "types, endpoints" in asked("propose_teams")["contracts"]
     assert set(asked("review_team")) == {"contracts"}
+    settle = tool_named("settle_teams")
+    assert settle is not None
+    chosen = settle.action()(
+        contracts=[{"path": "services/api", "take": "org"}], teams=[]
+    )
+    assert [
+        (document, [choice.path for choice in choices])
+        for document, choices in document_choices("settle_teams", chosen).items()
+    ] == [("contracts", ["services/api"])]
+    assert documents_given("settle_teams", chosen) == {}
     # Another test's document may have added one more.
     assert {"notes", "contracts"} <= set(asked("hand_over"))
     handed = document_arguments("hand_over")

@@ -30,6 +30,7 @@ ReportAction: Any = ReportTool.action()
 ProposeTeamsAction: Any = getattr(tool_named("propose_teams"), "action")()
 ReviewTeamAction: Any = getattr(tool_named("review_team"), "action")()
 HandOverAction: Any = getattr(tool_named("hand_over"), "action")()
+SettleTeamsAction: Any = getattr(tool_named("settle_teams"), "action")()
 
 
 def report(

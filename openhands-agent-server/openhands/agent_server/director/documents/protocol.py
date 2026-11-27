@@ -332,12 +332,15 @@ class DocumentArgument:
         name: What the argument is called.
         description: What the caller is told to give.
         answer: What the caller is answered when it gave something.
+        per_folder: Whether it is not one text but a choice for each
+            folder whose document waits to be settled.
     """
 
     tool: str
     name: str
     description: str
     answer: str = ""
+    per_folder: bool = False
 
 
 # For each tool, the document each of its arguments is given for.
@@ -356,6 +359,17 @@ def documents_given(tool: str, arguments: BaseModel) -> dict[str, str]:
     return {
         document: (getattr(arguments, asked.name, "") or "").strip()
         for document, asked in document_arguments(tool).items()
+        if not asked.per_folder
+    }
+
+
+def document_choices(tool: str, arguments: BaseModel) -> dict[str, list[Any]]:
+    """What a call of ``tool`` chose for each document it asks a choice
+    for, by the name of the document."""
+    return {
+        document: list(getattr(arguments, asked.name, None) or [])
+        for document, asked in document_arguments(tool).items()
+        if asked.per_folder
     }
 
 

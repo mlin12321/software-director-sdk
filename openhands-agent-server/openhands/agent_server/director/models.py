@@ -1409,17 +1409,17 @@ class OpenSessionRequest(BaseModel):
     )
 
 
-class ContractsChoice(BaseModel):
-    """What a Manager decides about contracts that wait for it."""
+class DocumentChoice(BaseModel):
+    """What a Manager decides about a document that waits for it."""
 
-    path: str = Field(description="The directory whose contracts wait.")
+    path: str = Field(description="The directory whose document waits.")
     take: Literal["org", "session", "text"] = Field(
         description=(
             "'org': the org's stay. 'session': the session's hold. 'text': "
             "what is written in `text` holds."
         )
     )
-    text: str = Field(default="", description="The contracts, for 'text'.")
+    text: str = Field(default="", description="What holds, for 'text'.")
 
 
 class SpecChoice(BaseModel):

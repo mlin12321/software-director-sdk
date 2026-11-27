@@ -43,7 +43,6 @@ from openhands.agent_server.director.tools import (
     SettleTeamsTool,
     SubmitReviewTool,
 )
-from openhands.agent_server.director.tools.definition import SettleTeamsAction
 from openhands.sdk.conversation.state import ConversationExecutionStatus
 from tests.agent_server.director.conftest import (
     APPROVE,
@@ -87,6 +86,7 @@ from tests.agent_server.director.conftest import (
     waiting,
     woken,
 )
+from tests.agent_server.director.document_tools import SettleTeamsAction
 
 
 def kinds(recovery) -> list[tuple[str, str]]:

@@ -21,7 +21,7 @@ from openhands.agent_server.director.documents.protocol import (
 from openhands.agent_server.director.git import head_of, uncommitted
 from openhands.agent_server.director.git_store import team_key
 from openhands.agent_server.director.models import (
-    ContractsChoice,
+    DocumentChoice,
     EscalationKind,
     Review,
     ReviewFinding,
@@ -733,9 +733,14 @@ def settle_teams(
     caller: Caller,
     teams: list[TeamChoice],
     note: str,
-    contracts: list[ContractsChoice] | None = None,
+    choices: Mapping[str, list[DocumentChoice]] | None = None,
 ) -> str:
-    """Settle what waits for the caller of a session's teams."""
+    """Settle what waits for the caller of a session's teams.
+
+    Args:
+        choices: For the documents that wait: what holds for each folder,
+            by the name of the document.
+    """
     _has(service, caller, "settle_teams", "settle the sub-teams of a session")
     return service.settle_teams(
         caller.node.id,
@@ -750,7 +755,7 @@ def settle_teams(
             for choice in teams
         ],
         note.strip(),
-        contracts,
+        choices or {},
     )
 
 

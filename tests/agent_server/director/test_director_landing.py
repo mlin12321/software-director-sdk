@@ -11,9 +11,9 @@ import pytest
 from openhands.agent_server.director.changes import accepted_changes
 from openhands.agent_server.director.intents import Accept
 from openhands.agent_server.director.models import (
-    ContractsChoice,
     CreateOrgRequest,
     DirectorSettingsUpdate,
+    DocumentChoice,
     OpenSessionRequest,
     Report,
     RouteMessageRequest,
@@ -47,7 +47,6 @@ from openhands.agent_server.director.tools import (
 )
 from openhands.agent_server.director.tools.definition import (
     RaiseEscalationAction,
-    SettleTeamsAction,
 )
 from openhands.sdk.conversation.state import ConversationExecutionStatus
 from openhands.sdk.errors import NotFound, OperationFailed
@@ -86,6 +85,7 @@ from tests.agent_server.director.document_tools import (
     ReportAction,
     ReportTool,
     ReviewTeamAction,
+    SettleTeamsAction,
     WriteSpecAction,
     WriteSpecTool,
     report,
@@ -685,7 +685,7 @@ async def test_contracts_both_changed_wait_for_the_manager_above(
     service.team_memory.write(
         "services/api", "contracts.md", "Orders and carts go through Jobs.\n"
     )
-    choice = ContractsChoice.model_validate(
+    choice = DocumentChoice.model_validate(
         {
             "path": "services/api",
             "take": take,
@@ -696,7 +696,7 @@ async def test_contracts_both_changed_wait_for_the_manager_above(
         service,
         asked,
         SettleTeamsTool,
-        SettleTeamsAction(contracts=[ContractsChoice(path="apps/web", take="org")]),
+        SettleTeamsAction(contracts=[DocumentChoice(path="apps/web", take="org")]),
     )
     stale = await use(
         service, asked, SettleTeamsTool, SettleTeamsAction(contracts=[choice])
@@ -1250,7 +1250,7 @@ async def test_a_manager_puts_a_team_it_takes_where_it_fits_the_org(
     await use(service, conversation, SubmitReviewTool, DONE)
     asked = division_lead_manager(service, top)
 
-    def placed(**choice: str) -> SettleTeamsAction:
+    def placed(**choice: str) -> Any:
         return SettleTeamsAction(
             teams=[TeamChoice.model_validate({"team": JOBS, **choice})]
         )

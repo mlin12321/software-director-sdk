@@ -10,9 +10,11 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from openhands.agent_server.director import agent_actions
-from openhands.agent_server.director.documents.protocol import documents_given
+from openhands.agent_server.director.documents.protocol import (
+    document_choices,
+    documents_given,
+)
 from openhands.agent_server.director.models import (
-    ContractsChoice,
     EscalationKind,
     ReviewFinding,
     SpecChoice,
@@ -96,13 +98,6 @@ class SettleTeamsArguments(BaseModel):
             "'session' where the team becomes what the session made of it, "
             "which you may put under another team of the org or name "
             "otherwise. Unnamed, a team becomes what the session made of it."
-        ),
-    )
-    contracts: list[ContractsChoice] = Field(
-        default_factory=list,
-        description=(
-            "For contracts that wait: which holds for each folder. "
-            "Unnamed, the session's hold."
         ),
     )
     note: str = Field(
@@ -354,7 +349,11 @@ SETTLE_TEAMS = ToolSpec(
     "accepted and it is the session's turn.",
     arguments=SettleTeamsArguments,
     act=lambda service, caller, action: agent_actions.settle_teams(
-        service, caller, action.teams, action.note, action.contracts
+        service,
+        caller,
+        action.teams,
+        action.note,
+        document_choices("settle_teams", action),
     ),
 )
 

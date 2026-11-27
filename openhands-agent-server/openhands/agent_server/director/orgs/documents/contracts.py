@@ -83,6 +83,13 @@ class ContractsProtocol(DocumentProtocolBase):
                 "has, or took over, sub-teams.",
                 "the contracts between its sub-teams are written",
             ),
+            DocumentArgument(
+                "settle_teams",
+                name,
+                "For contracts that wait: which holds for each folder. "
+                "Unnamed, the session's hold.",
+                per_folder=True,
+            ),
         )
 
     def write(self, call: DocumentToolCall) -> DocumentToolResult:
