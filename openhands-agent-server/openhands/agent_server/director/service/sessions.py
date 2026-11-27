@@ -271,7 +271,7 @@ class Sessions(Splits):
                 )
             except BaseException:
                 # Nothing of a session that never began stays in the record.
-                self._leave(top)
+                self.session_documents.leave(top)
                 for place in store.session(session_id):
                     run.unmark(TASK, place.id)
                 store.close_session(session_id)
@@ -628,7 +628,7 @@ class Sessions(Splits):
                 await self.work_queue.run_in(
                     BASE_LANE, lambda: asyncio.to_thread(self._settle_on_close, top)
                 )
-                gone = await asyncio.to_thread(self._leave, top)
+                gone = await asyncio.to_thread(self.session_documents.leave, top)
                 # Once: a step cut off after it would record it again.
                 if plan.known and "told" not in intent.steps:
                     await asyncio.to_thread(

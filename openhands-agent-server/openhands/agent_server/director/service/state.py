@@ -44,7 +44,6 @@ from openhands.agent_server.director.merge_checkout import MergeCheckout, discar
 from openhands.agent_server.director.models import (
     HandOverMode,
     OrgSummary,
-    Report,
     SessionTeam,
     SessionTeamInput,
     SplitChild,
@@ -84,6 +83,9 @@ from openhands.agent_server.director.service.session_draft_service import (
     SessionDraftService,
 )
 from openhands.agent_server.director.service.start_line_service import StartLineService
+from openhands.agent_server.director.service.team_report_service import (
+    TeamReportService,
+)
 from openhands.agent_server.director.service.team_type_service import (
     TeamTypeService,
 )
@@ -282,8 +284,16 @@ class ServiceState:
             org=lambda: self.org, org_state=self.org_state, retry=run_limit_retry
         )
         self.session_drafts = SessionDraftService(run_state=self.org_state.run_state)
+        self.team_reports = TeamReportService(
+            org=lambda: self.org,
+            team_memory=self._memory,
+            session_drafts=self.session_drafts,
+        )
         self.documents: DocumentStore = GitDocumentStore(
-            self._memory, self.org_state.run_state, self._document_changed, self
+            self._memory,
+            self.org_state.run_state,
+            self._note_change,
+            self.team_reports,
         )
         self.tree: TeamTree = _TeamsOfTheOrg(lambda: self.org)
         self.team_types = TeamTypeService(
@@ -424,14 +434,6 @@ class ServiceState:
     def _memory(self) -> GitStore:
         return GitStore(self._repo_dir)
 
-    def entries(self, team: TeamRef, name: str) -> list[Report]:
-        """What was added to a log of a team; the records keep it."""
-        raise NotImplementedError
-
-    def append(self, team: TeamRef, name: str, entry: Report) -> None:
-        """Add to a log of a team; the records keep it."""
-        raise NotImplementedError
-
     def summary(self) -> OrgSummary:
         store = self.org
         return OrgSummary(
@@ -447,8 +449,13 @@ class ServiceState:
             merging=self.org_state.run_state().get("merge") is not None,
         )
 
-    def _document_changed(self, session: str) -> None:
-        """A session wrote or removed a document."""
+    def _note_change(self, session: str) -> None:
+        """Remember that a session whose work is accepted has changed
+        something since: the org takes it only when it is submitted again."""
+        top = next(iter(self.org.session(session)), None)
+        if top is not None and top.review is not None:
+            if top.review.state == "accepted" and self.org.opens_session(top):
+                self._changed_since_accept.setdefault(session, False)
 
     @property
     def team_documents(self) -> TeamDocuments:

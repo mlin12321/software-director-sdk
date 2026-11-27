@@ -304,7 +304,7 @@ async def test_a_prune_cut_off_after_it_is_recorded_is_recorded_once(
         raise ServerEnded
 
     # The team is on record as pruned by now, and not yet removed.
-    monkeypatch.setattr(first, "_documents_left_in", server_ends)
+    monkeypatch.setattr(first.session_documents, "documents_left_in", server_ends)
     await cut_off(launcher, ended, use(first, manager(first), PruneTeamTool, PRUNE_API))
 
     second = await again(repo, launcher)

@@ -707,7 +707,7 @@ def get_node_memory(
     node = _require_any(service, node_id)
     return NodeMemory(
         documents=service.team_documents.listed(service.team_types.reader_of(node)),
-        reports=service.reports_of(node),
+        reports=service.team_reports.reports_of(node),
         former_teams=[
             FormerTeamSummary.model_validate(former.model_dump())
             for former in service.team_history.former_teams_of(node)

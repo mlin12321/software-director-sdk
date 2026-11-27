@@ -132,7 +132,7 @@ async def test_what_a_session_drafts_is_the_teams_once_its_work_is_accepted(
 ):
     await use(service, ic(service), ReportTool, ReportAction(text="Chose REST."))
 
-    assert [r.text for r in service.reports_of(node(service, "root"))] == [
+    assert [r.text for r in service.team_reports.reports_of(node(service, "root"))] == [
         "Chose REST."
     ]
     assert service.team_memory.reports("", "ic") == []
@@ -615,7 +615,7 @@ async def test_contracts_and_reports_a_session_writes_are_the_orgs_on_accept(
     assert service.team_memory.read(API_CONTRACTS) is None
     assert service.team_memory.reports("services/api", "ic") == []
     assert own_contracts(service, place) == "Jobs are idempotent.\n"
-    assert [r.text for r in service.reports_of(place)] == [
+    assert [r.text for r in service.team_reports.reports_of(place)] == [
         "The old jobs team retried forever."
     ]
 
@@ -796,7 +796,7 @@ async def test_what_a_session_wrote_for_a_team_that_was_replaced_is_not_the_new_
     assert left.documents == {"spec": "# Refunds"}
     assert [report.text for report in left.reports] == ["Chose a ledger."]
     # The session no longer reads the other team's records as its own.
-    assert service.reports_of(api_place(service, top)) == []
+    assert service.team_reports.reports_of(api_place(service, top)) == []
 
 
 async def test_a_team_only_the_session_renamed_is_renamed_in_the_org(
@@ -829,7 +829,7 @@ async def test_closing_a_session_leaves_the_org_nothing_it_never_had_accepted(
     assert service.team_memory.reports("services/api", "ic") == []
     # Nor is it on the org's record that it was closed.
     assert "session_closed" not in [e.kind for e in record_of(service, "root")]
-    assert service.drafts(place.session) == {}
+    assert service.session_documents.drafts(place.session) == {}
 
 
 async def test_closing_a_session_keeps_what_waited_of_its_accepted_work(
@@ -1164,7 +1164,7 @@ async def test_the_division_lead_ic_is_told_of_a_spec_that_could_not_be_written(
     told = launcher.messages_to(division_lead_ic(service, top))[-1]
     assert API_SPEC in told and "was not written" in told
     # The session keeps its text, to be shown with the org's next time.
-    assert API_SPEC in service.drafts(node(service, top).session)
+    assert API_SPEC in service.session_documents.drafts(node(service, top).session)
 
 
 async def test_a_reviewer_writes_the_spec_that_holds(service: DirectorService):
@@ -1621,9 +1621,9 @@ async def test_contracts_for_a_team_the_org_lost_wait_with_the_rest_of_the_landi
     await session_accepted(service, top, opened.conversation_id)
 
     # Only its code has landed: what it wrote is not lost before the rest.
-    assert [text for text, _ in service.drafts(place.session).values()] == [
-        "Refunds go through Jobs.\n"
-    ]
+    assert [
+        text for text, _ in service.session_documents.drafts(place.session).values()
+    ] == ["Refunds go through Jobs.\n"]
 
 
 async def test_a_team_beside_one_inside_its_directory_waits_for_the_manager_above(

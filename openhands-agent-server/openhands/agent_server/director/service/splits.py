@@ -208,7 +208,7 @@ class Splits(Watch):
                 team.model_copy(
                     update={
                         "leftover_documents": await asyncio.to_thread(
-                            self._documents_left_in,
+                            self.session_documents.documents_left_in,
                             place,
                             team.boundary.path,
                             split.replaces,
@@ -456,7 +456,10 @@ class Splits(Watch):
                 # The directory is the team above's again, with what the
                 # pruned team left there of how it worked.
                 left = await asyncio.to_thread(
-                    self._documents_left_in, above, pruned.boundary.path, [pruned]
+                    self.session_documents.documents_left_in,
+                    above,
+                    pruned.boundary.path,
+                    [pruned],
                 )
                 known = {(old.name, old.path) for old in above.leftover_documents}
                 store.update_place(
@@ -529,7 +532,7 @@ class Splits(Watch):
                 for name in stays
                 if (
                     text := await asyncio.to_thread(
-                        self.read_file,
+                        self.session_documents.read_file,
                         place,
                         DocumentRef(normalize_store_path(team.path), name).path,
                     )
@@ -626,7 +629,7 @@ class Splits(Watch):
         kept = self.session_drafts.former(team.session)
         record = next((f for f in kept if f.id == team.team_id and f.at == at), None)
         if record is None:
-            reports = await asyncio.to_thread(self.reports_of, team)
+            reports = await asyncio.to_thread(self.team_reports.reports_of, team)
             # What each of the team's documents keeps of itself. A document
             # that keeps nothing stays where it is: an old one for whoever
             # has the directory next.

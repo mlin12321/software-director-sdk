@@ -92,6 +92,7 @@ SERVICES_THE_DIRECTOR_HOLDS = [
     "service/message_delivery_service.py",
     "service/model_call_service.py",
     "service/request_routing_service.py",
+    "service/session_document_service.py",
     "service/session_draft_service.py",
     "service/session_landing_service.py",
     "service/stall_watch_service.py",
@@ -99,6 +100,7 @@ SERVICES_THE_DIRECTOR_HOLDS = [
     "service/team_context_service.py",
     "service/team_history_service.py",
     "service/team_messaging_service.py",
+    "service/team_report_service.py",
     "service/team_summary_service.py",
     "service/team_type_service.py",
 ]

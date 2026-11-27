@@ -674,7 +674,7 @@ def memory_of(service: DirectorService, file: str) -> str | None:
     """A file of team memory as the first session has it: what it wrote
     there and nobody accepted yet, else the org's."""
     [session, *_] = service.org.sessions()
-    return service.read_file(service.org.session(session.id)[0], file)
+    return service.session_documents.read_file(service.org.session(session.id)[0], file)
 
 
 def commit(checkout: Path, path: str, content: str) -> None:

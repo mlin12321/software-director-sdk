@@ -400,7 +400,9 @@ class Reviews(Teams):
                 "session is accepted. Leave that empty."
             )
         own = normalize_store_path(place.boundary.path)
-        homes = {found.home for found in self.documents_inherited(place)}
+        homes = {
+            found.home for found in self.session_documents.documents_inherited(place)
+        }
         chosen = []
         for choice in choices:
             document = choice.document.strip()
@@ -441,9 +443,9 @@ class Reviews(Teams):
         for choice in chosen:
             file = DocumentRef(choice["path"], choice["document"]).path
             if choice["use"] == "org":
-                self._undraft(top.session, file)
+                self.session_documents.undraft(top.session, file)
             elif choice["use"] == "replacement":
-                self._draft(top.session, file, choice["replacement"])
+                self.session_documents.draft(top.session, file, choice["replacement"])
 
     def accept_review(
         self,
@@ -664,7 +666,9 @@ class Reviews(Teams):
         for name, protocol in self.team_types.protocols.items():
             if not protocol.waits_for_team_changes:
                 continue
-            theirs = self.read_file(lost, DocumentRef(folder, name).path)
+            theirs = self.session_documents.read_file(
+                lost, DocumentRef(folder, name).path
+            )
             was = before.get(name)
             if was is not None and not (theirs and theirs.strip()):
                 theirs = was.session[len(was.org.rstrip()) :]
@@ -745,7 +749,9 @@ class Reviews(Teams):
                 )
             )
         memory = self._memory()
-        for file, (text, over) in sorted(self.drafts(top.session).items()):
+        for file, (text, over) in sorted(
+            self.session_documents.drafts(top.session).items()
+        ):
             path = file.rpartition("/")[0]
             name = DocumentRef.at(file).name
             if not self._waits_for_team_changes(file) or (name, path) in coming:
@@ -1145,7 +1151,7 @@ class Reviews(Teams):
             waits = {*take, *(item.key for item in items if item.kind == "team")}
             agreements = {
                 file
-                for file in self.drafts(top.session)
+                for file in self.session_documents.drafts(top.session)
                 if self._waits_for_team_changes(file)
             }
             self._keep_merge(
@@ -1215,7 +1221,7 @@ class Reviews(Teams):
                 if item.use == "org" or (
                     item.with_team is not None and item.with_team not in taken
                 ):
-                    self._undraft(top.session, file)
+                    self.session_documents.undraft(top.session, file)
                     held.append((item.document, item.key))
                     others.append((item.document, item.key, item.org))
                     continue
@@ -1413,7 +1419,9 @@ class Reviews(Teams):
         memory = self._memory()
         return [
             (DocumentRef.at(file).name, file.rpartition("/")[0], text or "")
-            for file, (text, _) in sorted(self.drafts(top.session).items())
+            for file, (text, _) in sorted(
+                self.session_documents.drafts(top.session).items()
+            )
             if self._waits_for_team_changes(file) and memory.read(file) != text
         ]
 
@@ -1456,7 +1464,7 @@ class Reviews(Teams):
                 files = [path for path in changes.both if owns(place, path)]
         opens = self.org.opens_session(place)
         changed = self.team_documents.changed_elsewhere(place.session) if opens else []
-        inherited = self.documents_inherited(place) if opens else []
+        inherited = self.session_documents.documents_inherited(place) if opens else []
         if not files and not changed and not inherited:
             return None
         text = reconcile_request(
