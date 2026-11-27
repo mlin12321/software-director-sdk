@@ -31,16 +31,12 @@ _BASICS = (
   team's context. Later changes arrive under `[director] context update` on
   the next message you get. `read_team_context` returns all of it again.
 - Your team has a type. Your first message says under <TEAM_TYPE> what a
-  team of that type is for, what its spec, contracts and reports hold, and
-  what the tools named here mean for it. Follow it; where it and this
+  team of that type is for, what the documents it keeps hold, and what the
+  tools named here mean for it. Follow it; where it and this
   protocol differ, this protocol holds.
 - Messages that start with [director] come from the runtime, not a person.
   A rare event (a review, a stalled team, replaced teams) is explained in
-  the message that brings it.
-- Spec: how your team works inside its folder. Contracts: what teams promise
-  each other. Promises go only in contracts; do not repeat them in a spec.""",
-    "- `report` what the team must remember. Only your team's {count} agents "
-    "read reports.",
+  the message that brings it.""",
     """\
 - What you cannot settle, raise with `raise_escalation`. It goes to the same
   role one team up, and from the team your session started at, to the human.
@@ -54,7 +50,7 @@ _PARTS: tuple[tuple[Literal["writer", "reviewer"], str], ...] = (
     (
         "writer",
         """\
-- Write the spec with `write_spec`. Do your team's work yourself.
+- Do your team's work yourself.
 - Write only inside your folder; the runtime refuses anything else. To get
   another team's files changed, raise an escalation: the {above_writer} above both
   teams decides.
@@ -64,18 +60,16 @@ _PARTS: tuple[tuple[Literal["writer", "reviewer"], str], ...] = (
   is the Division Lead {above_reviewer}) and you are woken with the result.
 - If you cannot go on, raise an escalation. That shows your team as blocked.
 - Propose sub-teams to your {overseer} with `propose_teams`. Each gets a
-  folder inside yours, a type, an instruction, and the contracts it must
-  keep; a `reason` is optional. A sub-team is told nothing else of your
-  team. You keep whatever no sub-team takes.
+  folder inside yours, a type and an instruction; a `reason` is optional. A
+  sub-team is told nothing else of your team. You keep whatever no sub-team
+  takes.
 - An approved sub-team starts only when you give it a task with `msg_team`.
   It answers through its work or an escalation, not a message.""",  # noqa: E501
     ),
     (
         "reviewer",
         """\
-- Review what sub-teams submit with `review_team`. When you accept, its
-  `contracts` adds to the contracts between your sub-teams what all of them
-  may rely on from now; they are told with their next message.
+- Review what sub-teams submit with `review_team`.
 - You are asked to review a sub-team's work as soon as it submits, while
   the teams beside it may still work. You may end your turn without
   deciding, to compare it with what another sub-team will submit: the next
@@ -101,14 +95,31 @@ def _bullet(line: str) -> str:
     return textwrap.fill(line, width=76, subsequent_indent="  ")
 
 
-def org_protocol(names: Names) -> str:
+def _rules_for(
+    rules: Sequence[Mapping[str, str]], whom: str, words: Mapping[str, str]
+) -> list[str]:
+    """What the documents a team keeps say to ``whom`` of its members."""
+    return [
+        _bullet("- " + " ".join(said[whom].format_map(words).split()))
+        for said in rules
+        if said.get(whom, "").strip()
+    ]
+
+
+def org_protocol(names: Names, rules: Sequence[Mapping[str, str]] = ()) -> str:
     """How the org works, for every agent of a team whose members are
-    called by ``names``: one part for each member that has one."""
+    called by ``names``: one part for each member that has one.
+
+    Args:
+        rules: What each document the team keeps says of itself, by whom
+            it says it to (``Document.rules``).
+    """
     words = names.words()
     basics = [
         _bullet(text.format_map(words)) if "\n" not in text else text
         for text in _BASICS
     ]
+    basics += _rules_for(rules, "everyone", words)
     parts = (
         [(names.writer, ("writer", "reviewer"))]
         if names.reviews_own
@@ -124,6 +135,8 @@ def org_protocol(names: Names) -> str:
     for called, theirs in parts:
         lines += ["", f"If you are the {called}"]
         lines += [text.format_map(words) for part, text in _PARTS if part in theirs]
+        for part in theirs:
+            lines += _rules_for(rules, part, words)
     return "\n".join([*lines, "</ORG_PROTOCOL>"])
 
 
@@ -650,6 +663,7 @@ def role_text(
     lead: bool = False,
     hand_over: bool = False,
     own: str = "",
+    rules: Sequence[Mapping[str, str]] = (),
 ) -> str:
     """How the org works and what an agent's part in it is: what every
     agent of an org is told in its first message, and again when it reads
@@ -666,6 +680,7 @@ def role_text(
         lead: Whether its team only reviews the work of a session.
         hand_over: Whether it is a hand-over conversation.
         own: What its type says of its part, in the type's own words.
+        rules: What each document its team keeps says of itself.
     """
     texts = []
     if hand_over:
@@ -676,7 +691,7 @@ def role_text(
         texts.append(DIVISION_LEAD_MANAGER_ROLE)
     elif not lead and "approve_teams" in tools:
         texts.append(MANAGER_ROLE)
-    said = [org_protocol(names)]
+    said = [org_protocol(names, rules)]
     said += [in_words(text.strip(), names) for text in texts]
     if not works and not hand_over and not texts:
         said.append(

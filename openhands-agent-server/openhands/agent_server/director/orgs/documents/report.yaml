@@ -5,3 +5,7 @@ name: report
 description: A decision and why, a setback, what failed.
 tool: report
 protocol: report
+rules:
+    everyone: >-
+        `report` what the team must remember. Only your team's {count} agents
+        read reports.

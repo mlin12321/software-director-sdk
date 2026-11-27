@@ -12,3 +12,6 @@ tool_description: >-
     own; sub-teams see only the contracts of the split that made them. What
     teams promise each other goes in contracts, not here.
 protocol: spec
+rules:
+    everyone: 'Spec: how your team works inside its folder.'
+    writer: Write the spec with `write_spec`.

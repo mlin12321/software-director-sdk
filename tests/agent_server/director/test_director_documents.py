@@ -36,9 +36,11 @@ from openhands.agent_server.director.orgs import (
     SoftwareOrg,
 )
 from openhands.agent_server.director.orgs.documents import ContractsProtocol
+from openhands.agent_server.director.prompts import org_protocol
 from openhands.agent_server.director.run_state import RunState
 from openhands.agent_server.director.service import DirectorService
 from openhands.agent_server.director.service.state import DIRECTOR_TOOL_NAMES
+from tests.agent_server.director.conftest import DEFAULT_TYPE, SHIPPED
 
 
 NOTES = DocumentRef("services/api", "notes")
@@ -393,3 +395,25 @@ def test_in_the_shipped_orgs_what_is_written_is_read_down_the_tree_only(
     assert org.allows_read(auth, TREE.ref("services"), "contracts")
     assert not org.allows_read(api, auth, "contracts")
     assert not org.allows_read(api, TREE.ref("services.web"), "contracts")
+
+
+def test_a_document_says_what_the_members_of_its_team_are_told_of_it(tmp_path: Path):
+    folder = tmp_path / "documents"
+    folder.mkdir()
+    (folder / "glossary.yaml").write_text(
+        "description: What the words mean.\n"
+        "rules:\n"
+        "    everyone: Use the words of the glossary; your {count} agents share it.\n"
+        "    writer: Add a word to the glossary before you use it.\n"
+    )
+    [glossary] = load_documents([folder]).values()
+    names = SHIPPED[DEFAULT_TYPE].names
+
+    told = org_protocol(names, [glossary.rules_by_member])
+    without = org_protocol(names)
+
+    assert "- Use the words of the glossary; your two agents share it." in told
+    assert "- Add a word to the glossary before you use it." in told
+    assert "glossary" not in without
+    assert "spec" not in without.lower() and "contracts" not in without
+    assert "`report`" not in without

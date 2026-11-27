@@ -8,6 +8,7 @@ shortened is not said here.
 import re
 from collections.abc import Iterable
 from pathlib import Path
+from typing import Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
@@ -59,6 +60,17 @@ class Document(BaseModel):
             "None: it is a plain text its team rewrites."
         ),
     )
+    rules: dict[Literal["everyone", "writer", "reviewer"], str] = Field(
+        default_factory=dict,
+        description=(
+            "What the members of a team that keeps it are told of it with "
+            "how the org works: `everyone` for all of them, `writer` for the "
+            "one that works in the team's folder, `reviewer` for the one "
+            "that reviews the teams below. A text may name a member as "
+            "`{writer}`, `{reviewer}` or `{overseer}`, and the number of the "
+            "team's agents as `{count}`."
+        ),
+    )
 
     @field_validator("name")
     @classmethod
@@ -69,6 +81,11 @@ class Document(BaseModel):
                 "and underscores"
             )
         return name
+
+    @property
+    def rules_by_member(self) -> dict[str, str]:
+        """What it says of itself, by whom it says it to."""
+        return {str(whom): text for whom, text in self.rules.items()}
 
     @property
     def written_with(self) -> str:

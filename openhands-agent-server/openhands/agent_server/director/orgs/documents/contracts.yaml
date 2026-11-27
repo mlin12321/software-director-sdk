@@ -11,3 +11,14 @@ tool_description: >-
     `insert_line`. The contracts are kept outside the working tree. Every
     sub-team reads them and is told of the change with its next message.
 protocol: contracts
+rules:
+    everyone: >-
+        Contracts: what teams promise each other. Promises go only in
+        contracts; do not repeat them in a spec.
+    writer: >-
+        A proposal of sub-teams gives, in `contracts`, what they must keep
+        between them: each sub-team is told it.
+    reviewer: >-
+        When you accept with `review_team`, its `contracts` adds to the
+        contracts between your sub-teams what all of them may rely on from
+        now; they are told with their next message.

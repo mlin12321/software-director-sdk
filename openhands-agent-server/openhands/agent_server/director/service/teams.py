@@ -719,7 +719,12 @@ class Teams(Delivery):
             self.reports_of(place),
             briefing_block(self.context_of(place, self.team(place).writer)),
             titles=self.type_of(place).titles,
-            role=role_text(self.team(place).names, works=True, hand_over=True),
+            role=role_text(
+                self.team(place).names,
+                works=True,
+                hand_over=True,
+                rules=self.document_rules(place),
+            ),
             names=self.team(place).names,
         )
 

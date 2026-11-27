@@ -161,7 +161,12 @@ def node_context(service: DirectorService, caller: Caller) -> str:
     kind = service.type_of(caller.node).text_for(caller.role)
     # The briefing said these once; they are given again only when asked for.
     context["how_the_org_works"] = (
-        role_text(names, works=True, hand_over=True)
+        role_text(
+            names,
+            works=True,
+            hand_over=True,
+            rules=service.document_rules(caller.node),
+        )
         if caller.hand_over
         else service.role_text(caller.node, caller.role)
     )

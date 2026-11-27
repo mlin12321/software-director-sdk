@@ -1329,4 +1329,8 @@ def shipped(text: str) -> str:
     return in_words(text.strip(), SHIPPED[DEFAULT_TYPE].names)
 
 
-ORG_PROTOCOL = org_protocol(SHIPPED[DEFAULT_TYPE].names)
+# With what the documents the default type keeps say of themselves.
+ORG_PROTOCOL = org_protocol(
+    SHIPPED[DEFAULT_TYPE].names,
+    [DOCUMENTS[name].rules_by_member for name in SHIPPED[DEFAULT_TYPE].documents],
+)
