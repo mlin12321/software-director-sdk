@@ -166,8 +166,8 @@ DIVISION_LEAD_IC_ROLE = """\
 You are the Division Lead {reviewer}: the {reviewer} of the team above the one a session
 worked at. You only review that session's work. You give no tasks and
 change no teams.
-- Judge the work by the human's request and by your team's spec, contracts
-  and records. Read it in the session's checkout; run its checks there.
+- Judge the work by the human's request and by what your team keeps and its
+  records. Read it in the session's checkout; run its checks there.
 - Decide with `review_team`: accept, or reject with what must change.
 - Work is accepted in the order it was submitted. If earlier work is still
   undecided you are told to wait, and told when it is your turn.
@@ -176,10 +176,7 @@ change no teams.
 - If it does not merge, the runtime lays the merge out and names the files.
   Edit only those files there, then accept again. This is the only time you
   write files. The session's team is not sent back for a merge.
-- With `specs` you may choose, per folder, the org's spec, the session's, or
-  a text you write. Keep promises between teams out of a spec.
-- Teams and contracts are not yours: the Division Lead {overseer} settles them.
-- `report` what the team must remember.
+- Teams are not yours: the Division Lead {overseer} settles them.
 </ORG_ROLE>"""
 
 DIVISION_LEAD_MANAGER_ROLE = """\
@@ -189,19 +186,15 @@ session worked at. Ignore {other_parts} above. You write no files and review
 no code; the Division Lead {reviewer} does that, and neither of you waits for the
 other.
 - You are asked only when the session and other accepted work both changed
-  the same team or the same contracts. The message lists each one with the
-  session's version and the org's.
+  the same team, or what is settled with the teams. The message lists each
+  one with the session's version and the org's.
 - Settle all of it in one `settle_teams` call. Per team: the org's or the
   session's; a team taken from the session may go under another team or get
-  another name. Per contracts: the org's, the session's, or a text you write
-  that keeps what both sides need.
-- Taking one side's contracts whole often breaks the other side's code. If
-  you do not take the session's, its {writer} is told to follow up.
-- Decide by your team's spec, contracts and records; `read_team_context`
+  another name.
+- Decide by what your team keeps and its records; `read_team_context`
   returns them.
-- Decide soon: later sessions' teams and contracts wait for you. Their code
-  does not.
-- `report` what the team must remember.
+- Decide soon: later sessions' teams, and what is settled with them, wait
+  for you. Their code does not.
 </ORG_ROLE>"""
 
 MANAGER_ROLE = """\
@@ -221,8 +214,8 @@ org as a whole works well, not that every team is busy.
 - `msg_ic` writes to your {writer}, or to the {writer} of a team directly below.
 - `read_team_context` shows how every team below has done, also removed
   ones, and what your {writer} proposed before. Weigh a proposal by it.
-- After you approve or prune, your {writer} passes on what removed teams left and
-  rewrites the spec. Write to it if the change needs explaining.
+- After you approve or prune, your {writer} passes on what removed teams left.
+  Write to it if the change needs explaining.
 - Settle what {overseers} directly below escalate with `resolve_escalation`,
   or pass it up with the reason.
 - `prune_team` removes a team directly below; your team's type says when.
@@ -235,9 +228,29 @@ HAND_OVER_ROLE = """\
 <ORG_ROLE>
 You are your team's {writer} in hand-over mode: a side conversation started for
 one hand-over. It does not carry on the team's work. Do not edit files or
-run commands that change the repository. Only `read_team_context`,
-`hand_over` and `write_spec` work here.
+run commands that change the repository. Only `read_team_context` and
+`hand_over` work here, and what is named below.
 </ORG_ROLE>"""
+
+# The role texts, by whom a document's `rules` say something to.
+ROLE_TEXTS: dict[str, str] = {
+    "overseer": MANAGER_ROLE,
+    "lead_reviewer": DIVISION_LEAD_IC_ROLE,
+    "lead_overseer": DIVISION_LEAD_MANAGER_ROLE,
+    "hand_over": HAND_OVER_ROLE,
+}
+
+
+def role_block(whom: str, names: Names, rules: Sequence[Mapping[str, str]] = ()) -> str:
+    """One of the role texts, in the words of a team, with what the
+    documents the team keeps say to that role."""
+    text = ROLE_TEXTS[whom].strip().format_map(names.words())
+    said = _rules_for(rules, whom, names.words())
+    if not said:
+        return text
+    body, closing = text.rsplit("\n", 1)
+    return "\n".join([body, *said, closing])
+
 
 DIRECTOR_PREFIX = "[director]"
 
@@ -656,15 +669,15 @@ def role_text(
     """
     texts = []
     if hand_over:
-        texts.append(HAND_OVER_ROLE)
+        texts.append("hand_over")
     elif lead and "review_team" in tools:
-        texts.append(DIVISION_LEAD_IC_ROLE)
+        texts.append("lead_reviewer")
     elif lead and "settle_teams" in tools:
-        texts.append(DIVISION_LEAD_MANAGER_ROLE)
+        texts.append("lead_overseer")
     elif not lead and "approve_teams" in tools:
-        texts.append(MANAGER_ROLE)
+        texts.append("overseer")
     said = [org_protocol(names, rules)]
-    said += [in_words(text.strip(), names) for text in texts]
+    said += [role_block(whom, names, rules) for whom in texts]
     if not works and not hand_over and not texts:
         said.append(
             f"You are the {title} of your team. You write no files. What you "

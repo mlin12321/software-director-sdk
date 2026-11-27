@@ -60,13 +60,28 @@ class Document(BaseModel):
             "None: it is a plain text its team rewrites."
         ),
     )
-    rules: dict[Literal["everyone", "writer", "reviewer"], str] = Field(
+    rules: dict[
+        Literal[
+            "everyone",
+            "writer",
+            "reviewer",
+            "overseer",
+            "lead_reviewer",
+            "lead_overseer",
+            "hand_over",
+        ],
+        str,
+    ] = Field(
         default_factory=dict,
         description=(
             "What the members of a team that keeps it are told of it with "
             "how the org works: `everyone` for all of them, `writer` for the "
             "one that works in the team's folder, `reviewer` for the one "
-            "that reviews the teams below. A text may name a member as "
+            "that reviews the teams below, `overseer` for the one that "
+            "decides on its sub-teams, `lead_reviewer` and `lead_overseer` "
+            "for the two that take a session's work into the org, and "
+            "`hand_over` for the conversation that passes on what removed "
+            "teams left. A text may name a member as "
             "`{writer}`, `{reviewer}` or `{overseer}`, and the number of the "
             "team's agents as `{count}`."
         ),

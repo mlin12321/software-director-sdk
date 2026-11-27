@@ -9,3 +9,5 @@ rules:
     everyone: >-
         `report` what the team must remember. Only your team's {count} agents
         read reports.
+    lead_reviewer: '`report` what the team must remember.'
+    lead_overseer: '`report` what the team must remember.'

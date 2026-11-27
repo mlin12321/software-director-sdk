@@ -15,3 +15,9 @@ protocol: spec
 rules:
     everyone: 'Spec: how your team works inside its folder.'
     writer: Write the spec with `write_spec`.
+    overseer: After you approve or prune, your {writer} rewrites its spec.
+    lead_reviewer: >-
+        With `specs` you may choose, per folder, the org's spec, the
+        session's, or a text you write. Keep promises between teams out of a
+        spec.
+    hand_over: "`write_spec` works here: rewrite your team's spec."

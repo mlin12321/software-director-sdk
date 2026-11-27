@@ -54,7 +54,12 @@ from openhands.agent_server.director.org_store import (
     team_id_of,
 )
 from openhands.agent_server.director.orgs import SHIPPED_DOCUMENTS, SHIPPED_TYPES
-from openhands.agent_server.director.prompts import in_words, org_protocol
+from openhands.agent_server.director.prompts import (
+    ROLE_TEXTS,
+    in_words,
+    org_protocol,
+    role_block,
+)
 from openhands.agent_server.director.service import (
     DIRECTOR_TOOL_NAMES,
     DirectorService,
@@ -1325,8 +1330,20 @@ agents:
 
 
 def shipped(text: str) -> str:
-    """A text of the director's own as a team of the default type reads it."""
-    return in_words(text.strip(), SHIPPED[DEFAULT_TYPE].names)
+    """A text of the director's own as a team of the default type reads it:
+    a role text with what the documents the type keeps say to that role."""
+    names = SHIPPED[DEFAULT_TYPE].names
+    for whom, role in ROLE_TEXTS.items():
+        if text is role:
+            return role_block(
+                whom,
+                names,
+                [
+                    DOCUMENTS[name].rules_by_member
+                    for name in SHIPPED[DEFAULT_TYPE].documents
+                ],
+            )
+    return in_words(text.strip(), names)
 
 
 # With what the documents the default type keeps say of themselves.

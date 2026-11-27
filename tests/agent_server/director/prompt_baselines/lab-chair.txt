@@ -64,8 +64,8 @@ org as a whole works well, not that every team is busy.
 - `msg_ic` writes to your bench, or to the bench of a team directly below.
 - `read_team_context` shows how every team below has done, also removed
   ones, and what your bench proposed before. Weigh a proposal by it.
-- After you approve or prune, your bench passes on what removed teams left and
-  rewrites the spec. Write to it if the change needs explaining.
+- After you approve or prune, your bench passes on what removed teams left.
+  Write to it if the change needs explaining.
 - Settle what chairs directly below escalate with `resolve_escalation`,
   or pass it up with the reason.
 - `prune_team` removes a team directly below; your team's type says when.

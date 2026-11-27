@@ -142,7 +142,7 @@ A team is told its own boundary's `spec.md` and two sets of contracts, nothing e
 
 ## Changing team memory in place
 
-**A document says what its team is told of it.** `rules` in its YAML (`everyone`, `writer`, `reviewer`) are lines added to `<ORG_PROTOCOL>` for the teams whose type keeps it (`ServiceState.document_rules`, `prompts.org_protocol`); the protocol text in `prompts.py` names no document.
+**A document says what its team is told of it.** `rules` in its YAML are lines added for the teams whose type keeps it: `everyone`, `writer` and `reviewer` to `<ORG_PROTOCOL>`, and `overseer`, `lead_reviewer`, `lead_overseer` and `hand_over` to the `<ORG_ROLE>` of that role (`prompts.role_block`) (`ServiceState.document_rules`, `prompts.org_protocol`); the protocol text in `prompts.py` names no document.
 
 **A document says its own part of a briefing.** `DocumentProtocolBase.told_in_briefing` returns the parts (a heading and a text) an agent's first message gives of it: a plain document its team's own, the contracts the two kinds a team reads, the report its entries. `Records.documents_briefed` asks each and adds, after a document's parts, what teams before left of it in the folder (`prompts.left_document`). `prompts.brief` and `hand_over_brief` take those parts and name no document.
 

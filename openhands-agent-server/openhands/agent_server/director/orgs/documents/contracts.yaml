@@ -22,3 +22,12 @@ rules:
         When you accept with `review_team`, its `contracts` adds to the
         contracts between your sub-teams what all of them may rely on from
         now; they are told with their next message.
+    lead_reviewer: >-
+        Contracts are not yours: the Division Lead {overseer} settles them
+        with the teams.
+    lead_overseer: >-
+        Contracts wait for you with the teams. Per contracts, in `contracts`
+        of `settle_teams`: the org's, the session's, or a text you write
+        that keeps what both sides need. Taking one side's contracts whole
+        often breaks the other side's code. If you do not take the
+        session's, its {writer} is told to follow up.
