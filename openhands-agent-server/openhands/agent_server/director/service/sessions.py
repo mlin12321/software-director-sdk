@@ -269,7 +269,7 @@ class Sessions(Splits):
                 store.close_session(session_id)
                 raise
         if not rename and not request.title.strip():
-            self.lanes.enqueue(lambda: self._name_session(top.id, text), top.id)
+            self.work_queue.enqueue(lambda: self._name_session(top.id, text), top.id)
         self._save_soon()
         return OpenedSession(
             session=next(found for found in store.sessions() if found.id == session_id),
@@ -344,10 +344,10 @@ class Sessions(Splits):
         self._checkout_for_session(top.id)
         self.progressed(top.id)
         self.joined(str(ic_id))
-        self.lanes.enqueue(
+        self.work_queue.enqueue(
             lambda: self._summarize(top.id, text, first=True, rename=rename), top.id
         )
-        self.intents.begin(top.id, Brief(role=writer, task=text + brief))
+        self.resumable_work.begin(top.id, Brief(role=writer, task=text + brief))
         return str(ic_id)
 
     def _hand_on(
@@ -527,7 +527,7 @@ class Sessions(Splits):
         teams = self.org.session(session_id)
         if not teams:
             raise NotFound(f"No session {session_id!r} is open")
-        self.intents.begin(teams[0].id, CloseSession())
+        self.resumable_work.begin(teams[0].id, CloseSession())
 
     async def _do_close_session(self, intent: Intent) -> None:
         store = self.org
@@ -602,7 +602,7 @@ class Sessions(Splits):
                         run.unmark(kind, team.id)
                     self._work_accepted(team)
             if top is not None:
-                await self.lanes.run_in(
+                await self.work_queue.run_in(
                     BASE_LANE, lambda: asyncio.to_thread(self._settle_on_close, top)
                 )
                 gone = await asyncio.to_thread(self._leave, top)

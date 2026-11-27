@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 
 from openhands.agent_server.director.intents import IntentPayload
 from openhands.agent_server.director.run_state import Intent, RunState
-from openhands.agent_server.director.service.lane_service import LaneService
+from openhands.agent_server.director.service.work_queue_service import WorkQueueService
 from openhands.sdk.errors import Unavailable
 from openhands.sdk.logger import get_logger
 
@@ -22,7 +22,7 @@ class Held(Exception):
 
 
 @dataclass
-class IntentService:
+class ResumableWorkService:
     """Records what the director begins and carries each kind out with the
     step registered for it.
 
@@ -32,7 +32,7 @@ class IntentService:
 
     run_state: Callable[[], RunState]
     """Where intents are kept."""
-    lanes: LaneService
+    work_queue: WorkQueueService
     """What carries the steps out."""
     lane_of: Callable[[Intent], str]
     """The lane an intent is carried out in."""
@@ -74,7 +74,7 @@ class IntentService:
         Raises:
             Unavailable: Nothing is carried out here now.
         """
-        if not self.lanes.is_open:
+        if not self.work_queue.is_open:
             raise Unavailable("The director is not running agents on this server")
         intent = self.run_state().begin(place_id, payload)
         self.save_soon()
@@ -82,7 +82,7 @@ class IntentService:
 
     def take_up(self, intent_id: int, lane: str) -> None:
         """Ask for an open intent to be carried out in ``lane``."""
-        self.lanes.enqueue(lambda: self.carry_out(intent_id), lane)
+        self.work_queue.enqueue(lambda: self.carry_out(intent_id), lane)
 
     async def carry_out(self, intent_id: int) -> None:
         """Take the step of an open intent, unless it is being taken."""

@@ -49,7 +49,7 @@ from openhands.agent_server.director.run_state import (
     TOLD,
     Intent,
 )
-from openhands.agent_server.director.service.intent_service import Held
+from openhands.agent_server.director.service.resumable_work_service import Held
 from openhands.agent_server.director.service.state import (
     _REASON_KEPT,
     PRUNED_REFS,
@@ -77,12 +77,12 @@ class Splits(Watch):
 
     def carry_out_split(self, place_id: str) -> None:
         """Start the sub-teams of a team's approved split. Safe from any thread."""
-        self.intents.begin(place_id, Split())
+        self.resumable_work.begin(place_id, Split())
 
     def prune(self, place_id: str, reason: str) -> None:
         """Remove a team and what is below it; its boundary goes back to
         the team above. Safe from any thread."""
-        self.intents.begin(place_id, Prune(reason=reason))
+        self.resumable_work.begin(place_id, Prune(reason=reason))
 
     async def _do_finish_split(self, intent: Intent) -> None:
         await self._finish_split(intent.node_id)
@@ -328,7 +328,7 @@ class Splits(Watch):
                 # was stopped.
                 self.progressed(below_id, by_above=True)
                 if plan.was_stopped:
-                    self.lanes.enqueue(
+                    self.work_queue.enqueue(
                         lambda below_id=below_id: self._go_on(
                             below_id, plan.cut_off, own_too=True
                         ),
@@ -336,7 +336,7 @@ class Splits(Watch):
                     )
             # Begun first: a server that ends between the two tells the IC
             # twice rather than never.
-            self.intents.begin(place_id, FinishSplit())
+            self.resumable_work.begin(place_id, FinishSplit())
             intent = run.step_done(intent, "handed_over")
 
     async def _finish_split(self, place_id: str) -> None:
@@ -380,7 +380,7 @@ class Splits(Watch):
             for intent in self._runs().open_intents()
         )
         if former and not begun:
-            self.intents.begin(
+            self.resumable_work.begin(
                 place_id,
                 HandOver(
                     conversation=str(uuid4()),
@@ -490,7 +490,7 @@ class Splits(Watch):
             ),
         )
         if former and parent_ic is not None:
-            self.intents.begin(
+            self.resumable_work.begin(
                 plan.parent,
                 HandOver(
                     conversation=str(uuid4()),

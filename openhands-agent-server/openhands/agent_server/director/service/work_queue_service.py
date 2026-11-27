@@ -20,7 +20,7 @@ _LANE: ContextVar[str] = ContextVar("director_lane", default="")
 
 
 @dataclass
-class LaneService:
+class WorkQueueService:
     """Carries out what it is asked to, lane by lane.
 
     A lane's work is carried out in the order it was asked for, and lanes
@@ -43,7 +43,7 @@ class LaneService:
     def __post_init__(self) -> None:
         self._quiet.set()
 
-    async def __aenter__(self) -> "LaneService":
+    async def __aenter__(self) -> "WorkQueueService":
         self._loop = asyncio.get_running_loop()
         self._waiting = {}
         self._unsettled = 0

@@ -113,7 +113,7 @@ class Sync(Sessions):
             raise Conflict("There is no org to pause")
         if self._paused is None:
             self._hold("human")
-            self.lanes.enqueue(self._pause_agents, PAUSE_LANE)
+            self.work_queue.enqueue(self._pause_agents, PAUSE_LANE)
         return await self.recovery()
 
     async def resume(self) -> Recovery:
@@ -138,7 +138,7 @@ class Sync(Sessions):
                 return await self.recovery()
             # A pause that is still stopping agents would stop them after this
             # has set them going again.
-            await self.lanes.after(PAUSE_LANE)
+            await self.work_queue.after(PAUSE_LANE)
             run = self._runs()
             await asyncio.to_thread(self._put_aside_stale)
             await asyncio.to_thread(
@@ -168,9 +168,9 @@ class Sync(Sessions):
         starting = {intent.node_id for intent in intents}
         self._line = deque(place_id for place_id in waited if place_id in starting)
         for intent in intents:
-            self.intents.take_up(intent.id, lane_for(intent))
+            self.resumable_work.take_up(intent.id, lane_for(intent))
         for held in run.held():
-            self.lanes.enqueue(
+            self.work_queue.enqueue(
                 lambda held=held: self._deliver(
                     held.seq, held.conversation_id, held.text
                 ),
@@ -180,7 +180,7 @@ class Sync(Sessions):
             submitted = store.place(place_id)
             self.release_reviews(submitted.parent_id if submitted else None)
         for conversation_id, note in again.items():
-            self.lanes.enqueue(
+            self.work_queue.enqueue(
                 lambda conversation_id=conversation_id, note=note: self._run_again(
                     conversation_id, note
                 ),
@@ -251,7 +251,7 @@ class Sync(Sessions):
             resume = self._paused is None
             if resume:
                 await self.pause()
-                await self.lanes.after(PAUSE_LANE)
+                await self.work_queue.after(PAUSE_LANE)
             state = {
                 "remote": remote,
                 "theirs": theirs,
@@ -474,7 +474,7 @@ class Sync(Sessions):
         ]
         if conversation is None:
             store.update_place(node_id, agents=agents, status="idle")
-            self.intents.begin(
+            self.resumable_work.begin(
                 node_id,
                 StartTeam(
                     task=task,
@@ -518,7 +518,7 @@ class Sync(Sessions):
             acp_server=started.acp_server,
             model=started.model,
         )
-        self.intents.begin(node_id, Brief(role=writer, task=task))
+        self.resumable_work.begin(node_id, Brief(role=writer, task=task))
         return store.place(node_id) or place
 
     async def _take_org(self, repo: Path, remote: str, theirs: str | None) -> OrgSync:
@@ -774,7 +774,7 @@ class Sync(Sessions):
         now = store.set_agent(node.id, role, status=shown)
         if self._paused is None and self._loop is not None:
             if failed:
-                self.lanes.enqueue(
+                self.work_queue.enqueue(
                     lambda: self._failed(node.id, role, conversation_id, status),
                     node.id,
                 )

@@ -54,7 +54,7 @@ from openhands.agent_server.director.run_state import (
     Intent,
 )
 from openhands.agent_server.director.service.delivery import Delivery
-from openhands.agent_server.director.service.intent_service import Held
+from openhands.agent_server.director.service.resumable_work_service import Held
 from openhands.agent_server.director.service.stall_watch_service import (
     progress_of,
 )
@@ -222,7 +222,9 @@ class Teams(Delivery):
         stopped = team.stopped
         if stopped is not None:
             store.set_stopped(place_id, None)
-            self.lanes.enqueue(lambda: self._go_on(place_id, stopped.running), place_id)
+            self.work_queue.enqueue(
+                lambda: self._go_on(place_id, stopped.running), place_id
+            )
         self.progressed(place_id, by_above=True)
         return stopped
 
@@ -295,7 +297,9 @@ class Teams(Delivery):
                 kept = [agent for agent in place.agents if agent not in lost]
                 place = store.update_place(place_id, agents=[*kept, added])
                 task = self._runs().marked(TASK).get(place_id) or place.summary
-                self.intents.begin(place_id, LaunchMember(task=task, role=member))
+                self.resumable_work.begin(
+                    place_id, LaunchMember(task=task, role=member)
+                )
         conversation_id = self.team(place).conversation(member)
         self.notify(conversation_id, text)
         return conversation_id
@@ -424,7 +428,7 @@ class Teams(Delivery):
                 [ic] = _new_agents(uuid4(), member)
                 store.update_place(place_id, agents=[ic, *place.agents])
                 purpose = self._purpose(place)
-                self.intents.begin(
+                self.resumable_work.begin(
                     place_id,
                     StartTeam(
                         task=f"{purpose}{_STARTED_WITH}{text}",
@@ -1028,7 +1032,7 @@ class Teams(Delivery):
         if opens and not is_division_lead(started):
             self._checkout_for_session(place_id)
         purpose = start.purpose or task
-        self.lanes.enqueue(
+        self.work_queue.enqueue(
             lambda: self._summarize(place_id, purpose, first=True), place_id
         )
 

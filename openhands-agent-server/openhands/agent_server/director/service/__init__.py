@@ -115,13 +115,13 @@ class DirectorService(Sync):
             "prune": self._do_prune,
             "close_session": self._do_close_session,
         }.items():
-            self.intents.register(kind, step)
+            self.resumable_work.register(kind, step)
 
     async def start(self, launcher: TeamLauncher) -> None:
         """Begin running agents through ``launcher``, on the running loop."""
         self._loop = asyncio.get_running_loop()
         self._launcher = launcher
-        await self.lanes.__aenter__()
+        await self.work_queue.__aenter__()
         self._stop_status = launcher.on_status(self._on_status)
         self._stop_guard = launcher.on_action(self.guard_action)
         self._stop_resume = launcher.on_resume(self.with_tools_again)
@@ -142,7 +142,7 @@ class DirectorService(Sync):
             self._watch_for_stalls(), name="director-stall-watch"
         )
         if self._store is not None:
-            self.lanes.enqueue(self._came_back)
+            self.work_queue.enqueue(self._came_back)
         elif await asyncio.to_thread(self._remembered_repo) is not None:
             # An org that was left in the middle of its work is looked at
             # now, not when somebody first asks for it.
@@ -170,7 +170,7 @@ class DirectorService(Sync):
         if self._stop_resume is not None:
             self._stop_resume()
             self._stop_resume = None
-        await self.lanes.__aexit__(None, None, None)
+        await self.work_queue.__aexit__(None, None, None)
         timers = [
             task
             for task in (self._stall_timer, self._review_instructions_ready)
@@ -283,8 +283,9 @@ class DirectorService(Sync):
             # The org is named after what its first session is for.
             top = opened.session.teams[0].id
             # In the lane of that team, after the model that names it.
-            self.lanes.enqueue(
-                lambda: self.lanes.run_in(BASE_LANE, lambda: self._name_org(top)), top
+            self.work_queue.enqueue(
+                lambda: self.work_queue.run_in(BASE_LANE, lambda: self._name_org(top)),
+                top,
             )
         return opened
 
@@ -512,7 +513,7 @@ class DirectorService(Sync):
                 with suppress(NotFound):
                     store.settle_escalation(place_id, escalation_id)
 
-            self.lanes.enqueue(again, place_id)
+            self.work_queue.enqueue(again, place_id)
             return place
         store.settle_escalation(place_id, escalation_id)
         if escalation_id == MERGE_WAITS:
@@ -523,7 +524,7 @@ class DirectorService(Sync):
             return store.place(place_id) or place
         if escalation_id == ORG_WAITS:
             # The human goes on without the Manager.
-            self.intents.begin(place_id, LandOrg(org_holds=True))
+            self.resumable_work.begin(place_id, LandOrg(org_holds=True))
             return store.place(place_id) or place
         if escalation_id == LIMIT_WAITS:
             self.go_on_past_limit(place_id)
