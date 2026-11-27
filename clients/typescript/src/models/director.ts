@@ -495,9 +495,10 @@ export interface DirectorMergeItem {
 }
 
 /**
- * How the work a session submitted becomes the org's. Its code and specs go
- * in when the reviewing IC accepts; its teams and contracts when it is their
- * turn and the Division Lead Manager has settled what waits of them.
+ * How the work a session submitted becomes the org's. Its code goes in when
+ * the reviewing IC accepts, with the documents that land with it; its teams,
+ * and the documents that wait with them, when it is their turn and the
+ * Division Lead Manager has settled what waits of them.
  */
 export interface DirectorMerge {
   /** Its place in the order: work submitted earlier goes in first. */
@@ -506,7 +507,7 @@ export interface DirectorMerge {
   /** Whether the code of its accepted work is in the repository. */
   code_landed?: boolean;
   /**
-   * Whether its teams and contracts wait for those of a session that
+   * Whether what it makes of the org's teams waits for that of a session that
    * submitted earlier. What waits of them is not known yet.
    */
   org_queued?: boolean;

@@ -8,10 +8,8 @@ from collections.abc import Sequence
 from typing import TYPE_CHECKING, ClassVar, Self
 
 from openhands.agent_server.director.documents.declared import Document
-from openhands.agent_server.director.documents.protocol import (
-    DocumentProtocolBase,
-    when_declared,
-)
+from openhands.agent_server.director.documents.protocol import DocumentProtocolBase
+from openhands.agent_server.director.documents.registry import when_declared
 from openhands.agent_server.director.tools import catalog
 from openhands.agent_server.director.tools.documents import document_tool
 from openhands.agent_server.director.tools.impl import (

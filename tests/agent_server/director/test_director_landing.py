@@ -1680,23 +1680,6 @@ async def test_a_landing_that_cannot_be_committed_leaves_the_tree_as_it_was(
     await service.aclose()
 
 
-async def test_an_org_that_kept_reports_by_team_id_has_them_in_its_folders(
-    repo: Path, launcher: FakeLauncher
-):
-    service = await started(repo, launcher)
-    kept = Report(at="2026-11-01T00:00:00+00:00", role="ic", text="Chose REST.")
-    service.team_memory.write(".reports/root", "ic.json", f"[{kept.model_dump_json()}]")
-    await service.aclose()
-
-    again = DirectorService(
-        repo, save_delay=0, remembered=repo.parent / "state" / "director.json"
-    )
-
-    assert again.org.team("root") is not None
-    assert again.team_memory.reports("") == [kept]
-    assert again.team_memory.read(".reports/root/ic.json") is None
-
-
 async def test_a_team_set_up_in_place_of_one_whose_folder_it_holds_is_the_orgs(
     service: DirectorService,
 ):

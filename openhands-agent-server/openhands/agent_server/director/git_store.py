@@ -7,7 +7,7 @@ builds a tree in a throwaway index file and lands with a compare-and-swap
 
 import json
 import tempfile
-from collections.abc import Callable, Collection, Mapping, Sequence
+from collections.abc import Callable, Collection, Sequence
 from pathlib import Path
 from typing import NamedTuple
 
@@ -32,9 +32,6 @@ MEMORY_REF = "refs/agents/memory"
 # What the members of a team recorded, in the team's folder beside its
 # other documents: one file for all of them.
 REPORTS_FILE = "report.json"
-# Where reports were kept before, one file for each member of a team:
-# `<team id>/<role>.json`. Only `migrate_reports` reads it.
-_OLD_REPORTS_DIR = ".reports"
 # One record for each team that was replaced or pruned:
 # `<team id>/<time>.json`.
 FORMER_DIR = ".former"
@@ -333,51 +330,6 @@ class GitStore:
             for report in _parse_reports(self.read(reports_file(folder)))
             if role is None or report.role == role
         ]
-
-    def migrate_reports(self, folders: Mapping[str, str]) -> int:
-        """Move what was recorded under the old layout, a file for each
-        member of a team by the team's id, into the folder of each team.
-
-        Args:
-            folders: The folder of every team of the org, by its id. What
-                was kept for a team that is not among them is dropped: the
-                team is gone.
-
-        Returns:
-            How many files of the old layout there were.
-        """
-        old = self._files(_OLD_REPORTS_DIR)
-        if not old:
-            return 0
-
-        def mutate(read: StoreReader) -> list[StoreChange]:
-            moved: dict[str, list[Report]] = {}
-            for file in old:
-                team = file.removeprefix(f"{_OLD_REPORTS_DIR}/").rpartition("/")[0]
-                if team in folders:
-                    try:
-                        found = _parse_reports(read(file))
-                    except ValidationError:
-                        continue
-                    moved.setdefault(reports_file(folders[team]), []).extend(found)
-            changes = [StoreChange(file, None) for file in old]
-            for path, reports in moved.items():
-                try:
-                    kept = _parse_reports(read(path))
-                except ValidationError:
-                    kept = []
-                changes.append(
-                    StoreChange(
-                        path,
-                        _serialize(
-                            _REPORTS.dump_python(_in_order(_union(kept, reports)))
-                        ),
-                    )
-                )
-            return changes
-
-        self.commit(mutate, "memory: reports are kept in each team's folder")
-        return len(old)
 
     def former(self, node_id: str) -> list[FormerTeam]:
         """The records of the teams that were removed from a team id,

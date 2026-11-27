@@ -14,9 +14,7 @@ from uuid import UUID, uuid4
 from pydantic import BaseModel
 
 from openhands.agent_server.director.boundary import owns
-from openhands.agent_server.director.documents.protocol import (
-    DocumentToolCall,
-)
+from openhands.agent_server.director.documents.schema import DocumentToolCall
 from openhands.agent_server.director.git import head_of, uncommitted
 from openhands.agent_server.director.git_store import team_key
 from openhands.agent_server.director.models import (
@@ -174,7 +172,7 @@ def write_document(
         aside=protocol.usable_in_hand_over,
     )
     node = caller.node
-    written = protocol.write(
+    written = protocol.writer(
         DocumentToolCall(
             team=team_ref(node),
             member=caller.role,

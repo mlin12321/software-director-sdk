@@ -18,7 +18,7 @@ def document_tool(
     return ToolSpec(
         name=document.written_with,
         summary=document.tool_summary,
-        arguments=protocol.arguments_for(document),
+        arguments=protocol.writer_class.arguments_for(document),
         act=lambda service, caller, arguments: agent_actions.write_document(
             service, caller, name, arguments
         ),
