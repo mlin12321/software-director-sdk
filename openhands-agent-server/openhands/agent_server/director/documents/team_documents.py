@@ -78,24 +78,16 @@ class Changed(NamedTuple):
     written: str
 
 
+@dataclass
 class TeamDocuments:
     """What the documents of an org are to each of its teams."""
 
-    def __init__(
-        self,
-        store: DocumentStore,
-        protocols: Mapping[str, DocumentProtocolBase],
-        org: OrgBase,
-    ) -> None:
-        """
-        Args:
-            store: Where documents are kept.
-            protocols: What each document the org declares is, by its name.
-            org: The kind of org, which may refuse a read.
-        """
-        self.store = store
-        self.protocols = protocols
-        self.org = org
+    store: DocumentStore
+    """Where documents are kept."""
+    protocols: Mapping[str, DocumentProtocolBase]
+    """What each document the org declares is, by its name."""
+    org: OrgBase
+    """The kind of org, which may refuse a read."""
 
     def kept_by(self, reader: Reader) -> list[DocumentProtocolBase]:
         """What each document a team keeps is, as its type lists them."""

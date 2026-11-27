@@ -196,7 +196,7 @@ class Requests(Teams):
             Each answer as ``routing.parse_answer`` reads it, and the reason
             the model gave first; no answers when no model can be asked.
         """
-        asker = self._asker()
+        asker = self.model_calls.asker()
         if asker is None or self._paused is not None:
             return [], ""
         not_theirs = [
@@ -208,8 +208,9 @@ class Requests(Teams):
 
         async def ask(turned: bool) -> str | None:
             system, user = routing.question(text, cards, not_theirs, turned=turned)
-            async with self._model_calls:
-                return await self._ask(asker, system, user, routing.USAGE_ID)
+            return await self.model_calls.ask(
+                asker, system, user, routing.USAGE_ID, in_turn=True
+            )
 
         raw = await asyncio.gather(ask(False), ask(True))
         reason = next((r for r in map(routing.reason_of, raw) if r), "")

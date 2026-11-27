@@ -134,6 +134,9 @@ from openhands.agent_server.director.sandbox import (
     find_bwrap,
 )
 from openhands.agent_server.director.scope import MergeArea, Scope
+from openhands.agent_server.director.service.model_call_service import (
+    ModelCallService,
+)
 from openhands.agent_server.director.session_state import (
     kept_sessions,
     restore_sessions,
@@ -292,8 +295,6 @@ _REASON_KEPT = 600
 # The escalation that tells the human a team shows no progress where no IC
 # works above it.
 STALL_WAITS = "stalled"
-# How many of the director's own model calls run at once.
-MODEL_CALLS_AT_ONCE = 2
 
 
 def failure_waits(role: str) -> str:
@@ -453,13 +454,11 @@ class ServiceState:
         self._repo_dir = repo_dir
         self._worktree_root = worktree_root
         self._find_sandbox = find_sandbox
-        self._summary_timeout = summary_timeout
         self._remembered = remembered
         self._find_review_instructions = find_review_instructions
         # The public skills that were looked for, by name; '' for one that
         # could not be loaded.
         self._review_instructions: dict[str, str] = {}
-        self._model_call_timeout = model_call_timeout
         self._run: RunState | None = None
         self._run_of: Path | None = None
         self._paused: PauseReason | None = None
@@ -543,7 +542,12 @@ class ServiceState:
         self._unsettled = 0
         self._quiet = asyncio.Event()
         self._quiet.set()
-        self._model_calls = asyncio.Semaphore(MODEL_CALLS_AT_ONCE)
+        self.model_calls = ModelCallService(
+            launcher=self._require_launcher,
+            sessions=lambda: self._store.sessions() if self._store else [],
+            call_timeout=model_call_timeout,
+            summary_timeout=summary_timeout,
+        )
         # Set when a conversation stopped running, so a start may fit now.
         self._room = asyncio.Event()
         # Held by the start that waits for room, so that starts are served

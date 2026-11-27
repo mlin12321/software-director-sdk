@@ -1748,7 +1748,9 @@ class Reviews(Requests):
         if not files:
             return ""
         asked = self.type_of(place).review.write_up
-        description = await self._ask_agent(ic, bugbot.write_up_question(files, asked))
+        description = await self.model_calls.ask_agent(
+            ic, bugbot.write_up_question(files, asked)
+        )
         return description or ""
 
     async def _request_review(self, place_id: str) -> None:

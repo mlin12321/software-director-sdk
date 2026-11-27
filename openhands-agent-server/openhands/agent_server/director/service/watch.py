@@ -431,7 +431,9 @@ class Watch(Reviews):
         in_a_turn = ic in self._running
         account = None
         if ic is not None and not in_a_turn:
-            account = await self._ask_agent(ic, in_words(STALL_QUESTION, names))
+            account = await self.model_calls.ask_agent(
+                ic, in_words(STALL_QUESTION, names)
+            )
         self.record_event(above.id, "stalled", team, f"{minutes} min")
         # Its reviewer is woken now anyway, and no longer waits for it.
         self._release_reviews(above.id)
