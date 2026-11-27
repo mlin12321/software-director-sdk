@@ -8,7 +8,7 @@ from typing import ClassVar
 
 from openhands.agent_server.director.documents.protocol import DocumentProtocolBase
 from openhands.agent_server.director.documents.registry import register_protocol
-from openhands.agent_server.director.git import git
+from openhands.agent_server.director.environment.git.cli import git
 from openhands.agent_server.director.models import (
     DocumentChoice,
     LeftoverDocument,

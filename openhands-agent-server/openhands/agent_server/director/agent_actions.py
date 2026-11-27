@@ -15,7 +15,7 @@ from pydantic import BaseModel
 
 from openhands.agent_server.director.boundary import owns
 from openhands.agent_server.director.documents.schema import DocumentToolCall
-from openhands.agent_server.director.git_store import team_key
+from openhands.agent_server.director.environment.records import team_key
 from openhands.agent_server.director.models import (
     DocumentChoice,
     EscalationKind,

@@ -9,17 +9,16 @@ from uuid import UUID
 import pytest
 from pydantic import ValidationError
 
-from openhands.agent_server.director.environment.git import GitCheckouts
+from openhands.agent_server.director.environment.git import (
+    GitCheckouts,
+    GitCodingEnvironment,
+)
 from openhands.agent_server.director.intents import Accept, Prune, Split
 from openhands.agent_server.director.models import (
     DirectorSettingsUpdate,
     OpenSessionRequest,
 )
-from openhands.agent_server.director.org_persistence import (
-    create_org_board,
-    load_org,
-    save_org,
-)
+from openhands.agent_server.director.org_persistence import load_org, save_org
 from openhands.agent_server.director.org_store import OrgStore, team_id_of
 from openhands.agent_server.director.recovery import describe
 from openhands.agent_server.director.run_state import (
@@ -643,7 +642,7 @@ async def test_a_session_stays_when_the_org_no_longer_has_its_team(
     await first.settled()
     await first.aclose()
     # The tree moves under the run state, as a pull does.
-    board, pulled = create_org_board(repo), OrgStore(shipped_type)
+    board, pulled = GitCodingEnvironment().org_tree(repo), OrgStore(shipped_type)
     load_org(board, pulled)
     pulled.remove("services.api")
     save_org(board, pulled)
@@ -677,7 +676,7 @@ async def test_a_sessions_run_state_is_kept_when_its_team_changed_in_the_org(
     first.message_delivery.notify(ic(first), "Carry on")
     await first.settled()
     await first.aclose()
-    board, pulled = create_org_board(repo), OrgStore(shipped_type)
+    board, pulled = GitCodingEnvironment().org_tree(repo), OrgStore(shipped_type)
     load_org(board, pulled)
     pulled.update_team("root", headline="Changed elsewhere")
     save_org(board, pulled)

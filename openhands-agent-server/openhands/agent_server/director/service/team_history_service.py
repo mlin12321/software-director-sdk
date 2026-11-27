@@ -8,7 +8,11 @@ from dataclasses import dataclass, field
 from uuid import uuid4
 
 from openhands.agent_server.director.boundary import owns
-from openhands.agent_server.director.git_store import GitStore, Landing, team_key
+from openhands.agent_server.director.environment.records import (
+    Landing,
+    RecordStore,
+    team_key,
+)
 from openhands.agent_server.director.models import (
     FormerTeam,
     HistoryEvent,
@@ -50,9 +54,9 @@ class TeamHistoryService:
 
     org: Callable[[], OrgStore]
     """The org whose teams the history is of."""
-    team_memory: Callable[[], GitStore]
+    team_memory: Callable[[], RecordStore]
     """The org's team memory, for what needs none where there is none."""
-    require_team_memory: Callable[[], GitStore]
+    require_team_memory: Callable[[], RecordStore]
     """The same, raising ``Unavailable`` where the org has no team memory."""
     session_drafts: SessionDraftService
     """Where what a session recorded waits for its work to be accepted."""
@@ -242,7 +246,7 @@ class TeamHistoryService:
             text[:ASKED_KEPT],
         )
 
-    def _former_below(self, team_memory: GitStore, node_id: str) -> list[FormerTeam]:
+    def _former_below(self, team_memory: RecordStore, node_id: str) -> list[FormerTeam]:
         """The records of the teams removed from below a team. They are
         read once for each state of team memory, since a context is built
         for every message."""

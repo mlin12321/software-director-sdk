@@ -5,6 +5,8 @@ from pathlib import Path
 
 import pytest
 
+from openhands.agent_server.director.environment.git import GitCodingEnvironment
+from openhands.agent_server.director.environment.git.git_store import ORG_REF
 from openhands.agent_server.director.models import (
     AgentRef,
     Escalation,
@@ -14,8 +16,6 @@ from openhands.agent_server.director.models import (
     SnapshotEvent,
 )
 from openhands.agent_server.director.org_persistence import (
-    ORG_REF,
-    create_org_board,
     load_org,
     own_settings,
     save_org,
@@ -321,7 +321,7 @@ def test_escalations_are_not_saved_with_the_tree(
 ):
     # What a team waits on is of the work, which is done in sessions
     # and kept with them; the saved tree is the org's reference only.
-    board = create_org_board(repo)
+    board = GitCodingEnvironment().org_tree(repo)
     save_org(board, escalations_store)
     loaded = OrgStore(shipped_type)
 
@@ -671,7 +671,7 @@ def test_a_malformed_tree_leaves_the_store_untouched(store: OrgStore, nodes):
 
 
 def test_the_tree_round_trips_through_a_hidden_ref(repo: Path, store: OrgStore):
-    board = create_org_board(repo)
+    board = GitCodingEnvironment().org_tree(repo)
 
     save_org(board, store)
     head = board.head()
@@ -690,12 +690,12 @@ def test_the_tree_round_trips_through_a_hidden_ref(repo: Path, store: OrgStore):
 def test_loading_finds_nothing_before_the_first_save(repo: Path):
     store = OrgStore(shipped_type)
 
-    assert load_org(create_org_board(repo), store) is False
+    assert load_org(GitCodingEnvironment().org_tree(repo), store) is False
     assert len(store) == 0
 
 
 def test_a_tree_saved_in_an_unknown_version_is_refused(repo: Path):
-    board = create_org_board(repo)
+    board = GitCodingEnvironment().org_tree(repo)
     board.write("", "org.json", '{"version": 99, "nodes": []}')
 
     with pytest.raises(ValueError, match="99"):
@@ -703,7 +703,7 @@ def test_a_tree_saved_in_an_unknown_version_is_refused(repo: Path):
 
 
 def test_settings_are_kept_with_their_version_and_read_back(repo: Path):
-    board = create_org_board(repo)
+    board = GitCodingEnvironment().org_tree(repo)
 
     save_own_settings(board, OrgSettings(allowed_agent_types=["researcher"]))
 
@@ -712,14 +712,14 @@ def test_settings_are_kept_with_their_version_and_read_back(repo: Path):
 
 
 def test_settings_kept_before_they_had_a_version_are_still_read(repo: Path):
-    board = create_org_board(repo)
+    board = GitCodingEnvironment().org_tree(repo)
     board.write("", "settings.json", '{"allowed_agent_types": ["researcher"]}')
 
     assert own_settings(board).allowed_agent_types == ["researcher"]
 
 
 def test_settings_of_an_unknown_version_are_refused_with_the_tree(repo: Path):
-    board = create_org_board(repo)
+    board = GitCodingEnvironment().org_tree(repo)
     store = OrgStore(shipped_type)
     board.write("", "org.json", '{"version": 1, "nodes": []}')
     board.write("", "settings.json", '{"schema_version": 99}')
@@ -1039,7 +1039,7 @@ def test_change_listeners_hear_every_change_until_stopped(store: OrgStore):
 def test_saving_does_not_record_the_sessions_or_their_agents(
     repo: Path, working: OrgStore
 ):
-    board = create_org_board(repo)
+    board = GitCodingEnvironment().org_tree(repo)
     save_org(board, working)
     saved = run_git(repo, "rev-parse", ORG_REF)
 

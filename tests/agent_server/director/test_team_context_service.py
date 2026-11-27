@@ -12,7 +12,7 @@ from openhands.agent_server.director.environment.git import (
     GitCheckouts,
     GitCodingEnvironment,
 )
-from openhands.agent_server.director.git_store import GitStore
+from openhands.agent_server.director.environment.git.git_store import GitStore
 from openhands.agent_server.director.org_store import OrgStore
 from openhands.agent_server.director.prompts import NEED_WRITE
 from openhands.agent_server.director.remembered import RememberedFile
@@ -77,6 +77,7 @@ class Context:
             org=lambda: self.store,
             org_state=self.org_state,
             org_settings=OrgSettingsService(
+                environment=GitCodingEnvironment(),
                 config_file=None,
                 remembered=RememberedFile(None),
                 team_types=team_types,

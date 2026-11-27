@@ -5,19 +5,39 @@ builds a tree in a throwaway index file and lands with a compare-and-swap
 ``git update-ref``, so concurrent writers never lose each other's changes.
 """
 
-import json
 import tempfile
 from collections.abc import Callable, Collection, Sequence
 from pathlib import Path
-from typing import NamedTuple
 
-from pydantic import TypeAdapter, ValidationError
-
-from openhands.agent_server.director.git import (
+from openhands.agent_server.director.environment.git.cli import (
     DIRECTOR_IDENTITY,
     GitError,
     git,
     git_version,
+)
+from openhands.agent_server.director.environment.records import (
+    EVENTS,
+    FORMER_DIR,
+    REPORTS,
+    ROUTED,
+    ROUTED_FILE,
+    Clash,
+    Landing,
+    Merged,
+    RecordStore,
+    Staged,
+    StoreChange,
+    StoreReader,
+    history_file,
+    in_order,
+    normalize_store_path,
+    parse_reports,
+    reports_file,
+    scoped,
+    serialize,
+    settle,
+    taking_in,
+    team_key,
 )
 from openhands.agent_server.director.models import (
     FormerTeam,
@@ -25,82 +45,15 @@ from openhands.agent_server.director.models import (
     RoutedRequest,
     TeamEvent,
 )
-from openhands.sdk.errors import Invalid, NotSupported, OperationFailed
+from openhands.sdk.errors import NotSupported, OperationFailed
 
 
 MEMORY_REF = "refs/agents/memory"
-# What the members of a team recorded, in the team's folder beside its
-# other documents: one file for all of them.
-REPORTS_FILE = "report.json"
-# One record for each team that was replaced or pruned:
-# `<team id>/<time>.json`.
-FORMER_DIR = ".former"
-HISTORY_DIR = ".history"
-# What the human said that went straight to a team, for the whole org.
-ROUTED_FILE = ".routed.json"
-
 _ZERO_OID = "0" * 40
 _MAX_COMMIT_ATTEMPTS = 8
 _MERGE_MIN_GIT = (2, 38)
-_REPORTS = TypeAdapter(list[Report])
-_EVENTS = TypeAdapter(list[TeamEvent])
-# How many events are kept of the teams below one team; the oldest go first.
-HISTORY_KEPT = 300
-_ROUTED = TypeAdapter(list[RoutedRequest])
-ROUTED_KEPT = 200
-
-
-class StoreScopeError(Invalid):
-    """A path escapes the store or the scope it must stay inside."""
-
-
-class StoreChange(NamedTuple):
-    """One file to write. ``content=None`` deletes the file."""
-
-    path: str
-    content: str | None
-
-
-class Merged(NamedTuple):
-    """The outcome of merging another store into this one."""
-
-    head: str
-    kept_local: list[str]
-    """Files both sides changed where this side's text was kept."""
-
-
-class Landing(NamedTuple):
-    """What a session's accepted work makes of team memory, to be taken in
-    as one commit."""
-
-    # Each file the session wrote, with its text (None to remove it) and
-    # the text it was written over.
-    files: dict[str, tuple[str | None, str | None]]
-    # The text a reviewer was shown of a file and decided to put the
-    # session's in place of.
-    seen: dict[str, str | None]
-    # What its agents recorded, by the folder of the team and in the order
-    # it was written.
-    reports: dict[str, list[Report]]
-    # The records of the teams it removed or that the org did not take.
-    former: list[FormerTeam]
-    # The teams whose own records go: another team has their id now, or
-    # none.
-    forget: list[str]
-    # The folders of those teams: what was recorded there goes with them.
-    forget_reports: list[str]
-    # What became of the teams below a team, by that team.
-    events: dict[str, list[TeamEvent]]
-    # Its requests that went straight to a team.
-    routed: list[RoutedRequest]
-
-
-class Staged(NamedTuple):
-    """A commit made for a ref that the ref does not point at yet."""
-
-    ref: str
-    commit: str
-    parent: str | None
+# Where an org's tree is kept.
+ORG_REF = "refs/agents/org"
 
 
 def swap_together(repo_dir: Path, staged: Sequence[Staged]) -> bool:
@@ -120,181 +73,16 @@ def swap_together(repo_dir: Path, staged: Sequence[Staged]) -> bool:
     return True
 
 
-class Clash(NamedTuple):
-    """A file both stores changed the same lines of."""
-
-    path: str
-    ours: str | None
-    theirs: str | None
-
-
-type StoreReader = Callable[[str], str | None]
-
-
-def normalize_store_path(path: str) -> str:
-    """Normalize a repo-relative path. ``""``, ``"."`` and ``"/"`` are the root.
-
-    Raises:
-        StoreScopeError: The path could escape the virtual tree.
-    """
-    segments = [
-        segment
-        for segment in path.replace("\\", "/").split("/")
-        if segment not in ("", ".")
-    ]
-    if any(segment in ("..", ".git") for segment in segments):
-        raise StoreScopeError(f"Path escapes the store: {path}")
-    return "/".join(segments)
-
-
-def _join(directory: str, file: str) -> str:
-    return f"{directory}/{file}" if directory else file
-
-
-def _scoped(scope_path: str, file: str) -> str:
-    relative = normalize_store_path(file)
-    if not relative:
-        raise StoreScopeError("A store write needs a file name")
-    return _join(normalize_store_path(scope_path), relative)
-
-
-def _parse_reports(raw: str | None) -> list[Report]:
-    return _REPORTS.validate_json(raw) if raw else []
-
-
-def reports_file(folder: str) -> str:
-    """The file of what the members of the team of ``folder`` recorded."""
-    return _join(normalize_store_path(folder), REPORTS_FILE)
-
-
-def _is_reports(path: str) -> bool:
-    return path == REPORTS_FILE or path.endswith(f"/{REPORTS_FILE}")
-
-
-def _in_order(reports: list[Report]) -> list[Report]:
-    return sorted(reports, key=lambda report: report.at)
-
-
-def _former_file(node_id: str, at: str) -> str:
-    return f"{FORMER_DIR}/{node_id}/{at}.json"
-
-
-def team_key(node_id: str) -> str:
-    """The team what is kept for ``node_id`` is kept under: the team of the
-    org itself, whichever session's place the id names."""
-    return node_id.split("@")[0]
-
-
-def _history_file(node_id: str) -> str:
-    return f"{HISTORY_DIR}/{team_key(node_id)}.json"
-
-
-def _serialize(value: object) -> str:
-    return json.dumps(value, indent=2) + "\n"
-
-
-def _union[T](ours: list[T], theirs: list[T]) -> list[T]:
-    return [*ours, *(item for item in theirs if item not in ours)]
-
-
-def _settle(path: str, ours: str | None, theirs: str | None) -> tuple[str | None, bool]:
-    """What a file both stores changed becomes.
-
-    Returns:
-        The content, and whether the other side's text was left out of it.
-    """
-    if ours is None or theirs is None:
-        # This side's stays, removed or changed, and what the other side
-        # did is left out.
-        return ours, True
-    try:
-        if _is_reports(path):
-            reports = _in_order(_union(_parse_reports(ours), _parse_reports(theirs)))
-            return _serialize(_REPORTS.dump_python(reports)), False
-        if path.startswith(f"{HISTORY_DIR}/"):
-            events = _union(_EVENTS.validate_json(ours), _EVENTS.validate_json(theirs))
-            events.sort(key=lambda event: event.at)
-            return _serialize(_EVENTS.dump_python(events[-HISTORY_KEPT:])), False
-        if path == ROUTED_FILE:
-            routed = _union(_ROUTED.validate_json(ours), _ROUTED.validate_json(theirs))
-            routed.sort(key=lambda request: request.at)
-            return _serialize(_ROUTED.dump_python(routed[-ROUTED_KEPT:])), False
-    except ValidationError:
-        pass
-    return ours, True
-
-
-def taking_in(
-    landing: Landing,
-) -> tuple[Callable[[StoreReader], list[StoreChange]], dict[str, str | None]]:
-    """What taking a landing in changes of team memory.
-
-    Returns:
-        The mutation, and the files it did not write with the text each
-        has, filled in whenever the mutation is run.
-    """
-    left: dict[str, str | None] = {}
-
-    def mutate(read: StoreReader) -> list[StoreChange]:
-        left.clear()
-        out: dict[str, str | None] = {}
-
-        def now(path: str) -> str | None:
-            return out[path] if path in out else read(path)
-
-        for file in (
-            *(reports_file(folder) for folder in landing.forget_reports),
-            *(_history_file(team) for team in landing.forget),
-        ):
-            if read(file) is not None:
-                out[file] = None
-        for record in landing.former:
-            path = _former_file(record.id, record.at)
-            if read(path) is None:
-                out[path] = record.model_dump_json(indent=2) + "\n"
-        for folder, reports in landing.reports.items():
-            path = reports_file(folder)
-            kept = _parse_reports(now(path))
-            known = {report.id for report in kept if report.id}
-            added = [report for report in reports if report.id not in known]
-            if added:
-                out[path] = _serialize(_REPORTS.dump_python(_in_order([*kept, *added])))
-        for team, events in landing.events.items():
-            path = _history_file(team)
-            raw = now(path)
-            had = _EVENTS.validate_json(raw) if raw else []
-            known = {event.id for event in had if event.id}
-            more = [event for event in events if event.id not in known]
-            if more:
-                kept = [*had, *more][-HISTORY_KEPT:]
-                out[path] = _serialize(_EVENTS.dump_python(kept))
-        if landing.routed:
-            raw = read(ROUTED_FILE)
-            asked = _ROUTED.validate_json(raw) if raw else []
-            known = {request.id for request in asked if request.id}
-            new = [r for r in landing.routed if r.id not in known]
-            if new:
-                asked = sorted([*asked, *new], key=lambda r: r.at)[-ROUTED_KEPT:]
-                out[ROUTED_FILE] = _serialize(_ROUTED.dump_python(asked))
-        for path, (text, over) in landing.files.items():
-            has = read(path)
-            if has == text:
-                continue
-            if has == over or (path in landing.seen and landing.seen[path] == has):
-                out[path] = text
-            else:
-                left[path] = has
-        return [StoreChange(path, content) for path, content in out.items()]
-
-    return mutate, left
-
-
-class GitStore:
+class GitStore(RecordStore):
     """Reads and writes one store ref of one repository."""
 
     def __init__(self, repo_dir: Path, ref: str = MEMORY_REF) -> None:
         self.repo_dir = repo_dir
         self.ref = ref
+
+    @property
+    def name(self) -> str:
+        return self.ref
 
     def head(self) -> str | None:
         """The commit the ref points at, or None before the first write."""
@@ -316,7 +104,7 @@ class GitStore:
 
         A file that resolves outside the scope is rejected.
         """
-        path = _scoped(scope_path, file)
+        path = scoped(scope_path, file)
         return self.commit(
             lambda _read: [StoreChange(path, content)], f"memory: write {path}"
         )
@@ -327,7 +115,7 @@ class GitStore:
         the team's member, whichever conversation it has."""
         return [
             report
-            for report in _parse_reports(self.read(reports_file(folder)))
+            for report in parse_reports(self.read(reports_file(folder)))
             if role is None or report.role == role
         ]
 
@@ -390,13 +178,13 @@ class GitStore:
 
     def history(self, node_id: str) -> list[TeamEvent]:
         """What became of the teams directly below a team, oldest first."""
-        raw = self.read(_history_file(node_id))
-        return _EVENTS.validate_json(raw) if raw else []
+        raw = self.read(history_file(node_id))
+        return EVENTS.validate_json(raw) if raw else []
 
     def routed(self) -> list[RoutedRequest]:
         """What the human said that went straight to a team, oldest first."""
         raw = self.read(ROUTED_FILE)
-        return _ROUTED.validate_json(raw) if raw else []
+        return ROUTED.validate_json(raw) if raw else []
 
     def replace_reports(
         self,
@@ -417,7 +205,7 @@ class GitStore:
 
         def mutate(read: StoreReader) -> list[StoreChange]:
             nonlocal replaced
-            kept = _parse_reports(read(path))
+            kept = parse_reports(read(path))
             replaced = [report for report in kept if report.role == role] == read_as
             if not replaced:
                 return []
@@ -425,7 +213,7 @@ class GitStore:
             return [
                 StoreChange(
                     path,
-                    _serialize(_REPORTS.dump_python(_in_order([*others, *reports]))),
+                    serialize(REPORTS.dump_python(in_order([*others, *reports]))),
                 )
             ]
 
@@ -595,7 +383,7 @@ class GitStore:
         changes: list[StoreChange] = []
         kept: list[str] = []
         for path in filter(None, conflicted):
-            content, ours_kept = _settle(
+            content, ours_kept = settle(
                 path, self._read_at(ours, path), self._read_at(theirs, path)
             )
             if ours_kept and path in take_theirs:

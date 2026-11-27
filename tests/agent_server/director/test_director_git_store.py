@@ -6,15 +6,17 @@ from pathlib import Path
 
 import pytest
 
-from openhands.agent_server.director.git import (
+from openhands.agent_server.director.environment.git.cli import (
     GitError,
     git,
     git_version,
     is_git_repository,
 )
-from openhands.agent_server.director.git_store import (
+from openhands.agent_server.director.environment.git.git_store import (
     MEMORY_REF,
     GitStore,
+)
+from openhands.agent_server.director.environment.records import (
     Landing,
     StoreChange,
     StoreScopeError,

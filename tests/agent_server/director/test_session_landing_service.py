@@ -7,19 +7,17 @@ import pytest
 
 from openhands.agent_server.director.documents.store import (
     DocumentRef,
-    GitDocumentStore,
+    RecordDocumentStore,
 )
-from openhands.agent_server.director.git_store import GitStore
+from openhands.agent_server.director.environment.git import GitCodingEnvironment
+from openhands.agent_server.director.environment.git.git_store import GitStore
 from openhands.agent_server.director.models import (
     Report,
     SessionTeam,
     TeamEvent,
     TeamEventKind,
 )
-from openhands.agent_server.director.org_persistence import (
-    create_org_board,
-    load_org,
-)
+from openhands.agent_server.director.org_persistence import load_org
 from openhands.agent_server.director.org_store import OrgStore
 from openhands.agent_server.director.run_state import RunState
 from openhands.agent_server.director.service.org_save_service import OrgSaveService
@@ -51,7 +49,7 @@ def event(kind: TeamEventKind, team: SessionTeam, detail: str) -> TeamEvent:
 def landing(repo: Path) -> SessionLandingService:
     run = RunState(None)
     store = OrgStore(lambda node: team_types.type_of(node))
-    documents = GitDocumentStore(lambda: GitStore(repo), lambda: run)
+    documents = RecordDocumentStore(lambda: GitStore(repo), lambda: run)
     team_types = TeamTypeService(
         config_file=None,
         documents=documents,
@@ -69,6 +67,7 @@ def landing(repo: Path) -> SessionLandingService:
         team_types=team_types,
         session_drafts=SessionDraftService(run_state=lambda: run),
         org_save=OrgSaveService(
+            environment=GitCodingEnvironment(),
             org=lambda: store,
             repo_dir=lambda: repo,
             team_memory=lambda: GitStore(repo),
@@ -182,13 +181,13 @@ def test_the_tree_lands_with_the_records_only_when_it_is_asked_to(
 ):
     landing.documents.write(SESSION, A_SPEC, "Take orders.")
     landing.land(top(landing))
-    assert create_org_board(repo).head() is None
+    assert GitCodingEnvironment().org_tree(repo).head() is None
 
     landing.documents.write(SESSION, B_SPEC, "Bill them.")
     landing.land(top(landing), tree=True)
 
     saved = OrgStore(landing.team_types.type_of)
-    assert load_org(create_org_board(repo), saved)
+    assert load_org(GitCodingEnvironment().org_tree(repo), saved)
     assert {team.id for team in saved.teams()} == {"root", "a", "b", "a1", "a2"}
 
 

@@ -4,14 +4,14 @@ from pathlib import Path
 
 import pytest
 
-from openhands.agent_server.director import ownership
+from openhands.agent_server.director.environment.git import ownership
+from openhands.agent_server.director.environment.git.ownership import node_ownership
 from openhands.agent_server.director.models import (
     AgentRef,
     Boundary,
     OrgNode,
     SessionTeam,
 )
-from openhands.agent_server.director.ownership import node_ownership
 from tests.agent_server.director.conftest import commit, run_git
 
 

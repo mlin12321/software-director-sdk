@@ -53,6 +53,7 @@ class Sync(Sessions):
     def org_sync(self) -> OrgSyncService:
         """What pushes, pulls and merges the org."""
         return OrgSyncService(
+            environment=self.environment,
             org=lambda: self.org,
             repo_dir=lambda: self._repo_dir,
             repository=self._repository,

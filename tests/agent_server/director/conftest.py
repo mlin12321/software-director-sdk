@@ -23,7 +23,11 @@ from openhands.agent_server.director.agent_types import (
     load_types,
 )
 from openhands.agent_server.director.documents.declared import load_documents
-from openhands.agent_server.director.git_store import GitStore, Landing, team_key
+from openhands.agent_server.director.environment.records import (
+    Landing,
+    RecordStore,
+    team_key,
+)
 from openhands.agent_server.director.headline import TeamSummary
 from openhands.agent_server.director.launch import StartedAgent
 from openhands.agent_server.director.models import (
@@ -649,7 +653,7 @@ def record_of(service: DirectorService, team_id: str) -> list[TeamEvent]:
 
 
 def take_in(
-    store: GitStore,
+    store: RecordStore,
     *,
     reports: dict[str, list[Report]] | None = None,
     events: dict[str, list[TeamEvent]] | None = None,

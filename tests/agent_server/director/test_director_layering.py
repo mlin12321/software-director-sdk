@@ -137,7 +137,7 @@ def test_where_documents_are_kept_knows_no_tool_type_or_tree():
     }
 
     # `models` for what an entry of a log is.
-    assert reached == {"git_store", "models", "run_state"}
+    assert reached == {"environment.records", "models", "run_state"}
 
 
 @pytest.mark.parametrize(
@@ -207,20 +207,10 @@ def test_the_director_names_no_document_an_org_declares(module: str):
     assert named == []
 
 
-# What runs git on a team's checkout. Only the git environment
-# (`environment/git/`) may reach them, and they each other.
-_CHECKOUT_GIT = {
-    "git",
-    "git_index",
-    "merge_back",
-    "merge_checkout",
-    "ownership",
-    "reconcile",
-    "changes",
-}
-# Still git of their own, for now: what confines the agents' own git, and
-# the records kept in hidden refs.
-_OTHER_GIT = {"confinement", "git_store", "org_sync"}
+GIT = "openhands.agent_server.director.environment.git"
+# The one place the environment is built, and what confines the agents'
+# own git, which is git and stays so.
+_MAY_REACH_GIT = {"director/service/state.py", "director/confinement.py"}
 
 
 def _reached(path: Path) -> set[str]:
@@ -233,30 +223,50 @@ def _reached(path: Path) -> set[str]:
     return found
 
 
-def test_only_the_git_environment_runs_git_on_a_teams_checkout():
-    prefix = "openhands.agent_server.director."
+def test_only_the_environment_knows_git():
+    # Checkouts, the org's records and its remote are reached through
+    # `CodingEnvironment`; nothing else imports what runs git.
     modules = [
         path
         for path in [*DIRECTOR.rglob("*.py"), DIRECTOR.parent / "director_router.py"]
         if "environment/git" not in path.as_posix()
-        and path.stem not in _CHECKOUT_GIT | _OTHER_GIT
+        and path.relative_to(DIRECTOR.parent).as_posix() not in _MAY_REACH_GIT
     ]
     reached = {
         f"{path.relative_to(DIRECTOR.parent)} imports {name}"
         for path in modules
         for name in _reached(path)
-        if name.removeprefix(prefix) in _CHECKOUT_GIT
+        if name == GIT or name.startswith(f"{GIT}.")
     }
 
     assert not reached
 
 
-def test_the_environment_is_said_without_git():
-    for module in ("environment/__init__.py", "environment/checkouts.py"):
-        assert not {
-            name
-            for name in _imports(module)
-            if name.startswith("openhands.agent_server.director.")
-            and not name.endswith((".models", ".environment.checkouts"))
-            and not name.endswith(".environment.errors")
-        }, module
+def test_what_confines_the_agents_git_reaches_only_gits_own_commands():
+    reached = {
+        name.removeprefix(f"{GIT}.")
+        for name in _imports("confinement.py")
+        if name.startswith(GIT)
+    }
+
+    assert reached == {"cli", "git_index"}
+
+
+@pytest.mark.parametrize(
+    "module", ["__init__.py", "checkouts.py", "records.py", "remote.py", "errors.py"]
+)
+def test_the_environment_is_said_without_git(module: str):
+    prefix = "openhands.agent_server.director."
+    reached = {
+        name.removeprefix(prefix)
+        for name in _imports(f"environment/{module}")
+        if name.startswith(prefix)
+    }
+
+    assert reached <= {
+        "models",
+        "environment.checkouts",
+        "environment.errors",
+        "environment.records",
+        "environment.remote",
+    }

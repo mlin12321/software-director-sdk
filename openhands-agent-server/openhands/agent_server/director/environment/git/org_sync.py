@@ -8,9 +8,11 @@ that has them.
 
 from pathlib import Path
 
-from openhands.agent_server.director.git import GitError, git
-from openhands.agent_server.director.git_store import MEMORY_REF
-from openhands.agent_server.director.org_persistence import ORG_REF
+from openhands.agent_server.director.environment.git.cli import GitError, git
+from openhands.agent_server.director.environment.git.git_store import (
+    MEMORY_REF,
+    ORG_REF,
+)
 from openhands.sdk.errors import NotFound, UpstreamFailed
 
 

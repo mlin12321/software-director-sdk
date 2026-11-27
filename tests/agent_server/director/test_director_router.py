@@ -11,17 +11,15 @@ from fastapi.testclient import TestClient
 
 from openhands.agent_server import director_router
 from openhands.agent_server.api import create_app
-from openhands.agent_server.director.git_store import GitStore
+from openhands.agent_server.director.environment.git import GitCodingEnvironment
+from openhands.agent_server.director.environment.git.git_store import GitStore
 from openhands.agent_server.director.models import (
     OrgNodeInput,
     Report,
     TeamEvent,
     ThreadMessage,
 )
-from openhands.agent_server.director.org_persistence import (
-    create_org_board,
-    save_org,
-)
+from openhands.agent_server.director.org_persistence import save_org
 from openhands.agent_server.director.org_store import OrgStore
 from openhands.agent_server.director.service import (
     DirectorService,
@@ -56,7 +54,7 @@ def saved_tree(repo: Path) -> Path:
     """A repository whose hidden org ref holds ``small_tree()``."""
     store = OrgStore(shipped_type)
     store.replace_all(small_tree())
-    save_org(create_org_board(repo), store)
+    save_org(GitCodingEnvironment().org_tree(repo), store)
     return repo
 
 
@@ -132,7 +130,7 @@ def test_ownership_lists_a_teams_files_by_the_report_that_owns_them(repo: Path):
     store.replace_all(
         [make_team("root", None, path=""), make_team("a", "root", path="svc/a")]
     )
-    save_org(create_org_board(repo), store)
+    save_org(GitCodingEnvironment().org_tree(repo), store)
 
     response = make_client(repo).get("/api/director/org/nodes/root/ownership")
 
@@ -168,7 +166,7 @@ def test_returns_what_applies_to_the_nodes_boundary_and_what_its_agents_reported
 ):
     store = OrgStore(shipped_type)
     store.replace_all(small_tree())
-    save_org(create_org_board(repo), store)
+    save_org(GitCodingEnvironment().org_tree(repo), store)
     board = GitStore(repo)
     board.write("", "spec.md", "root spec")
     board.write("svc/a", "spec.md", "a spec")

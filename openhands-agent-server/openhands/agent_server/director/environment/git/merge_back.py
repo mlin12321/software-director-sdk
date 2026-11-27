@@ -7,7 +7,7 @@ from contextlib import contextmanager, suppress
 from pathlib import Path
 
 from openhands.agent_server.director.environment.checkouts import MergeBack
-from openhands.agent_server.director.git import (
+from openhands.agent_server.director.environment.git.cli import (
     DIRECTOR_IDENTITY,
     GitError,
     common_dir,
@@ -15,10 +15,13 @@ from openhands.agent_server.director.git import (
     head_of,
     top_of,
 )
-from openhands.agent_server.director.git_index import LOCK_FILE
+from openhands.agent_server.director.environment.git.git_index import LOCK_FILE
+from openhands.agent_server.director.environment.git.ownership import (
+    can_merge_in_memory,
+    conflicts,
+)
+from openhands.agent_server.director.environment.git.reconcile import MERGE_SUBJECT
 from openhands.agent_server.director.models import Boundary
-from openhands.agent_server.director.ownership import can_merge_in_memory, conflicts
-from openhands.agent_server.director.reconcile import MERGE_SUBJECT
 from openhands.agent_server.director.scope import glob_matches
 
 

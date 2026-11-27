@@ -7,15 +7,16 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from openhands.agent_server.director.environment import EnvironmentFailed
-from openhands.agent_server.director.git_store import (
-    GitStore,
+from openhands.agent_server.director.environment import (
+    CodingEnvironment,
+    EnvironmentFailed,
+)
+from openhands.agent_server.director.environment.records import (
     Landing,
-    swap_together,
+    RecordStore,
     taking_in,
 )
 from openhands.agent_server.director.org_persistence import (
-    create_org_board,
     save_org,
     saving,
 )
@@ -49,9 +50,11 @@ class OrgSaveService:
 
     org: Callable[[], OrgStore]
     """The tree that is saved."""
+    environment: CodingEnvironment
+    """Where the org's records are kept."""
     repo_dir: Callable[[], Path]
     """The repository the org is in."""
-    team_memory: Callable[[], GitStore]
+    team_memory: Callable[[], RecordStore]
     """The team memory a landing is taken into."""
     run_state: Callable[[], RunState]
     """Where what the sessions have is kept."""
@@ -144,7 +147,7 @@ class OrgSaveService:
             EnvironmentFailed: The repository could not be written.
         """
         with self.lock:
-            save_org(create_org_board(self.repo_dir()), store)
+            save_org(self.environment.org_tree(self.repo_dir()), store)
             # Sessions are this machine's: kept here, not with the org.
             self.run_state().replace_marks(SESSION, kept_sessions(store))
 
@@ -172,11 +175,13 @@ class OrgSaveService:
                     made
                     for made in (
                         memory.stage(mutate, message),
-                        create_org_board(repo).stage(saving(store), f"org: {message}"),
+                        self.environment.org_tree(repo).stage(
+                            saving(store), f"org: {message}"
+                        ),
                     )
                     if made is not None
                 ]
-                if not staged or swap_together(repo, staged):
+                if not staged or self.environment.land_together(repo, staged):
                     self.run_state().replace_marks(SESSION, kept_sessions(store))
                     return dict(left)
         raise OperationFailed(

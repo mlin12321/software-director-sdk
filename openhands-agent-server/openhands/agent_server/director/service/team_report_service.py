@@ -5,7 +5,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from openhands.agent_server.director.documents.store import REPORT, TeamRef
-from openhands.agent_server.director.git_store import GitStore
+from openhands.agent_server.director.environment.records import RecordStore
 from openhands.agent_server.director.models import OrgNode, Report
 from openhands.agent_server.director.org_store import OrgStore, instant, session_of
 from openhands.agent_server.director.service.session_draft_service import (
@@ -25,7 +25,7 @@ class TeamReportService:
 
     org: Callable[[], OrgStore]
     """The org whose teams report."""
-    team_memory: Callable[[], GitStore]
+    team_memory: Callable[[], RecordStore]
     """Where the reports the org has are."""
     session_drafts: SessionDraftService
     """Where what a session reported waits for its work to be accepted."""

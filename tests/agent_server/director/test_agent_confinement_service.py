@@ -10,7 +10,7 @@ from openhands.agent_server.director.acp import agent_token
 from openhands.agent_server.director.environment.git import (
     GitCheckouts,
 )
-from openhands.agent_server.director.merge_checkout import MergeCheckout
+from openhands.agent_server.director.environment.git.merge_checkout import MergeCheckout
 from openhands.agent_server.director.models import SessionTeam
 from openhands.agent_server.director.org_store import OrgStore
 from openhands.agent_server.director.remembered import RememberedFile

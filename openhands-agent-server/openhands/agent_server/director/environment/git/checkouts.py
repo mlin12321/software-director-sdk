@@ -3,20 +3,20 @@
 from collections.abc import Iterable, Sequence
 from pathlib import Path
 
-from openhands.agent_server.director import changes as by_hand
 from openhands.agent_server.director.boundary import owns
-from openhands.agent_server.director.confinement import apart, checkout_root
 from openhands.agent_server.director.environment.checkouts import (
     Checkouts,
     MergeBack,
     MergeCheckout,
     Overlap,
 )
-from openhands.agent_server.director.git import (
+from openhands.agent_server.director.environment.git import changes as by_hand
+from openhands.agent_server.director.environment.git.cli import (
     GitError,
     branch_of,
     bring_over,
     changed_together,
+    checkout_root,
     enclosing_repository,
     git,
     head_of,
@@ -28,12 +28,22 @@ from openhands.agent_server.director.git import (
     tracked_files,
     uncommitted,
 )
-from openhands.agent_server.director.merge_back import (
+from openhands.agent_server.director.environment.git.merge_back import (
     merge_back,
     merge_message,
     take_merge,
 )
-from openhands.agent_server.director.merge_checkout import discard, finish, prepare
+from openhands.agent_server.director.environment.git.merge_checkout import (
+    discard,
+    finish,
+    prepare,
+)
+from openhands.agent_server.director.environment.git.ownership import (
+    can_merge_in_memory,
+    conflicts,
+    node_ownership,
+)
+from openhands.agent_server.director.environment.git.reconcile import changes_of
 from openhands.agent_server.director.models import (
     AcceptedChanges,
     FileEdit,
@@ -43,12 +53,6 @@ from openhands.agent_server.director.models import (
     SessionTeam,
     TeamChanges,
 )
-from openhands.agent_server.director.ownership import (
-    can_merge_in_memory,
-    conflicts,
-    node_ownership,
-)
-from openhands.agent_server.director.reconcile import changes_of
 from openhands.sdk.logger import get_logger
 
 
@@ -69,7 +73,7 @@ class GitCheckouts(Checkouts):
         return enclosing_repository(repository)
 
     def is_apart(self, team: SessionTeam, above: SessionTeam) -> bool:
-        return apart(team, above)
+        return checkout_root(team.worktree_path) != checkout_root(above.worktree_path)
 
     def missing(
         self, repository: Path, teams: Iterable[SessionTeam]

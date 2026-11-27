@@ -4,14 +4,14 @@ from pathlib import Path
 
 import pytest
 
-from openhands.agent_server.director.changes import (
+from openhands.agent_server.director.environment.git.changes import (
     accepted_changes,
     accepted_file,
     file_sides,
     team_changes,
     write_by_hand,
 )
-from openhands.agent_server.director.git import git, uncommitted
+from openhands.agent_server.director.environment.git.cli import git, uncommitted
 from openhands.agent_server.director.models import Boundary, SessionTeam
 from openhands.sdk.errors import Forbidden, Invalid, NotFound
 from tests.agent_server.director.conftest import commit, make_place, make_team, run_git

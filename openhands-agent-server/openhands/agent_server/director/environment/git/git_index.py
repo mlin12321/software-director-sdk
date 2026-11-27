@@ -14,7 +14,7 @@ import shlex
 from collections.abc import Sequence
 from pathlib import Path
 
-from openhands.agent_server.director.git import GitError, git
+from openhands.agent_server.director.environment.git.cli import GitError, git
 
 
 # Commands that make a repository or a checkout, which must not be handed

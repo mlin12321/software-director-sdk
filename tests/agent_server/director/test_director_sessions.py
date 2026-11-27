@@ -10,9 +10,10 @@ from uuid import UUID, uuid4
 import pytest
 
 from openhands.agent_server.director.documents.store import DocumentRef
-from openhands.agent_server.director.git import git
+from openhands.agent_server.director.environment.git import GitCodingEnvironment
+from openhands.agent_server.director.environment.git.cli import git
+from openhands.agent_server.director.environment.git.merge_back import merge_back
 from openhands.agent_server.director.headline import TeamSummary
-from openhands.agent_server.director.merge_back import merge_back
 from openhands.agent_server.director.models import (
     Boundary,
     OpenedSession,
@@ -21,7 +22,6 @@ from openhands.agent_server.director.models import (
     SessionTeam,
     SplitChild,
 )
-from openhands.agent_server.director.org_persistence import create_org_board
 from openhands.agent_server.director.org_store import (
     session_id_of,
     team_ref,
@@ -621,7 +621,7 @@ async def test_a_session_is_kept_on_its_machine_and_what_it_changes_with_the_org
     await service.settled()
     await service.aclose()
 
-    board = create_org_board(repo)
+    board = GitCodingEnvironment().org_tree(repo)
     saved = json.loads(board.read("org.json") or "{}")
     restarted = await again(repo, launcher)
 

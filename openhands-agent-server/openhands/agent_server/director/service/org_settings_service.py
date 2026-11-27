@@ -9,6 +9,7 @@ from typing import Any
 
 from openhands.agent_server.director.agent_types import TeamTemplate
 from openhands.agent_server.director.documents.tree import TeamTree
+from openhands.agent_server.director.environment import CodingEnvironment
 from openhands.agent_server.director.models import (
     AgentTypeInfo,
     DirectorSettings,
@@ -21,7 +22,6 @@ from openhands.agent_server.director.models import (
 from openhands.agent_server.director.org import OrgBase
 from openhands.agent_server.director.org_config import load_org_config
 from openhands.agent_server.director.org_persistence import (
-    create_org_board,
     own_settings,
     save_own_settings,
 )
@@ -60,6 +60,8 @@ class OrgSettingsService:
 
     config_file: Path | None
     """The org's ``director.yaml``; None for the director's defaults."""
+    environment: CodingEnvironment
+    """Where the org's records are kept."""
     remembered: RememberedFile
     """Where the server's settings are kept between starts."""
     team_types: TeamTypeService
@@ -115,7 +117,7 @@ class OrgSettingsService:
         kept = self._own_settings
         if kept is None or kept[0] != str(repo_dir):
             found = (
-                own_settings(create_org_board(repo_dir))
+                own_settings(self.environment.org_tree(repo_dir))
                 if self.org().root_id is not None
                 else OrgSettings()
             )
@@ -219,7 +221,7 @@ class OrgSettingsService:
                 f"ones: {', '.join(allowed)}"
             )
         repo_dir = self.repo_dir()
-        save_own_settings(create_org_board(repo_dir), changed)
+        save_own_settings(self.environment.org_tree(repo_dir), changed)
         self._own_settings = (str(repo_dir), changed)
         return self.org_settings_state()
 

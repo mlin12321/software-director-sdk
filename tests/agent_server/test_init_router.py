@@ -1028,8 +1028,8 @@ def test_init_serves_conversations_when_the_director_cannot_start(tmp_path: Path
     import json
     import subprocess
 
-    from openhands.agent_server.director.git_store import StoreChange
-    from openhands.agent_server.director.org_persistence import create_org_board
+    from openhands.agent_server.director.environment.git import GitCodingEnvironment
+    from openhands.agent_server.director.environment.records import StoreChange
 
     repo = tmp_path / "repo"
     subprocess.run(["git", "init", "-q", str(repo)], check=True)
@@ -1050,7 +1050,7 @@ def test_init_serves_conversations_when_the_director_cannot_start(tmp_path: Path
         ],
         check=True,
     )
-    create_org_board(repo).commit(
+    GitCodingEnvironment().org_tree(repo).commit(
         lambda read: [StoreChange("org.json", json.dumps({"version": 999}))], "bad"
     )
     user = tmp_path / "user"
