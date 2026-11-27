@@ -221,7 +221,7 @@ export interface DirectorOrgNode {
    * Documents that teams before this one left in its directory. One is old
    * until the team writes its own of that name.
    */
-  left_documents: DirectorLeftDocument[];
+  leftover_documents: DirectorLeftoverDocument[];
   /**
    * The agent profile the team's agents were started from; `null` when
    * they were derived from the team above.
@@ -748,7 +748,7 @@ export interface DirectorTeamDocument {
 }
 
 /** A document a team before left in a directory a team now owns. */
-export interface DirectorLeftDocument {
+export interface DirectorLeftoverDocument {
   /** The name of the document. */
   name: string;
   /** The directory it is in; '' at the root. */

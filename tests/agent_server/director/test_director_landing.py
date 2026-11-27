@@ -1330,10 +1330,10 @@ async def test_a_spec_written_for_a_team_the_org_lost_is_left_to_the_team_that_h
     assert service.team_memory.read(API_SPEC) == "# Refunds"
     if rewritten:
         assert service.team_memory.read("spec.md") == "# Checkout, with refunds"
-        assert root.left_documents == []
+        assert root.leftover_documents == []
     else:
         # Left alone, it is an old spec the next session there is told of.
-        assert [(old.path, old.team) for old in root.left_documents] == [
+        assert [(old.path, old.team) for old in root.leftover_documents] == [
             ("services/api", "API")
         ]
     [left] = service.team_memory.former("services.api")

@@ -1,8 +1,8 @@
 """Wire models for the director API."""
 
-from typing import Any, Literal
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field
 
 from openhands.agent_server.models import StartConversationRequest
 
@@ -226,7 +226,7 @@ class SplitProposal(BaseModel):
     proposed_at: str = Field(description="ISO 8601 timestamp.")
 
 
-class LeftDocument(BaseModel):
+class LeftoverDocument(BaseModel):
     """A document a team before left in a directory a team now owns."""
 
     name: str = Field(description="The name of the document.")
@@ -334,7 +334,7 @@ class OrgNodeInput(BaseModel):
             "on from whichever of its documents says so."
         ),
     )
-    left_documents: list[LeftDocument] = Field(
+    leftover_documents: list[LeftoverDocument] = Field(
         default_factory=list,
         description=(
             "Documents that teams before this one left in its directory. "
@@ -364,26 +364,6 @@ class OrgNodeInput(BaseModel):
             "directory, so a team that replaces another has its id."
         ),
     )
-
-    @model_validator(mode="before")
-    @classmethod
-    def _purpose_of_a_team_saved_earlier(cls, data: Any) -> Any:
-        """Read a team saved when its purpose was called ``spec_summary``
-        and the documents left in its directory ``old_specs``. For orgs
-        saved before the renames; to be removed once none is left."""
-        if isinstance(data, dict) and "spec_summary" in data:
-            data = dict(data)
-            data.setdefault("purpose", data.pop("spec_summary"))
-        if isinstance(data, dict) and "old_specs" in data:
-            data = dict(data)
-            data.setdefault(
-                "left_documents",
-                [
-                    {"name": "spec", **(old if isinstance(old, dict) else dict(old))}
-                    for old in data.pop("old_specs")
-                ],
-            )
-        return data
 
 
 class OrgNode(OrgNodeInput):
@@ -642,20 +622,6 @@ class FormerTeam(BaseModel):
         default="", description="When the team was set up, which tells it apart."
     )
     threads: list[FormerThread] = Field(default_factory=list)
-
-    @model_validator(mode="before")
-    @classmethod
-    def _documents_of_a_record_kept_earlier(cls, data: Any) -> Any:
-        """Read a record kept when it had a field for its spec and one for
-        its contracts. For records kept before the rename; to be removed
-        once none is left."""
-        if isinstance(data, dict) and ("spec" in data or "contracts" in data):
-            data = dict(data)
-            old = {name: data.pop(name, "") for name in ("contracts", "spec")}
-            data.setdefault(
-                "documents", {name: text for name, text in old.items() if text}
-            )
-        return data
 
 
 class BoundaryContracts(BaseModel):
@@ -1514,15 +1480,6 @@ class MergeItem(BaseModel):
     document: str = Field(
         default="", description="Only with `document`: the name of the document."
     )
-
-    @model_validator(mode="before")
-    @classmethod
-    def _kind_of_an_item_kept_earlier(cls, data: Any) -> Any:
-        """Read an item kept when a document's name was its kind. For
-        merges that waited before the rename; to be removed once none does."""
-        if isinstance(data, dict) and data.get("kind") in ("spec", "contracts"):
-            data = {**data, "document": data["kind"], "kind": "document"}
-        return data
 
     @property
     def waits_with_teams(self) -> bool:
