@@ -214,7 +214,7 @@ class Sessions(Splits):
                         if current.id == team.id
                         else current.headline,
                         purpose=current.purpose,
-                        old_specs=current.old_specs,
+                        leftover_documents=current.leftover_documents,
                         since=current.since,
                     )
                     for current in shape
@@ -412,7 +412,7 @@ class Sessions(Splits):
                 status="idle",
                 headline=node.headline,
                 purpose=higher.purpose,
-                old_specs=higher.old_specs,
+                leftover_documents=higher.leftover_documents,
                 since=higher.since,
             ),
             SessionTeamInput(
@@ -450,7 +450,7 @@ class Sessions(Splits):
                     status="idle",
                     headline=current.headline,
                     purpose=current.purpose,
-                    old_specs=current.old_specs,
+                    leftover_documents=current.leftover_documents,
                     since=current.since,
                 )
                 for current in added

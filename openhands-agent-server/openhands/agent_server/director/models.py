@@ -226,10 +226,11 @@ class SplitProposal(BaseModel):
     proposed_at: str = Field(description="ISO 8601 timestamp.")
 
 
-class OldSpec(BaseModel):
-    """A spec a team before left in a directory a team now owns."""
+class LeftoverDocument(BaseModel):
+    """A document a team before left in a directory a team now owns."""
 
-    path: str = Field(description="The directory of the spec; '' at the root.")
+    name: str = Field(description="The name of the document.")
+    path: str = Field(description="The directory it is in; '' at the root.")
     team: str | None = Field(
         default=None, description="The title of the team that left it, when known."
     )
@@ -333,11 +334,11 @@ class OrgNodeInput(BaseModel):
             "on from whichever of its documents says so."
         ),
     )
-    old_specs: list[OldSpec] = Field(
+    leftover_documents: list[LeftoverDocument] = Field(
         default_factory=list,
         description=(
-            "Specs that teams before this one left in its directory. They "
-            "are old until the team's IC writes its own spec."
+            "Documents that teams before this one left in its directory. "
+            "One is old until the team writes its own of that name."
         ),
     )
     agent_profile: str | None = Field(

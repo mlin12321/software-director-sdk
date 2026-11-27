@@ -181,7 +181,9 @@ def write_document(
     if written.purpose is not None:
         # With a document of its own that says what the team is for, what
         # teams before it left is no longer its guide.
-        service.org.update_place(node.id, purpose=written.purpose, old_specs=[])
+        service.org.update_place(
+            node.id, purpose=written.purpose, leftover_documents=[]
+        )
     if caller.hand_over:
         service.note_hand_over(node.id, spec=True)
     else:
