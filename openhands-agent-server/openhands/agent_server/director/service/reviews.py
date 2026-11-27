@@ -2134,7 +2134,9 @@ class Reviews(Requests):
             return
         ic = self.writer_conversation(place)
         above = store.place(place.parent_id) if place.parent_id else None
-        own = await asyncio.to_thread(self._own_changes, place, teams)
+        # A file in a sub-team's folder is that team's, also while the team
+        # has not been given work.
+        own = await asyncio.to_thread(self._own_changes, place, store.below(place_id))
         if own is None:
             return
         # The work of a session meets what other sessions delivered: where
