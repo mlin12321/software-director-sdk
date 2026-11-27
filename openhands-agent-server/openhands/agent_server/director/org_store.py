@@ -202,6 +202,14 @@ class OrgStore:
         """A place of a session; None for anything else."""
         return self._places.get(place_id)
 
+    def is_orgs(self, node: OrgNodeInput) -> bool:
+        """Whether a place is of the team the org has by its id now. An id
+        comes from the directory, so the org may have another team there."""
+        if not isinstance(node, SessionTeamInput):
+            return True
+        team = self.team(node.team_id)
+        return team is not None and team.since == node.since
+
     def sub_teams(self, team_id: str) -> list[OrgNode]:
         """The teams of the org directly below the team ``team_id``."""
         with self._lock:

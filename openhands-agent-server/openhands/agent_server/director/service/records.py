@@ -2,7 +2,8 @@
 records and what they needed of each other."""
 
 import json
-from collections.abc import Collection, Sequence
+from collections.abc import Sequence
+from functools import cached_property
 from pathlib import Path
 from typing import Any, NamedTuple
 from uuid import uuid4
@@ -62,12 +63,14 @@ from openhands.agent_server.director.recovery import STEP_NAMES
 from openhands.agent_server.director.run_state import (
     CHECKS,
     JOINED,
-    TASK,
     USE,
     Intent,
 )
 from openhands.agent_server.director.service.session_draft_service import (
     thread_name,
+)
+from openhands.agent_server.director.service.session_landing_service import (
+    SessionLandingService,
 )
 from openhands.agent_server.director.service.state import (
     _REASON_KEPT,
@@ -79,9 +82,6 @@ from openhands.agent_server.director.service.state import (
     TOGETHER_WORTH_SAYING,
     ServiceState,
     _instant,
-)
-from openhands.agent_server.director.split import (
-    home_of_lost,
 )
 from openhands.sdk.errors import NotFound, NotSupported
 from openhands.sdk.logger import get_logger
@@ -119,14 +119,6 @@ class Inherited(NamedTuple):
     written: str
 
 
-class Taken(NamedTuple):
-    """What became of a session's records when its work was accepted."""
-
-    grown: list[tuple[str, str]]
-    # The files that were not written: someone else changed them meanwhile.
-    left: list[str]
-
-
 # The events of a session that change what the org has of its teams.
 _CHANGES_THE_ORG: frozenset[TeamEventKind] = frozenset(
     {"set_up", "replaced", "pruned", "moved"}
@@ -135,6 +127,21 @@ _CHANGES_THE_ORG: frozenset[TeamEventKind] = frozenset(
 
 class Records(ServiceState):
     """Reads and keeps what is known of the teams."""
+
+    @cached_property
+    def session_landing(self) -> SessionLandingService:
+        """What makes a session's records the org's once its work is
+        accepted."""
+        return SessionLandingService(
+            org=lambda: self.org,
+            run_state=self._runs,
+            team_memory=self._memory,
+            documents=self.documents,
+            team_types=self.team_types,
+            session_drafts=self.session_drafts,
+            org_save=self.org_save,
+            event=self._event,
+        )
 
     def _keep_failure(self, intent: Intent, error: Exception) -> None:
         """Keep a step that failed where the team above and the human read
@@ -239,7 +246,7 @@ class Records(ServiceState):
         node = self.org.get(node_id)
         org = (
             self._memory().history(node_id)
-            if node is None or self.is_orgs(node)
+            if node is None or self.org.is_orgs(node)
             else []
         )
         session = session_in(node_id)
@@ -803,19 +810,13 @@ class Records(ServiceState):
             limit += 1
         return OrgHistory(events=events[:limit], earlier=len(events) > limit)
 
-    def is_orgs(self, node: OrgNode) -> bool:
-        """Whether a place is of the team the org has by its id now. An id
-        comes from the directory, so the org may have another team there."""
-        if not isinstance(node, SessionTeam):
-            return True
-        team = self.org.team(node.team_id)
-        return team is not None and team.since == node.since
-
     def reports_of(self, node: OrgNode) -> list[Report]:
         """What the two agents of a team recorded, oldest first. Reports
         are the team's: an agent started again reads what it wrote before."""
         team_memory = self._memory()
-        reports = team_memory.reports(node.boundary.path) if self.is_orgs(node) else []
+        reports = (
+            team_memory.reports(node.boundary.path) if self.org.is_orgs(node) else []
+        )
         own = self.session_drafts.reports(node.id)
         return sorted([*reports, *own], key=lambda report: report.at)
 
@@ -926,7 +927,7 @@ class Records(ServiceState):
                 or store.team(place.team_id) is not None
             ):
                 continue
-            home = store.team(self._home_of(top, place.boundary.path))
+            home = store.team(self.session_landing.home_of(top, place.boundary.path))
             if home is None:
                 continue
             path = normalize_store_path(home.boundary.path)
@@ -938,279 +939,6 @@ class Records(ServiceState):
                 now = memory.read(DocumentRef(path, name).path) or ""
                 found.append(Inherited(name, path, now, place.title, draft[0]))
         return found
-
-    def _home_of(self, top: SessionTeam, path: str) -> str:
-        """The team of the org that has what a session's team the org does
-        not have left: the nearest one that holds its directory."""
-        session = self.org.session_of(top)
-        return home_of_lost(
-            path, self.org.teams(), session.above_id if session else top.team_id
-        )
-
-    def _land_records(self, top: SessionTeam, *args: Any, **kwargs: Any) -> Taken:
-        """:meth:`_land_kept`, with nothing written to the session's records
-        between reading them and clearing them: it would be lost."""
-        with self.session_drafts.unchanged():
-            return self._land_kept(top, *args, **kwargs)
-
-    def _land_kept(
-        self,
-        top: SessionTeam,
-        seen: dict[str, str | None] | None = None,
-        chosen: dict[str, str | None] | None = None,
-        *,
-        waits: Collection[str] = (),
-        held: Collection[str] = (),
-        tree: bool = False,
-    ) -> Taken:
-        """Make what a session kept to itself the org's, now that its work
-        is accepted: the documents it wrote, what its agents
-        recorded and the records of the teams it removed. All of it is one
-        commit of team memory.
-
-        What is of a team that waits stays the session's until then. What
-        is of a team the org does not have, or has another team in place
-        of, is kept as that team's record with the nearest team of the org
-        that holds its directory. A document is put in place of one that
-        changed only where its reviewer was shown that one.
-
-        Args:
-            seen: The documents the reviewer was shown, by file.
-            chosen: The documents that waited with the teams and are
-                settled, by file: the text that holds.
-            waits: The teams whose records stay the session's for now.
-            held: The files that stay the session's for now.
-            tree: Whether the org tree as it is now lands with it.
-
-        Returns:
-            The records that grew and the files that were not written.
-        """
-        store = self.org
-        run = self._runs()
-        session = top.session
-        review = store.place(top.parent_id or "")
-        held = set(held) - set(chosen or {})
-        places = [
-            place for place in store.session(session) if not is_division_lead(place)
-        ]
-        by_path = {normalize_store_path(p.boundary.path): p for p in places}
-        stamp = utc_now()
-        left = {
-            place.id: place
-            for place in places
-            if place.team_id not in waits and not self.is_orgs(place)
-        }
-        files: dict[str, tuple[str | None, str | None]] = {}
-        passed_on: dict[str, SessionTeam] = {}
-        of_left: dict[str, dict[str, str]] = {}
-        drafts = self.drafts(session)
-        for file, text in (chosen or {}).items():
-            if file not in drafts:
-                # What came with a team: there is no draft of it.
-                files[file] = (text, self._memory().read(file))
-        for file, (text, over) in drafts.items():
-            owner = by_path.get(_directory_of(file))
-            if file in held or (owner is not None and owner.team_id in waits):
-                continue
-            if owner is not None and owner.id in left:
-                kind = DocumentRef.at(file).name
-                kept_of_it = of_left.setdefault(owner.id, {})
-                if text:
-                    kept_of_it[kind] = text
-                if (
-                    self.team_documents.stays_when_team_is_removed(kind)
-                    and text
-                    and store.team(owner.team_id) is None
-                    and all(
-                        normalize_store_path(team.boundary.path) != _directory_of(file)
-                        for team in store.teams()
-                    )
-                ):
-                    # No team has the directory: the document stays there
-                    # as an old one of the team that holds it now.
-                    files[file] = (text, over)
-                    passed_on[file] = owner
-                continue
-            if chosen is not None and file in chosen:
-                files[file] = (chosen[file], self._memory().read(file))
-            else:
-                files[file] = (text, over)
-        # By the folder of each team, where what it recorded is kept.
-        reports: dict[str, list[Report]] = {}
-        for place in places:
-            if place.team_id not in waits and place.id not in left:
-                at = normalize_store_path(place.boundary.path)
-                reports[at] = [
-                    *reports.get(at, []),
-                    *self.session_drafts.reports(place.id),
-                ]
-        if review is not None:
-            # What its reviewers recorded is the team's they review from.
-            home = (
-                review
-                if self.is_orgs(review)
-                else store.team(self._home_of(top, review.boundary.path))
-            )
-            at = normalize_store_path((home or review).boundary.path)
-            reports[at] = sorted(
-                [*reports.get(at, []), *self.session_drafts.reports(review.id)],
-                key=lambda report: report.at,
-            )
-        not_taken = [
-            FormerTeam(
-                id=place.team_id,
-                title=place.title,
-                above=self._home_of(top, place.boundary.path),
-                path=place.boundary.path,
-                purpose=run.marked(TASK).get(place.id, place.summary),
-                ended="not_taken",
-                at=stamp,
-                review=place.review.state if place.review else None,
-                reports=self.session_drafts.reports(place.id),
-                compacted_report="\n\n".join(
-                    r.text for r in self.session_drafts.reports(place.id)
-                ),
-                documents=of_left.get(place.id, {}),
-                session=store.session_title(place),
-                since=place.since,
-            )
-            for place in left.values()
-            if self.session_drafts.reports(place.id) or place.id in of_left
-        ]
-        removed = [
-            record
-            for record in self.session_drafts.former(session)
-            if record.id not in waits
-        ]
-        former, forget, forget_reports = [], [], []
-        for record in removed:
-            team = store.team(record.id)
-            if team is not None and team.since == record.since:
-                # The org kept the team the session removed.
-                former.append(record.model_copy(update={"ended": "not_taken"}))
-            else:
-                former.append(record)
-                ours = next((p for p in places if p.team_id == record.id), None)
-                if team is None or (ours is not None and ours.since == team.since):
-                    forget.append(record.id)
-                    forget_reports.append(record.path)
-        of_team = {place.team_id: place for place in places}
-        events: dict[str, list[TeamEvent]] = {}
-        kept_events: list[str] = []
-        for (_, kept_for), kept in self.session_drafts.events_by_team(session).items():
-            team_id = kept_for
-            place = of_team.get(team_id)
-            if team_id in waits:
-                continue
-            if place is not None and place.id in left:
-                team_id = self._home_of(top, place.boundary.path)
-            elif store.team(team_id) is None:
-                team_id = self._home_of(top, top.boundary.path)
-            events.setdefault(team_id, []).extend(
-                event.model_copy(update={"unaccepted": False}) for event in kept
-            )
-            kept_events.append(kept_for)
-        for record in not_taken:
-            place = next(p for p in left.values() if p.team_id == record.id)
-            events.setdefault(record.above, []).append(
-                self._event(
-                    "not_taken",
-                    place,
-                    "what its session wrote for it is kept in its record",
-                ).model_copy(update={"unaccepted": False})
-            )
-        routed = self.session_drafts.routed(session)
-        conflicts = self.org_save.commit_landing(
-            Landing(
-                files=files,
-                seen=seen or {},
-                reports={team: kept for team, kept in reports.items() if kept},
-                former=[*former, *not_taken],
-                forget=forget,
-                forget_reports=forget_reports,
-                events=events,
-                routed=routed,
-            ),
-            f"memory: the accepted work of session {session}",
-            tree,
-        )
-        for kept_for in kept_events:
-            self.session_drafts.forget_events(session, kept_for)
-        for request in routed:
-            self.session_drafts.forget_routed(session, request)
-        if review is not None:
-            self.session_drafts.forget_reports(review.id)
-            self.session_drafts.forget_passed(review.id)
-        for file in files:
-            if file in conflicts:
-                continue
-            self._undraft(session, file)
-            if file in passed_on:
-                lost = passed_on[file]
-                home = store.team(self._home_of(top, lost.boundary.path))
-                name = DocumentRef.at(file).name
-                rewritten = (
-                    DocumentRef(normalize_store_path(home.boundary.path), name).path
-                    if home
-                    else ""
-                )
-                directory = _directory_of(file)
-                if (
-                    home is not None
-                    and not (
-                        files.get(rewritten, (None,))[0] and rewritten not in conflicts
-                    )
-                    and all(
-                        (old.name, old.path) != (name, directory)
-                        for old in home.leftover_documents
-                    )
-                ):
-                    store.update_team(
-                        home.id,
-                        leftover_documents=[
-                            *home.leftover_documents,
-                            LeftoverDocument(
-                                name=name, path=directory, team=lost.title
-                            ),
-                        ],
-                    )
-                continue
-            owner = by_path.get(_directory_of(file))
-            name = DocumentRef.at(file).name
-            if (
-                owner is not None
-                and self.team_documents.stays_when_team_is_removed(name)
-                and files[file][0] is not None
-            ):
-                # The team has one of its own now: what teams before it
-                # left of that document is no longer its guide.
-                team = store.team(owner.team_id)
-                store.update_team(
-                    owner.team_id,
-                    summary=owner.summary,
-                    leftover_documents=[
-                        old
-                        for old in (team.leftover_documents if team else [])
-                        if old.name != name
-                    ],
-                )
-        for place in left.values():
-            for file in self.drafts(session):
-                # What waits for the org's part of the landing stays a draft.
-                if by_path.get(_directory_of(file)) is place and file not in held:
-                    self._undraft(session, file)
-        for place in places:
-            if place.team_id not in waits:
-                self.session_drafts.forget_reports(place.id)
-                self.session_drafts.forget_passed(place.id)
-        for record in removed:
-            self.session_drafts.forget_former(session, record)
-        grown: list[tuple[str, str]] = [
-            (team, role)
-            for team, kept in reports.items()
-            for role in dict.fromkeys(report.role for report in kept)
-        ]
-        return Taken(grown, sorted(conflicts))
 
     def _leave(self, top: SessionTeam) -> str:
         """Drop what a session that is being closed kept to itself: what

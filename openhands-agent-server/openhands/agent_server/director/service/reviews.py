@@ -83,7 +83,7 @@ from openhands.agent_server.director.run_state import (
     TURN,
     Intent,
 )
-from openhands.agent_server.director.service.records import (
+from openhands.agent_server.director.service.session_landing_service import (
     Taken,
 )
 from openhands.agent_server.director.service.state import (
@@ -528,7 +528,7 @@ class Reviews(Teams):
         if under is not None:
             above_id = under
         elif moved:
-            above_id = self._home_of(places[session.team_id], path)
+            above_id = self.session_landing.home_of(places[session.team_id], path)
         home = store.team(above_id)
         if home is None or any(
             other.id != team_id
@@ -724,7 +724,7 @@ class Reviews(Teams):
                 and not is_division_lead(above)
                 and store.team(above.team_id) is None
             ):
-                moved_to = self._home_of(top, place.boundary.path)
+                moved_to = self.session_landing.home_of(top, place.boundary.path)
                 for agreed in self._documents_coming_with(
                     above, moved_to, clash.team, came.get(clash.team, {})
                 ):
@@ -1153,7 +1153,7 @@ class Reviews(Teams):
                     }
                 ),
             )
-            records = self._land_records(top, seen, waits=waits, held=agreements)
+            records = self.session_landing.land(top, seen, waits=waits, held=agreements)
             return Landed(records, [], [], [], [], [])
         # What the tree and the merge were, for a landing that fails: the
         # tree never moves without the team memory that goes with it.
@@ -1221,7 +1221,7 @@ class Reviews(Teams):
                 if item.use == "replacement":
                     others.append((item.document, item.key, text))
             self._keep_merge(top, None)
-            records = self._land_records(top, seen, chosen=texts, tree=True)
+            records = self.session_landing.land(top, seen, chosen=texts, tree=True)
         except BaseException:
             store.replace_all(tree)
             store.set_shape(session.id, shape)
@@ -1287,7 +1287,7 @@ class Reviews(Teams):
         did not take, also when the session is closed and nobody is told."""
         for name, directory, _ in landed.others:
             self._land_event(
-                self._home_of(top, directory),
+                self.session_landing.home_of(top, directory),
                 self._event(
                     "not_taken",
                     top,
