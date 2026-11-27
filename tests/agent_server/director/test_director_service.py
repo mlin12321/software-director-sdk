@@ -11,14 +11,14 @@ from uuid import UUID, uuid4
 import pytest
 
 from openhands.agent_server.director import agent_actions
-from openhands.agent_server.director.git import common_dir
+from openhands.agent_server.director.environment.git.cli import common_dir
+from openhands.agent_server.director.environment.git.git_store import ORG_REF
 from openhands.agent_server.director.headline import TeamSummary
 from openhands.agent_server.director.models import (
     CreateOrgRequest,
     RouteMessageRequest,
     SplitChild,
 )
-from openhands.agent_server.director.org_persistence import ORG_REF
 from openhands.agent_server.director.org_store import AGENT_LOST, team_id_of
 from openhands.agent_server.director.prompts import MANAGER_ROLE
 from openhands.agent_server.director.service import (

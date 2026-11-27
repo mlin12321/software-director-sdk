@@ -7,10 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from openhands.agent_server.director import org_sync
-from openhands.agent_server.director.git_store import (
-    GitStore,
-)
+from openhands.agent_server.director.environment import CodingEnvironment
 from openhands.agent_server.director.launch import TeamLauncher
 from openhands.agent_server.director.models import (
     MemorySync,
@@ -28,7 +25,6 @@ from openhands.agent_server.director.org_merge import (
     merge_orgs,
 )
 from openhands.agent_server.director.org_persistence import (
-    create_org_board,
     org_file,
     save_org,
     saved_nodes,
@@ -72,6 +68,8 @@ class OrgSyncService:
 
     org: Callable[[], OrgStore]
     """The org that is pushed and pulled."""
+    environment: CodingEnvironment
+    """Where the org's records are kept."""
     repo_dir: Callable[[], Path]
     """The repository the org is in."""
     repository: Callable[[], Path]
@@ -113,9 +111,9 @@ class OrgSyncService:
                     "A merge waits for choices. Resolve it or abandon it first."
                 )
             repo = await asyncio.to_thread(self.repository)
-            await asyncio.to_thread(org_sync.fetch, repo, remote)
+            await asyncio.to_thread(self.environment.remote.fetch, repo, remote)
             theirs = await asyncio.to_thread(
-                org_sync.commit_at, repo, org_sync.remote_org(remote)
+                self.environment.remote.org_tree_of, repo, remote
             )
             if store.root_id is None:
                 return await self.work_queue.result_in(
@@ -158,17 +156,17 @@ class OrgSyncService:
 
             def push() -> OrgSync:
                 self.org_save.save_tree(store)
-                org_sync.fetch(repo, remote)
-                if org_sync.behind(repo, remote):
+                self.environment.remote.fetch(repo, remote)
+                if self.environment.remote.behind(repo, remote):
                     raise Conflict(
                         f"{remote} has changes of the org that are not here. "
                         "Pull first."
                     )
-                org_sync.push(repo, remote)
+                self.environment.remote.push(repo, remote)
                 return OrgSync(
                     remote=remote,
                     result="pushed",
-                    head=create_org_board(repo).head(),
+                    head=self.environment.org_tree(repo).head(),
                 )
 
             return await asyncio.to_thread(push)
@@ -223,7 +221,9 @@ class OrgSyncService:
             return OrgSync(
                 remote=state["remote"],
                 result="up_to_date",
-                head=await asyncio.to_thread(create_org_board(self.repo_dir()).head),
+                head=await asyncio.to_thread(
+                    self.environment.org_tree(self.repo_dir()).head
+                ),
             )
 
     async def _take_org(self, repo: Path, remote: str, theirs: str | None) -> OrgSync:
@@ -232,7 +232,7 @@ class OrgSyncService:
             return OrgSync(remote=remote, result="up_to_date", head=None)
 
         def take() -> OrgSync:
-            board = create_org_board(repo)
+            board = self.environment.org_tree(repo)
             if not board.move_to(theirs):
                 raise Conflict("The org was changed meanwhile. Pull once more.")
             pulled = self._pull_memory(repo, remote, ())
@@ -274,9 +274,9 @@ class OrgSyncService:
         repo, remote = self.repo_dir(), state["remote"]
         theirs: str | None = state["theirs"]
         choices: dict[str, Side] = state["choices"]
-        board = create_org_board(repo)
-        team_memory = GitStore(repo)
-        their_board = org_sync.commit_at(repo, org_sync.remote_memory(remote))
+        board = self.environment.org_tree(repo)
+        team_memory = self.environment.team_memory(repo)
+        their_board = self.environment.remote.team_memory_of(repo, remote)
         files = [
             OrgConflict(
                 id=f"file:{clash.path}",
@@ -345,10 +345,10 @@ class OrgSyncService:
     def _pull_memory(
         self, repo: Path, remote: str, take_theirs: Collection[str]
     ) -> MemorySync | None:
-        ref = org_sync.remote_memory(remote)
-        if org_sync.commit_at(repo, ref) is None:
+        ref = self.environment.remote.team_memory_name(remote)
+        if self.environment.remote.team_memory_of(repo, remote) is None:
             return None
-        board = GitStore(repo)
+        board = self.environment.team_memory(repo)
         before = board.head()
         merged = board.merge(ref, take_theirs)
         return MemorySync(

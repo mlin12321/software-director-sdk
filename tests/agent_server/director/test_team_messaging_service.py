@@ -8,7 +8,8 @@ from pathlib import Path
 
 import pytest
 
-from openhands.agent_server.director.git_store import GitStore
+from openhands.agent_server.director.environment.git import GitCodingEnvironment
+from openhands.agent_server.director.environment.git.git_store import GitStore
 from openhands.agent_server.director.models import DirectorSettings, Stopped
 from openhands.agent_server.director.remembered import RememberedFile
 from openhands.agent_server.director.run_state import CHECKS, PROGRESS
@@ -57,6 +58,7 @@ class Messaging(Starts):
             org=lambda: self.store,
             org_state=self.org_state,
             org_settings=OrgSettingsService(
+                environment=GitCodingEnvironment(),
                 config_file=None,
                 remembered=RememberedFile(None),
                 team_types=self.team_types,

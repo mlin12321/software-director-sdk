@@ -15,7 +15,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import NamedTuple, Protocol
 
-from openhands.agent_server.director.git_store import GitStore
+from openhands.agent_server.director.environment.records import RecordStore
 from openhands.agent_server.director.models import Report as LogEntry
 from openhands.agent_server.director.run_state import FILES, RunState
 from openhands.sdk.errors import NotSupported
@@ -116,14 +116,14 @@ class DocumentStore(ABC):
         was added and in which session."""
 
 
-class GitDocumentStore(DocumentStore):
+class RecordDocumentStore(DocumentStore):
     """Documents in the org's team memory, a hidden ref of its git
     repository; what sessions made of them is kept beside the director's
     unfinished work until it is accepted."""
 
     def __init__(
         self,
-        memory: Callable[[], GitStore],
+        memory: Callable[[], RecordStore],
         runs: Callable[[], RunState],
         changed: Callable[[str], None] = lambda _session: None,
         logs: "Logs | None" = None,

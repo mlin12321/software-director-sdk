@@ -8,7 +8,8 @@ from typing import Any
 
 import pytest
 
-from openhands.agent_server.director.changes import accepted_changes
+from openhands.agent_server.director.environment.git import GitCodingEnvironment
+from openhands.agent_server.director.environment.git.changes import accepted_changes
 from openhands.agent_server.director.intents import Accept
 from openhands.agent_server.director.models import (
     CreateOrgRequest,
@@ -20,7 +21,7 @@ from openhands.agent_server.director.models import (
     SessionTeam,
     TeamChoice,
 )
-from openhands.agent_server.director.org_persistence import create_org_board, load_org
+from openhands.agent_server.director.org_persistence import load_org
 from openhands.agent_server.director.org_store import (
     OrgStore,
     session_id_of,
@@ -1683,7 +1684,7 @@ async def test_a_landing_that_cannot_be_committed_leaves_the_tree_as_it_was(
     # team memory that goes with it.
     assert [team.id for team in service.org.teams()] == ["root"]
     saved = OrgStore(shipped_type)
-    load_org(create_org_board(repo), saved)
+    load_org(GitCodingEnvironment().org_tree(repo), saved)
     assert [team.id for team in saved.teams()] == ["root"]
     lead = service.org.place(division_lead_of(service))
     assert lead is not None and lead.merge is not None

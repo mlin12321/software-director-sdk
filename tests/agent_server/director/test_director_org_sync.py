@@ -5,6 +5,7 @@ from uuid import UUID
 
 import pytest
 
+from openhands.agent_server.director.environment.git import GitCodingEnvironment
 from openhands.agent_server.director.models import (
     OrgNode,
     ResolveMergeRequest,
@@ -13,7 +14,6 @@ from openhands.agent_server.director.models import (
     StartAgainRequest,
 )
 from openhands.agent_server.director.org_merge import by_id, merge_orgs
-from openhands.agent_server.director.org_persistence import create_org_board
 from openhands.agent_server.director.org_store import (
     AGENT_LOST,
     OrgChange,
@@ -352,7 +352,7 @@ async def test_a_pull_stops_on_a_conflict_and_writes_nothing(
     repo: Path, launcher: FakeLauncher, remote: Path, tmp_path: Path
 ):
     here, there = await conflicting(repo, launcher, remote, tmp_path)
-    before = create_org_board(repo).head()
+    before = GitCodingEnvironment().org_tree(repo).head()
 
     pulled = await here.org_sync.pull_org("origin")
 
@@ -366,7 +366,7 @@ async def test_a_pull_stops_on_a_conflict_and_writes_nothing(
     assert team(here, API).headline == "Mine" and team(here, WEB).headline != (
         "Web moved on"
     )
-    assert create_org_board(repo).head() == before
+    assert GitCodingEnvironment().org_tree(repo).head() == before
     assert here.summary().merging and here.summary().paused == "human"
     assert await here.org_sync.merge() == pulled.merge
     with pytest.raises(Conflict, match="merge waits"):

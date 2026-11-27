@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from openhands.agent_server.director.git_store import GitStore
+from openhands.agent_server.director.environment.git.git_store import GitStore
 from openhands.agent_server.director.models import SessionTeam
 from openhands.agent_server.director.org_store import OrgStore
 from openhands.agent_server.director.prompts import NEED_WRITE

@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from openhands.agent_server.director.git import (
+from openhands.agent_server.director.environment.git.cli import (
     DIRECTOR_IDENTITY,
     GitError,
     bring_over,

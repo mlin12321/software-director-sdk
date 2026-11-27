@@ -16,7 +16,7 @@ from openhands.agent_server.director.documents.store import DocumentRef
 from openhands.agent_server.director.documents.team_documents import TeamDocuments
 from openhands.agent_server.director.environment import EnvironmentFailed
 from openhands.agent_server.director.environment.checkouts import Checkouts, time_stamp
-from openhands.agent_server.director.git_store import (
+from openhands.agent_server.director.environment.records import (
     normalize_store_path,
     team_key,
 )

@@ -6,13 +6,12 @@ on start.
 
 import json
 from collections.abc import Callable
-from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel
 
-from openhands.agent_server.director.git_store import (
-    GitStore,
+from openhands.agent_server.director.environment.records import (
+    RecordStore,
     StoreChange,
     StoreReader,
 )
@@ -20,7 +19,6 @@ from openhands.agent_server.director.models import OrgNodeInput, OrgSettings
 from openhands.agent_server.director.org_store import OrgStore
 
 
-ORG_REF = "refs/agents/org"
 _ORG_FILE = "org.json"
 # What the org sets for itself, beside its tree in the same ref.
 _SETTINGS_FILE = "settings.json"
@@ -34,12 +32,7 @@ class _PersistedOrg(BaseModel):
     nodes: list[OrgNodeInput]
 
 
-def create_org_board(repo_dir: Path) -> GitStore:
-    """The store that holds the org tree of ``repo_dir``."""
-    return GitStore(repo_dir, ref=ORG_REF)
-
-
-def own_settings(board: GitStore) -> OrgSettings:
+def own_settings(board: RecordStore) -> OrgSettings:
     """What the org of ``board`` sets for itself; nothing when it kept none
     or what it kept cannot be read.
 
@@ -57,14 +50,14 @@ def own_settings(board: GitStore) -> OrgSettings:
         return OrgSettings()
     if version != _SETTINGS_VERSION:
         # Read as nothing, a newer director's settings would be saved over.
-        raise ValueError(f"Unrecognized org settings version {version} in {board.ref}")
+        raise ValueError(f"Unrecognized org settings version {version} in {board.name}")
     try:
         return OrgSettings.model_validate(kept)
     except ValueError:
         return OrgSettings()
 
 
-def save_own_settings(board: GitStore, settings: OrgSettings) -> None:
+def save_own_settings(board: RecordStore, settings: OrgSettings) -> None:
     """Keep what the org sets for itself beside its tree."""
     kept = {
         _SETTINGS_VERSION_KEY: _SETTINGS_VERSION,
@@ -93,7 +86,7 @@ def org_file(nodes: list[dict[str, Any]]) -> StoreChange:
     return StoreChange(_ORG_FILE, content)
 
 
-def saved_nodes(board: GitStore, commit: str | None) -> list[dict[str, Any]]:
+def saved_nodes(board: RecordStore, commit: str | None) -> list[dict[str, Any]]:
     """The teams of the tree saved at ``commit``, as they are stored.
 
     Raises:
@@ -105,7 +98,7 @@ def saved_nodes(board: GitStore, commit: str | None) -> list[dict[str, Any]]:
     saved = _PersistedOrg.model_validate_json(raw)
     if saved.version != _VERSION:
         raise ValueError(
-            f"Unrecognized org tree version {saved.version} in {board.ref}"
+            f"Unrecognized org tree version {saved.version} in {board.name}"
         )
     return [reference(node) for node in saved.nodes]
 
@@ -125,12 +118,12 @@ def saving(store: OrgStore) -> Callable[[StoreReader], list[StoreChange]]:
     return mutate
 
 
-def save_org(board: GitStore, store: OrgStore) -> None:
+def save_org(board: RecordStore, store: OrgStore) -> None:
     """Write the tree to ``board`` unless it is already stored unchanged."""
     board.commit(saving(store), "org: save tree")
 
 
-def load_org(board: GitStore, store: OrgStore) -> bool:
+def load_org(board: RecordStore, store: OrgStore) -> bool:
     """Load the saved tree into ``store``.
 
     Returns:
@@ -146,7 +139,7 @@ def load_org(board: GitStore, store: OrgStore) -> bool:
     saved = _PersistedOrg.model_validate_json(raw)
     if saved.version != _VERSION:
         raise ValueError(
-            f"Unrecognized org tree version {saved.version} in {board.ref}"
+            f"Unrecognized org tree version {saved.version} in {board.name}"
         )
     # Refused with the tree, before anything of the org is used.
     own_settings(board)

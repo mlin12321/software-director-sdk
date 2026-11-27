@@ -12,7 +12,7 @@ from uuid import UUID
 
 from openhands.agent_server.director.agent_types import TeamTemplate
 from openhands.agent_server.director.documents.store import TeamRef
-from openhands.agent_server.director.git_store import normalize_store_path
+from openhands.agent_server.director.environment.records import normalize_store_path
 from openhands.agent_server.director.models import (
     AgentKind,
     AgentRef,

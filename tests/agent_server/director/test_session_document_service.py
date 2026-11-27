@@ -7,10 +7,10 @@ import pytest
 
 from openhands.agent_server.director.documents.store import (
     DocumentRef,
-    GitDocumentStore,
+    RecordDocumentStore,
 )
 from openhands.agent_server.director.documents.team_documents import TeamDocuments
-from openhands.agent_server.director.git_store import GitStore
+from openhands.agent_server.director.environment.git.git_store import GitStore
 from openhands.agent_server.director.models import Report, SessionTeam
 from openhands.agent_server.director.org_store import OrgStore
 from openhands.agent_server.director.run_state import USE, RunState
@@ -36,7 +36,7 @@ class Documents:
     def __init__(self, repo: Path) -> None:
         self.run = RunState(None)
         self.store = OrgStore(lambda node: team_types.type_of(node))
-        documents = GitDocumentStore(lambda: GitStore(repo), lambda: self.run)
+        documents = RecordDocumentStore(lambda: GitStore(repo), lambda: self.run)
         tree = RootAboveApi()
         team_types = TeamTypeService(
             config_file=None, documents=documents, tree=tree, org=lambda: self.store

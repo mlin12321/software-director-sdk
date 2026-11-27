@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from openhands.agent_server.director.environment.git import GitCodingEnvironment
 from openhands.agent_server.director.models import (
     DirectorSettingsUpdate,
     OrgSettings,
@@ -49,6 +50,7 @@ def service_for(
         for node in small_tree():
             store.upsert(node)
     return OrgSettingsService(
+        environment=GitCodingEnvironment(),
         config_file=config_file,
         remembered=RememberedFile(repo.parent / "director.json"),
         team_types=team_types,

@@ -8,7 +8,10 @@ from pathlib import Path
 
 import pytest
 
-from openhands.agent_server.director.git_index import excludes_file, git_script
+from openhands.agent_server.director.environment.git.git_index import (
+    excludes_file,
+    git_script,
+)
 from openhands.agent_server.director.sandbox import write_shell
 from tests.agent_server.director.conftest import run_git
 

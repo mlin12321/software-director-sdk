@@ -10,9 +10,8 @@ import os
 import shutil
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from functools import lru_cache
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 from openhands.agent_server.conversation_service import ToolParams
 from openhands.agent_server.director.acp import (
@@ -21,13 +20,21 @@ from openhands.agent_server.director.acp import (
     as_org_agent,
     tools_server,
 )
-from openhands.agent_server.director.git import GitError, common_dir, git, top_of
-from openhands.agent_server.director.git_index import (
+from openhands.agent_server.director.environment.confinement import (
+    Confinement,
+    Enforcement,
+)
+from openhands.agent_server.director.environment.git.cli import (
+    GitError,
+    checkout_root,
+    common_dir,
+    git,
+)
+from openhands.agent_server.director.environment.git.git_index import (
     excludes_file,
     git_script,
     rcfile,
 )
-from openhands.agent_server.director.models import SessionTeam
 from openhands.agent_server.director.sandbox import (
     command_script,
     shell_script,
@@ -57,25 +64,13 @@ PRIVATE = ("director", "hooks")
 # The script an agent that runs its own tools is started by.
 ACP_LAUNCHER = ".acp.sh"
 
-Enforcement = Literal["sandbox", "checks", "merge"]
-
-
-@lru_cache(maxsize=4096)
-def checkout_root(workspace: str) -> Path:
-    """The top of the git checkout ``workspace`` is in, symlinks resolved."""
-    try:
-        top = top_of(Path(workspace))
-    except (GitError, OSError):
-        top = workspace
-    return Path(os.path.realpath(top))
-
 
 def is_in(path: Path, directory: Path) -> bool:
     return path == directory or directory in path.parents
 
 
 @dataclass(frozen=True)
-class Confinement:
+class GitConfinement(Confinement):
     """What holds the agents of one repository to their scopes.
 
     Attributes:
@@ -359,9 +354,3 @@ class Confinement:
                     shutil.rmtree(left, ignore_errors=True)
                 else:
                     left.unlink(missing_ok=True)
-
-
-def apart(team: SessionTeam, above: SessionTeam) -> bool:
-    """Whether a team works in a checkout of its own, not in the one of
-    the team above."""
-    return checkout_root(team.worktree_path) != checkout_root(above.worktree_path)

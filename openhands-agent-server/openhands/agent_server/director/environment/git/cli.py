@@ -5,6 +5,7 @@ import re
 import subprocess
 import tempfile
 from collections.abc import Mapping
+from functools import lru_cache
 from pathlib import Path
 
 from openhands.agent_server.director.environment.errors import EnvironmentFailed
@@ -314,3 +315,13 @@ def save_and_discard(checkout: Path, path: str, ref: str) -> str | None:
         git(checkout, ["restore", "--worktree", "--", *spec])
     git(checkout, ["clean", "--force", "-d", "--quiet", "--", *spec])
     return commit
+
+
+@lru_cache(maxsize=4096)
+def checkout_root(workspace: str) -> Path:
+    """The top of the git checkout ``workspace`` is in, symlinks resolved."""
+    try:
+        top = top_of(Path(workspace))
+    except (GitError, OSError):
+        top = workspace
+    return Path(os.path.realpath(top))

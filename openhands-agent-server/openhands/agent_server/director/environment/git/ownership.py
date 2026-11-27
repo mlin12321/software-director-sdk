@@ -5,7 +5,7 @@ from functools import lru_cache
 from itertools import combinations
 from pathlib import Path
 
-from openhands.agent_server.director.git import (
+from openhands.agent_server.director.environment.git.cli import (
     GitError,
     git,
     git_version,

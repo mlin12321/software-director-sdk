@@ -25,7 +25,7 @@ from openhands.agent_server.director.documents.schema import (
 from openhands.agent_server.director.documents.store import (
     DocumentDraft,
     DocumentRef,
-    GitDocumentStore,
+    RecordDocumentStore,
     TeamRef,
 )
 from openhands.agent_server.director.documents.team_documents import (
@@ -36,7 +36,7 @@ from openhands.agent_server.director.documents.writer import (
     DocumentWriterBase,
     EditorWriter,
 )
-from openhands.agent_server.director.git_store import GitStore
+from openhands.agent_server.director.environment.git.git_store import GitStore
 from openhands.agent_server.director.org import OrgBase
 from openhands.agent_server.director.orgs import (
     SHIPPED_DOCUMENTS,
@@ -88,9 +88,9 @@ TREE = FakeTree(
 
 
 @pytest.fixture
-def store(repo: Path) -> GitDocumentStore:
+def store(repo: Path) -> RecordDocumentStore:
     runs = RunState(None)
-    return GitDocumentStore(lambda: GitStore(repo), lambda: runs)
+    return RecordDocumentStore(lambda: GitStore(repo), lambda: runs)
 
 
 def test_a_document_is_kept_in_its_teams_folder_under_its_name():
@@ -101,7 +101,7 @@ def test_a_document_is_kept_in_its_teams_folder_under_its_name():
 
 
 def test_what_a_session_writes_is_its_own_until_it_is_taken(
-    store: GitDocumentStore, repo: Path
+    store: RecordDocumentStore, repo: Path
 ):
     GitStore(repo).write("services/api", "notes.md", "The org's.")
 
@@ -114,7 +114,9 @@ def test_what_a_session_writes_is_its_own_until_it_is_taken(
     assert store.drafts("two") == {}
 
 
-def test_a_session_keeps_what_it_first_wrote_over(store: GitDocumentStore, repo: Path):
+def test_a_session_keeps_what_it_first_wrote_over(
+    store: RecordDocumentStore, repo: Path
+):
     GitStore(repo).write("services/api", "notes.md", "First.")
     store.write("one", NOTES, "Mine.")
     GitStore(repo).write("services/api", "notes.md", "The org moved on.")
@@ -125,7 +127,7 @@ def test_a_session_keeps_what_it_first_wrote_over(store: GitDocumentStore, repo:
 
 
 def test_a_session_may_remove_a_document_or_forget_what_it_made_of_it(
-    store: GitDocumentStore, repo: Path
+    store: RecordDocumentStore, repo: Path
 ):
     GitStore(repo).write("services/api", "notes.md", "The org's.")
 
@@ -222,7 +224,7 @@ def test_a_type_cannot_keep_a_document_there_is_none_of(tmp_path: Path):
 
 
 def test_a_document_without_a_protocol_is_a_plain_text(
-    store: GitDocumentStore, tmp_path: Path
+    store: RecordDocumentStore, tmp_path: Path
 ):
     (tmp_path / "notes.yaml").write_text("description: Notes.\n")
 
@@ -233,7 +235,7 @@ def test_a_document_without_a_protocol_is_a_plain_text(
 
 
 def test_a_document_does_what_the_protocol_it_names_does(
-    store: GitDocumentStore, tmp_path: Path
+    store: RecordDocumentStore, tmp_path: Path
 ):
     # Any document may name the protocol: it is not the name `contracts`
     # that makes a document wait for the teams.
@@ -266,19 +268,19 @@ CONTRACTS = DocumentRef("services/api", "contracts")
 
 
 @pytest.fixture
-def contracts(store: GitDocumentStore) -> ContractsProtocol:
+def contracts(store: RecordDocumentStore) -> ContractsProtocol:
     document = load_documents([SHIPPED_DOCUMENTS])["contracts"]
     protocol = protocol_of(document, store, TREE)
     assert isinstance(protocol, ContractsProtocol)
     return protocol
 
 
-def of_teams(contracts: ContractsProtocol, store: GitDocumentStore) -> TeamDocuments:
+def of_teams(contracts: ContractsProtocol, store: RecordDocumentStore) -> TeamDocuments:
     return TeamDocuments(store, {"contracts": contracts}, OrgBase(TREE))
 
 
 def test_contracts_must_be_written_before_sub_teams_are_proposed(
-    contracts: ContractsProtocol, store: GitDocumentStore
+    contracts: ContractsProtocol, store: RecordDocumentStore
 ):
     documents = of_teams(contracts, store)
     team = Reader(team=TEAM, keeps=("contracts",))
@@ -294,7 +296,7 @@ def test_contracts_must_be_written_before_sub_teams_are_proposed(
 
 
 def test_a_removed_teams_contracts_go_into_its_record_and_out_of_its_folder(
-    contracts: ContractsProtocol, store: GitDocumentStore, repo: Path
+    contracts: ContractsProtocol, store: RecordDocumentStore, repo: Path
 ):
     GitStore(repo).write("services/api", "contracts.md", "Cart owns the cart page.\n")
 
@@ -310,7 +312,7 @@ def test_a_removed_teams_contracts_go_into_its_record_and_out_of_its_folder(
 def test_the_store_tells_of_every_change_a_session_makes(repo: Path):
     told: list[str] = []
     runs = RunState(None)
-    store = GitDocumentStore(lambda: GitStore(repo), lambda: runs, told.append)
+    store = RecordDocumentStore(lambda: GitStore(repo), lambda: runs, told.append)
 
     store.write("one", NOTES, "Mine.")
     store.remove("one", NOTES)
@@ -320,7 +322,7 @@ def test_the_store_tells_of_every_change_a_session_makes(repo: Path):
 
 
 def test_a_plain_document_is_read_by_the_team_that_keeps_it_and_no_other(
-    store: GitDocumentStore, tmp_path: Path
+    store: RecordDocumentStore, tmp_path: Path
 ):
     (tmp_path / "notes.yaml").write_text("description: Notes.\n")
     plain = protocol_of(read_document(tmp_path / "notes.yaml"), store, TREE)
@@ -390,7 +392,7 @@ def test_a_document_says_what_the_members_of_its_team_are_told_of_it(tmp_path: P
 
 
 def test_a_document_says_its_own_part_of_a_briefing(
-    store: GitDocumentStore, tmp_path: Path
+    store: RecordDocumentStore, tmp_path: Path
 ):
     (tmp_path / "notes.yaml").write_text("description: Notes.\n")
     plain = protocol_of(read_document(tmp_path / "notes.yaml"), store, TREE)

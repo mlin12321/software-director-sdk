@@ -18,7 +18,7 @@ from openhands.agent_server.director.agent_types import (
 )
 from openhands.agent_server.director.documents.store import (
     DocumentStore,
-    GitDocumentStore,
+    RecordDocumentStore,
     TeamRef,
 )
 from openhands.agent_server.director.documents.team_documents import (
@@ -28,8 +28,8 @@ from openhands.agent_server.director.documents.tree import TeamTree
 from openhands.agent_server.director.environment import Checkouts, CodingEnvironment
 from openhands.agent_server.director.environment.checkouts import MergeCheckout
 from openhands.agent_server.director.environment.git import GitCodingEnvironment
-from openhands.agent_server.director.git_store import (
-    GitStore,
+from openhands.agent_server.director.environment.records import (
+    RecordStore,
 )
 from openhands.agent_server.director.intents import Accept, LandOrg
 from openhands.agent_server.director.launch import TeamLauncher
@@ -38,7 +38,6 @@ from openhands.agent_server.director.models import (
     TeamMatch,
 )
 from openhands.agent_server.director.org_persistence import (
-    create_org_board,
     load_org,
 )
 from openhands.agent_server.director.org_store import (
@@ -235,7 +234,7 @@ class ServiceState:
             team_memory=self._memory,
             session_drafts=self.session_drafts,
         )
-        self.documents: DocumentStore = GitDocumentStore(
+        self.documents: DocumentStore = RecordDocumentStore(
             self._memory,
             self.org_state.run_state,
             self._note_change,
@@ -257,9 +256,10 @@ class ServiceState:
             org=lambda: self.org,
             team_types=self.team_types,
             run_state=self.org_state.run_state,
-            checkouts=self.checkouts,
+            environment=self.environment,
         )
         self.org_settings = OrgSettingsService(
+            environment=self.environment,
             config_file=config_file,
             remembered=self.remembered,
             team_types=self.team_types,
@@ -277,6 +277,7 @@ class ServiceState:
         self._launcher: TeamLauncher | None = None
         self.work_queue = WorkQueueService(default_lane=ORG_LANE)
         self.org_save = OrgSaveService(
+            environment=self.environment,
             org=lambda: self.org,
             repo_dir=lambda: self._repo_dir,
             team_memory=self._memory,
@@ -355,7 +356,7 @@ class ServiceState:
             return self._store
 
     @property
-    def team_memory(self) -> GitStore:
+    def team_memory(self) -> RecordStore:
         """The team memory of the director's repository.
 
         Raises:
@@ -375,8 +376,8 @@ class ServiceState:
         _ = self.org  # settles which repository the org is in
         return self._repo_dir
 
-    def _memory(self) -> GitStore:
-        return GitStore(self._repo_dir)
+    def _memory(self) -> RecordStore:
+        return self.environment.team_memory(self._repo_dir)
 
     def summary(self) -> OrgSummary:
         store = self.org
@@ -542,7 +543,7 @@ class ServiceState:
         while repository is not None and self.checkouts.is_repository(repository):
             if not climb and not (repository / ".git").exists():
                 return False
-            if load_org(create_org_board(repository), store):
+            if load_org(self.environment.org_tree(repository), store):
                 self._repo_dir = self.checkouts.root_of(str(repository))
                 logger.info("Director loaded %d teams from %s", len(store), repository)
                 kept = self.org_state.open(self._repo_dir)

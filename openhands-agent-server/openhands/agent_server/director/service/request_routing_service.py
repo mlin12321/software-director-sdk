@@ -8,7 +8,7 @@ from pathlib import Path
 from openhands.agent_server.director import routing
 from openhands.agent_server.director.boundary import owns
 from openhands.agent_server.director.environment.checkouts import Checkouts
-from openhands.agent_server.director.git_store import team_key
+from openhands.agent_server.director.environment.records import team_key
 from openhands.agent_server.director.models import OrgNode, RoutedRequest, SessionTeam
 from openhands.agent_server.director.org_store import (
     AGENT_LOST,

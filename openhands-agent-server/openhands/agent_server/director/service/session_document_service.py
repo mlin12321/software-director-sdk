@@ -10,8 +10,8 @@ from openhands.agent_server.director.documents.team_documents import (
     RemovedTeam,
     TeamDocuments,
 )
-from openhands.agent_server.director.git_store import (
-    GitStore,
+from openhands.agent_server.director.environment.records import (
+    RecordStore,
     normalize_store_path,
 )
 from openhands.agent_server.director.models import (
@@ -58,9 +58,9 @@ class SessionDocumentService:
 
     org: Callable[[], OrgStore]
     """The org the sessions work in."""
-    team_memory: Callable[[], GitStore]
+    team_memory: Callable[[], RecordStore]
     """The org's team memory, as it is when asked."""
-    require_team_memory: Callable[[], GitStore]
+    require_team_memory: Callable[[], RecordStore]
     """The same, raising ``Unavailable`` where the org has no team memory."""
     run_state: Callable[[], RunState]
     """Where what a session used is counted."""

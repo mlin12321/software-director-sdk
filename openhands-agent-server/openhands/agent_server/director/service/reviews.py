@@ -20,7 +20,7 @@ from openhands.agent_server.director.environment.checkouts import (
     Unfinished,
     time_stamp,
 )
-from openhands.agent_server.director.git_store import (
+from openhands.agent_server.director.environment.records import (
     normalize_store_path,
 )
 from openhands.agent_server.director.intents import Accept, LandOrg, RequestReview

@@ -6,14 +6,14 @@ import re
 from pathlib import Path
 
 from openhands.agent_server.director.boundary import owns
-from openhands.agent_server.director.git import (
+from openhands.agent_server.director.environment.git.cli import (
     DIRECTOR_IDENTITY,
     GitError,
     git,
     pathspec,
     top_of,
 )
-from openhands.agent_server.director.merge_back import (
+from openhands.agent_server.director.environment.git.merge_back import (
     bring_up_to_date,
     one_at_a_time,
 )

@@ -15,7 +15,11 @@ from openhands.agent_server.director.environment.checkouts import (
     MergeCheckout,
     Unfinished,
 )
-from openhands.agent_server.director.git import DIRECTOR_IDENTITY, GitError, git
+from openhands.agent_server.director.environment.git.cli import (
+    DIRECTOR_IDENTITY,
+    GitError,
+    git,
+)
 
 
 _MARKERS = ("<<<<<<< ", ">>>>>>> ")

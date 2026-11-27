@@ -12,7 +12,7 @@ from openhands.agent_server.director.documents.schema import (
 from openhands.agent_server.director.documents.store import DocumentRef, DocumentStore
 from openhands.agent_server.director.documents.team_documents import TeamDocuments
 from openhands.agent_server.director.environment.checkouts import Checkouts
-from openhands.agent_server.director.git_store import (
+from openhands.agent_server.director.environment.records import (
     team_key,
 )
 from openhands.agent_server.director.models import (

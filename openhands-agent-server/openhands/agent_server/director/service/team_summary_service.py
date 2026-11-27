@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from uuid import UUID
 
 from openhands.agent_server.director import compaction
-from openhands.agent_server.director.git_store import GitStore
+from openhands.agent_server.director.environment.records import RecordStore
 from openhands.agent_server.director.headline import provisional_summary
 from openhands.agent_server.director.launch import TeamLauncher
 from openhands.agent_server.director.models import (
@@ -56,7 +56,7 @@ class TeamSummaryService:
 
     org: Callable[[], OrgStore]
     """The org whose teams are named and summarized."""
-    team_memory: Callable[[], GitStore]
+    team_memory: Callable[[], RecordStore]
     """Where the reports of the teams are."""
     org_state: OrgStateService
     """The run state, and whether the org is paused."""

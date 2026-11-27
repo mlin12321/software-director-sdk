@@ -19,7 +19,7 @@ from openhands.agent_server.director.documents.store import (
     DocumentStore,
     TeamRef,
 )
-from openhands.agent_server.director.git_store import normalize_store_path
+from openhands.agent_server.director.environment.records import normalize_store_path
 from openhands.agent_server.director.models import LeftoverDocument, TeamDocument
 from openhands.agent_server.director.org import OrgBase
 from openhands.agent_server.director.prompts import left_document

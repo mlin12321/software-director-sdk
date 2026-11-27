@@ -6,9 +6,9 @@ from dataclasses import dataclass
 from typing import NamedTuple
 
 from openhands.agent_server.director.documents.store import DocumentRef, DocumentStore
-from openhands.agent_server.director.git_store import (
-    GitStore,
+from openhands.agent_server.director.environment.records import (
     Landing,
+    RecordStore,
     normalize_store_path,
 )
 from openhands.agent_server.director.models import (
@@ -63,7 +63,7 @@ class SessionLandingService:
     """The org a session's work lands in."""
     run_state: Callable[[], RunState]
     """Where the task each team was given is kept."""
-    team_memory: Callable[[], GitStore]
+    team_memory: Callable[[], RecordStore]
     """The team memory that is landed in, for the text a file has now."""
     documents: DocumentStore
     """Where the documents a session wrote wait."""

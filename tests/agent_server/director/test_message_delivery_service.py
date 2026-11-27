@@ -11,7 +11,7 @@ import pytest
 from openhands.agent_server.director.environment.git import (
     GitCodingEnvironment,
 )
-from openhands.agent_server.director.git_store import GitStore
+from openhands.agent_server.director.environment.git.git_store import GitStore
 from openhands.agent_server.director.intents import LaunchMember
 from openhands.agent_server.director.org_store import OrgStore
 from openhands.agent_server.director.run_state import RUNNING, TOLD, Intent
@@ -67,6 +67,7 @@ class Delivery:
             org=lambda: self.store,
             org_state=self.org_state,
             org_save=OrgSaveService(
+                environment=GitCodingEnvironment(),
                 org=lambda: self.store,
                 repo_dir=lambda: directory,
                 team_memory=lambda: GitStore(directory),

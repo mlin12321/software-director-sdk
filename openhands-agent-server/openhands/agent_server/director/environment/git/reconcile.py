@@ -12,7 +12,7 @@ asked to reconcile the two where they meet.
 from dataclasses import dataclass
 from pathlib import Path
 
-from openhands.agent_server.director.git import git, head_of
+from openhands.agent_server.director.environment.git.cli import git, head_of
 
 
 # How the commit that merges a team's accepted work starts.
