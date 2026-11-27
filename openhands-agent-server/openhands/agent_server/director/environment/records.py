@@ -267,7 +267,10 @@ class RecordStore(ABC):
     """One store of an org's records.
 
     A version of the store is named by a string; ``None`` names the store
-    before its first write.
+    before its first write. What keeps a store says only how files are
+    read, listed and changed whole (the abstract methods); how team
+    memory is laid out in one is the same for every store and is said
+    here once (the others).
     """
 
     @property
@@ -280,46 +283,12 @@ class RecordStore(ABC):
         """The commit the ref points at, or None before the first write."""
 
     @abstractmethod
-    def read(self, path: str) -> str | None:
-        """The content of ``path`` at the ref head, or None if it is absent."""
+    def read_at(self, commit: str | None, path: str) -> str | None:
+        """The content of ``path`` at ``commit``, or None if it is absent."""
 
     @abstractmethod
-    def write(self, scope_path: str, file: str, content: str) -> str | None:
-        """Write one file inside ``scope_path`` and return the new commit.
-
-        A file that resolves outside the scope is rejected.
-        """
-
-    @abstractmethod
-    def reports(self, folder: str, role: str | None = None) -> list[Report]:
-        """What the members of the team of ``folder`` recorded, oldest
-        first: all of it, or what the member ``role`` did. It belongs to
-        the team's member, whichever conversation it has."""
-
-    @abstractmethod
-    def former(self, node_id: str) -> list[FormerTeam]:
-        """The records of the teams that were removed from a team id,
-        oldest first."""
-
-    @abstractmethod
-    def former_below(self, above: str) -> list[FormerTeam]:
-        """The records of the teams that were removed from directly below
-        a team, oldest first."""
-
-    @abstractmethod
-    def take_in(self, landing: Landing, message: str) -> dict[str, str | None]:
-        """Make of team memory what a session's accepted work makes of it,
-        all of it or none, whoever else writes meanwhile.
-
-        A file is written only where the text it was written over still
-        stands, or the text a reviewer was shown; where the file already
-        has the session's text there is nothing to write. A report, an
-        event and a routed request are added once, by their ids. A record
-        of a former team is written once.
-
-        Returns:
-            The files that were not written, with the text each has now.
-        """
+    def files(self, directory: str) -> list[str]:
+        """Every file under ``directory`` as the store is now."""
 
     @abstractmethod
     def stage(
@@ -329,30 +298,6 @@ class RecordStore(ABC):
 
         Returns:
             None when ``mutate`` produced no changes.
-        """
-
-    @abstractmethod
-    def history(self, node_id: str) -> list[TeamEvent]:
-        """What became of the teams directly below a team, oldest first."""
-
-    @abstractmethod
-    def routed(self) -> list[RoutedRequest]:
-        """What the human said that went straight to a team, oldest first."""
-
-    @abstractmethod
-    def replace_reports(
-        self,
-        folder: str,
-        role: str,
-        read_as: list[Report],
-        reports: list[Report],
-    ) -> bool:
-        """Put ``reports`` in place of what one member of a team recorded,
-        unless that changed since it was read as ``read_as``. What the
-        team's other members recorded stays.
-
-        Returns:
-            Whether they were replaced.
         """
 
     @abstractmethod
@@ -367,6 +312,19 @@ class RecordStore(ABC):
         Returns:
             The new commit, or the unchanged head when ``mutate`` produced no
             changes.
+        """
+
+    @abstractmethod
+    def land(
+        self, changes: list[StoreChange], message: str, *, merging: str | None = None
+    ) -> bool:
+        """Commit ``changes`` on the head, once.
+
+        Args:
+            merging: A commit to record as the second parent.
+
+        Returns:
+            False when another writer moved the ref first; nothing was written.
         """
 
     @abstractmethod
@@ -396,19 +354,6 @@ class RecordStore(ABC):
         """
 
     @abstractmethod
-    def land(
-        self, changes: list[StoreChange], message: str, *, merging: str | None = None
-    ) -> bool:
-        """Commit ``changes`` on the head, once.
-
-        Args:
-            merging: A commit to record as the second parent.
-
-        Returns:
-            False when another writer moved the ref first; nothing was written.
-        """
-
-    @abstractmethod
     def move_to(self, commit: str) -> bool:
         """Point the ref at ``commit``, which has its head in its history.
 
@@ -424,6 +369,113 @@ class RecordStore(ABC):
     def base_with(self, other: str) -> str | None:
         """The commit this ref and ``other`` both come from, if any."""
 
-    @abstractmethod
-    def read_at(self, commit: str | None, path: str) -> str | None:
-        """The content of ``path`` at ``commit``, or None if it is absent."""
+    # How team memory is laid out in a store.
+
+    def read(self, path: str) -> str | None:
+        """The content of ``path`` at the ref head, or None if it is absent."""
+        return self.read_at(self.head(), path)
+
+    def write(self, scope_path: str, file: str, content: str) -> str | None:
+        """Write one file inside ``scope_path`` and return the new commit.
+
+        A file that resolves outside the scope is rejected.
+        """
+        path = scoped(scope_path, file)
+        return self.commit(
+            lambda _read: [StoreChange(path, content)], f"memory: write {path}"
+        )
+
+    def reports(self, folder: str, role: str | None = None) -> list[Report]:
+        """What the members of the team of ``folder`` recorded, oldest
+        first: all of it, or what the member ``role`` did. It belongs to
+        the team's member, whichever conversation it has."""
+        return [
+            report
+            for report in parse_reports(self.read(reports_file(folder)))
+            if role is None or report.role == role
+        ]
+
+    def former(self, node_id: str) -> list[FormerTeam]:
+        """The records of the teams that were removed from a team id,
+        oldest first."""
+        commit = self.head()
+        return [
+            FormerTeam.model_validate_json(raw)
+            for file in sorted(self.files(f"{FORMER_DIR}/{team_key(node_id)}"))
+            if (raw := self.read_at(commit, file))
+        ]
+
+    def former_below(self, above: str) -> list[FormerTeam]:
+        """The records of the teams that were removed from directly below
+        a team, oldest first."""
+        commit = self.head()
+        records = [
+            FormerTeam.model_validate_json(raw)
+            for file in self.files(FORMER_DIR)
+            if (raw := self.read_at(commit, file))
+        ]
+        return sorted(
+            (record for record in records if record.above == team_key(above)),
+            key=lambda record: record.at,
+        )
+
+    def take_in(self, landing: Landing, message: str) -> dict[str, str | None]:
+        """Make of team memory what a session's accepted work makes of it,
+        all of it or none, whoever else writes meanwhile.
+
+        A file is written only where the text it was written over still
+        stands, or the text a reviewer was shown; where the file already
+        has the session's text there is nothing to write. A report, an
+        event and a routed request are added once, by their ids. A record
+        of a former team is written once.
+
+        Returns:
+            The files that were not written, with the text each has now.
+        """
+        mutate, left = taking_in(landing)
+        self.commit(mutate, message)
+        return left
+
+    def history(self, node_id: str) -> list[TeamEvent]:
+        """What became of the teams directly below a team, oldest first."""
+        raw = self.read(history_file(node_id))
+        return EVENTS.validate_json(raw) if raw else []
+
+    def routed(self) -> list[RoutedRequest]:
+        """What the human said that went straight to a team, oldest first."""
+        raw = self.read(ROUTED_FILE)
+        return ROUTED.validate_json(raw) if raw else []
+
+    def replace_reports(
+        self,
+        folder: str,
+        role: str,
+        read_as: list[Report],
+        reports: list[Report],
+    ) -> bool:
+        """Put ``reports`` in place of what one member of a team recorded,
+        unless that changed since it was read as ``read_as``. What the
+        team's other members recorded stays.
+
+        Returns:
+            Whether they were replaced.
+        """
+        path = reports_file(folder)
+        replaced = False
+
+        def mutate(read: StoreReader) -> list[StoreChange]:
+            nonlocal replaced
+            kept = parse_reports(read(path))
+            replaced = [report for report in kept if report.role == role] == read_as
+            if not replaced:
+                return []
+            others = [report for report in kept if report.role != role]
+            return [
+                StoreChange(
+                    path,
+                    serialize(REPORTS.dump_python(in_order([*others, *reports]))),
+                )
+            ]
+
+        self.commit(mutate, f"memory: compact {path}")
+        return replaced

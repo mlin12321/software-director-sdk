@@ -123,7 +123,7 @@ class Starts:
             start_line=start_line,
             message_delivery=message_delivery,
             confinement=AgentConfinementService(
-                checkouts=GitCheckouts(),
+                environment=GitCodingEnvironment(),
                 repo_dir=lambda: repo,
                 worktree_root=None,
                 find_sandbox=lambda: None,

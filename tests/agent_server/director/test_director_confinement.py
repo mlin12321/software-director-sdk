@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from openhands.agent_server.director.confinement import Confinement
+from openhands.agent_server.director.environment.git import GitConfinement
 from openhands.agent_server.director.scope import Closed, MergeArea, Scope
 
 
@@ -17,8 +17,8 @@ def repo(tmp_path: Path) -> Path:
     return root
 
 
-def confinement(repo: Path, secret: Path | None = None) -> Confinement:
-    return Confinement(
+def confinement(repo: Path, secret: Path | None = None) -> GitConfinement:
+    return GitConfinement(
         repo_dir=repo,
         checkouts=(repo,),
         bwrap=None,

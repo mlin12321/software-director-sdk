@@ -11,7 +11,7 @@ import shutil
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 from openhands.agent_server.conversation_service import ToolParams
 from openhands.agent_server.director.acp import (
@@ -19,6 +19,10 @@ from openhands.agent_server.director.acp import (
     agent_token,
     as_org_agent,
     tools_server,
+)
+from openhands.agent_server.director.environment.confinement import (
+    Confinement,
+    Enforcement,
 )
 from openhands.agent_server.director.environment.git.cli import (
     GitError,
@@ -60,15 +64,13 @@ PRIVATE = ("director", "hooks")
 # The script an agent that runs its own tools is started by.
 ACP_LAUNCHER = ".acp.sh"
 
-Enforcement = Literal["sandbox", "checks", "merge"]
-
 
 def is_in(path: Path, directory: Path) -> bool:
     return path == directory or directory in path.parents
 
 
 @dataclass(frozen=True)
-class Confinement:
+class GitConfinement(Confinement):
     """What holds the agents of one repository to their scopes.
 
     Attributes:

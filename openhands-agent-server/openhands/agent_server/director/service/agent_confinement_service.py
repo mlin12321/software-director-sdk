@@ -14,10 +14,12 @@ from uuid import UUID
 from openhands.agent_server.conversation_service import ToolParams
 from openhands.agent_server.director.acp import conversation_of
 from openhands.agent_server.director.boundary import scope_within
-from openhands.agent_server.director.confinement import Confinement
-from openhands.agent_server.director.environment import EnvironmentFailed
+from openhands.agent_server.director.environment import (
+    CodingEnvironment,
+    Confinement,
+    EnvironmentFailed,
+)
 from openhands.agent_server.director.environment.checkouts import (
-    Checkouts,
     MergeCheckout,
 )
 from openhands.agent_server.director.models import (
@@ -79,8 +81,8 @@ class AgentConfinementService:
     """Where this server answers; None for the address it is bound to."""
     org: Callable[[], OrgStore]
     """The org whose agents are held."""
-    checkouts: Checkouts
-    """Where each team's work is and how it moves."""
+    environment: CodingEnvironment
+    """Where the agents work, and what holds them to their scopes there."""
     team_types: TeamTypeService
     """What a team's type says of who writes and who reviews."""
     run_state: Callable[[], RunState]
@@ -136,10 +138,10 @@ class AgentConfinementService:
     def _confinement(self) -> Confinement:
         """What holds the org's agents to their scopes, as the server is
         now."""
-        return Confinement(
-            repo_dir=self.repo_dir(),
+        return self.environment.confinement(
+            self.repo_dir(),
             checkouts=tuple(self._checkouts()),
-            bwrap=self._bwrap,
+            sandbox=self._bwrap,
             secret=self.remembered.path,
             # Where an agent that runs its own tools reaches this server.
             server_url=self.server_url or os.environ.get(_INTERNAL_SERVER_URL_ENV),
@@ -153,7 +155,7 @@ class AgentConfinementService:
     def merges_for(self, place_id: str) -> Path:
         """Where the merges the reviewer of a team finishes are laid out:
         one folder for each reviewer, which its shell alone may write."""
-        root = self._confinement().shells.parent / _MERGING_DIR
+        root = self.environment.state_dir(self.repo_dir()) / _MERGING_DIR
         return root / place_id.replace("@", "-")
 
     def scope_of(
@@ -192,7 +194,7 @@ class AgentConfinementService:
             checkout="" if hand_over else place.worktree_path,
             edits=role == kind.writer,
         )
-        repo_checkout = self.checkouts.root_of(str(self.repo_dir()))
+        repo_checkout = self.environment.checkouts.root_of(str(self.repo_dir()))
         return replace(
             within,
             # It writes in its boundary from its main conversation alone;
@@ -206,7 +208,7 @@ class AgentConfinementService:
             # branch they have it.
             branch=place.branch or ""
             if place.worktree_path
-            and self.checkouts.root_of(place.worktree_path) != repo_checkout
+            and self.environment.checkouts.root_of(place.worktree_path) != repo_checkout
             else "",
             # Its git commits nothing in a sub-team's directory; it may still
             # write in that of a team that has not started.

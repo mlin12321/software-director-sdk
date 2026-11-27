@@ -208,9 +208,8 @@ def test_the_director_names_no_document_an_org_declares(module: str):
 
 
 GIT = "openhands.agent_server.director.environment.git"
-# The one place the environment is built, and what confines the agents'
-# own git, which is git and stays so.
-_MAY_REACH_GIT = {"director/service/state.py", "director/confinement.py"}
+# The one place the environment is built.
+_MAY_REACH_GIT = {"director/service/state.py"}
 
 
 def _reached(path: Path) -> set[str]:
@@ -242,18 +241,16 @@ def test_only_the_environment_knows_git():
     assert not reached
 
 
-def test_what_confines_the_agents_git_reaches_only_gits_own_commands():
-    reached = {
-        name.removeprefix(f"{GIT}.")
-        for name in _imports("confinement.py")
-        if name.startswith(GIT)
-    }
-
-    assert reached == {"cli", "git_index"}
-
-
 @pytest.mark.parametrize(
-    "module", ["__init__.py", "checkouts.py", "records.py", "remote.py", "errors.py"]
+    "module",
+    [
+        "__init__.py",
+        "checkouts.py",
+        "confinement.py",
+        "records.py",
+        "remote.py",
+        "errors.py",
+    ],
 )
 def test_the_environment_is_said_without_git(module: str):
     prefix = "openhands.agent_server.director."
@@ -265,7 +262,9 @@ def test_the_environment_is_said_without_git(module: str):
 
     assert reached <= {
         "models",
+        "scope",
         "environment.checkouts",
+        "environment.confinement",
         "environment.errors",
         "environment.records",
         "environment.remote",

@@ -256,7 +256,7 @@ class ServiceState:
             org=lambda: self.org,
             team_types=self.team_types,
             run_state=self.org_state.run_state,
-            checkouts=self.checkouts,
+            environment=self.environment,
         )
         self.org_settings = OrgSettingsService(
             environment=self.environment,

@@ -1,13 +1,14 @@
 """The coding environment over git: a checkout is a git worktree, a
 version is a commit, and a store of records is a hidden ref."""
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 from openhands.agent_server.director.environment import CodingEnvironment
 from openhands.agent_server.director.environment.git import org_sync
 from openhands.agent_server.director.environment.git.checkouts import GitCheckouts
 from openhands.agent_server.director.environment.git.cli import common_dir
+from openhands.agent_server.director.environment.git.confinement import GitConfinement
 from openhands.agent_server.director.environment.git.git_store import (
     ORG_REF,
     GitStore,
@@ -17,7 +18,13 @@ from openhands.agent_server.director.environment.records import Staged
 from openhands.agent_server.director.environment.remote import Remote
 
 
-__all__ = ["GitCheckouts", "GitCodingEnvironment", "GitRemote", "GitStore"]
+__all__ = [
+    "GitCheckouts",
+    "GitCodingEnvironment",
+    "GitConfinement",
+    "GitRemote",
+    "GitStore",
+]
 
 
 class GitRemote(Remote):
@@ -57,6 +64,25 @@ class GitCodingEnvironment(CodingEnvironment):
     @property
     def remote(self) -> GitRemote:
         return self._remote
+
+    def confinement(
+        self,
+        repository: Path,
+        *,
+        checkouts: tuple[Path, ...],
+        sandbox: str | None,
+        secret: Path | None,
+        server_url: str | None,
+        key: Callable[[], bytes],
+    ) -> GitConfinement:
+        return GitConfinement(
+            repo_dir=repository,
+            checkouts=checkouts,
+            bwrap=sandbox,
+            secret=secret,
+            server_url=server_url,
+            key=key,
+        )
 
     def team_memory(self, repository: Path) -> GitStore:
         return GitStore(repository)

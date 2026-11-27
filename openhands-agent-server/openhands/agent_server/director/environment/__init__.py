@@ -9,10 +9,11 @@ git (`director.environment.git`).
 """
 
 from abc import ABC, abstractmethod
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 from openhands.agent_server.director.environment.checkouts import Checkouts
+from openhands.agent_server.director.environment.confinement import Confinement
 from openhands.agent_server.director.environment.errors import EnvironmentFailed
 from openhands.agent_server.director.environment.records import RecordStore, Staged
 from openhands.agent_server.director.environment.remote import Remote
@@ -21,6 +22,7 @@ from openhands.agent_server.director.environment.remote import Remote
 __all__ = [
     "Checkouts",
     "CodingEnvironment",
+    "Confinement",
     "EnvironmentFailed",
     "RecordStore",
     "Remote",
@@ -40,6 +42,29 @@ class CodingEnvironment(ABC):
     @abstractmethod
     def remote(self) -> Remote:
         """Exchanges an org's records with a remote of its repository."""
+
+    @abstractmethod
+    def confinement(
+        self,
+        repository: Path,
+        *,
+        checkouts: tuple[Path, ...],
+        sandbox: str | None,
+        secret: Path | None,
+        server_url: str | None,
+        key: Callable[[], bytes],
+    ) -> Confinement:
+        """What holds the agents of ``repository`` to their scopes.
+
+        Args:
+            checkouts: Where its checkouts are.
+            sandbox: The binary shells are confined with; None leaves
+                them unconfined.
+            secret: A file of the director's own that no agent may open.
+            server_url: Where an agent that runs its own tools reaches
+                the server; None when that is not known.
+            key: Gives what the tokens of such agents are signed with.
+        """
 
     @abstractmethod
     def team_memory(self, repository: Path) -> RecordStore:
