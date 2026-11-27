@@ -24,11 +24,11 @@ from openhands.agent_server.director.models import (
 from openhands.agent_server.director.org_persistence import create_org_board
 from openhands.agent_server.director.org_store import (
     session_id_of,
+    team_ref,
 )
 from openhands.agent_server.director.routing import USAGE_ID
 from openhands.agent_server.director.run_state import TASK
 from openhands.agent_server.director.service import DirectorService
-from openhands.agent_server.director.service.state import team_ref
 from openhands.agent_server.director.tools import (
     ApproveTeamsTool,
     MsgTeamTool,

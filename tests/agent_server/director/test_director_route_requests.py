@@ -212,7 +212,7 @@ async def test_nothing_is_chosen_while_the_org_has_routing_off_or_unasked(
     launcher.answers[USAGE_ID] = TO_DB
 
     unasked = await service.route_message(RouteMessageRequest(text="Add an index."))
-    service.update_settings(DirectorSettingsUpdate(route_requests=False))
+    service.org_settings.update_settings(DirectorSettingsUpdate(route_requests=False))
     off = await ask(service, "Add an index.")
 
     assert (team_of(service, unasked), unasked.chosen_by) == ("root", "path")

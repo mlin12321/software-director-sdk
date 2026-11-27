@@ -33,6 +33,7 @@ from openhands.agent_server.director.org_store import (
     AGENT_LOST,
     is_division_lead,
     session_team_id,
+    team_ref,
     utc_now,
 )
 from openhands.agent_server.director.prompts import (
@@ -71,7 +72,6 @@ from openhands.agent_server.director.service.state import (
     _new_agents,
     checkout_root,
     failure_waits,
-    team_ref,
 )
 from openhands.sdk.conversation.state import ConversationExecutionStatus
 from openhands.sdk.errors import (
@@ -117,14 +117,15 @@ class Teams(Delivery):
             raise NotFound(
                 f"There is no {ref.name} of {ref.folder or 'the repository'}"
             )
-        if not self.org_kind.allows_ref(
+        if not self.org_settings.org_kind.allows_ref(
             TeamMember(team_ref(sender_place), sender),
             TeamMember(team_ref(target_place), target),
             ref,
         ):
             raise Invalid(
-                f"This org does not let the {self.team(sender_place).title(sender)} "
-                f"of {sender_place.title!r} pass a document to {target_place.title!r}"
+                "This org does not let the "
+                f"{self.team_types.team(sender_place).title(sender)} of "
+                f"{sender_place.title!r} pass a document to {target_place.title!r}"
             )
         self.session_drafts.keep_passed(target_place_id, ref.folder, ref.name)
 
@@ -162,18 +163,19 @@ class Teams(Delivery):
         target_place = store.place(target_place_id)
         if sender_place is None or target_place is None:
             raise NotFound("That team is no longer in the org")
-        if not self.org_kind.allows_msg(
+        if not self.org_settings.org_kind.allows_msg(
             TeamMember(team_ref(sender_place), sender),
             TeamMember(team_ref(target_place), target),
         ):
             raise Invalid(
-                f"This org does not let the {self.team(sender_place).title(sender)} "
-                f"of {sender_place.title!r} write to {target_place.title!r}"
+                "This org does not let the "
+                f"{self.team_types.team(sender_place).title(sender)} of "
+                f"{sender_place.title!r} write to {target_place.title!r}"
             )
         # The member that works in a team's folder is the one the team is
         # written to through, and the one that is given work.
-        to_writer = target == self.team(target_place).writer
-        between_ics = to_writer and sender == self.team(sender_place).writer
+        to_writer = target == self.team_types.team(target_place).writer
+        between_ics = to_writer and sender == self.team_types.team(sender_place).writer
         # A thread is named by its reader's team when an IC reads it, and
         # by its writer's when an IC writes to a Manager.
         if to_writer:
@@ -185,7 +187,7 @@ class Teams(Delivery):
             ThreadMessage(at=_instant(), sender=sender, text=text),
         )
         stopped = self._assign(target_place_id) if between_ics else None
-        writer = self.team(sender_place).title(sender)
+        writer = self.team_types.team(sender_place).title(sender)
         heading = (
             f"Your {writer} writes:"
             if sender_place_id == target_place_id or not to_writer
@@ -248,7 +250,7 @@ class Teams(Delivery):
         place = self.org.place(place_id)
         if place is None:
             return None
-        if member == self.team(place).writer:
+        if member == self.team_types.team(place).writer:
             return self._tell_writer(
                 place_id, member, text, human=human, division_lead=division_lead
             )
@@ -262,7 +264,10 @@ class Teams(Delivery):
         place = self.org.place(place_id)
         if place is not None:
             self.tell(
-                place_id, self.team(place).manager, text, division_lead=division_lead
+                place_id,
+                self.team_types.team(place).manager,
+                text,
+                division_lead=division_lead,
             )
 
     def _tell_other(
@@ -283,7 +288,7 @@ class Teams(Delivery):
                 for agent in place.agents
                 if agent.role == member and agent.status == AGENT_LOST
             ]
-            if lost or self.team(place).conversation(member) is None:
+            if lost or self.team_types.team(place).conversation(member) is None:
                 added = AgentRef(
                     role=member, conversation_id=str(uuid4()), status="idle"
                 )
@@ -293,7 +298,7 @@ class Teams(Delivery):
                 self.resumable_work.begin(
                     place_id, LaunchMember(task=task, role=member)
                 )
-        conversation_id = self.team(place).conversation(member)
+        conversation_id = self.team_types.team(place).conversation(member)
         self.notify(conversation_id, text)
         return conversation_id
 
@@ -320,7 +325,7 @@ class Teams(Delivery):
         store = self.org
         above = store.place(team.parent_id) if team.parent_id else None
         if above is not None and not is_division_lead(above):
-            self.tell(above.id, self.team(above).reviewer, notice)
+            self.tell(above.id, self.team_types.team(above).reviewer, notice)
             return
         now = store.place(team.id)
         if now is None or any(e.id == waits for e in now.escalations):
@@ -332,9 +337,9 @@ class Teams(Delivery):
             title=title,
             detail=detail,
             at=utc_now(),
-            raised_by=raised_by or self.team(team).writer,
+            raised_by=raised_by or self.team_types.team(team).writer,
         )
-        self._save_soon()
+        self.org_save.save_soon()
 
     def tell_of_failure(self, place_id: str, role: str, reason: str) -> None:
         """Keep why an agent of a team failed, and tell of it."""
@@ -344,7 +349,7 @@ class Teams(Delivery):
         team = store.place(place_id)
         if team is None:
             return
-        name = self.team(team).title(role)
+        name = self.team_types.team(team).title(role)
         self.record_event(team.parent_id, "failed", team, f"{name}: {reason}")
         lost = any(a.role == role and a.status == AGENT_LOST for a in team.agents)
         self.tell_above(
@@ -353,8 +358,8 @@ class Teams(Delivery):
                 team,
                 name,
                 reason,
-                works=role == self.team(team).writer,
-                names=self.team(team).names,
+                works=role == self.team_types.team(team).writer,
+                names=self.team_types.team(team).names,
             ),
             waits=failure_waits(role),
             title=f"The {name} of {team.title!r} failed",
@@ -390,7 +395,7 @@ class Teams(Delivery):
             return None
         return self.tell(
             place_id,
-            self.team(place).writer,
+            self.team_types.team(place).writer,
             text,
             human=human,
             division_lead=division_lead,
@@ -413,7 +418,7 @@ class Teams(Delivery):
             place = store.place(place_id)
             if place is None:
                 return None
-            conversation_id = self.team(place).conversation(member)
+            conversation_id = self.team_types.team(place).conversation(member)
             leads = is_division_lead(place)
             if conversation_id is None and leads and not division_lead:
                 return None
@@ -488,8 +493,8 @@ class Teams(Delivery):
         """Count a review a team's IC accepted, and wake the team's Manager
         to look at its teams when that makes as many as the org set. Safe
         from any thread."""
-        names = self.names_at(place_id)
-        limit = self.settings.manager_check_accepted_reviews
+        names = self.team_types.names_at(place_id)
+        limit = self.org_settings.settings.manager_check_accepted_reviews
         if not limit:
             return
         with self._counting:
@@ -514,8 +519,8 @@ class Teams(Delivery):
         team's IC, and wake the team's Manager when that team has raised as
         many, on the work it has in hand, as the org set. Safe from any
         thread."""
-        names = self.names_at(place_id)
-        limit = self.settings.manager_check_ic_setbacks
+        names = self.team_types.names_at(place_id)
+        limit = self.org_settings.settings.manager_check_ic_setbacks
         team = self.org.place(below_id)
         if not limit or team is None:
             return
@@ -562,7 +567,7 @@ class Teams(Delivery):
         teams = store.below(place_id)
         waiting = {}
         for below in teams:
-            writer = self.team(below).writer
+            writer = self.team_types.team(below).writer
             raised = [e.raised_at for e in below.escalations if e.raised_by == writer]
             if raised:
                 since = now - datetime.fromisoformat(min(raised))
@@ -578,8 +583,8 @@ class Teams(Delivery):
                 counted["escalations"],
                 self.history_of(place_id),
                 after_successes=after_successes,
-                escalation_limit=self.settings.manager_check_ic_setbacks,
-                names=self.names_at(place_id),
+                escalation_limit=self.org_settings.settings.manager_check_ic_setbacks,
+                names=self.team_types.names_at(place_id),
             ),
         )
 
@@ -606,7 +611,7 @@ class Teams(Delivery):
         team = self.org.place(place_id)
         if team is None or team.stopped is not None:
             return
-        own = None if own_too else self.writer_conversation(team)
+        own = None if own_too else self.team_types.writer_conversation(team)
         if self._paused is not None:
             # The org goes on later: those cut off are run again then, like
             # any agent that was in a turn when the org was paused.
@@ -693,13 +698,15 @@ class Teams(Delivery):
             place,
             role,
             task,
-            self.team_documents.briefed(self.reader_of(place)),
-            briefing_block(context, self.team_documents.told(self.reader_of(place))),
-            self.type_of(place).text_for(role),
-            works=role == self.team(place).writer,
-            titles=self.type_of(place).titles,
-            role_said=self.role_text(place, role),
-            names=self.team(place).names,
+            self.team_documents.briefed(self.team_types.reader_of(place)),
+            briefing_block(
+                context, self.team_documents.told(self.team_types.reader_of(place))
+            ),
+            self.team_types.type_of(place).text_for(role),
+            works=role == self.team_types.team(place).writer,
+            titles=self.team_types.type_of(place).titles,
+            role_said=self.team_types.role_text(place, role),
+            names=self.team_types.team(place).names,
         )
         return text, json.dumps(steady(context))
 
@@ -708,18 +715,18 @@ class Teams(Delivery):
         return hand_over_brief(
             place,
             job,
-            self.team_documents.briefed(self.reader_of(place)),
+            self.team_documents.briefed(self.team_types.reader_of(place)),
             briefing_block(
-                self.context_of(place, self.team(place).writer),
-                self.team_documents.told(self.reader_of(place)),
+                self.context_of(place, self.team_types.team(place).writer),
+                self.team_documents.told(self.team_types.reader_of(place)),
             ),
             role=role_text(
-                self.team(place).names,
+                self.team_types.team(place).names,
                 works=True,
                 hand_over=True,
-                rules=self.document_rules(place),
+                rules=self.team_types.document_rules(place),
             ),
-            names=self.team(place).names,
+            names=self.team_types.team(place).names,
         )
 
     async def _start_hand_over(
@@ -731,7 +738,7 @@ class Teams(Delivery):
         Returns:
             Whether it runs.
         """
-        names = self.team(place).names
+        names = self.team_types.team(place).names
         launcher = self._require_launcher()
         try:
             if await launcher.started(UUID(conversation_id)) is not None:
@@ -741,10 +748,15 @@ class Teams(Delivery):
                 raise NotFound(f"Team {place.id} has no {names.writer} to hand over")
             text = await asyncio.to_thread(self._hand_over_briefing, place, job)
             tool_params = await asyncio.to_thread(
-                self._confine, place.id, self.team(place).writer, conversation_id
+                self.confinement.confine,
+                place.id,
+                self.team_types.team(place).writer,
+                conversation_id,
             )
             adapt = await asyncio.to_thread(
-                self._adapter, conversation_id, self.hand_over_tools
+                self.confinement.adapter,
+                conversation_id,
+                self.team_types.hand_over_tools,
             )
 
             async def start() -> StartedAgent:
@@ -773,7 +785,7 @@ class Teams(Delivery):
         place = self.org.place(place_id)
         if place is None:
             return
-        conversation_id = self.team(place).conversation(role)
+        conversation_id = self.team_types.team(place).conversation(role)
         if conversation_id is not None:
             text, told = await asyncio.to_thread(self._briefing, place, role, task)
             self._runs().mark(TOLD, conversation_id, told)
@@ -798,7 +810,9 @@ class Teams(Delivery):
         """
         store = self.org
         place = store.place(place_id)
-        conversation_id = self.team(place).conversation(role) if place else None
+        conversation_id = (
+            self.team_types.team(place).conversation(role) if place else None
+        )
         if place is None or conversation_id is None:
             return False
         launcher = self._require_launcher()
@@ -827,7 +841,7 @@ class Teams(Delivery):
             acp_server=started.acp_server,
             model=started.model,
         )
-        if role == self.team(place).writer:
+        if role == self.team_types.team(place).writer:
             store.update_place(
                 place_id,
                 worktree_path=started.workspace,
@@ -835,7 +849,7 @@ class Teams(Delivery):
                 branch=await asyncio.to_thread(_branch_of, started.workspace),
                 base_commit=place.base_commit
                 or await asyncio.to_thread(_base_of, started.workspace),
-                boundary_enforcement=self._enforcement(started.kind),
+                boundary_enforcement=self.confinement.enforcement(started.kind),
             )
         return True
 
@@ -864,13 +878,13 @@ class Teams(Delivery):
                 f"{role} was not started"
             )
         text, told = await asyncio.to_thread(self._briefing, place, role, task)
-        tool_params = await asyncio.to_thread(self._confine, place_id, role)
+        tool_params = await asyncio.to_thread(self.confinement.confine, place_id, role)
         if parent_conversation is None:
             raise NotFound(f"Team {place_id} has nobody to derive its {role} from")
         parent_id = UUID(parent_conversation)
         # A team given a profile of its own starts its IC from it; its
         # Manager, like every Manager, is derived from the IC.
-        works = role == self.team(place).writer
+        works = role == self.team_types.team(place).writer
         profile = place.agent_profile if works else None
         kind = await (
             launcher.profile_kind(profile)
@@ -879,12 +893,14 @@ class Teams(Delivery):
         )
         isolation = place.isolation if works else "shared"
         leads = is_division_lead(place)
-        if kind == "acp" and works and self._bwrap is None:
+        if kind == "acp" and works and not self.confinement.is_sandboxed:
             # Nothing holds its process to the team's directory, so its
             # work is kept apart and checked when it is merged.
             isolation = "worktree"
-        tools = self.tools_for(place, role)
-        adapt = await asyncio.to_thread(self._adapter, conversation_id, tools)
+        tools = self.team_types.tools_for(place, role)
+        adapt = await asyncio.to_thread(
+            self.confinement.adapter, conversation_id, tools
+        )
         # A session starts from where the repository's checkout is.
         base = (
             await asyncio.to_thread(head_of, self._repo_dir)
@@ -896,7 +912,7 @@ class Teams(Delivery):
         )
         title = _agent_title(
             place.title,
-            self.team(place).title(role),
+            self.team_types.team(place).title(role),
             self.org.session_title(place),
             division_lead=leads,
         )
@@ -938,7 +954,7 @@ class Teams(Delivery):
         derived from."""
         store, launcher = self.org, self._require_launcher()
         while place is not None:
-            ic = self.writer_conversation(place)
+            ic = self.team_types.writer_conversation(place)
             # Never a Division Lead IC, whose role of reviewer the new agent
             # would inherit.
             if (
@@ -963,7 +979,8 @@ class Teams(Delivery):
             # A member that reviews a session's work without being the one
             # that works there still does it in the place's own checkout.
             reviews_here = (
-                is_division_lead(place) and member == self.team(place).reviewer
+                is_division_lead(place)
+                and member == self.team_types.team(place).reviewer
             )
             await self._start_agent(
                 place_id,
@@ -976,7 +993,7 @@ class Teams(Delivery):
     async def _do_brief(self, intent: Intent) -> None:
         brief = intent.of(Brief)
         place = self.org.place(intent.node_id)
-        if place and brief.role == self.team(place).writer:
+        if place and brief.role == self.team_types.team(place).writer:
             self._runs().mark(TASK, intent.node_id, brief.task)
         await self._brief(intent.node_id, brief.role, brief.task)
 
@@ -1013,9 +1030,9 @@ class Teams(Delivery):
             return
         await self._start_agent(
             place_id,
-            self.team(started).writer,
+            self.team_types.team(started).writer,
             parent_ic,
-            f"{task}\n\n{left_for_team(left, names=self.names_at(place_id))}"
+            f"{task}\n\n{left_for_team(left, names=self.team_types.names_at(place_id))}"
             if left
             else task,
             checkout,
@@ -1053,7 +1070,7 @@ class Teams(Delivery):
             return
         with suppress(GitError, OSError):
             # The shell the IC above starts next cannot write there.
-            self._confine(above.id, self.team(above).writer)
+            self.confinement.confine(above.id, self.team_types.team(above).writer)
         source, target = Path(above.worktree_path), Path(team.worktree_path)
         if checkout_root(str(source)) == checkout_root(str(target)):
             # In one checkout the team finds the files where they are.

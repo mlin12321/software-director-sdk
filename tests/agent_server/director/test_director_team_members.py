@@ -84,7 +84,7 @@ async def test_a_team_starts_with_the_member_that_works_in_its_folder(
 
     assert [agent.role for agent in root.agents] == ["bench"]
     assert launcher.root_tools == BENCH
-    team = service.team(root)
+    team = service.team_types.team(root)
     assert (team.writer, team.reviewer, team.manager) == ("bench", "referee", "chair")
     assert team.members == ("bench", "referee", "chair")
 
@@ -236,7 +236,10 @@ async def test_a_page_is_told_who_the_members_of_each_type_are(
     service: DirectorService,
 ):
     """What shows a team need not know any member by name."""
-    types = {kind.name: kind for kind in service.org_settings_state().agent_types}
+    types = {
+        kind.name: kind
+        for kind in service.org_settings.org_settings_state().agent_types
+    }
 
     lab = [
         (m.name, m.title, m.writes, m.reviews, m.oversees) for m in types["lab"].members

@@ -21,6 +21,12 @@ from openhands.agent_server.director.run_state import FILES, RunState
 from openhands.sdk.errors import NotSupported
 
 
+# The record every member of a team keeps of what it learned. It is the
+# director's own, as messages are, and not a document an org invents: the
+# one log the store keeps.
+REPORT = "report"
+
+
 class DocumentRef(NamedTuple):
     """One document: its name, in the folder of the team that keeps it."""
 

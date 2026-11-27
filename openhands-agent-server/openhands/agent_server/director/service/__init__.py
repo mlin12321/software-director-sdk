@@ -43,7 +43,6 @@ from openhands.agent_server.director.service.stall_watch_service import (
 from openhands.agent_server.director.service.state import (
     AGENT_PAUSED,
     BASE_LANE,
-    DIRECTOR_TOOL_NAMES,
     LIMIT_WAITS,
     MERGE_WAITS,
     ORG_WAITS,
@@ -56,6 +55,9 @@ from openhands.agent_server.director.service.state import (
     hand_over_of,
 )
 from openhands.agent_server.director.service.sync import Sync
+from openhands.agent_server.director.service.team_type_service import (
+    DIRECTOR_TOOL_NAMES,
+)
 from openhands.sdk.errors import (
     Conflict,
     NotFound,
@@ -122,15 +124,11 @@ class DirectorService(Sync):
         self._loop = asyncio.get_running_loop()
         self._launcher = launcher
         await self.work_queue.__aenter__()
+        await self.org_save.__aenter__()
         self._stop_status = launcher.on_status(self._on_status)
         self._stop_guard = launcher.on_action(self.guard_action)
-        self._stop_resume = launcher.on_resume(self.with_tools_again)
-        self._bwrap = await asyncio.to_thread(self._find_sandbox)
-        if self._bwrap is None:
-            logger.warning(
-                "Director cannot confine shells here (no bubblewrap): it checks "
-                "file tools, and nothing holds the process of an ACP agent"
-            )
+        self._stop_resume = launcher.on_resume(self.confinement.with_tools_again)
+        await asyncio.to_thread(self.confinement.look_for_sandbox)
         bind_director(self)
         # What reviewers check work by is fetched now, off the loop, so
         # that no review request is the first to wait for it.
@@ -180,13 +178,7 @@ class DirectorService(Sync):
         for task in timers:
             task.cancel()
         await asyncio.gather(*timers, return_exceptions=True)
-        # A save that was cut off goes on in its thread: nothing of this
-        # director may write the tree after it has closed.
-        await asyncio.to_thread(self._wait_for_save)
-        if self._save_timer is not None:
-            self._save_timer.cancel()
-            self._save_timer = None
-            await self._save()
+        await self.org_save.__aexit__(None, None, None)
         self._launcher = None
         self._loop = None
         with self._lock:
@@ -223,9 +215,11 @@ class DirectorService(Sync):
             raise Unprocessable(
                 "An org's agents run in the server's own process, not in Docker"
             )
-        root_type = request.agent_type or self.settings.default_agent_type
-        allowed = self.settings.allowed_agent_types
-        if root_type not in await asyncio.to_thread(lambda: self.agent_types):
+        root_type = request.agent_type or self.org_settings.settings.default_agent_type
+        allowed = self.org_settings.settings.allowed_agent_types
+        if root_type not in await asyncio.to_thread(
+            lambda: self.team_types.agent_types
+        ):
             raise Unprocessable(
                 f"The director finds no agent type named {root_type!r} for the "
                 "org's top team"
@@ -277,7 +271,7 @@ class DirectorService(Sync):
                 store.remove(ROOT_ID)
                 self._repo_dir = configured
                 raise
-            await asyncio.to_thread(self._remember, repo_path=str(self._repo_dir))
+            await asyncio.to_thread(self.remembered.keep, repo_path=str(self._repo_dir))
             await asyncio.to_thread(self._working)
         if request.title is None:
             # The org is named after what its first session is for.
@@ -306,7 +300,7 @@ class DirectorService(Sync):
         top = place = places[0]
         chosen_by: ChosenBy = "path"
         reason = ""
-        if self.settings.route_requests and len(places) > 1:
+        if self.org_settings.settings.route_requests and len(places) > 1:
             choice = await self.request_routing.choose_team(
                 text, top, within=session_id
             )
@@ -396,7 +390,7 @@ class DirectorService(Sync):
         text = request.text
         chosen_by: ChosenBy = "path"
         reason = ""
-        if request.auto and self.settings.route_requests:
+        if request.auto and self.org_settings.settings.route_requests:
             choice = await self.request_routing.choose_team(text, node)
             chosen_by, reason = choice.by, choice.reason
             node = store.team(choice.node_id) or node
@@ -445,18 +439,20 @@ class DirectorService(Sync):
             return None
         found = store.find_by_conversation(str(conversation_id))
         if found is not None:
-            scope = self.scope_of(*found)
+            scope = self.confinement.scope_of(*found)
         else:
             aside = store.find_hand_over(str(conversation_id))
             scope = (
-                self.scope_of(aside, self.team(aside).writer, str(conversation_id))
+                self.confinement.scope_of(
+                    aside, self.team_types.team(aside).writer, str(conversation_id)
+                )
                 if aside
                 else None
             )
-        denied = self._confinement().check(scope, event.tool_name, action)
+        denied = self.confinement.check(scope, event.tool_name, action)
         if denied is None:
             return None
-        works = found is not None and found[1] == self.team(found[0]).writer
+        works = found is not None and found[1] == self.team_types.team(found[0]).writer
         if found is not None and works and denied.relative is not None:
             # The refusal stands whether or not it could be kept.
             with suppress(Exception):
@@ -464,7 +460,7 @@ class DirectorService(Sync):
         return worded(
             denied,
             scope or Scope(checkout="", directory=""),
-            names=self.names_at(found[0].id if found else ""),
+            names=self.team_types.names_at(found[0].id if found else ""),
         )
 
     def answer_escalation(
@@ -484,7 +480,7 @@ class DirectorService(Sync):
             Conflict: The escalation is still held by a team.
             Unavailable: The director is not running.
         """
-        names = self.names_at(place_id)
+        names = self.team_types.names_at(place_id)
         self._require_launcher()
         store = self.org
         place = store.place(place_id)
@@ -505,7 +501,7 @@ class DirectorService(Sync):
         lost = escalation_id == failure_waits(role) and any(
             a.role == role and a.status == AGENT_LOST for a in place.agents
         )
-        if lost and role == self.team(place).writer:
+        if lost and role == self.team_types.team(place).writer:
             # It has no conversation to answer in: the team starts again
             # with the answer, and is asked of no longer once it has.
             async def again() -> None:
@@ -548,6 +544,8 @@ class DirectorService(Sync):
             else f"The human answered your escalation {escalation.title!r}"
         )
         self.notify(
-            self.team(place).conversation(role), f"{told}:\n{answer}", at_once=True
+            self.team_types.team(place).conversation(role),
+            f"{told}:\n{answer}",
+            at_once=True,
         )
         return store.place(place_id) or place

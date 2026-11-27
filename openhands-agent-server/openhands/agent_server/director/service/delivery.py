@@ -79,8 +79,8 @@ class Delivery(Records):
             work_queue=self.work_queue,
             lane_of=lane_for,
             is_paused=lambda: self._paused is not None,
-            save=self._save,
-            save_soon=self._save_soon,
+            save=self.org_save.save,
+            save_soon=self.org_save.save_soon,
             let_go=self._let_go,
             keep_failure=self._keep_failure,
             left=self._leave_line,
@@ -112,7 +112,7 @@ class Delivery(Records):
         """Compact what one member of the team of ``folder`` recorded, if
         it has grown past what the org set. Safe from any thread."""
         reports = self._memory().reports(folder, role)
-        if compaction.due(reports, self.settings.report_compaction_chars):
+        if compaction.due(reports, self.org_settings.settings.report_compaction_chars):
             self.work_queue.enqueue(lambda: self._compact(folder, role), MODELS_LANE)
 
     def joined(self, conversation_id: str) -> None:
@@ -157,7 +157,7 @@ class Delivery(Records):
         seq = self._runs().hold(conversation_id, place_id, text)
         if at_once:
             self._at_once.add(seq)
-        self._save_soon()
+        self.org_save.save_soon()
         self.work_queue.enqueue(
             lambda: self._deliver(seq, conversation_id, text), place_id or ORG_LANE
         )
@@ -229,7 +229,9 @@ class Delivery(Records):
         written itself, so that they are not sent back to it. Safe from any
         thread."""
         place = self.org.place(place_id)
-        conversation_id = self.team(place).conversation(role) if place else None
+        conversation_id = (
+            self.team_types.team(place).conversation(role) if place else None
+        )
         run = self._runs()
         before = run.marked(TOLD).get(conversation_id or "")
         if place is None or conversation_id is None or not before:
@@ -278,14 +280,14 @@ class Delivery(Records):
         except (GitError, OSError):
             return text, None
         if again:
-            said = again_block(self.role_text(node, role), now)
+            said = again_block(self.team_types.role_text(node, role), now)
             return f"{text}\n\n{said}", json.dumps(now)
         before = self._runs().marked(TOLD).get(conversation_id)
         news = changed(
             json.loads(before) if before else {},
             now,
             role,
-            works=role == self.team(node).writer,
+            works=role == self.team_types.team(node).writer,
         )
         if not news:
             return text, None
@@ -455,7 +457,9 @@ class Delivery(Records):
             return
         team_memory = self._memory()
         reports = await asyncio.to_thread(team_memory.reports, folder, role)
-        if not compaction.due(reports, self.settings.report_compaction_chars):
+        if not compaction.due(
+            reports, self.org_settings.settings.report_compaction_chars
+        ):
             return
         answer = await self.model_calls.ask(
             asker, *compaction.prompt(reports), compaction.USAGE_ID
@@ -522,7 +526,7 @@ class Delivery(Records):
             )
 
         place = store.place(place_id)
-        conversation_id = self.writer_conversation(place) if place else None
+        conversation_id = self.team_types.writer_conversation(place) if place else None
         if place is None or conversation_id is None or reported():
             return
         if self._paused is not None:
@@ -550,7 +554,7 @@ class Delivery(Records):
         its request. The team it was opened at keeps its own name."""
         store = self.org
         place = store.place(place_id)
-        conversation_id = self.writer_conversation(place) if place else None
+        conversation_id = self.team_types.writer_conversation(place) if place else None
         if place is None or conversation_id is None or self._paused is not None:
             return
         launcher = self._require_launcher()
@@ -570,7 +574,7 @@ class Delivery(Records):
                         UUID(agent.conversation_id),
                         _agent_title(
                             place.title,
-                            self.team(place).title(agent.role),
+                            self.team_types.team(place).title(agent.role),
                             store.session_title(place),
                         ),
                     )

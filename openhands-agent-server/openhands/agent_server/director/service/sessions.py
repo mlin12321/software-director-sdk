@@ -131,7 +131,7 @@ class Sessions(Splits):
             raise Conflict("There is no org to open a session in")
         if self._paused is not None:
             raise Conflict("The org is paused; resume it before opening a session")
-        most = self.settings.max_open_sessions
+        most = self.org_settings.settings.max_open_sessions
         if most and len(store.sessions()) >= most:
             raise Conflict(
                 f"The org's settings allow {most} open "
@@ -145,7 +145,7 @@ class Sessions(Splits):
             team = store.team(request.node_id)
             if team is None:
                 raise NotFound(f"Unknown team: {request.node_id}")
-        elif self.settings.route_requests and store.sub_teams(root.id):
+        elif self.org_settings.settings.route_requests and store.sub_teams(root.id):
             choice = await self.request_routing.choose_team(text, root)
             chosen_by, reason = choice.by, choice.reason
             team = store.team(choice.node_id) or root
@@ -157,8 +157,8 @@ class Sessions(Splits):
         if conversation is None and await self._template() is None:
             raise Conflict(
                 "No conversation of the org runs on this server to start the "
-                f"session's {self.type_of(team).names.writer} from. Send the request "
-                "from a new conversation."
+                f"session's {self.team_types.type_of(team).names.writer} from. Send "
+                "the request from a new conversation."
             )
         shape = [team]
         for current in shape:
@@ -187,7 +187,7 @@ class Sessions(Splits):
                 request=text[:ASKED_KEPT],
                 opened_at=datetime.now(UTC).isoformat(),
                 branch="" if branch == "HEAD" else branch,
-                cost_allowance=self.settings.session_cost_limit,
+                cost_allowance=self.org_settings.settings.session_cost_limit,
                 shape=shape_of(shape),
             ),
             [
@@ -251,8 +251,8 @@ class Sessions(Splits):
             top,
             title,
             others,
-            names=self.team(top).names,
-            kept=self.kept_documents(top),
+            names=self.team_types.team(top).names,
+            kept=self.team_types.kept_documents(top),
         )
         if conversation is None:
             conversation_id = self.tell_writer(top.id, text + brief, human=True) or ""
@@ -270,7 +270,7 @@ class Sessions(Splits):
                 raise
         if not rename and not request.title.strip():
             self.work_queue.enqueue(lambda: self._name_session(top.id, text), top.id)
-        self._save_soon()
+        self.org_save.save_soon()
         return OpenedSession(
             session=next(found for found in store.sessions() if found.id == session_id),
             conversation_id=conversation_id,
@@ -295,11 +295,11 @@ class Sessions(Splits):
         """
         store = self.org
         ic_id = conversation.conversation_id or uuid4()
-        writer = self.team(top).writer
+        writer = self.team_types.team(top).writer
         store.update_place(top.id, agents=_new_agents(ic_id, writer))
         apart = top.isolation == "worktree"
-        tools = self.tools_for(top, writer)
-        tool_params = await asyncio.to_thread(self._confine, top.id, writer)
+        tools = self.team_types.tools_for(top, writer)
+        tool_params = await asyncio.to_thread(self.confinement.confine, top.id, writer)
         started = await launcher.start_root(
             conversation.model_copy(
                 update={
@@ -321,10 +321,14 @@ class Sessions(Splits):
             ),
             [Tool(name=name) for name in tools],
             title=_agent_title(
-                top.title, self.team(top).title(writer), store.session_title(top)
+                top.title,
+                self.team_types.team(top).title(writer),
+                store.session_title(top),
             ),
             tool_params=tool_params,
-            adapt_agent=await asyncio.to_thread(self._adapter, str(ic_id), tools),
+            adapt_agent=await asyncio.to_thread(
+                self.confinement.adapter, str(ic_id), tools
+            ),
         )
         store.set_agent(
             top.id,
@@ -339,7 +343,7 @@ class Sessions(Splits):
             isolation=started.isolation if apart else "shared",
             branch=await asyncio.to_thread(_branch_of, started.workspace),
             base_commit=await asyncio.to_thread(_base_of, started.workspace),
-            boundary_enforcement=self._enforcement(started.kind),
+            boundary_enforcement=self.confinement.enforcement(started.kind),
         )
         self._checkout_for_session(top.id)
         self.progressed(top.id)
@@ -358,7 +362,7 @@ class Sessions(Splits):
         Nobody works above the team a session was opened at, so what that
         team hands back goes one team up the org, in a session of its own,
         and to the human only from the top."""
-        names = self.team(place).names
+        names = self.team_types.team(place).names
         if not is_division_lead(above):
             self.tell_writer(
                 above.id, misrouted_notice(place, request.text, why, names=names)
@@ -389,10 +393,10 @@ class Sessions(Splits):
                 self.org.session_title(top),
                 [],
                 names=names,
-                kept=self.kept_documents(top),
+                kept=self.team_types.kept_documents(top),
             ),
         )
-        self._save_soon()
+        self.org_save.save_soon()
         return (
             f"Handed to the {names.writer} of the team above ({top.title}), which this "
             "session is now opened at. Your team stays in it as a sub-team: "
@@ -513,7 +517,7 @@ class Sessions(Splits):
             title="This request is not this team's",
             detail=f"{why}\n\nThe request:\n{text}",
         )
-        self._save_soon()
+        self.org_save.save_soon()
 
     def close_session(self, session_id: str) -> None:
         """Close a session: its agents are stopped and removed with its
@@ -635,7 +639,7 @@ class Sessions(Splits):
             store.close_session(plan.session)
             await asyncio.to_thread(self._org_turn)
             self._tell_turns()
-            await self._save()
+            await self.org_save.save()
             intent = run.step_done(intent, "removed")
         self._settling.pop(intent.id, None)
 

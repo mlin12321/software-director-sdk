@@ -9,10 +9,10 @@ from openhands.agent_server.director.documents.store import DocumentRef, TeamRef
 from openhands.agent_server.director.documents.tree import TeamTree
 from openhands.agent_server.director.models import DirectorSettingsUpdate
 from openhands.agent_server.director.org import OrgBase, TeamMember
+from openhands.agent_server.director.org_store import team_ref
 from openhands.agent_server.director.orgs import ORG_KINDS
 from openhands.agent_server.director.orgs.top_down import TopDownOrg
 from openhands.agent_server.director.service import DirectorService
-from openhands.agent_server.director.service.state import team_ref
 from openhands.agent_server.director.tools.remote import call_tool
 from openhands.sdk.errors import Invalid, NotFound
 from tests.agent_server.director.conftest import (
@@ -128,7 +128,7 @@ async def test_an_open_org_passes_a_document_anywhere(
     root, api, web = (node(service, name) for name in ("root", API, WEB))
     ref = _write_spec(service, API, "# API")
 
-    service.update_settings(DirectorSettingsUpdate(org_kind="open"))
+    service.org_settings.update_settings(DirectorSettingsUpdate(org_kind="open"))
     service.send_ref(api.id, "ic", root.id, "ic", ref)
     service.send_ref(api.id, "ic", web.id, "ic", ref)
 
@@ -137,7 +137,7 @@ async def test_an_open_org_passes_a_document_anywhere(
         for passed in service.context_of(web, "ic")["documents_passed_to_you"]
     ] == ["services/api"]
     with pytest.raises(Invalid, match="no kind of org named 'flat'"):
-        service.update_settings(DirectorSettingsUpdate(org_kind="flat"))
+        service.org_settings.update_settings(DirectorSettingsUpdate(org_kind="flat"))
     await service.aclose()
 
 
@@ -155,7 +155,7 @@ async def test_the_kind_of_an_org_may_refuse_a_message(
     await split_root(service)
     root, api = node(service, "root"), node(service, API)
     monkeypatch.setitem(ORG_KINDS, "silent", _Silent)
-    service.update_settings(DirectorSettingsUpdate(org_kind="silent"))
+    service.org_settings.update_settings(DirectorSettingsUpdate(org_kind="silent"))
 
     service.send_msg(root.id, "manager", root.id, "ic", "Go on.")
     with pytest.raises(Invalid, match="does not let"):

@@ -104,7 +104,7 @@ async def test_a_count_that_begins_again_takes_nothing_away(
 async def test_a_session_at_its_limit_rests_until_the_human_lets_it_go_on(
     service: DirectorService, launcher: FakeLauncher
 ):
-    service.update_settings(DirectorSettingsUpdate(session_cost_limit=2.0))
+    service.org_settings.update_settings(DirectorSettingsUpdate(session_cost_limit=2.0))
     api = ic(service, API)
     assert api is not None
     launcher.report(api, ConversationExecutionStatus.RUNNING)
@@ -145,11 +145,11 @@ async def test_a_session_at_its_limit_rests_until_the_human_lets_it_go_on(
 async def test_an_open_session_follows_a_limit_that_is_changed(
     service: DirectorService, launcher: FakeLauncher
 ):
-    service.update_settings(DirectorSettingsUpdate(session_cost_limit=2.0))
+    service.org_settings.update_settings(DirectorSettingsUpdate(session_cost_limit=2.0))
     uses(launcher, ic(service), 700, 100, 1.5)
     assert (await counted(service)).cost_allowance == 2.0
 
-    service.update_settings(DirectorSettingsUpdate(session_cost_limit=5.0))
+    service.org_settings.update_settings(DirectorSettingsUpdate(session_cost_limit=5.0))
     uses(launcher, ic(service), 900, 150, 2.25)
     session = await counted(service)
 
@@ -185,14 +185,14 @@ async def test_a_closed_sessions_count_goes_with_it(
 async def test_no_more_sessions_are_opened_than_the_settings_allow(
     service: DirectorService,
 ):
-    service.update_settings(DirectorSettingsUpdate(max_open_sessions=1))
+    service.org_settings.update_settings(DirectorSettingsUpdate(max_open_sessions=1))
 
     with pytest.raises(Conflict, match="allow 1 open session at once"):
         await service.open_session(
             OpenSessionRequest(text="Add refunds", node_id="root")
         )
 
-    service.update_settings(DirectorSettingsUpdate(max_open_sessions=2))
+    service.org_settings.update_settings(DirectorSettingsUpdate(max_open_sessions=2))
     opened = await service.open_session(
         OpenSessionRequest(text="Add refunds", node_id="root")
     )
@@ -474,7 +474,7 @@ def test_a_model_is_looked_up_under_each_of_its_names():
 async def test_a_session_set_going_while_the_org_is_paused_goes_on_when_it_resumes(
     service: DirectorService, launcher: FakeLauncher
 ):
-    service.update_settings(DirectorSettingsUpdate(session_cost_limit=2.0))
+    service.org_settings.update_settings(DirectorSettingsUpdate(session_cost_limit=2.0))
     api = ic(service, API)
     assert api is not None
     launcher.report(api, ConversationExecutionStatus.RUNNING)

@@ -8,7 +8,9 @@ from openhands.agent_server.director.agent_types import load_types
 from openhands.agent_server.director.documents.declared import load_documents
 from openhands.agent_server.director.orgs import SHIPPED_DOCUMENTS, SHIPPED_TYPES
 from openhands.agent_server.director.service import DirectorService
-from openhands.agent_server.director.service.state import DIRECTOR_TOOL_NAMES
+from openhands.agent_server.director.service.team_type_service import (
+    DIRECTOR_TOOL_NAMES,
+)
 from tests.agent_server.director.conftest import (
     FakeLauncher,
     an_org,

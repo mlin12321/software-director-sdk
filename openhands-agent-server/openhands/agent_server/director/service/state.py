@@ -5,45 +5,24 @@ import asyncio
 import json
 import os
 import re
-import secrets
 import sqlite3
 import threading
 from collections import deque
-from collections.abc import Awaitable, Callable, Iterable, Sequence
-from dataclasses import replace
+from collections.abc import Awaitable, Callable, Iterable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Self
 from uuid import UUID, uuid4
 
 from openhands.agent_server.config import Config
-from openhands.agent_server.conversation_service import ToolParams
 from openhands.agent_server.director import bugbot
-from openhands.agent_server.director.acp import (
-    conversation_of,
-)
 from openhands.agent_server.director.agent_types import (
     DEFAULT_TYPE,
-    TYPES_FOLDER,
-    Names,
     TeamTemplate,
-    load_types,
 )
-from openhands.agent_server.director.boundary import scope_within
 from openhands.agent_server.director.confinement import (
-    Confinement,
     checkout_root,
     is_in,
-)
-from openhands.agent_server.director.documents.declared import (
-    DOCUMENTS_FOLDER,
-    load_documents,
-)
-from openhands.agent_server.director.documents.protocol import DocumentProtocolBase
-from openhands.agent_server.director.documents.registry import (
-    UnknownProtocol,
-    declare,
-    protocol_of,
 )
 from openhands.agent_server.director.documents.store import (
     DocumentStore,
@@ -51,12 +30,12 @@ from openhands.agent_server.director.documents.store import (
     TeamRef,
 )
 from openhands.agent_server.director.documents.team_documents import (
-    Reader,
     TeamDocuments,
 )
 from openhands.agent_server.director.documents.tree import TeamTree
 from openhands.agent_server.director.git import (
     GitError,
+    common_dir,
     enclosing_repository,
     git,
     head_of,
@@ -64,28 +43,15 @@ from openhands.agent_server.director.git import (
 )
 from openhands.agent_server.director.git_store import (
     GitStore,
-    Landing,
-    normalize_store_path,
-    swap_together,
-    taking_in,
 )
 from openhands.agent_server.director.headline import provisional_summary
 from openhands.agent_server.director.intents import Accept, LandOrg
 from openhands.agent_server.director.launch import TeamLauncher
 from openhands.agent_server.director.merge_checkout import MergeCheckout, discard
 from openhands.agent_server.director.models import (
-    AgentKind,
     AgentRef,
-    AgentTypeInfo,
-    DirectorSettings,
-    DirectorSettingsState,
-    DirectorSettingsUpdate,
     FormerTeam,
     HandOverMode,
-    MemberInfo,
-    OrgNodeInput,
-    OrgSettings,
-    OrgSettingsState,
     OrgStateEvent,
     OrgSummary,
     PauseReason,
@@ -95,31 +61,18 @@ from openhands.agent_server.director.models import (
     SessionTeam,
     SessionTeamInput,
     SplitChild,
-    TeamEnforcement,
     TeamMatch,
 )
-from openhands.agent_server.director.org import OrgBase
-from openhands.agent_server.director.org_config import load_org_config
 from openhands.agent_server.director.org_persistence import (
     create_org_board,
     load_org,
-    own_settings,
-    save_org,
-    save_own_settings,
-    saving,
 )
 from openhands.agent_server.director.org_store import (
     OrgStore,
-    is_division_lead,
-    session_id_of,
     session_team_id,
+    team_ref,
 )
-from openhands.agent_server.director.orgs import (
-    ORG_KINDS,
-    SHIPPED_DOCUMENTS,
-    SHIPPED_TYPES,
-)
-from openhands.agent_server.director.prompts import KeptDocuments, role_text
+from openhands.agent_server.director.remembered import RememberedFile
 from openhands.agent_server.director.run_state import (
     MERGING,
     PROGRESS,
@@ -132,33 +85,36 @@ from openhands.agent_server.director.run_state import (
 from openhands.agent_server.director.sandbox import (
     find_bwrap,
 )
-from openhands.agent_server.director.scope import MergeArea, Scope
+from openhands.agent_server.director.service.agent_confinement_service import (
+    AgentConfinementService,
+)
 from openhands.agent_server.director.service.model_call_service import (
     ModelCallService,
+)
+from openhands.agent_server.director.service.org_save_service import OrgSaveService
+from openhands.agent_server.director.service.org_settings_service import (
+    OrgSettingsService,
 )
 from openhands.agent_server.director.service.session_draft_service import (
     SessionDraftService,
 )
 from openhands.agent_server.director.service.stall_watch_service import progress_of
+from openhands.agent_server.director.service.team_type_service import (
+    TeamTypeService,
+)
 from openhands.agent_server.director.service.work_queue_service import (
     WorkQueueService,
 )
 from openhands.agent_server.director.session_state import (
-    kept_sessions,
     restore_sessions,
 )
 from openhands.agent_server.director.split import (
     child_boundary,
     clean_path,
 )
-from openhands.agent_server.director.team import Team
-from openhands.sdk.agent.base import AgentBase
 from openhands.sdk.conversation.state import ConversationExecutionStatus
 from openhands.sdk.errors import (
     DomainError,
-    Invalid,
-    NotFound,
-    OperationFailed,
     Unavailable,
     Unprocessable,
 )
@@ -168,45 +124,6 @@ from openhands.sdk.logger import get_logger
 logger = get_logger(__name__)
 
 ROOT_ID = "root"
-# What no type takes from an agent: without them it could not read its
-# place, hand its work on, or say that it cannot go on.
-_TOOLS_NO_TYPE_REMOVES = ("read_team_context", "raise_escalation", "submit_review")
-# What the member that takes over what a removed team left is offered,
-# beside the tools of the documents it may write while it does.
-_HAND_OVER_TOOLS = ("read_team_context", "hand_over")
-
-
-# Every tool of the director's own; they register in ``director.tools``.
-# The documents an org keeps bring theirs beside these. Which of them an
-# agent is offered is its team's type's to say, and `agent_actions`
-# refuses the rest whatever is offered.
-DIRECTOR_TOOL_NAMES = (
-    "read_team_context",
-    "raise_escalation",
-    "resolve_escalation",
-    "msg_manager",
-    "propose_teams",
-    "msg_team",
-    "send_document",
-    "hand_over",
-    "stop_team",
-    "submit_review",
-    "review_team",
-    "msg_ic",
-    "approve_teams",
-    "decline_teams",
-    "prune_team",
-    "settle_teams",
-)
-# Tools that start agents nothing holds to the team's folder. An org's
-# agent hands work on by proposing sub-teams.
-_SUB_AGENT_TOOLS = (
-    "task_tool_set",
-    "task",
-    "delegate",
-    "workflow_tool_set",
-    "workflow",
-)
 # How a team that was set up and given no task reads to the IC above.
 NOT_STARTED = "not_started"
 # What follows a team's purpose in its task once something started it.
@@ -231,10 +148,6 @@ DECLINED_TOLD = 3
 # How long a model may take to name a team before the team keeps the name
 # it has; a session's first IC is not briefed until then.
 SUMMARY_TIMEOUT_SECONDS = 20.0
-# The record every member of a team keeps of what it learned. It is the
-# director's own, as messages are, and not a document an org invents: the
-# one log the store keeps.
-REPORT = "report"
 # How long a model may take over a team's diff, or over an agent's reports.
 MODEL_CALL_TIMEOUT_SECONDS = 120.0
 # A team whose work is sent back this many times is stopped.
@@ -261,21 +174,8 @@ _MERGE_ATTEMPTS = 4
 # Where, in the repository's git directory, the director keeps what it is in
 # the middle of.
 _RUN_STATE = "director/state.db"
-# Where, in the repository's git directory, the director keeps the shells
-# its agents' terminals start, and what those shells need.
-# In the git directory, and not for an agent's shell to write.
-# In the repository's git directory: the merges reviewers finish.
-_MERGING_DIR = "director-merging"
 # After a conversation id: the script an ACP agent's process is started by.
 _REMEMBERED_FILE = "director.json"
-# The shape of that file. A file with no version is of the first.
-REMEMBERED_VERSION = 1
-_REMEMBERED_VERSION_KEY = "schema_version"
-# In it: the settings changed through the settings route, which hold over
-# the org's ``director.yaml`` field by field.
-_CHANGED_SETTINGS = "settings_changed"
-# Set by the server's entry point to the address it is bound to.
-_INTERNAL_SERVER_URL_ENV = "OH_INTERNAL_SERVER_URL"
 # The lane of what concerns the org as a whole, such as saving its tree.
 ORG_LANE = "org"
 # The lane of everything that changes what the org shares: the repository's
@@ -314,9 +214,6 @@ _AGENT_STATUS: dict[ConversationExecutionStatus, str] = {
 # How long a message waits for an IC that submitted to end its turn.
 _REST_CHECKS = 600
 _REST_CHECK_SECONDS = 0.05
-
-# How often a landing is tried when another writer moves a ref first.
-_LANDING_ATTEMPTS = 8
 
 
 def conversations_of(teams: Iterable[SessionTeam]) -> list[str]:
@@ -364,16 +261,6 @@ def apart(team: SessionTeam, above: SessionTeam) -> bool:
     """Whether a team works in a checkout of its own, not in the one of
     the team above."""
     return checkout_root(team.worktree_path) != checkout_root(above.worktree_path)
-
-
-def team_ref(node: OrgNodeInput) -> TeamRef:
-    """A team, or the work of one in a session, as its documents and its
-    org are told of it."""
-    return TeamRef(
-        id=node.id,
-        session=session_id_of(node),
-        folder=normalize_store_path(node.boundary.path),
-    )
 
 
 class _TeamsOfTheOrg:
@@ -448,9 +335,7 @@ class ServiceState:
         self._directory = repo_dir
         # Where the org is; moves up when the store is loaded from above.
         self._repo_dir = repo_dir
-        self._worktree_root = worktree_root
-        self._find_sandbox = find_sandbox
-        self._remembered = remembered
+        self.remembered = RememberedFile(remembered)
         self._find_review_instructions = find_review_instructions
         # The public skills that were looked for, by name; '' for one that
         # could not be loaded.
@@ -477,8 +362,6 @@ class ServiceState:
         self._settling: dict[int, tuple[set[str], str]] = {}
         # The conversations a resume is about to run again.
         self._resuming: set[str] = set()
-        self._save_asked = False
-        self._sessions_asked = False
         # Teams that waited for a run when the org was paused, in the order
         # they waited: each tries to start only when it is the first.
         self._line: deque[str] = deque()
@@ -487,10 +370,8 @@ class ServiceState:
         # at one state of team memory.
         self._former_read: tuple[str | None, dict[str, list[FormerTeam]]] | None = None
         self._routed_read: tuple[str | None, list[RoutedRequest]] | None = None
-        self._bwrap: str | None = None
         self._stop_guard: Callable[[], None] | None = None
         self._stop_resume: Callable[[], None] | None = None
-        self._save_delay = save_delay
         self._run_limit_retry = run_limit_retry
         self._lock = threading.Lock()
         # Held from looking a need up in the record to keeping it, so that
@@ -501,9 +382,31 @@ class ServiceState:
             self._memory, self._runs, self._document_changed, self
         )
         self.tree: TeamTree = _TeamsOfTheOrg(lambda: self.org)
-        # Held while the tree is saved, and all through a landing, which
-        # changes the tree and saves it with team memory in one step.
-        self._saving = threading.RLock()
+        self.team_types = TeamTypeService(
+            config_file=config_file,
+            documents=self.documents,
+            tree=self.tree,
+            org=lambda: self.org,
+        )
+        self.confinement = AgentConfinementService(
+            repo_dir=lambda: self._repo_dir,
+            worktree_root=worktree_root,
+            find_sandbox=find_sandbox,
+            remembered=self.remembered,
+            server_url=server_url,
+            org=lambda: self.org,
+            team_types=self.team_types,
+            run_state=self._runs,
+        )
+        self.org_settings = OrgSettingsService(
+            config_file=config_file,
+            remembered=self.remembered,
+            team_types=self.team_types,
+            tree=self.tree,
+            org=lambda: self.org,
+            repo_dir=lambda: self.repo_dir,
+            max_concurrent_runs=max_concurrent_runs,
+        )
         # Held while what waits of a session's work is read and changed.
         self._weighing = threading.RLock()
         self._adding_manager = threading.Lock()
@@ -511,27 +414,18 @@ class ServiceState:
         self._clock = clock
         self._stall_poll = stall_poll
         self._stall_timer: asyncio.Task[None] | None = None
-        # Held to read it too: it is written in place.
-        self._remember_lock = threading.RLock()
         self._store: OrgStore | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._launcher: TeamLauncher | None = None
-        self._max_concurrent_runs = max_concurrent_runs
-        self._settings: DirectorSettings | None = None
-        self._config_file = config_file
-        # What ``director.yaml`` sets; a server that cannot read its
-        # settings does not start.
-        self._configured: dict[str, Any] = (
-            load_org_config(config_file) if config_file else {}
-        )
-        self._agent_types: dict[str, TeamTemplate] | None = None
-        self._protocols: dict[str, DocumentProtocolBase] = {}
-        self._agent_types_seen: tuple[tuple[str, int], ...] = ()
-        # What the org sets for itself, by the repository it was read from.
-        self._own_settings: tuple[str, OrgSettings] | None = None
-        self._server_url = server_url
-        self._tool_key: bytes | None = None
         self.work_queue = WorkQueueService(default_lane=ORG_LANE)
+        self.org_save = OrgSaveService(
+            org=lambda: self.org,
+            repo_dir=lambda: self._repo_dir,
+            team_memory=self._memory,
+            run_state=self._runs,
+            work_queue=self.work_queue,
+            delay=save_delay,
+        )
         self.model_calls = ModelCallService(
             launcher=self._require_launcher,
             sessions=lambda: self._store.sessions() if self._store else [],
@@ -543,7 +437,6 @@ class ServiceState:
         # Held by the start that waits for room, so that starts are served
         # in the order they began to wait.
         self._start_gate = asyncio.Lock()
-        self._save_timer: asyncio.TimerHandle | None = None
         self._stop_status: Callable[[], None] | None = None
         self._create_lock = asyncio.Lock()
         self._first_message_lock = asyncio.Lock()
@@ -562,7 +455,7 @@ class ServiceState:
             kind: The type of the team whose work is reviewed; the default
                 type when None.
         """
-        kind = kind or self.agent_types.get(DEFAULT_TYPE)
+        kind = kind or self.team_types.agent_types.get(DEFAULT_TYPE)
         if kind is None:
             return ""
         parts: list[str] = []
@@ -585,7 +478,7 @@ class ServiceState:
         """Fetch what reviewers of every type check work by, so that it is
         there when a review is requested. Safe from any thread."""
         try:
-            for kind in self.agent_types.values():
+            for kind in self.team_types.agent_types.values():
                 self.review_instructions(kind)
         except Exception:
             logger.exception("Could not load the review instructions")
@@ -688,44 +581,12 @@ class ServiceState:
             repo_path=str(self._repo_dir),
             directory=self._home(),
             is_git_repository=is_git_repository(self._repo_dir),
-            boundary_enforcement="sandbox" if self._bwrap else "checks",
+            boundary_enforcement=(
+                "sandbox" if self.confinement.is_sandboxed else "checks"
+            ),
             paused=self._paused if self._runs() else None,
             merging=self._runs().get("merge") is not None,
         )
-
-    @property
-    def settings(self) -> DirectorSettings:
-        """The limits on new teams, as last saved."""
-        with self._lock:
-            if self._settings is None:
-                remembered = self._read_remembered()
-                # With a ``director.yaml`` only what was changed since
-                # holds over it; without one, the settings as last saved.
-                saved = (
-                    {**self._configured, **self._settings_changed()}
-                    if self._config_file
-                    else remembered.get("settings")
-                )
-                try:
-                    self._settings = DirectorSettings.model_validate(saved or {})
-                except ValueError:
-                    logger.warning("Ignoring the saved director settings: %r", saved)
-                    self._settings = DirectorSettings.model_validate(self._configured)
-            return self._settings
-
-    @property
-    def agent_types(self) -> dict[str, TeamTemplate]:
-        """The types a team may be, by name: the ones the director ships
-        and the ones beside ``director.yaml``. They are read again when a
-        file among them is added, removed or changed, so a new type can be
-        given to the next team without a restart."""
-        return self._declared()[0]
-
-    @property
-    def protocols(self) -> dict[str, DocumentProtocolBase]:
-        """What each document teams may keep does, by the document's name.
-        Read again with the types."""
-        return self._declared()[1]
 
     def _document_changed(self, session: str) -> None:
         """A session wrote or removed a document."""
@@ -734,211 +595,9 @@ class ServiceState:
     def team_documents(self) -> TeamDocuments:
         """The documents of the org as each team reads, writes and leaves
         them."""
-        return TeamDocuments(self.documents, self.protocols, self.org_kind)
-
-    def reader_of(self, node: OrgNodeInput) -> Reader:
-        """A team as its documents see it."""
-        kind = self.type_of(node)
-        return Reader(
-            team=team_ref(node),
-            keeps=tuple(kind.documents),
-            leftover=tuple(node.leftover_documents),
-            titles=kind.titles,
-            descriptions={name: said for name, said in kind.documents.items() if said},
+        return TeamDocuments(
+            self.documents, self.team_types.protocols, self.org_settings.org_kind
         )
-
-    def _declared(
-        self,
-    ) -> tuple[dict[str, TeamTemplate], dict[str, DocumentProtocolBase]]:
-        folders = [*SHIPPED_TYPES]
-        documents = [SHIPPED_DOCUMENTS]
-        if self._config_file:
-            folders.append(self._config_file.parent / TYPES_FOLDER)
-            documents.append(self._config_file.parent / DOCUMENTS_FOLDER)
-        files = sorted(
-            path
-            for folder in (*folders, *documents)
-            if folder.is_dir()
-            for path in folder.iterdir()
-            if path.suffix in (".yaml", ".yml")
-        )
-        seen = tuple((str(path), path.stat().st_mtime_ns) for path in files)
-        with self._lock:
-            if self._agent_types is None or seen != self._agent_types_seen:
-                protocols: dict[str, DocumentProtocolBase] = {}
-                tools: dict[str, str] = {}
-                for document in load_documents(documents).values():
-                    tool = document.written_with
-                    try:
-                        if tool in tools:
-                            raise ValueError(
-                                f"The document {tools[tool]!r} is written with "
-                                f"{tool} already"
-                            )
-                        declare(document)
-                        protocols[document.name] = protocol_of(
-                            document, self.documents, self.tree
-                        )
-                    except (UnknownProtocol, ValueError):
-                        logger.exception("Ignoring the document %s", document.name)
-                        continue
-                    tools[tool] = document.name
-                self._agent_types = load_types(
-                    folders,
-                    DIRECTOR_TOOL_NAMES,
-                    {name: found.document for name, found in protocols.items()},
-                )
-                self._protocols = protocols
-                self._agent_types_seen = seen
-            return self._agent_types, self._protocols
-
-    @property
-    def org_kind(self) -> OrgBase:
-        """The kind of organisation this is, as its settings name it:
-        what it allows. One the director does not know is the default."""
-        named = self.settings.org_kind
-        kind = ORG_KINDS.get(named)
-        if kind is None:
-            logger.warning("There is no kind of org named %r", named)
-            kind = ORG_KINDS[DirectorSettings().org_kind]
-        return kind(self.tree)
-
-    @property
-    def tool_names(self) -> tuple[str, ...]:
-        """Every tool an agent of the org may be offered: the director's
-        own and the one of each document the org keeps."""
-        written_with = (
-            protocol.document.written_with for protocol in self.protocols.values()
-        )
-        return tuple(dict.fromkeys((*DIRECTOR_TOOL_NAMES, *written_with)))
-
-    @property
-    def hand_over_tools(self) -> tuple[str, ...]:
-        """What the member that takes over what a removed team left is
-        offered in the conversation it does so in."""
-        return _HAND_OVER_TOOLS + tuple(
-            protocol.document.written_with
-            for protocol in self.protocols.values()
-            if protocol.usable_in_hand_over
-        )
-
-    def type_of(self, node: OrgNodeInput) -> TeamTemplate:
-        """The type of a team. A team whose type the director no longer
-        finds is told as the default type is."""
-        types = self.agent_types
-        return types.get(node.agent_type) or types[DEFAULT_TYPE]
-
-    def names_at(self, place_id: str) -> Names:
-        """What the members the director turns to are called in a team; in
-        one that is gone, what they are called in a team of the default
-        type."""
-        place = self.org.place(place_id)
-        if place is None:
-            return self.agent_types[DEFAULT_TYPE].names
-        return self.team(place).names
-
-    def team(self, place: SessionTeam) -> Team:
-        """A team of the org as the director reads it."""
-        return Team(self.org, place)
-
-    def role_text(self, place: SessionTeam, member: str) -> str:
-        """How the org works and what the member's part in it is, as its
-        briefing says it."""
-        team = self.team(place)
-        found = team.kind.agents.get(member)
-        return role_text(
-            team.names,
-            works=member == team.writer,
-            tools=self.tools_for(place, member),
-            title=team.title(member),
-            lead=team.is_lead,
-            own=found.protocol if found else "",
-            rules=self.document_rules(place),
-        )
-
-    def kept_documents(self, place: OrgNodeInput) -> KeptDocuments:
-        """The documents a team keeps, as the director's own messages name
-        them: what each is called and what its protocol says of it."""
-        kept = [
-            protocol
-            for protocol in self.team_documents.kept_by(self.reader_of(place))
-            if protocol.document.name != REPORT
-        ]
-
-        def named(fact: str) -> tuple[str, ...]:
-            return tuple(found.document.name for found in kept if getattr(found, fact))
-
-        return KeptDocuments(
-            names=tuple(found.document.name for found in kept),
-            wait_with_teams=named("waits_for_team_changes"),
-            read_by_sub_teams=named("read_by_sub_teams"),
-            stay_when_removed=named("stays_when_team_is_removed"),
-            reports=REPORT in self.type_of(place).documents,
-        )
-
-    def document_rules(self, place: SessionTeam) -> list[dict[str, str]]:
-        """What each document a team keeps says of itself to its members,
-        with how the org works."""
-        return [
-            protocol.document.rules_by_member
-            for protocol in self.team_documents.kept_by(self.reader_of(place))
-        ]
-
-    def writer_conversation(self, place: SessionTeam) -> str | None:
-        """The conversation of the member that works in a team's folder."""
-        team = self.team(place)
-        return team.conversation(team.writer)
-
-    def reviewer_conversation(self, place: SessionTeam) -> str | None:
-        """The conversation of the member the teams below turn to."""
-        team = self.team(place)
-        return team.conversation(team.reviewer)
-
-    def tools_for(self, place: SessionTeam, member: str) -> tuple[str, ...]:
-        """The director's tools the member of a team is offered: the ones
-        its type gives it, less the ones the type leaves its teams
-        without. What an agent needs to read its place and hand its work
-        on stays."""
-        kind = self.type_of(place)
-        found = kind.agents.get(member)
-        if found is None:
-            return ()
-        if is_division_lead(place):
-            return tuple(found.lead_tools)
-        return tuple(
-            name
-            for name in found.tools
-            if name not in kind.omit_tools or name in _TOOLS_NO_TYPE_REMOVES
-        )
-
-    @property
-    def own_settings(self) -> OrgSettings:
-        """What the org sets for itself: kept with it in its repository, so
-        another org on the same server has its own."""
-        repo = str(self._repo_dir)
-        kept = self._own_settings
-        if kept is None or kept[0] != repo:
-            found = (
-                own_settings(create_org_board(self._repo_dir))
-                if self.org.root_id is not None
-                else OrgSettings()
-            )
-            kept = self._own_settings = (repo, found)
-        return kept[1]
-
-    def _allowed_type_names(self) -> list[str]:
-        own = self.own_settings.allowed_agent_types
-        return self.settings.allowed_agent_types if own is None else own
-
-    def types_allowed(self) -> list[TeamTemplate]:
-        """The types a new team may be. A team that exists keeps its type
-        whatever this says."""
-        allowed = self._allowed_type_names()
-        return [
-            found
-            for name, found in self.agent_types.items()
-            if not allowed or name in allowed
-        ]
 
     def profile_exists(self, name: str) -> bool:
         """Whether the server has an agent profile of that name. Called
@@ -955,259 +614,6 @@ class ServiceState:
         asked = asyncio.run_coroutine_threadsafe(launcher.profile_kind(name), loop)
         return asked.result(timeout=30) is not None
 
-    def default_type(self) -> str:
-        """The type of a new team whose making names none."""
-        return self.own_settings.default_agent_type or self.settings.default_agent_type
-
-    def org_settings_state(self) -> OrgSettingsState:
-        """What holds for new teams of the org, and the types there are."""
-        allowed = {kind.name for kind in self.types_allowed()}
-        return OrgSettingsState(
-            default_agent_type=self.default_type(),
-            allowed_agent_types=self._allowed_type_names(),
-            own=self.own_settings,
-            agent_types=[
-                AgentTypeInfo(
-                    name=name,
-                    description=kind.description,
-                    allowed=name in allowed,
-                    sas_profile=kind.sas_profile,
-                    members=[
-                        MemberInfo(
-                            name=member,
-                            title=kind.title_of(member),
-                            writes=member == kind.writer,
-                            reviews=member == kind.reviewer,
-                            oversees=member == kind.manager,
-                        )
-                        for member in kind.agents
-                    ],
-                )
-                for name, kind in self.agent_types.items()
-            ],
-        )
-
-    def update_org_settings(self, update: OrgSettings) -> OrgSettingsState:
-        """Set what the org sets for itself. Only what ``update`` names is
-        changed; an empty default goes back to the one for every org.
-
-        It holds for teams made from now on: no team that exists changes
-        its type or is removed.
-
-        Raises:
-            NotFound: There is no org to set it for.
-            Invalid: A type is named that the director does not find, or
-                the default is not among the allowed ones.
-        """
-        if self.org.root_id is None:
-            raise NotFound("No org exists")
-        named = update.model_dump(exclude_unset=True)
-        changed = self.own_settings.model_copy(update=named)
-        if changed.default_agent_type == "":
-            changed.default_agent_type = None
-        types = self.agent_types
-        asked = [*(changed.allowed_agent_types or [])]
-        if changed.default_agent_type:
-            asked.append(changed.default_agent_type)
-        unknown = sorted(set(asked) - set(types))
-        if unknown:
-            raise Invalid(
-                f"The director finds no agent type named {', '.join(unknown)}. "
-                f"The types are: {', '.join(types)}."
-            )
-        allowed = (
-            self.settings.allowed_agent_types
-            if changed.allowed_agent_types is None
-            else changed.allowed_agent_types
-        )
-        default = changed.default_agent_type or self.settings.default_agent_type
-        if allowed and default not in allowed:
-            raise Invalid(
-                f"The default agent type {default!r} is not among the allowed "
-                f"ones: {', '.join(allowed)}"
-            )
-        save_own_settings(create_org_board(self._repo_dir), changed)
-        self._own_settings = (str(self._repo_dir), changed)
-        return self.org_settings_state()
-
-    def settings_state(self) -> DirectorSettingsState:
-        """The settings, with how large the org is now."""
-        levels: dict[str, int] = {}
-        for node in self.org.teams():
-            levels[node.id] = levels.get(node.parent_id or "", 0) + 1
-        return DirectorSettingsState(
-            **self.settings.model_dump(),
-            teams=len(levels),
-            depth=max(levels.values(), default=0),
-            max_concurrent_runs=self._max_concurrent_runs,
-        )
-
-    def _settings_changed(self) -> dict[str, Any]:
-        """The settings changed through the settings route, as kept."""
-        kept = self._read_remembered().get(_CHANGED_SETTINGS)
-        return kept if isinstance(kept, dict) else {}
-
-    def update_settings(self, update: DirectorSettingsUpdate) -> DirectorSettingsState:
-        """Change the limits on new teams. Existing teams are left alone.
-
-        An open session follows a new cost limit, unless the human let it
-        go on past the one it had.
-
-        Raises:
-            Invalid: A kind of org is named that the director does not know.
-        """
-        values = update.model_dump(exclude_none=True)
-        if values.get("org_kind", self.settings.org_kind) not in ORG_KINDS:
-            raise Invalid(
-                f"There is no kind of org named {values['org_kind']!r}. "
-                f"The kinds are: {', '.join(ORG_KINDS)}."
-            )
-        before = self.settings.session_cost_limit
-        now = self.settings.model_dump()
-        # The org page sends every setting when one is changed: only what
-        # differs was changed, and only that holds over ``director.yaml``.
-        values = {key: value for key, value in values.items() if now[key] != value}
-        changed = self.settings.model_copy(update=values)
-        with self._lock:
-            self._settings = changed
-        if changed.session_cost_limit != before and self._store is not None:
-            for session in self._store.sessions():
-                if session.cost_allowance == before:
-                    self._store.set_session_use(
-                        session.id, session.usage, changed.session_cost_limit
-                    )
-        earlier = self._settings_changed()
-        self._remember(
-            settings=changed.model_dump(), **{_CHANGED_SETTINGS: {**earlier, **values}}
-        )
-        return self.settings_state()
-
-    def agent_of(self, token: str) -> UUID:
-        """The conversation of the agent a tool call comes from.
-
-        Raises:
-            NotFound: The token was not given out by this director.
-        """
-        conversation_id = conversation_of(self._key(), token)
-        if conversation_id is None:
-            raise NotFound("That is not the token of an agent of this org")
-        return UUID(conversation_id)
-
-    def _url(self) -> str | None:
-        """Where an agent that runs its own tools reaches this server: the
-        address it was configured with, or the one it is bound to."""
-        return self._server_url or os.environ.get(_INTERNAL_SERVER_URL_ENV)
-
-    def _key(self) -> bytes:
-        """What the tokens of the org's agents are signed with. It is kept
-        beside the server's conversations, never in the repository."""
-        with self._lock:
-            if self._tool_key is None:
-                kept = self._read_remembered().get("tool_key")
-                if not isinstance(kept, str):
-                    kept = secrets.token_hex(32)
-                    self._remember(tool_key=kept)
-                self._tool_key = kept.encode()
-            return self._tool_key
-
-    def _confinement(self) -> Confinement:
-        """What holds the org's agents to their scopes, as the server is
-        now."""
-        return Confinement(
-            repo_dir=self._repo_dir,
-            checkouts=tuple(self._checkouts()),
-            bwrap=self._bwrap,
-            secret=self._remembered,
-            server_url=self._url(),
-            key=self._key,
-        )
-
-    def scope_of(
-        self, place: SessionTeam, role: str, hand_over: str | None = None
-    ) -> Scope:
-        """What an agent of ``place`` may write: the one place the org
-        decides what its agents are held to.
-
-        Args:
-            hand_over: The IC's hand-over conversation, when the scope is
-                that conversation's and not the IC's own.
-        """
-        children = self.org.below(place.id)
-        kind = self.type_of(place)
-        reviewer = self.team(place).reviewer
-        # A team that has not started holds no one out of its directory:
-        # the IC above may finish what it has there.
-        started = [child for child in children if child.agents]
-        merges = []
-        for team_id, kept in self._runs().marked(MERGING).items():
-            merge = MergeCheckout.model_validate_json(kept)
-            team = self.org.place(team_id)
-            merges.append(
-                MergeArea(
-                    where=merge.where,
-                    files=tuple(merge.files),
-                    own=role == reviewer
-                    and team is not None
-                    and team.parent_id == place.id,
-                )
-            )
-        within = scope_within(
-            place,
-            started,
-            # A hand-over conversation is no agent of the place.
-            checkout="" if hand_over else place.worktree_path,
-            edits=role == kind.writer,
-        )
-        return replace(
-            within,
-            # It writes in its boundary from its main conversation alone;
-            # at a Division Lead place it only reviews, in the human's own
-            # checkout.
-            writes=role == kind.writer
-            and hand_over is None
-            and not is_division_lead(place),
-            aside=hand_over is not None,
-            # The repository's own checkout is the human's, on whatever
-            # branch they have it.
-            branch=place.branch or ""
-            if place.worktree_path
-            and checkout_root(place.worktree_path) != checkout_root(str(self._repo_dir))
-            else "",
-            # Its git commits nothing in a sub-team's directory; it may still
-            # write in that of a team that has not started.
-            hidden=tuple(child.boundary.path for child in children),
-            merges=tuple(merges),
-            merge_root=str(self._merges_for(place.id))
-            if role == reviewer and hand_over is None
-            else "",
-        )
-
-    def with_tools_again(self, conversation_id: UUID, agent: AgentBase) -> AgentBase:
-        """The saved agent of a conversation that is loaded again, able to
-        reach the director's tools. Safe from any thread."""
-        return self._confinement().with_tools_again(str(conversation_id), agent)
-
-    def _adapter(
-        self, conversation_id: str, offered: Sequence[str]
-    ) -> Callable[[AgentBase], AgentBase]:
-        """What is changed on an agent as its conversation starts: of the
-        director's tools it gets the ones in ``offered``, and the tools
-        that start agents nothing holds are taken from it."""
-        return self._confinement().adapter(
-            conversation_id,
-            offered,
-            known=self.tool_names,
-            never=_SUB_AGENT_TOOLS,
-        )
-
-    def _merging_root(self) -> Path:
-        return self._confinement().shells.parent / _MERGING_DIR
-
-    def _merges_for(self, place_id: str) -> Path:
-        """Where the merges the reviewer of a team finishes are laid out:
-        one folder for each reviewer, which its shell alone may write."""
-        return self._merging_root() / place_id.replace("@", "-")
-
     def merge_checkout(self, place_id: str) -> MergeCheckout | None:
         """The merge of a team's work that its reviewer finishes."""
         kept = self._runs().marked(MERGING).get(place_id)
@@ -1218,9 +624,6 @@ class ServiceState:
         if merge is not None:
             discard(self._repo_dir, Path(merge.where))
             self._runs().unmark(MERGING, place_id)
-
-    def _enforcement(self, kind: AgentKind) -> TeamEnforcement:
-        return self._confinement().enforcement(kind == "acp")
 
     def search(self, query: str, limit: int) -> list[TeamMatch]:
         """Teams whose title or directory has every word of ``query``."""
@@ -1309,7 +712,7 @@ class ServiceState:
         if not is_git_repository(self._repo_dir):
             return RunState(None)
         try:
-            return RunState(self._confinement().shells.parent / _RUN_STATE)
+            return RunState(common_dir(self._repo_dir) / _RUN_STATE)
         except (GitError, OSError, RunStateError, sqlite3.Error):
             logger.exception("Run state of %s is kept in memory only", self._repo_dir)
             return RunState(None)
@@ -1337,12 +740,12 @@ class ServiceState:
 
     def _instance(self) -> str:
         """Names this server, to tell its run state from another's."""
-        if self._remembered is None:
+        if self.remembered.path is None:
             return ""
-        kept = self._read_remembered().get("instance")
+        kept = self.remembered.read().get("instance")
         if not isinstance(kept, str):
             kept = uuid4().hex
-            self._remember(instance=kept)
+            self.remembered.keep(instance=kept)
         return kept
 
     def _working(self) -> None:
@@ -1351,14 +754,6 @@ class ServiceState:
         run = self._runs()
         run.put("instance", self._instance())
         run.put("clean", "0")
-
-    def _checkouts(self) -> list[Path]:
-        """Where the org's checkouts are: the repository and the worktrees."""
-        roots = [
-            self._repo_dir,
-            *([self._worktree_root] if self._worktree_root else []),
-        ]
-        return [Path(os.path.realpath(root)) for root in roots]
 
     def _home(self) -> str:
         """The directory the server was started for, relative to the org's
@@ -1385,50 +780,17 @@ class ServiceState:
         relative = target.relative_to(top).as_posix()
         return "" if relative == "." else relative
 
-    def _confine(
-        self, place_id: str, role: str | None = None, hand_over: str | None = None
-    ) -> ToolParams | None:
-        """Write the shell an agent's terminal starts.
-
-        Args:
-            role: The agent's member; None for the one that works in the
-                team's folder.
-
-        Returns:
-            What to start the agent's terminal with, or None when it needs
-            no shell of its own.
-        """
-        place = self.org.place(place_id)
-        if place is None:
-            return None
-        team = self.team(place)
-        role = role or team.writer
-        conversation_id = hand_over or team.conversation(role)
-        if conversation_id is None:
-            return None
-        return self._confinement().confine(
-            conversation_id, self.scope_of(place, role, hand_over)
-        )
-
-    def _confine_all(self) -> None:
-        for node in self.org.places():
-            for agent in node.agents:
-                try:
-                    self._confine(node.id, agent.role)
-                except (GitError, OSError):
-                    logger.exception("Could not write the shell of team %s", node.id)
-
     def _require_launcher(self) -> TeamLauncher:
         if self._launcher is None:
             raise Unavailable("The director is not running agents on this server")
         return self._launcher
 
     def _load_store(self) -> OrgStore:
-        store = OrgStore(self.type_of)
+        store = OrgStore(self.team_types.type_of)
         remembered = self._remembered_repo()
         if remembered is None or not self._load_from(remembered, store):
             self._load_from(self._directory, store)
-        store.on_change(self._schedule_save)
+        store.on_change(self.org_save.tree_changed)
         if self._loop is not None:
             self.work_queue.enqueue(self._came_back)
         return store
@@ -1470,63 +832,12 @@ class ServiceState:
         """Take up the org saved at ``workspace``, or above it when ``climb``."""
         if not self._load_from(workspace, self.org, climb=climb):
             return False
-        self._remember(repo_path=str(self._repo_dir))
+        self.remembered.keep(repo_path=str(self._repo_dir))
         return True
 
-    def _read_remembered(self) -> dict[str, object]:
-        """What the director keeps between starts of the server."""
-        if self._remembered is None:
-            return {}
-        try:
-            with self._remember_lock:
-                kept = json.loads(self._remembered.read_text())
-        except (OSError, ValueError):
-            return {}
-        if not isinstance(kept, dict):
-            return {}
-        version = kept.get(_REMEMBERED_VERSION_KEY, REMEMBERED_VERSION)
-        if version != REMEMBERED_VERSION:
-            raise Unavailable(
-                f"{self._remembered} was written by a director of version "
-                f"{version}; this one reads version {REMEMBERED_VERSION}"
-            )
-        return kept
-
     def _remembered_repo(self) -> Path | None:
-        repo_path = self._read_remembered().get("repo_path")
+        repo_path = self.remembered.read().get("repo_path")
         return Path(repo_path) if isinstance(repo_path, str) else None
-
-    def _remember(self, **changes: object) -> None:
-        """Keep ``changes`` for the next start of the server."""
-        if self._remembered is None:
-            return
-        with self._remember_lock:
-            try:
-                self._remembered.parent.mkdir(parents=True, exist_ok=True)
-                # Written in place: a file put in its place by a rename
-                # would no longer be the one an agent's shell is kept from.
-                # One that cannot be read is left as it is: writing over it
-                # would lose the key of the tool tokens.
-                before = (
-                    json.loads(self._remembered.read_text())
-                    if self._remembered.exists()
-                    else {}
-                )
-                written = before.get(_REMEMBERED_VERSION_KEY, REMEMBERED_VERSION)
-                if written != REMEMBERED_VERSION:
-                    # Left for the director that wrote it.
-                    logger.error(
-                        "%s is of version %s and is not written over",
-                        self._remembered,
-                        written,
-                    )
-                    return
-                versioned = {_REMEMBERED_VERSION_KEY: REMEMBERED_VERSION}
-                kept = json.dumps({**versioned, **before, **changes}) + "\n"
-                self._remembered.touch(mode=0o600)
-                self._remembered.write_text(kept)
-            except (OSError, ValueError, TypeError):
-                logger.exception("Could not write %s", self._remembered)
 
     def next_submission(self) -> int:
         """The place in the order of the work that is submitted now."""
@@ -1537,41 +848,6 @@ class ServiceState:
             self._line.remove(place_id)
             moved, self._line_moved = self._line_moved, asyncio.Event()
             moved.set()
-
-    def _schedule_save(self) -> None:
-        loop = self._loop
-        if loop is not None:
-            loop.call_soon_threadsafe(self._arm_save)
-
-    def _arm_save(self) -> None:
-        loop = self._loop
-        if loop is None:
-            return
-        if not self._sessions_asked:
-            # What a session has is only here: it is kept at once, not
-            # when the tree is next saved.
-            self._sessions_asked = True
-            self.work_queue.enqueue(self._keep_sessions)
-        if self._save_timer is not None:
-            return
-        self._save_timer = loop.call_later(
-            self._save_delay, lambda: self.work_queue.enqueue(self._save_due)
-        )
-
-    async def _keep_sessions(self) -> None:
-        self._sessions_asked = False
-        store = self._store
-        if store is None:
-            return
-
-        def keep() -> None:
-            with self._saving:
-                self._runs().replace_marks(SESSION, kept_sessions(store))
-
-        try:
-            await asyncio.to_thread(keep)
-        except (GitError, RunStateError):
-            logger.exception("Could not keep the sessions of %s", self._repo_dir)
 
     async def _base[T](self, work: Callable[[], Awaitable[T]]) -> T:
         """What ``work`` returns, carried out in the lane of what the org
@@ -1584,78 +860,6 @@ class ServiceState:
         await self.work_queue.run_in(BASE_LANE, effect)
         return results[0]
 
-    async def _save_due(self) -> None:
-        self._save_timer = None
-        await self._save()
-
-    def _save_soon(self) -> None:
-        """Save the tree without waiting to gather more changes: what was
-        just recorded as begun refers to it."""
-        if not self._save_asked:
-            self._save_asked = True
-            self.work_queue.enqueue(self._save_asked_for)
-
-    async def _save_asked_for(self) -> None:
-        self._save_asked = False
-        await self._save()
-
-    async def _save(self) -> None:
-        store = self._store
-        if store is None:
-            return
-        try:
-            await asyncio.to_thread(self._save_tree, store)
-        except GitError:
-            logger.exception("Could not save the org tree to %s", self._repo_dir)
-
-    def _commit_landing(
-        self, landing: Landing, message: str, tree: bool
-    ) -> dict[str, str | None]:
-        """Take a landing into team memory, and with ``tree`` save the org
-        tree as it is now with it: both refs move together or neither.
-
-        Returns:
-            The files that were not written, with the text each has now.
-
-        Raises:
-            OperationFailed: Another writer kept moving a ref first.
-        """
-        memory = self._memory()
-        if not tree:
-            return memory.take_in(landing, message)
-        store = self.org
-        with self._saving:
-            for _ in range(_LANDING_ATTEMPTS):
-                mutate, left = taking_in(landing)
-                board = create_org_board(self._repo_dir)
-                staged = [
-                    made
-                    for made in (
-                        memory.stage(mutate, message),
-                        board.stage(saving(store), f"org: {message}"),
-                    )
-                    if made is not None
-                ]
-                if not staged or swap_together(self._repo_dir, staged):
-                    self._runs().replace_marks(SESSION, kept_sessions(store))
-                    return dict(left)
-        raise OperationFailed(
-            f"Gave up landing in {self._repo_dir} after {_LANDING_ATTEMPTS} "
-            "contended attempts"
-        )
-
-    def _save_tree(self, store: OrgStore) -> None:
-        with self._saving:
-            board = create_org_board(self._repo_dir)
-            save_org(board, store)
-            run = self._runs()
-            # Sessions are this machine's: kept here, not with the org.
-            run.replace_marks(SESSION, kept_sessions(store))
-
-    def _wait_for_save(self) -> None:
-        with self._saving:
-            pass
-
     def _shown(self, conversation_id: str, status: ConversationExecutionStatus) -> str:
         """An agent's status as the org shows it. One that was running when
         the org was paused is paused, whatever stopping did to it."""
@@ -1664,13 +868,6 @@ class ServiceState:
             if status != ConversationExecutionStatus.RUNNING:
                 return AGENT_PAUSED
         return _AGENT_STATUS.get(status, "idle")
-
-    def _forget_shells(self, team: SessionTeam) -> None:
-        """Remove what the shells of a team's agents were made of."""
-        self._confinement().forget(
-            [agent.conversation_id for agent in team.agents if agent.conversation_id],
-            Path(team.worktree_path),
-        )
 
     async def _came_back(self) -> None:
         """Take up what the org had begun before the server stopped."""

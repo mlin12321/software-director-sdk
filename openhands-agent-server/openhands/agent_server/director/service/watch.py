@@ -44,7 +44,7 @@ class Watch(Reviews):
         return StallWatchService(
             org=lambda: self.org,
             has_org=lambda: self._store is not None,
-            settings=lambda: self.settings,
+            settings=lambda: self.org_settings.settings,
             run_state=self._runs,
             clock=self._clock,
             paused=lambda: self._paused is not None,
@@ -77,19 +77,22 @@ class Watch(Reviews):
         if holder is None:
             return
         history = "".join(f"\nPassed up by {entry}" for entry in passed_up)
-        if escalation.raised_by == self.team(raiser).writer:
+        if escalation.raised_by == self.team_types.team(raiser).writer:
             # It is woken now anyway, so it gets what waits for its review too.
             self.release_reviews(holder_id)
             self.count_escalation_from_below(holder_id, through.id)
         raised_by = escalation.raised_by
         text = (
-            f"The {self.team(raiser).title(raised_by)} of team {raiser.title!r} "
-            f"(id {raiser.id}) escalates {escalation.title!r} (escalation "
-            f"{escalation.id}):\n{escalation.detail or '(no detail)'}{history}\n"
+            f"The {self.team_types.team(raiser).title(raised_by)} of team "
+            f"{raiser.title!r} (id {raiser.id}) escalates {escalation.title!r} "
+            f"(escalation {escalation.id}):\n"
+            f"{escalation.detail or '(no detail)'}{history}\n"
             "Settle it with resolve_escalation if you can; pass it up only with "
             "the reason you cannot."
         )
-        self.tell(holder_id, self.team(holder).answers(escalation.raised_by), text)
+        self.tell(
+            holder_id, self.team_types.team(holder).answers(escalation.raised_by), text
+        )
 
     def stop_team(self, place_id: str, reason: str) -> None:
         """Stop a team for the IC of the team above: its agents and those
@@ -100,7 +103,7 @@ class Watch(Reviews):
             NotFound: The team does not exist.
             Conflict: It is stopped already.
         """
-        names = self.names_at(place_id)
+        names = self.team_types.names_at(place_id)
         store = self.org
         team = store.place(place_id)
         if team is None:
@@ -117,7 +120,7 @@ class Watch(Reviews):
         )
         if self._loop is not None:
             self.work_queue.enqueue(lambda: self._stop(place_id), place_id)
-        self._save_soon()
+        self.org_save.save_soon()
         self.record_event(team.parent_id, "stopped", team, reason)
         # A stopped team is waited for no longer by the reviews beside it.
         self.release_reviews(team.parent_id)
@@ -182,7 +185,9 @@ class Watch(Reviews):
             )
             if session is None:
                 continue
-            limit = session.cost_allowance or self.settings.session_cost_limit
+            limit = (
+                session.cost_allowance or self.org_settings.settings.session_cost_limit
+            )
             kept = store.set_session_use(session.id, session.usage.plus(added), limit)
             if kept is not None:
                 self._hold_at_limit(kept)
@@ -227,12 +232,12 @@ class Watch(Reviews):
                     f"({used.input_tokens:,} tokens in, "
                     f"{used.output_tokens:,} out) and are at rest.\nAnswer "
                     "this to let it go on for as much again; your answer is "
-                    f"sent to its {self.team(top).names.writer}. Close the session "
-                    "to end it."
+                    f"sent to its {self.team_types.team(top).names.writer}. Close the "
+                    "session to end it."
                 ),
                 at=utc_now(),
             )
-        self._save_soon()
+        self.org_save.save_soon()
 
     def go_on_past_limit(self, place_id: str) -> None:
         """Let a session that was put to rest at its limit go on for as
@@ -242,7 +247,7 @@ class Watch(Reviews):
         session = store.session_of(top) if top else None
         if top is None or session is None:
             return
-        limit = self.settings.session_cost_limit
+        limit = self.org_settings.settings.session_cost_limit
         store.set_session_use(
             session.id, session.usage, session.usage.cost + limit if limit else 0.0
         )
@@ -252,4 +257,4 @@ class Watch(Reviews):
             self.work_queue.enqueue(
                 lambda: self._go_on(top.id, stopped.running, own_too=True), top.id
             )
-        self._save_soon()
+        self.org_save.save_soon()

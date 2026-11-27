@@ -307,6 +307,11 @@ async def running(
     await service.aclose()
 
 
+def token_of(service: DirectorService, conversation_id: str) -> str:
+    """The token a tool call of that conversation's agent is known by."""
+    return agent_token(service.confinement.tool_key(), conversation_id)
+
+
 async def test_an_agent_calls_the_directors_tools_with_its_token_alone(
     running, repo: Path
 ):
@@ -317,7 +322,7 @@ async def test_an_agent_calls_the_directors_tools_with_its_token_alone(
         )
     )
     await service.settled()
-    token = agent_token(service._key(), str(ic(service)))
+    token = token_of(service, str(ic(service)))
     headers = {mcp_shim.TOKEN_HEADER: token}
 
     listed = await client.get("/api/director/tools", headers=headers)
@@ -361,12 +366,12 @@ async def test_a_manager_is_listed_its_own_tools_and_a_stranger_none(
 
     listed = await client.get(
         "/api/director/tools",
-        headers={mcp_shim.TOKEN_HEADER: agent_token(service._key(), asking)},
+        headers={mcp_shim.TOKEN_HEADER: token_of(service, asking)},
     )
     # Its token is right, and it is no agent of the org.
     stranger = await client.get(
         "/api/director/tools",
-        headers={mcp_shim.TOKEN_HEADER: agent_token(service._key(), str(uuid4()))},
+        headers={mcp_shim.TOKEN_HEADER: token_of(service, str(uuid4()))},
     )
 
     names = {tool["name"] for tool in listed.json()}
@@ -391,7 +396,7 @@ async def test_an_ic_that_only_reviews_a_session_has_the_tools_for_that_alone(
     await service.settled()
     reviewing = division_lead_ic(service)
     assert reviewing is not None
-    headers = {mcp_shim.TOKEN_HEADER: agent_token(service._key(), reviewing)}
+    headers = {mcp_shim.TOKEN_HEADER: token_of(service, reviewing)}
 
     listed = await client.get("/api/director/tools", headers=headers)
     refused = await client.post(
@@ -417,7 +422,7 @@ async def test_the_tool_routes_refuse_whoever_has_no_agents_token(running, repo:
         )
     )
     forged = f"{ic(service)}.{'0' * 64}"
-    stranger = agent_token(service._key(), str(uuid4()))
+    stranger = token_of(service, str(uuid4()))
 
     responses = [
         await client.get("/api/director/tools"),
@@ -436,7 +441,7 @@ async def test_the_tool_routes_refuse_whoever_has_no_agents_token(running, repo:
     )
     unknown_tool = await client.post(
         "/api/director/tools/format_disk",
-        headers={mcp_shim.TOKEN_HEADER: agent_token(service._key(), str(ic(service)))},
+        headers={mcp_shim.TOKEN_HEADER: token_of(service, str(ic(service)))},
         json={},
     )
 
@@ -484,7 +489,7 @@ async def test_an_agent_loaded_again_is_given_its_tools_again(repo: Path):
     server = loaded.mcp_config[MCP_SERVER_NAME]
     assert server.env is not None
     token = server.env["DIRECTOR_AGENT_TOKEN"].get_secret_value()
-    assert service.agent_of(token) == conversation_id
+    assert service.confinement.agent_of(token) == conversation_id
     assert (
         server.env["DIRECTOR_TOOLS_URL"]
         .get_secret_value()
@@ -508,14 +513,14 @@ async def test_the_agent_of_an_org_reaches_the_tools_as_itself(repo: Path):
     server = adapted.mcp_config[MCP_SERVER_NAME]
     assert server.env is not None
     token = server.env["DIRECTOR_AGENT_TOKEN"].get_secret_value()
-    assert str(service.agent_of(token)) == ic(service)
+    assert str(service.confinement.agent_of(token)) == ic(service)
     assert (
         server.env["DIRECTOR_TOOLS_URL"].get_secret_value()
         == "http://127.0.0.1:8000/api/director/tools"
     )
     # The token outlives the server, as the agent's configuration does.
     again = DirectorService(repo, remembered=repo.parent / "state" / "director.json")
-    assert str(again.agent_of(token)) == ic(service)
+    assert str(again.confinement.agent_of(token)) == ic(service)
     await service.aclose()
 
 
@@ -563,7 +568,9 @@ async def test_a_sub_team_runs_on_another_agent_profile_when_the_org_allows_it(
     codex = SplitChild(title="API", path="svc/api", task="Serve", agent_profile="codex")
 
     refused = await use(service, ic(service), ProposeTeamsTool, split(codex))
-    service.update_settings(DirectorSettingsUpdate(allowed_profiles=["codex"]))
+    service.org_settings.update_settings(
+        DirectorSettingsUpdate(allowed_profiles=["codex"])
+    )
     await carry_out(service, codex, SplitChild(title="Web", path="web", task="Pages"))
 
     assert refused.is_error and "leave `model` out" in refused.text
@@ -590,7 +597,9 @@ async def test_the_profiles_a_sub_team_may_run_on_are_kept_and_told_to_the_ic(
     launcher = FakeLauncher(profiles={"codex": "acp"})
     service = await started_with_server(repo, launcher)
 
-    service.update_settings(DirectorSettingsUpdate(allowed_profiles=["codex"]))
+    service.org_settings.update_settings(
+        DirectorSettingsUpdate(allowed_profiles=["codex"])
+    )
     other = await use(
         service,
         ic(service),
@@ -602,9 +611,13 @@ async def test_the_profiles_a_sub_team_may_run_on_are_kept_and_told_to_the_ic(
     kept = json.loads((repo.parent / "state" / "director.json").read_text())
     assert kept["settings"]["allowed_profiles"] == ["codex"]
     # Limits that are not named stay.
-    assert service.update_settings(DirectorSettingsUpdate(max_depth=3)).model_dump(
-        include={"allowed_profiles", "max_depth", "max_teams"}
-    ) == {"allowed_profiles": ["codex"], "max_depth": 3, "max_teams": 32}
+    assert service.org_settings.update_settings(
+        DirectorSettingsUpdate(max_depth=3)
+    ).model_dump(include={"allowed_profiles", "max_depth", "max_teams"}) == {
+        "allowed_profiles": ["codex"],
+        "max_depth": 3,
+        "max_teams": 32,
+    }
     await service.aclose()
 
 

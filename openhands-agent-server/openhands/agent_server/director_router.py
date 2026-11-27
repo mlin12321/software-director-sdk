@@ -115,7 +115,7 @@ def _calling_agent(
 ) -> UUID:
     """The conversation of the agent that shows its token."""
     try:
-        return service.agent_of(token or "")
+        return service.confinement.agent_of(token or "")
     except NotFound as error:
         raise Unauthenticated(str(error)) from error
 
@@ -281,7 +281,7 @@ def get_settings(
     service: DirectorService = Depends(get_director_service),
 ) -> DirectorSettingsState:
     """Get the limits on new teams, beside how large the org is now."""
-    return service.settings_state()
+    return service.org_settings.settings_state()
 
 
 @director_router.get("/org/settings", response_model=OrgSettingsState)
@@ -294,7 +294,7 @@ def get_org_settings(
     Without an org these are the ones for every org, which a new org
     starts with.
     """
-    return service.org_settings_state()
+    return service.org_settings.org_settings_state()
 
 
 @director_router.patch("/org/settings", response_model=OrgSettingsState)
@@ -309,7 +309,7 @@ def update_org_settings(
     from now on: a team that exists keeps its type. An empty default goes
     back to the one for every org.
     """
-    return service.update_org_settings(request)
+    return service.org_settings.update_org_settings(request)
 
 
 @director_router.patch("/settings", response_model=DirectorSettingsState)
@@ -323,7 +323,7 @@ def update_settings(
     org already has removes nothing; it refuses the next split. The values
     are kept for the server's next start.
     """
-    return service.update_settings(request)
+    return service.org_settings.update_settings(request)
 
 
 @director_router.get("/org/search", response_model=list[TeamMatch])
@@ -706,7 +706,7 @@ def get_node_memory(
     ones a team above keeps for it, and what its agents reported."""
     node = _require_any(service, node_id)
     return NodeMemory(
-        documents=service.team_documents.listed(service.reader_of(node)),
+        documents=service.team_documents.listed(service.team_types.reader_of(node)),
         reports=service.reports_of(node),
         former_teams=[
             FormerTeamSummary.model_validate(former.model_dump())

@@ -25,6 +25,7 @@ from openhands.agent_server.director.org_store import (
     OrgStore,
     session_id_of,
     team_id_of,
+    team_ref,
 )
 from openhands.agent_server.director.prompts import (
     DIVISION_LEAD_IC_ROLE,
@@ -35,7 +36,6 @@ from openhands.agent_server.director.run_state import SESSION
 from openhands.agent_server.director.service import DirectorService
 from openhands.agent_server.director.service.state import (
     MERGE_WAITS,
-    team_ref,
 )
 from openhands.agent_server.director.tools import (
     PruneTeamTool,
@@ -147,7 +147,7 @@ async def test_what_is_recorded_while_work_lands_is_not_lost(
     service: DirectorService, monkeypatch: pytest.MonkeyPatch
 ):
     await use(service, ic(service), ReportTool, ReportAction(text="Chose REST."))
-    root, commit = node(service, "root"), service._commit_landing
+    root, commit = node(service, "root"), service.org_save.commit_landing
     late: list[threading.Thread] = []
 
     def a_report_comes(*args: Any, **kwargs: Any):
@@ -160,7 +160,7 @@ async def test_what_is_recorded_while_work_lands_is_not_lost(
         late.append(writer)
         return commit(*args, **kwargs)
 
-    monkeypatch.setattr(service, "_commit_landing", a_report_comes)
+    monkeypatch.setattr(service.org_save, "commit_landing", a_report_comes)
 
     await landed(service)
     await service.settled()
@@ -406,7 +406,7 @@ async def test_what_the_human_says_in_a_session_is_routed_among_its_own_teams(
     assert "Handed to the IC of the team above" in handed.text
     assert "Make the cart page faster." in launcher.messages_to(ic(service))[-1]
 
-    service.update_settings(DirectorSettingsUpdate(route_requests=False))
+    service.org_settings.update_settings(DirectorSettingsUpdate(route_requests=False))
     kept = await service.route_message(
         RouteMessageRequest(text="Make the cart page lighter.", session_id=session.id)
     )
@@ -719,7 +719,7 @@ async def test_contracts_both_changed_wait_for_the_manager_above(
     contracts = [
         shown
         for shown in service.team_documents.shown(
-            service.reader_of(api_place(service, top))
+            service.team_types.reader_of(api_place(service, top))
         )
         if shown.name == "contracts"
     ]
@@ -1057,7 +1057,7 @@ async def test_a_save_that_comes_in_the_middle_of_a_landing_waits_for_it(
 
     def a_save_begins(session_id: str, shape: list[tuple[str, str, str, str]]) -> None:
         # The org is half changed here: a save of the tree is due now.
-        save = threading.Thread(target=service._save_tree, args=(store,))
+        save = threading.Thread(target=service.org_save.save_tree, args=(store,))
         save.start()
         save.join(0.3)
         saves.append(save)
@@ -1152,12 +1152,12 @@ async def test_the_division_lead_ic_is_told_of_a_spec_that_could_not_be_written(
     await use(
         service, conversation, WriteSpecTool, WriteSpecAction(file_text="# Refunds")
     )
-    commit_landing = service._commit_landing
+    commit_landing = service.org_save.commit_landing
 
     def changed_meanwhile(landing, message, tree):
         return {**commit_landing(landing, message, tree), API_SPEC: "# Orders"}
 
-    monkeypatch.setattr(service, "_commit_landing", changed_meanwhile)
+    monkeypatch.setattr(service.org_save, "commit_landing", changed_meanwhile)
 
     await session_accepted(service, top, conversation)
 
@@ -1390,7 +1390,9 @@ async def test_a_manager_that_does_not_answer_is_asked_again_and_then_the_human(
 ):
     now = [datetime(2026, 11, 14, tzinfo=UTC)]
     service = await started(repo, launcher, clock=lambda: now[0], stall_poll=3600)
-    service.update_settings(DirectorSettingsUpdate(soft_check_in_minutes=60))
+    service.org_settings.update_settings(
+        DirectorSettingsUpdate(soft_check_in_minutes=60)
+    )
     top, conversation = await at_api(service)
     sets_up_jobs(service, top)
     org_gains(service, JOBS, "services/api/workers")
@@ -1662,20 +1664,20 @@ async def test_a_landing_that_cannot_be_committed_leaves_the_tree_as_it_was(
 ):
     service = await started(repo, launcher)
     await split_root(service)
-    real = service._commit_landing
+    real = service.org_save.commit_landing
 
     def fails(landing, message, tree):
         if tree:
             raise OperationFailed("another writer kept moving a ref first")
         return real(landing, message, tree)
 
-    service._commit_landing = fails  # type: ignore[method-assign]
+    service.org_save.commit_landing = fails  # type: ignore[method-assign]
     await use(service, ic(service), SubmitReviewTool, DONE)
     top = node(service, "root").id
     await use(service, division_lead_ic(service), ReviewTeamTool, accept(top))
     await service.settled()
-    service._commit_landing = real  # type: ignore[method-assign]
-    await service._save()
+    service.org_save.commit_landing = real  # type: ignore[method-assign]
+    await service.org_save.save()
 
     # Neither the tree nor what decides how it lands moved without the
     # team memory that goes with it.

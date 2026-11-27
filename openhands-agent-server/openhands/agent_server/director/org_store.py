@@ -10,6 +10,8 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 from openhands.agent_server.director.agent_types import TeamTemplate
+from openhands.agent_server.director.documents.store import TeamRef
+from openhands.agent_server.director.git_store import normalize_store_path
 from openhands.agent_server.director.models import (
     AgentKind,
     Escalation,
@@ -107,6 +109,16 @@ def is_division_lead(node: OrgNodeInput | None) -> bool:
 def session_id_of(node: OrgNodeInput) -> str:
     """The session ``node`` belongs to; '' for a team of the org."""
     return node.session if isinstance(node, SessionTeamInput) else ""
+
+
+def team_ref(node: OrgNodeInput) -> TeamRef:
+    """A team, or the work of one in a session, as its documents and its
+    org are told of it."""
+    return TeamRef(
+        id=node.id,
+        session=session_id_of(node),
+        folder=normalize_store_path(node.boundary.path),
+    )
 
 
 def team_id_of(node: OrgNodeInput) -> str:

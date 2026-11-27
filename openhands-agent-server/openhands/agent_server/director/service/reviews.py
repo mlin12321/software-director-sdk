@@ -203,11 +203,11 @@ class Reviews(Teams):
 
     async def _rest(self, place_id: str) -> None:
         place = self.org.place(place_id)
-        conversation_id = self.writer_conversation(place) if place else None
+        conversation_id = self.team_types.writer_conversation(place) if place else None
         if place is None or conversation_id is None or self._paused is not None:
             return
         launcher = self._require_launcher()
-        writer = self.team(place).writer
+        writer = self.team_types.team(place).writer
         if any(agent.role == writer and agent.kind == "acp" for agent in place.agents):
             # It runs its own turn, and the tool's answer tells it to end
             # it. Only one that carries on regardless is cut short, which
@@ -236,7 +236,7 @@ class Reviews(Teams):
             NotFound: The team does not exist.
             Conflict: None of its work waits for a review.
         """
-        names = self.names_at(place_id)
+        names = self.team_types.names_at(place_id)
         store = self.org
         place = store.place(place_id)
         if place is None:
@@ -262,7 +262,7 @@ class Reviews(Teams):
             for path in finding.path.split(", "):
                 if path.strip():
                     self.record_need(place, path.strip(), NEED_FINDING)
-        limit = self.settings.manager_check_ic_setbacks
+        limit = self.org_settings.settings.manager_check_ic_setbacks
         if limit and place.parent_id is not None and review.round % limit == 0:
             with self._counting:
                 counted = self._counted(place.parent_id)
@@ -274,7 +274,7 @@ class Reviews(Teams):
                 team=place,
             )
         self.notify(
-            self.writer_conversation(place),
+            self.team_types.writer_conversation(place),
             changes_requested(
                 above or place,
                 findings,
@@ -335,8 +335,8 @@ class Reviews(Teams):
                             store.session_title(team),
                             self._asked_for(team),
                             self._documents_waiting(team),
-                            names=self.team(team).names,
-                            kept=self.kept_documents(node),
+                            names=self.team_types.team(team).names,
+                            kept=self.team_types.kept_documents(node),
                         )
                         if store.opens_session(team)
                         else ""
@@ -346,8 +346,8 @@ class Reviews(Teams):
                         team.review,
                         self._so_far(team),
                         self.asked_of(team),
-                        self.review_instructions(self.type_of(team)),
-                        self.kept_documents(node).read_by_sub_teams,
+                        self.review_instructions(self.team_types.type_of(team)),
+                        self.team_types.kept_documents(node).read_by_sub_teams,
                     )
                 )
         # What it was asked before and has not decided: it may have waited
@@ -363,7 +363,7 @@ class Reviews(Teams):
             requests.append(still_undecided(sorted(asked_before, key=_submitted)))
         self.tell(
             node.id,
-            self.team(node).reviewer,
+            self.team_types.team(node).reviewer,
             "\n\n---\n\n".join(requests),
             division_lead=True,
         )
@@ -400,7 +400,7 @@ class Reviews(Teams):
         chosen = []
         for choice in choices:
             document = choice.document.strip()
-            protocol = self.protocols.get(document)
+            protocol = self.team_types.protocols.get(document)
             if protocol is None:
                 raise Invalid(f"The org keeps no document named {document!r}")
             if protocol.waits_for_team_changes:
@@ -513,7 +513,7 @@ class Reviews(Teams):
         Returns:
             Whether the org has it now.
         """
-        names = self.names_at(team_id)
+        names = self.team_types.names_at(team_id)
         store = self.org
         place = places.get(team_id)
         above = store.place(place.parent_id or "") if place else None
@@ -657,7 +657,7 @@ class Reviews(Teams):
         path = normalize_store_path(home.boundary.path)
         folder = normalize_store_path(lost.boundary.path)
         found = []
-        for name, protocol in self.protocols.items():
+        for name, protocol in self.team_types.protocols.items():
             if not protocol.waits_for_team_changes:
                 continue
             theirs = self.read_file(lost, DocumentRef(folder, name).path)
@@ -836,7 +836,7 @@ class Reviews(Teams):
                 self.org.session_title(top),
                 waiting,
                 merge.code_landed,
-                names=self.team(top).names,
+                names=self.team_types.team(top).names,
             ),
             division_lead=True,
         )
@@ -847,7 +847,7 @@ class Reviews(Teams):
         the org's teams, so it is asked once more after the time a team
         may show no progress, and after as long again the human is asked:
         their answer lets the org's stand wherever nothing was decided."""
-        limit = self.settings.soft_check_in_minutes
+        limit = self.org_settings.settings.soft_check_in_minutes
         if not limit:
             return
         with self._weighing:
@@ -879,7 +879,7 @@ class Reviews(Teams):
                         self.org.session_title(top),
                         waiting,
                         merge.code_landed,
-                        names=self.team(top).names,
+                        names=self.team_types.team(top).names,
                     ),
                     division_lead=True,
                 )
@@ -890,23 +890,23 @@ class Reviews(Teams):
                 top.id,
                 ORG_WAITS,
                 kind="critical_issue",
-                title=f"{self.team(top).names.A_manager} has not settled the teams "
-                "of accepted work",
+                title=f"{self.team_types.team(top).names.A_manager} has not settled "
+                "the teams of accepted work",
                 detail=(
                     f"The code of {top.title!r} is accepted and merged. What "
                     "it makes of the org's teams waits for the "
-                    f"{self.team(top).names.manager} that reviews it, which has "
-                    "not answered, and the "
+                    f"{self.team_types.team(top).names.manager} that reviews it, "
+                    "which has not answered, and the "
                     "teams of sessions that submitted later "
                     "wait behind it. Answer this to go on without the "
-                    f"{self.team(top).names.manager}: the org's stay wherever it "
-                    "has not decided, and "
+                    f"{self.team_types.team(top).names.manager}: the org's stay "
+                    "wherever it has not decided, and "
                     "what the session wrote for a team that is not taken is "
                     "kept in that team's record."
                 ),
                 at=utc_now(),
             )
-        self._save_soon()
+        self.org_save.save_soon()
 
     def settle_teams(
         self,
@@ -931,7 +931,7 @@ class Reviews(Teams):
             Invalid: A team or a directory named does not wait, or a team
                 cannot be put where it was asked to.
         """
-        names = self.names_at(review_id)
+        names = self.team_types.names_at(review_id)
         store = self.org
         with self._weighing:
             review = store.place(review_id)
@@ -1022,7 +1022,7 @@ class Reviews(Teams):
             )
             landed = merge.code_landed
         self._org_turn()
-        self._save_soon()
+        self.org_save.save_soon()
         return "Settled. " + (
             "It is the org's as soon as it is its turn."
             if landed
@@ -1095,9 +1095,10 @@ class Reviews(Teams):
                 f"goes under team {holder.id} or one below it."
             )
         level = len(store.teams_above(home.id)) + 2
-        if level > self.settings.max_depth:
+        max_depth = self.org_settings.settings.max_depth
+        if level > max_depth:
             raise Invalid(
-                f"An org may have at most {self.settings.max_depth} levels of "
+                f"An org may have at most {max_depth} levels of "
                 f"teams, and under team {choice.under} it would be level {level}."
             )
 
@@ -1120,7 +1121,7 @@ class Reviews(Teams):
         """
         # No save of the tree comes between what this changes of the org
         # and the one commit that takes it and team memory together.
-        with self._saving:
+        with self.org_save.lock:
             return self._land_all(top, seen, org)
 
     def _land_all(
@@ -1259,7 +1260,7 @@ class Reviews(Teams):
         review = self._review_of(top)
         if review is not None and landed.records.left:
             self.notify(
-                self.reviewer_conversation(review),
+                self.team_types.reviewer_conversation(review),
                 files_not_written(top.title, landed.records.left),
             )
         if review is not None and (
@@ -1274,7 +1275,7 @@ class Reviews(Teams):
                     landed.agreed,
                     landed.held,
                     landed.others,
-                    names=self.team(top).names,
+                    names=self.team_types.team(top).names,
                 )
                 + (f"\n\n{note}" if note else ""),
             )
@@ -1460,8 +1461,8 @@ class Reviews(Teams):
             list(changes.landed) if changes else [],
             changed,
             inherited,
-            names=self.team(place).names,
-            reports=self.kept_documents(above).reports,
+            names=self.team_types.team(place).names,
+            reports=self.team_types.kept_documents(above).reports,
         )
         there = git(checkout, ["ls-tree", "HEAD", "--", *files]) if files else ""
         compared = json.dumps(
@@ -1553,7 +1554,7 @@ class Reviews(Teams):
                 continue
             run.unmark(TURN, place_id)
             self.notify(
-                self.reviewer_conversation(above),
+                self.team_types.reviewer_conversation(above),
                 f"It is your turn: the work submitted before that of "
                 f"{place.title!r} (id {place.id}) is decided on. Accept it "
                 "with `review_team` now, or send it back.",
@@ -1589,7 +1590,7 @@ class Reviews(Teams):
                     place,
                     first,
                     store.session_title(first) if theirs else "",
-                    names=self.names_at(place_id),
+                    names=self.team_types.names_at(place_id),
                 )
             )
         try:
@@ -1722,7 +1723,7 @@ class Reviews(Teams):
             detail=detail,
             at=utc_now(),
         )
-        self._save_soon()
+        self.org_save.save_soon()
 
     async def _do_accept(self, intent: Intent) -> None:
         accept = intent.of(Accept)
@@ -1737,7 +1738,7 @@ class Reviews(Teams):
             Its description of the changes, '' when it gave none or was
             not asked.
         """
-        ic = self.writer_conversation(place)
+        ic = self.team_types.writer_conversation(place)
         if ic is None or not place.base_commit:
             return ""
         files = await asyncio.to_thread(
@@ -1748,7 +1749,7 @@ class Reviews(Teams):
         )
         if not files:
             return ""
-        asked = self.type_of(place).review.write_up
+        asked = self.team_types.type_of(place).review.write_up
         description = await self.model_calls.ask_agent(
             ic, bugbot.write_up_question(files, asked)
         )
@@ -1774,7 +1775,9 @@ class Reviews(Teams):
         if place.parent_id is not None:
             # A skill is fetched over the network the first time: not on
             # the loop, where every agent's turn would wait for it.
-            await asyncio.to_thread(self.review_instructions, self.type_of(place))
+            await asyncio.to_thread(
+                self.review_instructions, self.team_types.type_of(place)
+            )
             self._runs().mark(HELD, place_id)
             self._release_reviews(place.parent_id)
 
@@ -1785,7 +1788,7 @@ class Reviews(Teams):
         reconciled: str = "",
         choices: list[dict[str, str]] | None = None,
     ) -> None:
-        names = self.names_at(place_id)
+        names = self.team_types.names_at(place_id)
         store = self.org
         place = store.place(place_id)
         above = store.place(place.parent_id) if place and place.parent_id else None
@@ -1805,7 +1808,7 @@ class Reviews(Teams):
             self._tell_turns()
         if place.review.state != "pending":
             return
-        reviewer = self.reviewer_conversation(above)
+        reviewer = self.team_types.reviewer_conversation(above)
         first = self._before(place)
         if first is not None:
             # The acceptance of work submitted earlier was carried out
@@ -1945,7 +1948,7 @@ class Reviews(Teams):
             merged = result.outcome == "merged"
             if resolved:
                 self.notify(
-                    self.writer_conversation(place),
+                    self.team_types.writer_conversation(place),
                     f"Your team's work did not merge by itself. The {names.reviewer} "
                     "that "
                     "reviewed it finished the merge in these files, which are "
@@ -1988,7 +1991,7 @@ class Reviews(Teams):
         if not is_division_lead(above):
             self.count_accepted_review(above.id)
         self.notify(
-            self.writer_conversation(place),
+            self.team_types.writer_conversation(place),
             f"The {names.reviewer} of {above.title!r} accepted your team's work"
             + (" and it is merged into that team's checkout." if merged else "."),
         )
@@ -2000,7 +2003,7 @@ class Reviews(Teams):
         further = store.place(above.parent_id) if above.parent_id else None
         if needed_above and further is not None:
             self.notify(
-                self.writer_conversation(further),
+                self.team_types.writer_conversation(further),
                 f"Team {above.title!r} (id {above.id}) below you accepted the "
                 f"work of its sub-team {place.title!r} in {where} and says a team "
                 f"above it waits on that work: {needed_above}\nIt is in "
@@ -2029,7 +2032,7 @@ class Reviews(Teams):
         ):
             if ours is None:
                 return f"The checkout of {above.title!r} has no commit."
-            where = self._merges_for(above.id) / place.id.replace("@", "-")
+            where = self.confinement.merges_for(above.id) / place.id.replace("@", "-")
             merge = MergeCheckout(
                 where=str(where), ours=ours, tip=found.tip, files=list(found.files)
             )
@@ -2122,7 +2125,7 @@ class Reviews(Teams):
             acted: Whether the team's IC has just accepted the last of its
                 sub-teams itself; otherwise their work came up on its own.
         """
-        names = self.names_at(place_id)
+        names = self.team_types.names_at(place_id)
         store = self.org
         place = store.place(place_id)
         # A Division Lead place reviews; it has no work to hand on.
@@ -2132,7 +2135,8 @@ class Reviews(Teams):
         teams = [
             team
             for team in store.below(place_id)
-            if team.review is not None or self.writer_conversation(team) is not None
+            if team.review is not None
+            or self.team_types.writer_conversation(team) is not None
         ]
         if not teams or any(
             team.review is None or team.review.state != "accepted" for team in teams
@@ -2147,7 +2151,7 @@ class Reviews(Teams):
                 BASE_LANE, lambda: self._pass_up(place_id, acted=acted)
             )
             return
-        ic = self.writer_conversation(place)
+        ic = self.team_types.writer_conversation(place)
         above = store.place(place.parent_id) if place.parent_id else None
         # A file in a sub-team's folder is that team's, also while the team
         # has not been given work.
@@ -2253,6 +2257,6 @@ class Reviews(Teams):
             logger.exception("Could not put aside what is in %s", path)
             return
         self.notify(
-            self.writer_conversation(above),
+            self.team_types.writer_conversation(above),
             put_aside_notice(team, files, ref),
         )

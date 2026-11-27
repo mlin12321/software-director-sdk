@@ -122,7 +122,7 @@ async def test_what_a_team_escalated_is_counted_for_the_work_it_has_in_hand(
 async def test_the_two_counts_are_kept_apart(
     service: DirectorService, launcher: FakeLauncher, repo: Path
 ):
-    service.update_settings(
+    service.org_settings.update_settings(
         DirectorSettingsUpdate(
             manager_check_accepted_reviews=2, manager_check_ic_setbacks=2
         )
@@ -150,7 +150,7 @@ async def test_the_two_counts_are_kept_apart(
 async def test_each_check_can_be_turned_off(
     service: DirectorService, launcher: FakeLauncher, repo: Path
 ):
-    service.update_settings(
+    service.org_settings.update_settings(
         DirectorSettingsUpdate(
             manager_check_accepted_reviews=0, manager_check_ic_setbacks=0
         )
@@ -223,7 +223,9 @@ async def test_what_was_counted_is_kept_over_a_restart(
 async def test_work_that_goes_up_without_a_review_is_not_counted(
     service: DirectorService, launcher: FakeLauncher, repo: Path
 ):
-    service.update_settings(DirectorSettingsUpdate(manager_check_accepted_reviews=1))
+    service.org_settings.update_settings(
+        DirectorSettingsUpdate(manager_check_accepted_reviews=1)
+    )
     db = [SplitChild(title="DB", path="services/api/db", task="Own the schema")]
     await use(service, ic(service, API), ProposeTeamsTool, proposing(db))
     await use(service, manager(service, API), ApproveTeamsTool, APPROVE)
@@ -300,7 +302,9 @@ async def test_what_became_of_its_teams_is_kept_for_a_teams_two_agents(
 async def test_a_manager_is_shown_what_became_of_teams_that_are_gone(
     service: DirectorService, launcher: FakeLauncher, repo: Path
 ):
-    service.update_settings(DirectorSettingsUpdate(manager_check_accepted_reviews=1))
+    service.org_settings.update_settings(
+        DirectorSettingsUpdate(manager_check_accepted_reviews=1)
+    )
     await sent_back(service, repo, API, times=3)
     await use(
         service,

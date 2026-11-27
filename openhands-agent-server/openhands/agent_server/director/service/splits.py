@@ -91,7 +91,7 @@ class Splits(Watch):
     ) -> None:
         """Put approved sub-teams aside, tell the IC that proposed them and
         keep it in the record, where its Manager reads it."""
-        names = self.team(place).names
+        names = self.team_types.team(place).names
         proposal = place.pending_split
         self.org.update_place(place.id, pending_split=None)
         self.record_event(
@@ -102,7 +102,7 @@ class Splits(Watch):
             [child.path for child in proposal.children] if proposal else [],
         )
         self.notify(
-            self.writer_conversation(place),
+            self.team_types.writer_conversation(place),
             f"The sub-teams your {names.manager} approved could not be set up: "
             f"{reason} "
             f"{left} Tell your {names.manager} with msg_manager, with a new "
@@ -147,7 +147,7 @@ class Splits(Watch):
                     git(checkout, ["reset", "--merge", "--quiet", before])
                 return f"the work {team.title!r} committed {refusal}"
         for team in teams:
-            self._forget_shells(team)
+            self.confinement.forget_shells(team)
         for team in apart:
             self._discard_work([team], stamp)
         return None
@@ -189,7 +189,7 @@ class Splits(Watch):
                     store,
                     place,
                     len(split.children) - len(split.replaces),
-                    self.settings,
+                    self.org_settings.settings,
                 )
             except OrgStoreError as error:
                 self._decline(place, str(error))
@@ -294,7 +294,7 @@ class Splits(Watch):
             if store.place(below_id) is not None and store.place(home) is not None:
                 store.move_place(below_id, home)
         self._let_go(intent)
-        await self._save()
+        await self.org_save.save()
         if "handed_over" not in intent.steps:
             # A new team starts nothing by being set up. What it is for is
             # kept for the day something is sent to it.
@@ -312,14 +312,14 @@ class Splits(Watch):
                 if below and above and below.review and below.review.state == "pending":
                     self.tell(
                         home,
-                        self.team(above).reviewer,
+                        self.team_types.team(above).reviewer,
                         review_request(
                             below,
                             below.review,
                             self._so_far(below),
                             self.asked_of(below),
-                            self.review_instructions(self.type_of(below)),
-                            self.kept_documents(above).read_by_sub_teams,
+                            self.review_instructions(self.team_types.type_of(below)),
+                            self.team_types.kept_documents(above).read_by_sub_teams,
                         ),
                     )
                 # Under a new team it starts from now: its time without
@@ -346,7 +346,7 @@ class Splits(Watch):
             return
         # The shell the IC starts next can no longer write what it gave away.
         with suppress(GitError, OSError):
-            await asyncio.to_thread(self._confine, place_id)
+            await asyncio.to_thread(self.confinement.confine, place_id)
         # The record each replaced team left last: the one just made.
         kept = self.session_drafts.former(place.session)
         former = [
@@ -361,12 +361,12 @@ class Splits(Watch):
                     uncommitted, Path(place.worktree_path), child.path
                 )
         self.notify(
-            self.writer_conversation(place),
+            self.team_types.writer_conversation(place),
             approved_notice(
                 proposal.children,
                 former,
-                names=self.team(place).names,
-                rules=self.document_rules(place),
+                names=self.team_types.team(place).names,
+                rules=self.team_types.document_rules(place),
                 unfinished=unfinished,
             ),
         )
@@ -439,7 +439,7 @@ class Splits(Watch):
                 run.drop_held(str(conversation_id))
             intent = run.step_done(intent, "deleted")
         above = store.place(plan.parent)
-        parent_ic = self.writer_conversation(above) if above else None
+        parent_ic = self.team_types.writer_conversation(above) if above else None
         if "removed" not in intent.steps:
             pruned = store.place(place_id)
             for team in map(store.place, plan.teams):
@@ -465,8 +465,8 @@ class Splits(Watch):
             store.remove(place_id)
             # The shell the IC above starts next can write there again.
             with suppress(GitError, OSError):
-                await asyncio.to_thread(self._confine, plan.parent)
-            await self._save()
+                await asyncio.to_thread(self.confinement.confine, plan.parent)
+            await self.org_save.save()
             intent = run.step_done(intent, "removed")
         self._settling.pop(intent.id, None)
         if "told" in intent.steps:
@@ -484,8 +484,8 @@ class Splits(Watch):
                 plan.reason,
                 saved,
                 former,
-                names=self.names_at(intent.node_id),
-                rules=self.document_rules(above) if above else (),
+                names=self.team_types.names_at(intent.node_id),
+                rules=self.team_types.document_rules(above) if above else (),
             ),
         )
         if former and parent_ic is not None:
@@ -517,7 +517,7 @@ class Splits(Watch):
             for record in self.session_drafts.former(place.session)
             if (record.id, record.at) in wanted
         ]
-        stays = self.kept_documents(place).stay_when_removed
+        stays = self.team_types.kept_documents(place).stay_when_removed
         # What each of them wrote that stays in its folder, by the folder.
         left = {
             team.path: [
@@ -541,8 +541,8 @@ class Splits(Watch):
                 children,
                 former,
                 left,
-                names=self.names_at(intent.node_id),
-                rules=self.document_rules(place),
+                names=self.team_types.names_at(intent.node_id),
+                rules=self.team_types.document_rules(place),
                 stays=stays,
             )
         else:
@@ -552,8 +552,8 @@ class Splits(Watch):
                 payload.reason,
                 former,
                 left,
-                names=self.names_at(intent.node_id),
-                rules=self.document_rules(place),
+                names=self.team_types.names_at(intent.node_id),
+                rules=self.team_types.document_rules(place),
                 stays=stays,
             )
         mode = hand_over_of(place)
@@ -582,7 +582,7 @@ class Splits(Watch):
         store.set_hand_over(
             place.id, HandOverMode(conversation_id=conversation, status=AGENT_LOST)
         )
-        self.notify(self.writer_conversation(place), HAND_OVER_FAILED)
+        self.notify(self.team_types.writer_conversation(place), HAND_OVER_FAILED)
 
     def _hand_over_ended(self, place_id: str) -> None:
         """Tell a team's IC, in its main conversation, what its hand-over
@@ -595,14 +595,16 @@ class Splits(Watch):
         run.unmark(HANDING, place_id)
         done = json.loads(kept)
         self.notify(
-            self.writer_conversation(place),
+            self.team_types.writer_conversation(place),
             handed_over_notice(
                 done["given"],
                 done["written"],
-                names=self.names_at(place_id),
+                names=self.team_types.names_at(place_id),
                 rules=[
                     protocol.document.rules_by_member
-                    for protocol in self.team_documents.kept_by(self.reader_of(place))
+                    for protocol in self.team_documents.kept_by(
+                        self.team_types.reader_of(place)
+                    )
                     if protocol.document.name not in done["written"]
                 ],
             ),
@@ -623,7 +625,8 @@ class Splits(Watch):
             # that keeps nothing stays where it is: an old one for whoever
             # has the directory next.
             kept = await asyncio.to_thread(
-                self.team_documents.when_team_is_removed, self.reader_of(team)
+                self.team_documents.when_team_is_removed,
+                self.team_types.reader_of(team),
             )
             record = FormerTeam(
                 id=team.team_id,
@@ -659,7 +662,7 @@ class Splits(Watch):
         store = self.org
         kept: str | None = None
         for index, team in enumerate(teams):
-            self._forget_shells(team)
+            self.confinement.forget_shells(team)
             above = store.place(team.parent_id) if team.parent_id else None
             # A team in the checkout of the one above is covered by it.
             if index and above and above.worktree_path == team.worktree_path:
