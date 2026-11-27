@@ -229,7 +229,9 @@ class Delivery(Records):
         written itself, so that they are not sent back to it. Safe from any
         thread."""
         place = self.org.place(place_id)
-        conversation_id = self.team(place).conversation(role) if place else None
+        conversation_id = (
+            self.team_types.team(place).conversation(role) if place else None
+        )
         run = self._runs()
         before = run.marked(TOLD).get(conversation_id or "")
         if place is None or conversation_id is None or not before:
@@ -278,14 +280,14 @@ class Delivery(Records):
         except (GitError, OSError):
             return text, None
         if again:
-            said = again_block(self.role_text(node, role), now)
+            said = again_block(self.team_types.role_text(node, role), now)
             return f"{text}\n\n{said}", json.dumps(now)
         before = self._runs().marked(TOLD).get(conversation_id)
         news = changed(
             json.loads(before) if before else {},
             now,
             role,
-            works=role == self.team(node).writer,
+            works=role == self.team_types.team(node).writer,
         )
         if not news:
             return text, None
@@ -522,7 +524,7 @@ class Delivery(Records):
             )
 
         place = store.place(place_id)
-        conversation_id = self.writer_conversation(place) if place else None
+        conversation_id = self.team_types.writer_conversation(place) if place else None
         if place is None or conversation_id is None or reported():
             return
         if self._paused is not None:
@@ -550,7 +552,7 @@ class Delivery(Records):
         its request. The team it was opened at keeps its own name."""
         store = self.org
         place = store.place(place_id)
-        conversation_id = self.writer_conversation(place) if place else None
+        conversation_id = self.team_types.writer_conversation(place) if place else None
         if place is None or conversation_id is None or self._paused is not None:
             return
         launcher = self._require_launcher()
@@ -570,7 +572,7 @@ class Delivery(Records):
                         UUID(agent.conversation_id),
                         _agent_title(
                             place.title,
-                            self.team(place).title(agent.role),
+                            self.team_types.team(place).title(agent.role),
                             store.session_title(place),
                         ),
                     )

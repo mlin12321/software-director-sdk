@@ -377,7 +377,7 @@ class Sync(Sessions):
                     "org or wait for it to finish, then save again."
                 )
         edit = await asyncio.to_thread(write_by_hand, place, sub_teams, path, content)
-        ic = self.writer_conversation(place)
+        ic = self.team_types.writer_conversation(place)
         if edit.commit is not None and ic is not None and self._loop is not None:
             self.notify(
                 ic,
@@ -408,7 +408,7 @@ class Sync(Sessions):
                 to start it like.
             Unavailable: The director is not running.
         """
-        names = self.names_at(node_id)
+        names = self.team_types.names_at(node_id)
         launcher = self._require_launcher()
         store = await asyncio.to_thread(lambda: self.org)
         place = store.place(node_id)
@@ -424,7 +424,7 @@ class Sync(Sessions):
         leads = is_division_lead(place)
         if place.status == "done":
             raise Conflict(f"Team {place.title} is done")
-        ic = self.writer_conversation(place)
+        ic = self.team_types.writer_conversation(place)
         if ic is not None and await launcher.started(UUID(ic)) is not None:
             raise Conflict(
                 f"The {names.writer} of team {place.title} has a conversation here"
@@ -466,8 +466,8 @@ class Sync(Sessions):
                 f"you was lost, and says:\n{said}"
             )
         # The team's other agents stay its own: only the IC is new.
-        writer = self.team(place).writer
-        tools = self.tools_for(place, writer)
+        writer = self.team_types.team(place).writer
+        tools = self.team_types.tools_for(place, writer)
         agents = [
             *_new_agents(ic_id, writer),
             *(a for a in place.agents if a.role != writer),
@@ -502,7 +502,7 @@ class Sync(Sessions):
                 [Tool(name=name) for name in tools],
                 title=_agent_title(
                     place.title,
-                    self.team(place).title(writer),
+                    self.team_types.team(place).title(writer),
                     store.session_title(place),
                 ),
                 tool_params=await asyncio.to_thread(self._confine, node_id, writer),
@@ -784,7 +784,7 @@ class Sync(Sessions):
                 # A blocked team is no longer waited for.
                 self.release_reviews(node.parent_id)
             if (
-                role == self.team(node).writer
+                role == self.team_types.team(node).writer
                 and status == ConversationExecutionStatus.RUNNING
             ):
                 self.release_reviews(node.id)
@@ -833,7 +833,7 @@ class Sync(Sessions):
     def _runs_again(self, team: SessionTeam, role: str) -> None:
         """An agent that runs is no longer something the human is asked of."""
         waits = {failure_waits(role)} | (
-            {STALL_WAITS} if role == self.team(team).writer else set()
+            {STALL_WAITS} if role == self.team_types.team(team).writer else set()
         )
         settled = [e.id for e in team.escalations if e.id in waits]
         for escalation_id in settled:
@@ -884,8 +884,8 @@ class Sync(Sessions):
         if top is None or top.review is None or top.review.state != "accepted":
             return
         self.notify(
-            self.writer_conversation(top),
-            changed_since_accept(self.kept_documents(top)),
+            self.team_types.writer_conversation(top),
+            changed_since_accept(self.team_types.kept_documents(top)),
         )
 
     async def _resync(self) -> None:

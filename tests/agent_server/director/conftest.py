@@ -53,6 +53,7 @@ from openhands.agent_server.director.org_store import (
     session_id_of,
     session_team_id,
     team_id_of,
+    team_ref,
 )
 from openhands.agent_server.director.orgs import SHIPPED_DOCUMENTS, SHIPPED_TYPES
 from openhands.agent_server.director.prompts import (
@@ -62,10 +63,11 @@ from openhands.agent_server.director.prompts import (
     role_block,
 )
 from openhands.agent_server.director.service import (
-    DIRECTOR_TOOL_NAMES,
     DirectorService,
 )
-from openhands.agent_server.director.service.state import team_ref
+from openhands.agent_server.director.service.team_type_service import (
+    DIRECTOR_TOOL_NAMES,
+)
 from openhands.agent_server.director.split import ProposedTeam
 from openhands.agent_server.director.tools import (
     ApproveTeamsTool,
@@ -748,7 +750,7 @@ def _contracts_before_proposing(service: DirectorService, conversation_id: str) 
         place = agent_actions.caller_of(service, UUID(conversation_id)).node
     except Exception:  # noqa: BLE001  the call itself is refused for this
         return
-    if "contracts" not in service.type_of(place).documents:
+    if "contracts" not in service.team_types.type_of(place).documents:
         return
     ref = team_ref(place).keeps("contracts")
     if not (service.documents.read(place.session, ref) or "").strip():
@@ -841,7 +843,9 @@ def own_document(service: DirectorService, place: SessionTeam, name: str) -> str
     return next(
         (
             shown.text
-            for shown in service.team_documents.shown(service.reader_of(place))
+            for shown in service.team_documents.shown(
+                service.team_types.reader_of(place)
+            )
             if shown.name == name and shown.own
         ),
         None,

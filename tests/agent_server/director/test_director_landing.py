@@ -25,6 +25,7 @@ from openhands.agent_server.director.org_store import (
     OrgStore,
     session_id_of,
     team_id_of,
+    team_ref,
 )
 from openhands.agent_server.director.prompts import (
     DIVISION_LEAD_IC_ROLE,
@@ -35,7 +36,6 @@ from openhands.agent_server.director.run_state import SESSION
 from openhands.agent_server.director.service import DirectorService
 from openhands.agent_server.director.service.state import (
     MERGE_WAITS,
-    team_ref,
 )
 from openhands.agent_server.director.tools import (
     PruneTeamTool,
@@ -719,7 +719,7 @@ async def test_contracts_both_changed_wait_for_the_manager_above(
     contracts = [
         shown
         for shown in service.team_documents.shown(
-            service.reader_of(api_place(service, top))
+            service.team_types.reader_of(api_place(service, top))
         )
         if shown.name == "contracts"
     ]

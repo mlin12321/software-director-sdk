@@ -24,10 +24,7 @@ from openhands.agent_server.director.acp import (
 )
 from openhands.agent_server.director.agent_types import (
     DEFAULT_TYPE,
-    TYPES_FOLDER,
-    Names,
     TeamTemplate,
-    load_types,
 )
 from openhands.agent_server.director.boundary import scope_within
 from openhands.agent_server.director.confinement import (
@@ -35,23 +32,12 @@ from openhands.agent_server.director.confinement import (
     checkout_root,
     is_in,
 )
-from openhands.agent_server.director.documents.declared import (
-    DOCUMENTS_FOLDER,
-    load_documents,
-)
-from openhands.agent_server.director.documents.protocol import DocumentProtocolBase
-from openhands.agent_server.director.documents.registry import (
-    UnknownProtocol,
-    declare,
-    protocol_of,
-)
 from openhands.agent_server.director.documents.store import (
     DocumentStore,
     GitDocumentStore,
     TeamRef,
 )
 from openhands.agent_server.director.documents.team_documents import (
-    Reader,
     TeamDocuments,
 )
 from openhands.agent_server.director.documents.tree import TeamTree
@@ -64,7 +50,6 @@ from openhands.agent_server.director.git import (
 )
 from openhands.agent_server.director.git_store import (
     GitStore,
-    normalize_store_path,
 )
 from openhands.agent_server.director.headline import provisional_summary
 from openhands.agent_server.director.intents import Accept, LandOrg
@@ -80,7 +65,6 @@ from openhands.agent_server.director.models import (
     FormerTeam,
     HandOverMode,
     MemberInfo,
-    OrgNodeInput,
     OrgSettings,
     OrgSettingsState,
     OrgStateEvent,
@@ -106,15 +90,12 @@ from openhands.agent_server.director.org_persistence import (
 from openhands.agent_server.director.org_store import (
     OrgStore,
     is_division_lead,
-    session_id_of,
     session_team_id,
+    team_ref,
 )
 from openhands.agent_server.director.orgs import (
     ORG_KINDS,
-    SHIPPED_DOCUMENTS,
-    SHIPPED_TYPES,
 )
-from openhands.agent_server.director.prompts import KeptDocuments, role_text
 from openhands.agent_server.director.run_state import (
     MERGING,
     PROGRESS,
@@ -136,6 +117,9 @@ from openhands.agent_server.director.service.session_draft_service import (
     SessionDraftService,
 )
 from openhands.agent_server.director.service.stall_watch_service import progress_of
+from openhands.agent_server.director.service.team_type_service import (
+    TeamTypeService,
+)
 from openhands.agent_server.director.service.work_queue_service import (
     WorkQueueService,
 )
@@ -146,7 +130,6 @@ from openhands.agent_server.director.split import (
     child_boundary,
     clean_path,
 )
-from openhands.agent_server.director.team import Team
 from openhands.sdk.agent.base import AgentBase
 from openhands.sdk.conversation.state import ConversationExecutionStatus
 from openhands.sdk.errors import (
@@ -162,36 +145,6 @@ from openhands.sdk.logger import get_logger
 logger = get_logger(__name__)
 
 ROOT_ID = "root"
-# What no type takes from an agent: without them it could not read its
-# place, hand its work on, or say that it cannot go on.
-_TOOLS_NO_TYPE_REMOVES = ("read_team_context", "raise_escalation", "submit_review")
-# What the member that takes over what a removed team left is offered,
-# beside the tools of the documents it may write while it does.
-_HAND_OVER_TOOLS = ("read_team_context", "hand_over")
-
-
-# Every tool of the director's own; they register in ``director.tools``.
-# The documents an org keeps bring theirs beside these. Which of them an
-# agent is offered is its team's type's to say, and `agent_actions`
-# refuses the rest whatever is offered.
-DIRECTOR_TOOL_NAMES = (
-    "read_team_context",
-    "raise_escalation",
-    "resolve_escalation",
-    "msg_manager",
-    "propose_teams",
-    "msg_team",
-    "send_document",
-    "hand_over",
-    "stop_team",
-    "submit_review",
-    "review_team",
-    "msg_ic",
-    "approve_teams",
-    "decline_teams",
-    "prune_team",
-    "settle_teams",
-)
 # Tools that start agents nothing holds to the team's folder. An org's
 # agent hands work on by proposing sub-teams.
 _SUB_AGENT_TOOLS = (
@@ -225,10 +178,6 @@ DECLINED_TOLD = 3
 # How long a model may take to name a team before the team keeps the name
 # it has; a session's first IC is not briefed until then.
 SUMMARY_TIMEOUT_SECONDS = 20.0
-# The record every member of a team keeps of what it learned. It is the
-# director's own, as messages are, and not a document an org invents: the
-# one log the store keeps.
-REPORT = "report"
 # How long a model may take over a team's diff, or over an agent's reports.
 MODEL_CALL_TIMEOUT_SECONDS = 120.0
 # A team whose work is sent back this many times is stopped.
@@ -357,16 +306,6 @@ def apart(team: SessionTeam, above: SessionTeam) -> bool:
     return checkout_root(team.worktree_path) != checkout_root(above.worktree_path)
 
 
-def team_ref(node: OrgNodeInput) -> TeamRef:
-    """A team, or the work of one in a session, as its documents and its
-    org are told of it."""
-    return TeamRef(
-        id=node.id,
-        session=session_id_of(node),
-        folder=normalize_store_path(node.boundary.path),
-    )
-
-
 class _TeamsOfTheOrg:
     """Where a team stands among the others: the org's tree for a team of
     the org, its session's for the work of one in a session."""
@@ -489,6 +428,12 @@ class ServiceState:
             self._memory, self._runs, self._document_changed, self
         )
         self.tree: TeamTree = _TeamsOfTheOrg(lambda: self.org)
+        self.team_types = TeamTypeService(
+            config_file=config_file,
+            documents=self.documents,
+            tree=self.tree,
+            org=lambda: self.org,
+        )
         # Held while what waits of a session's work is read and changed.
         self._weighing = threading.RLock()
         self._adding_manager = threading.Lock()
@@ -509,9 +454,6 @@ class ServiceState:
         self._configured: dict[str, Any] = (
             load_org_config(config_file) if config_file else {}
         )
-        self._agent_types: dict[str, TeamTemplate] | None = None
-        self._protocols: dict[str, DocumentProtocolBase] = {}
-        self._agent_types_seen: tuple[tuple[str, int], ...] = ()
         # What the org sets for itself, by the repository it was read from.
         self._own_settings: tuple[str, OrgSettings] | None = None
         self._server_url = server_url
@@ -554,7 +496,7 @@ class ServiceState:
             kind: The type of the team whose work is reviewed; the default
                 type when None.
         """
-        kind = kind or self.agent_types.get(DEFAULT_TYPE)
+        kind = kind or self.team_types.agent_types.get(DEFAULT_TYPE)
         if kind is None:
             return ""
         parts: list[str] = []
@@ -577,7 +519,7 @@ class ServiceState:
         """Fetch what reviewers of every type check work by, so that it is
         there when a review is requested. Safe from any thread."""
         try:
-            for kind in self.agent_types.values():
+            for kind in self.team_types.agent_types.values():
                 self.review_instructions(kind)
         except Exception:
             logger.exception("Could not load the review instructions")
@@ -705,20 +647,6 @@ class ServiceState:
                     self._settings = DirectorSettings.model_validate(self._configured)
             return self._settings
 
-    @property
-    def agent_types(self) -> dict[str, TeamTemplate]:
-        """The types a team may be, by name: the ones the director ships
-        and the ones beside ``director.yaml``. They are read again when a
-        file among them is added, removed or changed, so a new type can be
-        given to the next team without a restart."""
-        return self._declared()[0]
-
-    @property
-    def protocols(self) -> dict[str, DocumentProtocolBase]:
-        """What each document teams may keep does, by the document's name.
-        Read again with the types."""
-        return self._declared()[1]
-
     def _document_changed(self, session: str) -> None:
         """A session wrote or removed a document."""
 
@@ -726,63 +654,7 @@ class ServiceState:
     def team_documents(self) -> TeamDocuments:
         """The documents of the org as each team reads, writes and leaves
         them."""
-        return TeamDocuments(self.documents, self.protocols, self.org_kind)
-
-    def reader_of(self, node: OrgNodeInput) -> Reader:
-        """A team as its documents see it."""
-        kind = self.type_of(node)
-        return Reader(
-            team=team_ref(node),
-            keeps=tuple(kind.documents),
-            leftover=tuple(node.leftover_documents),
-            titles=kind.titles,
-            descriptions={name: said for name, said in kind.documents.items() if said},
-        )
-
-    def _declared(
-        self,
-    ) -> tuple[dict[str, TeamTemplate], dict[str, DocumentProtocolBase]]:
-        folders = [*SHIPPED_TYPES]
-        documents = [SHIPPED_DOCUMENTS]
-        if self._config_file:
-            folders.append(self._config_file.parent / TYPES_FOLDER)
-            documents.append(self._config_file.parent / DOCUMENTS_FOLDER)
-        files = sorted(
-            path
-            for folder in (*folders, *documents)
-            if folder.is_dir()
-            for path in folder.iterdir()
-            if path.suffix in (".yaml", ".yml")
-        )
-        seen = tuple((str(path), path.stat().st_mtime_ns) for path in files)
-        with self._lock:
-            if self._agent_types is None or seen != self._agent_types_seen:
-                protocols: dict[str, DocumentProtocolBase] = {}
-                tools: dict[str, str] = {}
-                for document in load_documents(documents).values():
-                    tool = document.written_with
-                    try:
-                        if tool in tools:
-                            raise ValueError(
-                                f"The document {tools[tool]!r} is written with "
-                                f"{tool} already"
-                            )
-                        declare(document)
-                        protocols[document.name] = protocol_of(
-                            document, self.documents, self.tree
-                        )
-                    except (UnknownProtocol, ValueError):
-                        logger.exception("Ignoring the document %s", document.name)
-                        continue
-                    tools[tool] = document.name
-                self._agent_types = load_types(
-                    folders,
-                    DIRECTOR_TOOL_NAMES,
-                    {name: found.document for name, found in protocols.items()},
-                )
-                self._protocols = protocols
-                self._agent_types_seen = seen
-            return self._agent_types, self._protocols
+        return TeamDocuments(self.documents, self.team_types.protocols, self.org_kind)
 
     @property
     def org_kind(self) -> OrgBase:
@@ -794,114 +666,6 @@ class ServiceState:
             logger.warning("There is no kind of org named %r", named)
             kind = ORG_KINDS[DirectorSettings().org_kind]
         return kind(self.tree)
-
-    @property
-    def tool_names(self) -> tuple[str, ...]:
-        """Every tool an agent of the org may be offered: the director's
-        own and the one of each document the org keeps."""
-        written_with = (
-            protocol.document.written_with for protocol in self.protocols.values()
-        )
-        return tuple(dict.fromkeys((*DIRECTOR_TOOL_NAMES, *written_with)))
-
-    @property
-    def hand_over_tools(self) -> tuple[str, ...]:
-        """What the member that takes over what a removed team left is
-        offered in the conversation it does so in."""
-        return _HAND_OVER_TOOLS + tuple(
-            protocol.document.written_with
-            for protocol in self.protocols.values()
-            if protocol.usable_in_hand_over
-        )
-
-    def type_of(self, node: OrgNodeInput) -> TeamTemplate:
-        """The type of a team. A team whose type the director no longer
-        finds is told as the default type is."""
-        types = self.agent_types
-        return types.get(node.agent_type) or types[DEFAULT_TYPE]
-
-    def names_at(self, place_id: str) -> Names:
-        """What the members the director turns to are called in a team; in
-        one that is gone, what they are called in a team of the default
-        type."""
-        place = self.org.place(place_id)
-        if place is None:
-            return self.agent_types[DEFAULT_TYPE].names
-        return self.team(place).names
-
-    def team(self, place: SessionTeam) -> Team:
-        """A team of the org as the director reads it."""
-        return Team(self.org, place)
-
-    def role_text(self, place: SessionTeam, member: str) -> str:
-        """How the org works and what the member's part in it is, as its
-        briefing says it."""
-        team = self.team(place)
-        found = team.kind.agents.get(member)
-        return role_text(
-            team.names,
-            works=member == team.writer,
-            tools=self.tools_for(place, member),
-            title=team.title(member),
-            lead=team.is_lead,
-            own=found.protocol if found else "",
-            rules=self.document_rules(place),
-        )
-
-    def kept_documents(self, place: OrgNodeInput) -> KeptDocuments:
-        """The documents a team keeps, as the director's own messages name
-        them: what each is called and what its protocol says of it."""
-        kept = [
-            protocol
-            for protocol in self.team_documents.kept_by(self.reader_of(place))
-            if protocol.document.name != REPORT
-        ]
-
-        def named(fact: str) -> tuple[str, ...]:
-            return tuple(found.document.name for found in kept if getattr(found, fact))
-
-        return KeptDocuments(
-            names=tuple(found.document.name for found in kept),
-            wait_with_teams=named("waits_for_team_changes"),
-            read_by_sub_teams=named("read_by_sub_teams"),
-            stay_when_removed=named("stays_when_team_is_removed"),
-            reports=REPORT in self.type_of(place).documents,
-        )
-
-    def document_rules(self, place: SessionTeam) -> list[dict[str, str]]:
-        """What each document a team keeps says of itself to its members,
-        with how the org works."""
-        return [
-            protocol.document.rules_by_member
-            for protocol in self.team_documents.kept_by(self.reader_of(place))
-        ]
-
-    def writer_conversation(self, place: SessionTeam) -> str | None:
-        """The conversation of the member that works in a team's folder."""
-        team = self.team(place)
-        return team.conversation(team.writer)
-
-    def reviewer_conversation(self, place: SessionTeam) -> str | None:
-        """The conversation of the member the teams below turn to."""
-        team = self.team(place)
-        return team.conversation(team.reviewer)
-
-    def tools_for(self, place: SessionTeam, member: str) -> tuple[str, ...]:
-        """The director's tools the member of a team is offered: the ones
-        its type gives it, less the ones the type leaves its teams
-        without. What an agent needs to read its place and hand its work
-        on stays."""
-        kind = self.type_of(place)
-        found = kind.agents.get(member)
-        if found is None:
-            return ()
-        if is_division_lead(place):
-            return tuple(found.lead_tools)
-        return tuple(
-            name
-            for name in found.tools
-            if name not in kind.omit_tools or name in _TOOLS_NO_TYPE_REMOVES
-        )
 
     @property
     def own_settings(self) -> OrgSettings:
@@ -928,7 +692,7 @@ class ServiceState:
         allowed = self._allowed_type_names()
         return [
             found
-            for name, found in self.agent_types.items()
+            for name, found in self.team_types.agent_types.items()
             if not allowed or name in allowed
         ]
 
@@ -975,7 +739,7 @@ class ServiceState:
                         for member in kind.agents
                     ],
                 )
-                for name, kind in self.agent_types.items()
+                for name, kind in self.team_types.agent_types.items()
             ],
         )
 
@@ -997,7 +761,7 @@ class ServiceState:
         changed = self.own_settings.model_copy(update=named)
         if changed.default_agent_type == "":
             changed.default_agent_type = None
-        types = self.agent_types
+        types = self.team_types.agent_types
         asked = [*(changed.allowed_agent_types or [])]
         if changed.default_agent_type:
             asked.append(changed.default_agent_type)
@@ -1125,8 +889,8 @@ class ServiceState:
                 that conversation's and not the IC's own.
         """
         children = self.org.below(place.id)
-        kind = self.type_of(place)
-        reviewer = self.team(place).reviewer
+        kind = self.team_types.type_of(place)
+        reviewer = self.team_types.team(place).reviewer
         # A team that has not started holds no one out of its directory:
         # the IC above may finish what it has there.
         started = [child for child in children if child.agents]
@@ -1188,7 +952,7 @@ class ServiceState:
         return self._confinement().adapter(
             conversation_id,
             offered,
-            known=self.tool_names,
+            known=self.team_types.tool_names,
             never=_SUB_AGENT_TOOLS,
         )
 
@@ -1393,7 +1157,7 @@ class ServiceState:
         place = self.org.place(place_id)
         if place is None:
             return None
-        team = self.team(place)
+        team = self.team_types.team(place)
         role = role or team.writer
         conversation_id = hand_over or team.conversation(role)
         if conversation_id is None:
@@ -1416,7 +1180,7 @@ class ServiceState:
         return self._launcher
 
     def _load_store(self) -> OrgStore:
-        store = OrgStore(self.type_of)
+        store = OrgStore(self.team_types.type_of)
         remembered = self._remembered_repo()
         if remembered is None or not self._load_from(remembered, store):
             self._load_from(self._directory, store)

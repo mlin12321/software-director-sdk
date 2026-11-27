@@ -26,12 +26,15 @@ from openhands.agent_server.director.models import (
     SplitProposal,
     TeamChoice,
 )
-from openhands.agent_server.director.org_store import is_division_lead, utc_now
+from openhands.agent_server.director.org_store import (
+    is_division_lead,
+    team_ref,
+    utc_now,
+)
 from openhands.agent_server.director.prompts import role_text
 from openhands.agent_server.director.service import (
     DirectorService,
 )
-from openhands.agent_server.director.service.state import team_ref
 from openhands.agent_server.director.split import (
     Proposed,
     ProposedTeam,
@@ -65,7 +68,7 @@ def caller_of(service: DirectorService, conversation_id: UUID) -> Caller:
     node = service.org.find_hand_over(str(conversation_id))
     if node is None:
         raise NotFound("This conversation is not an agent of the org")
-    return Caller(node=node, role=service.team(node).writer, hand_over=True)
+    return Caller(node=node, role=service.team_types.team(node).writer, hand_over=True)
 
 
 def acting(service: DirectorService, conversation_id: UUID) -> Caller:
@@ -95,7 +98,7 @@ def _not_aside(caller: Caller) -> None:
 
 def _title(service: DirectorService, caller: Caller, member: str) -> str:
     """A member of the caller's team as the agents are told of it."""
-    return service.type_of(caller.node).title_of(member)
+    return service.team_types.type_of(caller.node).title_of(member)
 
 
 def _has(
@@ -112,7 +115,7 @@ def _has(
         what: What the tool does, for the refusal.
         aside: Whether it may be used in hand-over mode.
     """
-    kind = service.type_of(caller.node)
+    kind = service.team_types.type_of(caller.node)
     if kind.has(caller.role, tool):
         if not (caller.hand_over and aside):
             _not_aside(caller)
@@ -128,7 +131,7 @@ def _writes(service: DirectorService, caller: Caller, what: str) -> None:
     """Refuse an agent that is not the one that works in its team's
     folder."""
     _not_aside(caller)
-    writer = service.type_of(caller.node).writer
+    writer = service.team_types.type_of(caller.node).writer
     if caller.role != writer:
         raise Invalid(
             f"Only the {_title(service, caller, writer)} of a team can {what}"
@@ -138,18 +141,18 @@ def _writes(service: DirectorService, caller: Caller, what: str) -> None:
 def node_context(service: DirectorService, caller: Caller) -> str:
     """Who the agent is and everything of the org that concerns its team."""
     context = service.context_of(caller.node, caller.role, in_full=True)
-    names = service.team(caller.node).names
-    kind = service.type_of(caller.node).text_for(caller.role)
+    names = service.team_types.team(caller.node).names
+    kind = service.team_types.type_of(caller.node).text_for(caller.role)
     # The briefing said these once; they are given again only when asked for.
     context["how_the_org_works"] = (
         role_text(
             names,
             works=True,
             hand_over=True,
-            rules=service.document_rules(caller.node),
+            rules=service.team_types.document_rules(caller.node),
         )
         if caller.hand_over
-        else service.role_text(caller.node, caller.role)
+        else service.team_types.role_text(caller.node, caller.role)
     )
     if kind:
         context["what_your_teams_type_says"] = kind
@@ -161,7 +164,7 @@ def write_document(
 ) -> str:
     """Carry out a call of the tool of the document named ``name``: the
     document's protocol does it, for the team of the caller."""
-    protocol = service.protocols.get(name)
+    protocol = service.team_types.protocols.get(name)
     if protocol is None:
         raise Invalid(f"The org keeps no document named {name!r}")
     _has(
@@ -179,7 +182,7 @@ def write_document(
             arguments=arguments,
             hand_over=caller.hand_over,
             leads_session=is_division_lead(node),
-            words=asdict(service.team(node).names),
+            words=asdict(service.team_types.team(node).names),
         )
     )
     if written.summary is not None:
@@ -267,7 +270,7 @@ def _waiting(place: SessionTeam) -> SplitProposal | None:
 
 def msg_manager(service: DirectorService, caller: Caller, text: str) -> str:
     """Send the caller's Manager a message."""
-    names = service.team(caller.node).names
+    names = service.team_types.team(caller.node).names
     _has(service, caller, "msg_manager", f"message its {names.manager}")
     node = caller.node
     text = text.strip()
@@ -279,7 +282,9 @@ def msg_manager(service: DirectorService, caller: Caller, text: str) -> str:
             "proposal: use propose_teams. Raise anything else with "
             "raise_escalation."
         )
-    service.send_msg(node.id, caller.role, node.id, service.team(node).manager, text)
+    service.send_msg(
+        node.id, caller.role, node.id, service.team_types.team(node).manager, text
+    )
     return f"Sent to your {names.manager}."
 
 
@@ -291,14 +296,16 @@ def propose_teams(
     text: str,
 ) -> str:
     """Put the sub-teams the caller proposes before its Manager."""
-    names = service.team(caller.node).names
+    names = service.team_types.team(caller.node).names
     _has(service, caller, "propose_teams", "propose sub-teams")
     node = caller.node
     if node.pending_split and node.pending_split.status == "approved":
         raise Conflict(
             f"The sub-teams your {names.manager} approved are still being set up"
         )
-    service.team_documents.before_sub_teams_are_proposed(service.reader_of(node))
+    service.team_documents.before_sub_teams_are_proposed(
+        service.team_types.reader_of(node)
+    )
     proposed = proposed_teams(teams, keep, text, service.default_type())
     proposal = _checked(service, node, proposed)
     store = service.org
@@ -321,7 +328,7 @@ def propose_teams(
     facts = service.facts_of_proposal(node, proposal)
     if facts:
         note += f"\n\n{facts}"
-    read = service.team_documents.read_by_sub_teams(service.reader_of(node))
+    read = service.team_documents.read_by_sub_teams(service.team_types.reader_of(node))
     service.record_event(
         node.id, "proposed", None, _named(proposal, replaced), _paths(proposal)
     )
@@ -330,7 +337,7 @@ def propose_teams(
         node.id,
         caller.role,
         node.id,
-        service.team(node).manager,
+        service.team_types.team(node).manager,
         f"{said}\n\nProposed sub-teams:\n{as_written(proposed)}"
         + "".join(
             f"\n\nYour team's {name}, which each sub-team reads:\n{text}"
@@ -347,7 +354,7 @@ def propose_teams(
 def msg_ic(service: DirectorService, caller: Caller, text: str, team: str) -> str:
     """Send a message to the caller's own IC, or to the IC of a team
     directly below."""
-    names = service.team(caller.node).names
+    names = service.team_types.team(caller.node).names
     _has(service, caller, "msg_ic", f"message {names.a_writer}")
     node = caller.node
     text = text.strip()
@@ -368,7 +375,12 @@ def msg_ic(service: DirectorService, caller: Caller, text: str, team: str) -> st
         else ""
     )
     service.send_msg(
-        node.id, caller.role, target.id, service.team(target).writer, text, note
+        node.id,
+        caller.role,
+        target.id,
+        service.team_types.team(target).writer,
+        text,
+        note,
     )
     return f"Sent to the {names.writer} of {target.title!r}." + (
         " The sub-teams it proposed still wait on you: approve_teams or decline_teams."
@@ -379,7 +391,7 @@ def msg_ic(service: DirectorService, caller: Caller, text: str, team: str) -> st
 
 def approve_teams(service: DirectorService, caller: Caller) -> str:
     """Set up the sub-teams the caller's IC proposed, as written."""
-    names = service.team(caller.node).names
+    names = service.team_types.team(caller.node).names
     _has(service, caller, "approve_teams", "approve sub-teams")
     node = caller.node
     proposal = _waiting(node)
@@ -428,7 +440,7 @@ def approve_teams(service: DirectorService, caller: Caller) -> str:
 
 def decline_teams(service: DirectorService, caller: Caller, reason: str) -> str:
     """Decline the sub-teams the caller's IC proposed, and keep why."""
-    names = service.team(caller.node).names
+    names = service.team_types.team(caller.node).names
     _has(service, caller, "decline_teams", "decline sub-teams")
     node = caller.node
     reason = reason.strip()
@@ -448,7 +460,7 @@ def decline_teams(service: DirectorService, caller: Caller, reason: str) -> str:
         node.id,
         caller.role,
         node.id,
-        service.team(node).writer,
+        service.team_types.team(node).writer,
         reason,
         f"\n\n[director] Your {names.manager} declined the sub-teams you proposed "
         f"({named}); the above is its reason. Nothing was set up. Propose "
@@ -530,19 +542,19 @@ def resolve_escalation(
         raise NotFound(f"Team {node_id} has no escalation {escalation_id}")
     if escalation.held_by != caller.node.id:
         raise Invalid(f"Escalation {escalation_id} is not with your team")
-    holder = service.team(caller.node).answers(escalation.raised_by)
+    holder = service.team_types.team(caller.node).answers(escalation.raised_by)
     if holder != caller.role:
         raise Invalid(
             f"Escalation {escalation_id} was raised by the "
-            f"{service.team(raiser).title(escalation.raised_by)} of its team: it "
-            f"is for your team's {_title(service, caller, holder)} to settle"
+            f"{service.team_types.team(raiser).title(escalation.raised_by)} of its "
+            f"team: it is for your team's {_title(service, caller, holder)} to settle"
         )
     mine = _title(service, caller, caller.role)
     if action == "settle":
         store.settle_escalation(raiser.id, escalation_id)
         service.progressed(raiser.id)
         service.notify(
-            service.team(raiser).conversation(escalation.raised_by),
+            service.team_types.team(raiser).conversation(escalation.raised_by),
             f"The {mine} of {caller.node.title!r} settled "
             f"your escalation {escalation.title!r}:\n{text.strip()}",
         )
@@ -563,7 +575,7 @@ def resolve_escalation(
 def submit_review(service: DirectorService, caller: Caller, summary: str) -> str:
     """Hand the work of the caller's team to the IC of the team above for
     review."""
-    names = service.team(caller.node).names
+    names = service.team_types.team(caller.node).names
     _has(service, caller, "submit_review", "submit its team's work")
     store = service.org
     node = caller.node
@@ -746,13 +758,13 @@ def send_document(
     if target is None or target.session != caller.node.session:
         raise Invalid(f"{team.strip()} is not a team of your session")
     name = document.strip()
-    if name not in service.protocols:
+    if name not in service.team_types.protocols:
         raise Invalid(f"The org keeps no document named {name!r}")
     service.send_ref(
         caller.node.id,
         caller.role,
         target.id,
-        service.team(target).writer,
+        service.team_types.team(target).writer,
         team_ref(caller.node).keeps(name),
     )
     return (
@@ -770,20 +782,24 @@ def _team_below(service: DirectorService, caller: Caller, node_id: str) -> Sessi
 
 def msg_team(service: DirectorService, caller: Caller, team: str, text: str) -> str:
     """Send a message to the IC of a team directly below the caller's."""
-    names = service.team(caller.node).names
+    names = service.team_types.team(caller.node).names
     _has(service, caller, "msg_team", f"message the {names.writer} of a team below")
     text = text.strip()
     if not text:
         raise Invalid("A message cannot be empty")
     target = _team_below(service, caller, team)
-    new = service.writer_conversation(target) is None
+    new = service.team_types.writer_conversation(target) is None
     left = (
         uncommitted(Path(caller.node.worktree_path), target.boundary.path)
         if new
         else []
     )
     if service.send_msg(
-        caller.node.id, caller.role, target.id, service.team(target).writer, text
+        caller.node.id,
+        caller.role,
+        target.id,
+        service.team_types.team(target).writer,
+        text,
     ):
         return (
             f"Sent to the {names.writer} of {target.title!r}. Its team was stopped "
@@ -835,7 +851,7 @@ def hand_over(service: DirectorService, caller: Caller, team: str, text: str) ->
 
 def stop_team(service: DirectorService, caller: Caller, team: str, reason: str) -> str:
     """Stop a team directly below the caller's."""
-    names = service.team(caller.node).names
+    names = service.team_types.team(caller.node).names
     _has(service, caller, "stop_team", "stop a team")
     if not reason.strip():
         raise Invalid(f"Say why the team is stopped; your {names.manager} is told")
@@ -856,7 +872,7 @@ def prune_team(
     reason: str,
 ) -> str:
     """Remove a team directly below the caller's."""
-    names = service.team(caller.node).names
+    names = service.team_types.team(caller.node).names
     _has(service, caller, "prune_team", "prune a team")
     if not reason.strip():
         raise Invalid(

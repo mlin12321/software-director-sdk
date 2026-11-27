@@ -52,7 +52,7 @@ async def test_what_a_member_of_a_shipped_team_is_told_of_the_org(
     try:
         held(
             f"software-engineer-{'division-lead-' if lead else ''}{member}",
-            service.role_text(place, member),
+            service.team_types.role_text(place, member),
         )
     finally:
         await service.aclose()
@@ -69,6 +69,8 @@ async def test_what_a_member_with_a_name_of_its_own_is_told_of_the_org(
     service = await an_org(repo, launcher, config, agent_type="lab")
 
     try:
-        held(f"lab-{member}", service.role_text(node(service, "root"), member))
+        held(
+            f"lab-{member}", service.team_types.role_text(node(service, "root"), member)
+        )
     finally:
         await service.aclose()

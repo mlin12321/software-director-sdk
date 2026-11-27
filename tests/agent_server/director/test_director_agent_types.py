@@ -21,7 +21,7 @@ from openhands.agent_server.director.models import (
 from openhands.agent_server.director.org_config import InvalidOrgConfig
 from openhands.agent_server.director.orgs import SHIPPED_DOCUMENTS, SHIPPED_TYPES
 from openhands.agent_server.director.service import DirectorService
-from openhands.agent_server.director.service.state import (
+from openhands.agent_server.director.service.team_type_service import (
     DIRECTOR_TOOL_NAMES,
 )
 from openhands.agent_server.director.tools import (
@@ -127,11 +127,11 @@ async def test_a_type_takes_tools_away_but_not_the_ones_an_agent_needs(
     await split_into_typed_teams(service)
 
     tables = node(service, "tables")
-    offered = service.tools_for(tables, "ic")
+    offered = service.team_types.tools_for(tables, "ic")
     assert "propose_teams" not in offered
     assert "read_team_context" in offered and "submit_review" in offered
     harness = node(service, "harness")
-    assert "propose_teams" in service.tools_for(harness, "ic")
+    assert "propose_teams" in service.team_types.tools_for(harness, "ic")
 
 
 async def test_a_team_cannot_be_of_a_type_the_director_does_not_find(
@@ -301,7 +301,8 @@ async def test_an_org_sets_the_type_of_its_new_teams_and_which_they_may_be(
     # there are: the team keeps its type and is still told what it says.
     service.update_org_settings(OrgSettings(allowed_agent_types=["analyst"]))
     assert node(service, "harness").agent_type == "software-engineer"
-    assert service.type_of(node(service, "harness")).name == "software-engineer"
+    kind = service.team_types.type_of(node(service, "harness"))
+    assert kind.name == "software-engineer"
     refused = await use(
         service,
         ic(service, "tables"),
@@ -347,7 +348,7 @@ async def test_an_org_cannot_set_a_type_there_is_not_or_a_default_not_allowed(
 async def test_a_type_added_while_the_server_runs_can_be_given_to_the_next_team(
     service: DirectorService, tmp_path: Path
 ):
-    assert "auditor" not in service.agent_types
+    assert "auditor" not in service.team_types.agent_types
 
     (tmp_path / "config" / "types" / "auditor.yaml").write_text(
         members_yaml() + "description: Checks what other teams claim.\n"

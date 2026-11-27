@@ -12,8 +12,8 @@ from openhands.agent_server.director.documents.registry import (
     declare,
     register_protocol,
 )
+from openhands.agent_server.director.org_store import team_ref
 from openhands.agent_server.director.service import DirectorService
-from openhands.agent_server.director.service.state import team_ref
 from openhands.agent_server.director.tools.definition import tool_named
 from openhands.agent_server.director.tools.remote import call_tool, list_tools
 from tests.agent_server.director.conftest import (
@@ -66,7 +66,7 @@ def glossary(service: DirectorService) -> str | None:
 async def test_a_document_of_the_orgs_own_is_written_with_a_tool_made_for_it(
     service: DirectorService, launcher: FakeLauncher
 ):
-    assert "write_glossary" in service.tool_names
+    assert "write_glossary" in service.team_types.tool_names
     assert launcher.root_tools == ["write_glossary", *BENCH]
     offered = {tool.name: tool for tool in list_tools(service, UUID(bench(service)))}
     assert "glossary" in offered["write_glossary"].description
@@ -108,7 +108,7 @@ async def test_only_what_a_document_allows_is_offered_in_a_hand_over(
 ):
     # The spec and the contracts may be written by the member that takes
     # over what a removed team left; a plain document may not.
-    assert service.hand_over_tools == (
+    assert service.team_types.hand_over_tools == (
         "read_team_context",
         "hand_over",
         "write_contracts",
@@ -135,7 +135,7 @@ async def test_a_team_is_told_the_documents_its_type_keeps_under_their_names(
     # Whoever looks at the team is given it as the team reads it.
     assert [
         found.model_dump()
-        for found in service.team_documents.listed(service.reader_of(root))
+        for found in service.team_documents.listed(service.team_types.reader_of(root))
     ] == [
         {
             "name": "glossary",

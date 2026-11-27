@@ -77,19 +77,22 @@ class Watch(Reviews):
         if holder is None:
             return
         history = "".join(f"\nPassed up by {entry}" for entry in passed_up)
-        if escalation.raised_by == self.team(raiser).writer:
+        if escalation.raised_by == self.team_types.team(raiser).writer:
             # It is woken now anyway, so it gets what waits for its review too.
             self.release_reviews(holder_id)
             self.count_escalation_from_below(holder_id, through.id)
         raised_by = escalation.raised_by
         text = (
-            f"The {self.team(raiser).title(raised_by)} of team {raiser.title!r} "
-            f"(id {raiser.id}) escalates {escalation.title!r} (escalation "
-            f"{escalation.id}):\n{escalation.detail or '(no detail)'}{history}\n"
+            f"The {self.team_types.team(raiser).title(raised_by)} of team "
+            f"{raiser.title!r} (id {raiser.id}) escalates {escalation.title!r} "
+            f"(escalation {escalation.id}):\n"
+            f"{escalation.detail or '(no detail)'}{history}\n"
             "Settle it with resolve_escalation if you can; pass it up only with "
             "the reason you cannot."
         )
-        self.tell(holder_id, self.team(holder).answers(escalation.raised_by), text)
+        self.tell(
+            holder_id, self.team_types.team(holder).answers(escalation.raised_by), text
+        )
 
     def stop_team(self, place_id: str, reason: str) -> None:
         """Stop a team for the IC of the team above: its agents and those
@@ -100,7 +103,7 @@ class Watch(Reviews):
             NotFound: The team does not exist.
             Conflict: It is stopped already.
         """
-        names = self.names_at(place_id)
+        names = self.team_types.names_at(place_id)
         store = self.org
         team = store.place(place_id)
         if team is None:
@@ -227,8 +230,8 @@ class Watch(Reviews):
                     f"({used.input_tokens:,} tokens in, "
                     f"{used.output_tokens:,} out) and are at rest.\nAnswer "
                     "this to let it go on for as much again; your answer is "
-                    f"sent to its {self.team(top).names.writer}. Close the session "
-                    "to end it."
+                    f"sent to its {self.team_types.team(top).names.writer}. Close the "
+                    "session to end it."
                 ),
                 at=utc_now(),
             )

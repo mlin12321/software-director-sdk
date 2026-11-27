@@ -157,8 +157,8 @@ class Sessions(Splits):
         if conversation is None and await self._template() is None:
             raise Conflict(
                 "No conversation of the org runs on this server to start the "
-                f"session's {self.type_of(team).names.writer} from. Send the request "
-                "from a new conversation."
+                f"session's {self.team_types.type_of(team).names.writer} from. Send "
+                "the request from a new conversation."
             )
         shape = [team]
         for current in shape:
@@ -251,8 +251,8 @@ class Sessions(Splits):
             top,
             title,
             others,
-            names=self.team(top).names,
-            kept=self.kept_documents(top),
+            names=self.team_types.team(top).names,
+            kept=self.team_types.kept_documents(top),
         )
         if conversation is None:
             conversation_id = self.tell_writer(top.id, text + brief, human=True) or ""
@@ -295,10 +295,10 @@ class Sessions(Splits):
         """
         store = self.org
         ic_id = conversation.conversation_id or uuid4()
-        writer = self.team(top).writer
+        writer = self.team_types.team(top).writer
         store.update_place(top.id, agents=_new_agents(ic_id, writer))
         apart = top.isolation == "worktree"
-        tools = self.tools_for(top, writer)
+        tools = self.team_types.tools_for(top, writer)
         tool_params = await asyncio.to_thread(self._confine, top.id, writer)
         started = await launcher.start_root(
             conversation.model_copy(
@@ -321,7 +321,9 @@ class Sessions(Splits):
             ),
             [Tool(name=name) for name in tools],
             title=_agent_title(
-                top.title, self.team(top).title(writer), store.session_title(top)
+                top.title,
+                self.team_types.team(top).title(writer),
+                store.session_title(top),
             ),
             tool_params=tool_params,
             adapt_agent=await asyncio.to_thread(self._adapter, str(ic_id), tools),
@@ -358,7 +360,7 @@ class Sessions(Splits):
         Nobody works above the team a session was opened at, so what that
         team hands back goes one team up the org, in a session of its own,
         and to the human only from the top."""
-        names = self.team(place).names
+        names = self.team_types.team(place).names
         if not is_division_lead(above):
             self.tell_writer(
                 above.id, misrouted_notice(place, request.text, why, names=names)
@@ -389,7 +391,7 @@ class Sessions(Splits):
                 self.org.session_title(top),
                 [],
                 names=names,
-                kept=self.kept_documents(top),
+                kept=self.team_types.kept_documents(top),
             ),
         )
         self.org_save.save_soon()

@@ -36,8 +36,8 @@ class ToolAnswer(BaseModel):
 
 def _offered(service: DirectorService, caller: Caller) -> tuple[str, ...]:
     if caller.hand_over:
-        return service.hand_over_tools
-    return service.tools_for(caller.node, caller.role)
+        return service.team_types.hand_over_tools
+    return service.team_types.tools_for(caller.node, caller.role)
 
 
 def list_tools(service: DirectorService, conversation_id: UUID) -> list[RemoteTool]:

@@ -13,7 +13,7 @@ from openhands.agent_server.director.boundary import (
 from openhands.agent_server.director.documents.schema import (
     ShownDocument,
 )
-from openhands.agent_server.director.documents.store import DocumentRef, TeamRef
+from openhands.agent_server.director.documents.store import REPORT, DocumentRef, TeamRef
 from openhands.agent_server.director.documents.team_documents import RemovedTeam
 from openhands.agent_server.director.git import (
     changed_together,
@@ -45,6 +45,7 @@ from openhands.agent_server.director.models import (
 from openhands.agent_server.director.org_store import (
     is_division_lead,
     team_id_of,
+    team_ref,
     utc_now,
 )
 from openhands.agent_server.director.prompts import (
@@ -75,11 +76,9 @@ from openhands.agent_server.director.service.state import (
     DECLINED_TOLD,
     HISTORY_TOLD,
     NOT_STARTED,
-    REPORT,
     TOGETHER_WORTH_SAYING,
     ServiceState,
     _instant,
-    team_ref,
 )
 from openhands.agent_server.director.split import (
     home_of_lost,
@@ -447,7 +446,7 @@ class Records(ServiceState):
             together,
             before + declined + needed,
             proposal.reason,
-            names=self.team(place).names,
+            names=self.team_types.team(place).names,
         )
 
     def _work_accepted(self, team: SessionTeam) -> None:
@@ -523,7 +522,7 @@ class Records(ServiceState):
                 # Below a team, its IC is the one that is written to.
                 and (
                     relation in ("above", "beside")
-                    or agent.role == self.team(team).writer
+                    or agent.role == self.team_types.team(team).writer
                 )
             ],
         )
@@ -607,7 +606,7 @@ class Records(ServiceState):
                 "branch": place.branch,
                 "isolation": place.isolation,
             },
-            **self.team_documents.told(self.reader_of(place)),
+            **self.team_documents.told(self.team_types.reader_of(place)),
             "documents_passed_to_you": [
                 {
                     "document": passed.name,
@@ -623,7 +622,7 @@ class Records(ServiceState):
                     "team": old.left_by,
                     "text": old.text,
                 }
-                for old in self.team_documents.left_to(self.reader_of(place))
+                for old in self.team_documents.left_to(self.team_types.reader_of(place))
             ],
             "sub_teams": [
                 {
@@ -693,16 +692,16 @@ class Records(ServiceState):
                 }
                 for other in others
             ]
-        works = role == self.team(place).writer
+        works = role == self.team_types.team(place).writer
         if works and store.below(place.id):
             context["asked_directly_of_teams_below"] = self.asked_below(place)
         if works and (handed := self.session_drafts.handed_over_to(place.id)):
             context["handed_over_to_your_team"] = handed
             # It is the team's to write into its own documents.
             todo = rules_said(
-                self.document_rules(place),
+                self.team_types.document_rules(place),
                 "handed_over",
-                self.team(place).names.words(),
+                self.team_types.team(place).names.words(),
             )
             if todo:
                 context["what_to_do_with_what_was_handed_over"] = " ".join(todo)
@@ -1256,7 +1255,9 @@ class Records(ServiceState):
         self.session_drafts.keep_handed_over(
             place.id,
             {
-                "by": f"the {self.team(above).title(member)} of {above.title}",
+                "by": (
+                    f"the {self.team_types.team(above).title(member)} of {above.title}"
+                ),
                 "at": utc_now(),
                 "text": text,
             },

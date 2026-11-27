@@ -84,7 +84,7 @@ async def test_a_team_starts_with_the_member_that_works_in_its_folder(
 
     assert [agent.role for agent in root.agents] == ["bench"]
     assert launcher.root_tools == BENCH
-    team = service.team(root)
+    team = service.team_types.team(root)
     assert (team.writer, team.reviewer, team.manager) == ("bench", "referee", "chair")
     assert team.members == ("bench", "referee", "chair")
 

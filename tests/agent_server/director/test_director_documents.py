@@ -4,7 +4,10 @@ from pathlib import Path
 
 import pytest
 
-from openhands.agent_server.director.agent_types import InvalidAgentType, read_type
+from openhands.agent_server.director.agent_types import (
+    InvalidAgentType,
+    read_type,
+)
 from openhands.agent_server.director.documents.declared import (
     InvalidDocument,
     load_documents,
@@ -45,7 +48,9 @@ from openhands.agent_server.director.orgs.documents import ContractsProtocol
 from openhands.agent_server.director.prompts import org_protocol
 from openhands.agent_server.director.run_state import RunState
 from openhands.agent_server.director.service import DirectorService
-from openhands.agent_server.director.service.state import DIRECTOR_TOOL_NAMES
+from openhands.agent_server.director.service.team_type_service import (
+    DIRECTOR_TOOL_NAMES,
+)
 from openhands.sdk.errors import Invalid
 from tests.agent_server.director.conftest import DEFAULT_TYPE, SHIPPED
 
@@ -248,7 +253,7 @@ def test_a_document_does_what_the_protocol_it_names_does(
 def test_the_director_asks_a_files_document_what_it_does(repo: Path):
     service = DirectorService(repo)
 
-    assert set(service.protocols) == {"spec", "contracts", "report"}
+    assert set(service.team_types.protocols) == {"spec", "contracts", "report"}
     contracts = service.team_documents.at("services/api/contracts.md")
     assert contracts is not None and contracts.waits_for_team_changes
     spec = service.team_documents.at("spec.md")

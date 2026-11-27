@@ -9,10 +9,10 @@ from openhands.agent_server.director.documents.store import DocumentRef, TeamRef
 from openhands.agent_server.director.documents.tree import TeamTree
 from openhands.agent_server.director.models import DirectorSettingsUpdate
 from openhands.agent_server.director.org import OrgBase, TeamMember
+from openhands.agent_server.director.org_store import team_ref
 from openhands.agent_server.director.orgs import ORG_KINDS
 from openhands.agent_server.director.orgs.top_down import TopDownOrg
 from openhands.agent_server.director.service import DirectorService
-from openhands.agent_server.director.service.state import team_ref
 from openhands.agent_server.director.tools.remote import call_tool
 from openhands.sdk.errors import Invalid, NotFound
 from tests.agent_server.director.conftest import (

@@ -570,7 +570,7 @@ async def test_an_approved_split_sets_up_each_sub_team(
     [contracts] = [
         shown
         for shown in service.team_documents.shown(
-            service.reader_of(node(service, "services.api"))
+            service.team_types.reader_of(node(service, "services.api"))
         )
         if shown.name == "contracts"
     ]
