@@ -56,7 +56,8 @@ class Starts:
 
     def __init__(self, repo: Path) -> None:
         self.store = OrgStore(lambda node: self.team_types.type_of(node))
-        documents = TextsInADict()
+        self.repo = repo
+        self.documents = documents = TextsInADict()
         self.team_types = TeamTypeService(
             config_file=None,
             documents=documents,
@@ -80,21 +81,22 @@ class Starts:
         self.org_state = OrgStateService(
             repo_dir=lambda: repo, clock=lambda: datetime.now(UTC)
         )
-        start_line = StartLineService(
+        self.start_line = start_line = StartLineService(
             org=lambda: self.store, org_state=self.org_state, retry=0
         )
+        self.org_save = OrgSaveService(
+            org=lambda: self.store,
+            repo_dir=lambda: repo,
+            team_memory=lambda: GitStore(repo),
+            run_state=self.org_state.run_state,
+            work_queue=self.queue,
+            delay=60,
+        )
         context = {"status": "idle", "task": "Build the parser"}
-        message_delivery = MessageDeliveryService(
+        self.message_delivery = message_delivery = MessageDeliveryService(
             org=lambda: self.store,
             org_state=self.org_state,
-            org_save=OrgSaveService(
-                org=lambda: self.store,
-                repo_dir=lambda: repo,
-                team_memory=lambda: GitStore(repo),
-                run_state=self.org_state.run_state,
-                work_queue=self.queue,
-                delay=60,
-            ),
+            org_save=self.org_save,
             work_queue=self.queue,
             team_types=self.team_types,
             launcher=lambda: self.launcher,

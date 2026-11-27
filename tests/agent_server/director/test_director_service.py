@@ -463,7 +463,9 @@ async def test_an_escalation_a_team_still_holds_cannot_be_answered_by_the_human(
 
 async def woken_manager(service: DirectorService, node_id: str = "root") -> str:
     """The Manager of a team, started as the first message to it does."""
-    service.tell_manager(node(service, node_id).id, "Look in on your team.")
+    service.team_messaging.tell_manager(
+        node(service, node_id).id, "Look in on your team."
+    )
     await service.settled()
     manager = agent_conversation(node(service, node_id), "manager")
     assert manager is not None

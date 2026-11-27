@@ -26,6 +26,7 @@ from openhands.agent_server.director.models import (
 )
 from openhands.agent_server.director.org_store import (
     AGENT_LOST,
+    instant,
     is_division_lead,
 )
 from openhands.agent_server.director.prompts import (
@@ -48,13 +49,12 @@ from openhands.agent_server.director.service.state import (
     ORG_WAITS,
     RESTART_NOTE,
     ROOT_ID,
-    _instant,
     _summary_of,
     checkout_root,
-    failure_waits,
     hand_over_of,
 )
 from openhands.agent_server.director.service.sync import Sync
+from openhands.agent_server.director.service.team_messaging_service import failure_waits
 from openhands.agent_server.director.service.team_type_service import (
     DIRECTOR_TOOL_NAMES,
 )
@@ -253,7 +253,7 @@ class DirectorService(Sync):
                     agent_type=root_type,
                     headline=named.headline,
                     summary=_summary_of(request.task),
-                    since=_instant(),
+                    since=instant(),
                 )
             )
             try:
@@ -305,7 +305,7 @@ class DirectorService(Sync):
             chosen_by, reason = choice.by, choice.reason
             place = store.instance(choice.node_id, session_id) or top
         conversation_id = await asyncio.to_thread(
-            lambda: self.tell_writer(place.id, text, human=True)
+            lambda: self.team_messaging.tell_writer(place.id, text, human=True)
         )
         if place.id != top.id:
             # Its IC may say it is not the team's own: the IC above has it then.
@@ -533,7 +533,7 @@ class DirectorService(Sync):
             self.go_on_past_limit(place_id)
         if lost:
             # A new Manager starts with the answer; the IC goes on as it was.
-            self.tell_manager(
+            self.team_messaging.tell_manager(
                 place_id,
                 f"The {names.manager} before you could not be started. The human was "
                 f"told, and says:\n{answer}",

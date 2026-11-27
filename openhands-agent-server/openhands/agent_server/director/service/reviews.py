@@ -254,7 +254,7 @@ class Reviews(Teams):
         store.set_review(place_id, review)
         self._drop_merge_checkout(place_id)
         self._tell_turns()
-        self.progressed(place_id, by_above=True)
+        self.team_messaging.progressed(place_id, by_above=True)
         self.team_history.record_event(
             place.parent_id,
             "sent_back",
@@ -270,7 +270,7 @@ class Reviews(Teams):
         if limit and place.parent_id is not None and review.round % limit == 0:
             with self.check_counts.lock:
                 counted = self.check_counts.counted(place.parent_id)
-            self._wake_manager(
+            self.team_messaging.wake_manager(
                 place.parent_id,
                 f"your {names.reviewer} has sent the work of {place.title!r} back "
                 f"{review.round} times.",
@@ -365,7 +365,7 @@ class Reviews(Teams):
         ]
         if asked_before:
             requests.append(still_undecided(sorted(asked_before, key=_submitted)))
-        self.tell(
+        self.team_messaging.tell(
             node.id,
             self.team_types.team(node).reviewer,
             "\n\n---\n\n".join(requests),
@@ -833,7 +833,7 @@ class Reviews(Teams):
                 }
             ),
         )
-        self.tell_manager(
+        self.team_messaging.tell_manager(
             review.id,
             merge_request(
                 top,
@@ -874,7 +874,7 @@ class Reviews(Teams):
                         update={"reminded": True, "asked_at": now.isoformat()}
                     ),
                 )
-                self.tell_manager(
+                self.team_messaging.tell_manager(
                     review.id,
                     "This still waits for you, and with it what every session "
                     "that submitted later made of its teams.\n\n"
@@ -1270,7 +1270,7 @@ class Reviews(Teams):
         if review is not None and (
             landed.taken or landed.kept or landed.agreed or landed.held
         ):
-            self.tell_writer(
+            self.team_messaging.tell_writer(
                 top.id,
                 teams_settled(
                     review.title,
@@ -1390,7 +1390,7 @@ class Reviews(Teams):
             if merge.asked and any(
                 item.gate == "manager" and item.use is None for item in merge.items
             ):
-                self.tell_manager(
+                self.team_messaging.tell_manager(
                     review.id,
                     f"The work of {top.title!r} was sent back to its team. "
                     "What waited of it for you waits no longer. What you "
@@ -1966,7 +1966,7 @@ class Reviews(Teams):
             place.review.model_copy(update={"state": "accepted", "at": utc_now()}),
             base_commit=tip or place.base_commit,
         )
-        self.progressed(above.id)
+        self.team_messaging.progressed(above.id)
         self.check_counts.work_accepted(place)
         if meets is not None or resolved:
             self.team_history.record_event(
@@ -1995,7 +1995,7 @@ class Reviews(Teams):
         self.org_state.run_state().unmark(CLEARING, place_id)
         self._tell_turns()
         if not is_division_lead(above):
-            self.count_accepted_review(above.id)
+            self.team_messaging.count_accepted_review(above.id)
         self.message_delivery.notify(
             self.team_types.writer_conversation(place),
             f"The {names.reviewer} of {above.title!r} accepted your team's work"

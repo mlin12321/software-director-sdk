@@ -656,7 +656,7 @@ async def test_a_team_started_again_keeps_its_manager_and_hears_the_human(
     here = await started(repo, launcher)
     await split_root(here)
     api = node(here, API).id
-    here.tell_manager(api, "Look in on your team.")
+    here.team_messaging.tell_manager(api, "Look in on your team.")
     await here.settled()
     kept, lost = manager(here, API), ic(here, API)
     assert kept is not None and lost is not None

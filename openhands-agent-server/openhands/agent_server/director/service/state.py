@@ -5,11 +5,11 @@ import asyncio
 import os
 import re
 import threading
-from collections.abc import Awaitable, Callable, Iterable
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Self
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 from openhands.agent_server.config import Config
 from openhands.agent_server.director import bugbot
@@ -42,7 +42,6 @@ from openhands.agent_server.director.intents import Accept, LandOrg
 from openhands.agent_server.director.launch import TeamLauncher
 from openhands.agent_server.director.merge_checkout import MergeCheckout, discard
 from openhands.agent_server.director.models import (
-    AgentRef,
     HandOverMode,
     OrgSummary,
     Report,
@@ -57,6 +56,7 @@ from openhands.agent_server.director.org_persistence import (
 )
 from openhands.agent_server.director.org_store import (
     OrgStore,
+    instant,
     session_team_id,
     team_ref,
 )
@@ -109,8 +109,6 @@ from openhands.sdk.logger import get_logger
 logger = get_logger(__name__)
 
 ROOT_ID = "root"
-# What follows a team's purpose in its task once something started it.
-_STARTED_WITH = "\n\nWhat your team is started with:\n"
 # How long tree changes are gathered before they are saved as one commit.
 SAVE_DELAY_SECONDS = 2.0
 # How long to wait before starting an agent again when the server is full.
@@ -167,11 +165,6 @@ ORG_WAITS = "org-waits"
 LIMIT_WAITS = "limit-reached"
 
 
-def failure_waits(role: str) -> str:
-    """The id of the escalation that tells the human an agent failed."""
-    return f"{role}-failed"
-
-
 _AGENT_STATUS: dict[ConversationExecutionStatus, str] = {
     ConversationExecutionStatus.RUNNING: "working",
     ConversationExecutionStatus.ERROR: "blocked",
@@ -181,20 +174,6 @@ _AGENT_STATUS: dict[ConversationExecutionStatus, str] = {
 # How long a message waits for an IC that submitted to end its turn.
 _REST_CHECKS = 600
 _REST_CHECK_SECONDS = 0.05
-
-
-def conversations_of(teams: Iterable[SessionTeam]) -> list[str]:
-    """Every conversation of ``teams``' agents, hand-over ones included."""
-    return [
-        conversation_id
-        for team in teams
-        for agent in team.agents
-        for conversation_id in (
-            agent.conversation_id,
-            agent.hand_over.conversation_id if agent.hand_over else None,
-        )
-        if conversation_id is not None
-    ]
 
 
 def hand_over_of(place: SessionTeam) -> HandOverMode | None:
@@ -298,8 +277,6 @@ class ServiceState:
         # The sessions that changed something of the org's after their
         # work was accepted, and whether their IC was told to submit it.
         self._changed_since_accept: dict[str, bool] = {}
-        # The conversations a resume is about to run again.
-        self._resuming: set[str] = set()
         self._stop_guard: Callable[[], None] | None = None
         self._stop_resume: Callable[[], None] | None = None
         self._lock = threading.Lock()
@@ -341,7 +318,6 @@ class ServiceState:
         )
         # Held while what waits of a session's work is read and changed.
         self._weighing = threading.RLock()
-        self._adding_manager = threading.Lock()
         self._stall_poll = stall_poll
         self._stall_timer: asyncio.Task[None] | None = None
         self._store: OrgStore | None = None
@@ -533,25 +509,6 @@ class ServiceState:
         """Wait until everything asked for so far has been carried out."""
         await self.work_queue.settled()
 
-    def _conversations_below(self, team: SessionTeam) -> list[str]:
-        """The conversations of a team and of every team below it."""
-        store = self.org
-        teams = [team]
-        for found in teams:
-            teams.extend(store.below(found.id))
-        return conversations_of(teams)
-
-    def _is_stopped(self, conversation_id: str) -> bool:
-        """Whether the agent's team, or a team above it, is stopped."""
-        store = self.org
-        found = store.find_by_conversation(conversation_id)
-        if found is None:
-            return False
-        node = found[0]
-        return node.stopped is not None or any(
-            above.stopped is not None for above in store.above(node.id)
-        )
-
     def _repository(self) -> Path:
         """The repository the org is in, or would be in.
 
@@ -689,7 +646,7 @@ class ServiceState:
             self.org_state.paused is not None
             and conversation_id in self.org_state.running
         )
-        if held or conversation_id in self._resuming:
+        if held or conversation_id in self.org_state.resuming:
             if status != ConversationExecutionStatus.RUNNING:
                 return AGENT_PAUSED
         return _AGENT_STATUS.get(status, "idle")
@@ -727,7 +684,7 @@ def _child_node(
         status="idle",
         headline=provisional_summary(child.task).headline,
         summary=_summary_of(child.task),
-        since=_instant(),
+        since=instant(),
     )
 
 
@@ -745,15 +702,3 @@ def lane_for(intent: Intent) -> str:
     if intent.kind in _REVIEW_STEPS:
         return f"review:{intent.node_id}"
     return intent.node_id
-
-
-def _new_agents(ic_id: UUID, member: str) -> list[AgentRef]:
-    """The agents a team starts with: the member that works in its folder.
-    Any other joins when something is first sent to it (see
-    :meth:`DirectorService.tell`)."""
-    return [AgentRef(role=member, conversation_id=str(ic_id), status="idle")]
-
-
-def _instant() -> str:
-    """Now, fine enough to put what two agents record in order."""
-    return datetime.now(UTC).isoformat()

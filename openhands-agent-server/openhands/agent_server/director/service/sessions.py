@@ -24,8 +24,10 @@ from openhands.agent_server.director.models import (
 )
 from openhands.agent_server.director.org_store import (
     OrgStoreError,
+    conversations_of,
     division_lead_id,
     is_division_lead,
+    new_agents,
     session_team_id,
 )
 from openhands.agent_server.director.prompts import (
@@ -51,9 +53,7 @@ from openhands.agent_server.director.service.request_routing_service import (
 from openhands.agent_server.director.service.splits import Splits
 from openhands.agent_server.director.service.state import (
     BASE_LANE,
-    _new_agents,
     apart,
-    conversations_of,
 )
 from openhands.agent_server.director.service.team_history_service import ASKED_KEPT
 from openhands.agent_server.director.split import shape_of
@@ -88,7 +88,7 @@ class Sessions(Splits):
             org=lambda: self.org,
             model_calls=self.model_calls,
             checkout=lambda: self._repo_dir,
-            purpose=self._purpose,
+            purpose=self.team_messaging.purpose,
             routed_requests=self.team_history.routed_requests,
             keep_routed=self.team_history.keep_routed,
             hand_on=self._hand_on,
@@ -245,7 +245,7 @@ class Sessions(Splits):
             ],
         )
         for current in shape:
-            run.mark(TASK, ids[current.id], self._purpose(current))
+            run.mark(TASK, ids[current.id], self.team_messaging.purpose(current))
         await asyncio.to_thread(
             self.team_history.record_event,
             above.id,
@@ -261,7 +261,9 @@ class Sessions(Splits):
             kept=self.team_types.kept_documents(top),
         )
         if conversation is None:
-            conversation_id = self.tell_writer(top.id, text + brief, human=True) or ""
+            conversation_id = (
+                self.team_messaging.tell_writer(top.id, text + brief, human=True) or ""
+            )
         else:
             try:
                 conversation_id = await self._start_with(
@@ -302,7 +304,7 @@ class Sessions(Splits):
         store = self.org
         ic_id = conversation.conversation_id or uuid4()
         writer = self.team_types.team(top).writer
-        store.update_place(top.id, agents=_new_agents(ic_id, writer))
+        store.update_place(top.id, agents=new_agents(ic_id, writer))
         apart = top.isolation == "worktree"
         tools = self.team_types.tools_for(top, writer)
         tool_params = await asyncio.to_thread(self.confinement.confine, top.id, writer)
@@ -352,7 +354,7 @@ class Sessions(Splits):
             boundary_enforcement=self.confinement.enforcement(started.kind),
         )
         self._checkout_for_session(top.id)
-        self.progressed(top.id)
+        self.team_messaging.progressed(top.id)
         self.joined(str(ic_id))
         self.work_queue.enqueue(
             lambda: self._summarize(top.id, text, first=True, rename=rename), top.id
@@ -370,7 +372,7 @@ class Sessions(Splits):
         and to the human only from the top."""
         names = self.team_types.team(place).names
         if not is_division_lead(above):
-            self.tell_writer(
+            self.team_messaging.tell_writer(
                 above.id, misrouted_notice(place, request.text, why, names=names)
             )
             return (
@@ -391,7 +393,7 @@ class Sessions(Splits):
             )
         # It may say the same, and the session then goes up once more.
         self.team_history.keep_routed("asked", top, request.text, "top", why)
-        self.tell_writer(
+        self.team_messaging.tell_writer(
             top.id,
             handed_up(place, request.text, why, names=names)
             + session_brief(
@@ -510,7 +512,11 @@ class Sessions(Splits):
         store.update_place(node.id, isolation="shared")
         run = self.org_state.run_state()
         for current in [higher, *added]:
-            run.mark(TASK, session_team_id(current.id, sid), self._purpose(current))
+            run.mark(
+                TASK,
+                session_team_id(current.id, sid),
+                self.team_messaging.purpose(current),
+            )
         return top
 
     def _tell_human_misrouted(self, place: SessionTeam, text: str, why: str) -> None:

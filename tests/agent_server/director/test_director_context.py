@@ -75,7 +75,7 @@ def update_of(message: str) -> dict[str, Any] | None:
 async def tell(service: DirectorService, launcher: FakeLauncher, to: str) -> str:
     """Send the IC of a team a message from the human; what it got."""
     team = "apps.web" if to else "root"
-    service.tell_writer(node(service, team).id, "Go on.", human=True)
+    service.team_messaging.tell_writer(node(service, team).id, "Go on.", human=True)
     await service.settled()
     return launcher.messages_to(ic(service, team))[-1]
 

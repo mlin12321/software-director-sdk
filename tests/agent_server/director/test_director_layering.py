@@ -98,6 +98,7 @@ SERVICES_THE_DIRECTOR_HOLDS = [
     "service/start_line_service.py",
     "service/team_context_service.py",
     "service/team_history_service.py",
+    "service/team_messaging_service.py",
     "service/team_type_service.py",
 ]
 

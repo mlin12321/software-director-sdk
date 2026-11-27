@@ -11,7 +11,7 @@ from openhands.agent_server.director.service import DirectorService
 from openhands.agent_server.director.service.stall_watch_service import (
     STALL_WAITS,
 )
-from openhands.agent_server.director.service.state import failure_waits
+from openhands.agent_server.director.service.team_messaging_service import failure_waits
 from openhands.agent_server.director.tools import MsgTeamTool, PruneTeamTool
 from openhands.agent_server.director.tools.definition import MsgTeamAction
 from openhands.sdk.conversation.state import ConversationExecutionStatus
@@ -195,7 +195,7 @@ async def test_an_agent_that_cannot_be_started_is_lost_with_the_reason(
     service: DirectorService, launcher: FakeLauncher
 ):
     launcher.derive_error = RuntimeError("npx is not installed")
-    service.tell_manager(node(service, API).id, "Look in on your team.")
+    service.team_messaging.tell_manager(node(service, API).id, "Look in on your team.")
     await service.settled()
 
     [agent] = [a for a in node(service, API).agents if a.role == "manager"]
@@ -212,7 +212,7 @@ async def test_a_step_of_the_director_that_fails_is_kept_in_the_record(
         raise RuntimeError("the disk is full")
 
     monkeypatch.setitem(service.resumable_work.steps, "launch_member", breaks)
-    service.tell_manager(node(service, API).id, "Look in on your team.")
+    service.team_messaging.tell_manager(node(service, API).id, "Look in on your team.")
     await service.settled()
 
     [event] = [e for e in record_of(service, "root") if e.kind == "failed"]

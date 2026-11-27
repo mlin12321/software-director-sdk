@@ -45,6 +45,7 @@ from openhands.agent_server.director.org_store import (
     AGENT_LOST,
     OrgStore,
     is_division_lead,
+    new_agents,
 )
 from openhands.agent_server.director.prompts import (
     changed_since_accept,
@@ -68,16 +69,17 @@ from openhands.agent_server.director.service.stall_watch_service import (
 )
 from openhands.agent_server.director.service.state import (
     _MERGE_ATTEMPTS,
-    _STARTED_WITH,
     AGENT_PAUSED,
     ORG_LANE,
     PAUSE_LANE,
     RESTART_NOTE,
-    _new_agents,
     apart,
-    failure_waits,
     hand_over_of,
     lane_for,
+)
+from openhands.agent_server.director.service.team_messaging_service import (
+    STARTED_WITH,
+    failure_waits,
 )
 from openhands.sdk.conversation.state import ConversationExecutionStatus
 from openhands.sdk.errors import (
@@ -155,7 +157,7 @@ class Sync(Sessions):
                     again[conversation_id] = RESTART_NOTE
                 elif status == ConversationExecutionStatus.PAUSED:
                     again[conversation_id] = None
-            self._resuming = set(again)
+            self.org_state.resuming = set(again)
             self.org_state.release()
         await self._resync()
         for conversation_id in again:
@@ -181,8 +183,8 @@ class Sync(Sessions):
             self.release_reviews(submitted.parent_id if submitted else None)
         for conversation_id, note in again.items():
             self.work_queue.enqueue(
-                lambda conversation_id=conversation_id, note=note: self._run_again(
-                    conversation_id, note
+                lambda conversation_id=conversation_id, note=note: (
+                    self.team_messaging.run_again(conversation_id, note)
                 ),
                 was_running[conversation_id],
             )
@@ -457,11 +459,13 @@ class Sync(Sessions):
         )
         ic_id = uuid4()
         task = await asyncio.to_thread(
-            lambda: self._purpose(place) if leads else self._task_of(place)
+            lambda: (
+                self.team_messaging.purpose(place) if leads else self._task_of(place)
+            )
         )
         if said:
             task = (
-                f"{task}{_STARTED_WITH}The human was told that the {names.writer} "
+                f"{task}{STARTED_WITH}The human was told that the {names.writer} "
                 "before "
                 f"you was lost, and says:\n{said}"
             )
@@ -469,7 +473,7 @@ class Sync(Sessions):
         writer = self.team_types.team(place).writer
         tools = self.team_types.tools_for(place, writer)
         agents = [
-            *_new_agents(ic_id, writer),
+            *new_agents(ic_id, writer),
             *(a for a in place.agents if a.role != writer),
         ]
         if conversation is None:
@@ -771,7 +775,7 @@ class Sync(Sessions):
             return
         node, role = found
         if status == ConversationExecutionStatus.RUNNING:
-            self._resuming.discard(agent)
+            self.org_state.resuming.discard(agent)
         if self.org_state.paused is None:
             self.message_delivery.note_running(
                 agent, node.id, status == ConversationExecutionStatus.RUNNING
@@ -822,7 +826,7 @@ class Sync(Sessions):
         ):
             # It runs again already.
             return
-        self.tell_of_failure(place_id, role, said)
+        self.team_messaging.tell_of_failure(place_id, role, said)
 
     def acts(self, place_id: str, role: str) -> None:
         """An agent that uses one of the director's tools is at work,
@@ -862,7 +866,7 @@ class Sync(Sessions):
         if node is None or mode is None:
             return
         if status == ConversationExecutionStatus.RUNNING:
-            self._resuming.discard(conversation_id)
+            self.org_state.resuming.discard(conversation_id)
         if self.org_state.paused is None:
             self.message_delivery.note_running(
                 conversation_id, node.id, status == ConversationExecutionStatus.RUNNING

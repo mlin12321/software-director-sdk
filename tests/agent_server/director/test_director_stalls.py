@@ -472,7 +472,7 @@ async def test_a_team_set_up_and_given_no_task_is_told_to_the_ic_above(
     service = await started_with_server(repo, launcher, clock=clock, stall_poll=3600)
     await use(service, ic(service), ProposeTeamsTool, SPLIT)
     await use(service, manager(service), ApproveTeamsTool, APPROVE)
-    service.tell_writer(node(service, WEB).id, "Begin.")
+    service.team_messaging.tell_writer(node(service, WEB).id, "Begin.")
     await service.settled()
 
     await looked(service)
@@ -501,7 +501,7 @@ async def test_a_team_set_up_and_given_no_task_is_told_to_the_ic_above(
     await service.resume()
     clock.passes(240)
     await looked(service)
-    service.tell_writer(api, "Begin.")
+    service.team_messaging.tell_writer(api, "Begin.")
     await service.settled()
     clock.passes(120)
     await looked(service)

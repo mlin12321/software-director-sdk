@@ -530,7 +530,7 @@ async def test_an_org_is_paused_asked_what_it_holds_and_resumed(running, repo):
 
     paused = await client.post("/api/director/org/pause")
     asked = await client.post("/api/director/org/messages", json={"text": "Refunds"})
-    service.tell_writer(top["id"], "Add a cart", human=True)
+    service.team_messaging.tell_writer(top["id"], "Add a cart", human=True)
     await service.settled()
     summary = await client.get("/api/director/org")
     recovery = await client.get("/api/director/org/recovery")

@@ -931,9 +931,11 @@ async def test_every_message_between_agents_goes_one_way(
 ):
     top = node(service, "root").id
 
-    stopped = service.send_msg(top, "ic", top, "manager", "Split in two?")
+    stopped = service.team_messaging.send_msg(
+        top, "ic", top, "manager", "Split in two?"
+    )
     await service.settled()
-    service.send_msg(top, "manager", top, "ic", "Not yet.")
+    service.team_messaging.send_msg(top, "manager", top, "ic", "Not yet.")
     await service.settled()
 
     assert stopped is False
@@ -954,7 +956,7 @@ async def test_a_message_to_a_team_that_is_gone_is_refused(service: DirectorServ
     top = node(service, "root").id
 
     with pytest.raises(NotFound):
-        service.send_msg(top, "ic", "gone@nowhere", "ic", "Anyone?")
+        service.team_messaging.send_msg(top, "ic", "gone@nowhere", "ic", "Anyone?")
 
 
 async def test_an_agent_reads_how_the_org_works_again_with_its_context(

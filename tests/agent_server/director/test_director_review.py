@@ -706,7 +706,7 @@ async def test_a_file_in_the_folder_of_a_team_never_given_work_is_not_the_ics_ow
     )
     await use(service, manager(service, "services.api"), ApproveTeamsTool, APPROVE)
     # Only one of the two is given work.
-    service.tell_writer(node(service, SCHEMA).id, "Begin.")
+    service.team_messaging.tell_writer(node(service, SCHEMA).id, "Begin.")
     await service.settled()
     # What a run of the tests leaves in the other's folder.
     (repo / "services" / "api" / "jobs").mkdir(parents=True)

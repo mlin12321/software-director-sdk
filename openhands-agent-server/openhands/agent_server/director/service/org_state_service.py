@@ -61,6 +61,8 @@ class OrgStateService:
     """The time, for counting how long a team has shown no progress."""
     running: set[str] = field(default_factory=set, init=False)
     """The conversations last recorded as running."""
+    resuming: set[str] = field(default_factory=set, init=False)
+    """The conversations a resume is about to run again."""
     _run: RunState | None = field(default=None, init=False)
     _run_of: Path | None = field(default=None, init=False)
     _paused: PauseReason | None = field(default=None, init=False)

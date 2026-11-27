@@ -192,7 +192,7 @@ def write_document(
             node.id, summary=written.summary, leftover_documents=[]
         )
     if caller.hand_over:
-        service.note_hand_over(node.id, wrote=name)
+        service.team_messaging.note_hand_over(node.id, wrote=name)
     else:
         service.message_delivery.knows(node.id, caller.role, name)
     return written.answer
@@ -285,7 +285,7 @@ def msg_manager(service: DirectorService, caller: Caller, text: str) -> str:
             "proposal: use propose_teams. Raise anything else with "
             "raise_escalation."
         )
-    service.send_msg(
+    service.team_messaging.send_msg(
         node.id, caller.role, node.id, service.team_types.team(node).manager, text
     )
     return f"Sent to your {names.manager}."
@@ -336,7 +336,7 @@ def propose_teams(
         node.id, "proposed", None, _named(proposal, replaced), _paths(proposal)
     )
     said = proposed.reason or "I propose these sub-teams."
-    service.send_msg(
+    service.team_messaging.send_msg(
         node.id,
         caller.role,
         node.id,
@@ -377,7 +377,7 @@ def msg_ic(service: DirectorService, caller: Caller, text: str, team: str) -> st
         if waiting
         else ""
     )
-    service.send_msg(
+    service.team_messaging.send_msg(
         node.id,
         caller.role,
         target.id,
@@ -459,7 +459,7 @@ def decline_teams(service: DirectorService, caller: Caller, reason: str) -> str:
     service.team_history.record_event(
         node.id, "declined", None, f"{named}. Reason: {reason}", _paths(proposal)
     )
-    service.send_msg(
+    service.team_messaging.send_msg(
         node.id,
         caller.role,
         node.id,
@@ -504,7 +504,7 @@ def raise_escalation(
         detail=detail.strip(),
         raised_by=caller.role,
     )
-    service.progressed(node.id)
+    service.team_messaging.progressed(node.id)
     if escalation.held_by is None:
         return (
             f"Raised as {escalation.id}. Nobody is above your team: it waits "
@@ -555,7 +555,7 @@ def resolve_escalation(
     mine = _title(service, caller, caller.role)
     if action == "settle":
         store.settle_escalation(raiser.id, escalation_id)
-        service.progressed(raiser.id)
+        service.team_messaging.progressed(raiser.id)
         service.message_delivery.notify(
             service.team_types.team(raiser).conversation(escalation.raised_by),
             f"The {mine} of {caller.node.title!r} settled "
@@ -659,7 +659,7 @@ def submit_review(service: DirectorService, caller: Caller, summary: str) -> str
             commit=head_of(Path(node.worktree_path)) or "",
         ),
     )
-    service.progressed(node.id)
+    service.team_messaging.progressed(node.id)
     service.rest(node.id)
     service.request_review(node.id)
     service.refresh_headline(node.id, f"it submitted its work. {summary}")
@@ -763,7 +763,7 @@ def send_document(
     name = document.strip()
     if name not in service.team_types.protocols:
         raise Invalid(f"The org keeps no document named {name!r}")
-    service.send_ref(
+    service.team_messaging.send_ref(
         caller.node.id,
         caller.role,
         target.id,
@@ -797,7 +797,7 @@ def msg_team(service: DirectorService, caller: Caller, team: str, text: str) -> 
         if new
         else []
     )
-    if service.send_msg(
+    if service.team_messaging.send_msg(
         caller.node.id,
         caller.role,
         target.id,
@@ -843,7 +843,7 @@ def hand_over(service: DirectorService, caller: Caller, team: str, text: str) ->
     target = _team_below(service, caller, team)
     service.removed_team_handed_over(target, caller.node, caller.role, text.strip())
     if caller.hand_over:
-        service.note_hand_over(caller.node.id, team=target.title)
+        service.team_messaging.note_hand_over(caller.node.id, team=target.title)
     return f"Handed over to {target.title!r}. " + (
         "Its agents read it with the next message they get."
         if target.agents

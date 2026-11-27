@@ -30,6 +30,7 @@ from openhands.agent_server.director.models import (
 from openhands.agent_server.director.org_store import (
     AGENT_LOST,
     OrgStoreError,
+    conversations_of,
 )
 from openhands.agent_server.director.prompts import (
     HAND_OVER_FAILED,
@@ -53,7 +54,6 @@ from openhands.agent_server.director.service.resumable_work_service import Held
 from openhands.agent_server.director.service.state import (
     PRUNED_REFS,
     _child_node,
-    conversations_of,
     hand_over_of,
 )
 from openhands.agent_server.director.service.watch import Watch
@@ -312,7 +312,7 @@ class Splits(Watch):
             for below_id, home in moves.items():
                 below, above = store.place(below_id), store.place(home)
                 if below and above and below.review and below.review.state == "pending":
-                    self.tell(
+                    self.team_messaging.tell(
                         home,
                         self.team_types.team(above).reviewer,
                         review_request(
@@ -327,10 +327,10 @@ class Splits(Watch):
                 # Under a new team it starts from now: its time without
                 # progress, and what was held for it while a team above
                 # was stopped.
-                self.progressed(below_id, by_above=True)
+                self.team_messaging.progressed(below_id, by_above=True)
                 if plan.was_stopped:
                     self.work_queue.enqueue(
-                        lambda below_id=below_id: self._go_on(
+                        lambda below_id=below_id: self.team_messaging.go_on(
                             below_id, plan.cut_off, own_too=True
                         ),
                         below_id,
@@ -639,7 +639,7 @@ class Splits(Watch):
                 title=team.title,
                 above=team_key(team.parent_id or ""),
                 path=team.boundary.path,
-                purpose=self._purpose(team),
+                purpose=self.team_messaging.purpose(team),
                 ended=ended,
                 at=at,
                 review=team.review.state if team.review else None,

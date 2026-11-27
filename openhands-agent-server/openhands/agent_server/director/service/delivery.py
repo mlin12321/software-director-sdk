@@ -15,6 +15,7 @@ from openhands.agent_server.director.models import (
 )
 from openhands.agent_server.director.org_store import (
     division_lead_id,
+    instant,
 )
 from openhands.agent_server.director.run_state import (
     JOINED,
@@ -31,7 +32,6 @@ from openhands.agent_server.director.service.state import (
     MODELS_LANE,
     ORG_LANE,
     SAVED_BEFORE_FORGOTTEN,
-    _instant,
     lane_for,
 )
 from openhands.sdk.errors import (
@@ -75,7 +75,7 @@ class Delivery(Records):
             launcher=self._require_launcher,
             is_running=lambda: self._loop is not None,
             context_of=self.team_context.context_of,
-            is_stopped=self._is_stopped,
+            is_stopped=lambda conversation_id: self.org.is_stopped(conversation_id),
             lane_of=lane_for,
             take_up=lambda intent_id, lane: self.resumable_work.take_up(
                 intent_id, lane
@@ -140,7 +140,7 @@ class Delivery(Records):
         answer = await self.model_calls.ask(
             asker, *compaction.prompt(reports), compaction.USAGE_ID
         )
-        shorter = compaction.compacted(answer or "", reports, _instant())
+        shorter = compaction.compacted(answer or "", reports, instant())
         if shorter is None:
             logger.warning("No usable rewrite of the reports of %s %s", folder, role)
             return
@@ -161,7 +161,7 @@ class Delivery(Records):
         answer = await self.model_calls.ask(
             asker, *compaction.prompt(reports), compaction.USAGE_ID
         )
-        shorter = compaction.compacted(answer or "", reports, _instant())
+        shorter = compaction.compacted(answer or "", reports, instant())
         return shorter[0].text if shorter else full
 
     async def _name_org(self, top_id: str) -> None:

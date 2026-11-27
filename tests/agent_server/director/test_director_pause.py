@@ -106,7 +106,7 @@ async def test_a_paused_org_holds_messages_and_delivers_them_in_order_on_resume(
     before = len(launcher.sent)
 
     paused = await service.pause()
-    service.tell_writer(place(service), "First", human=True)
+    service.team_messaging.tell_writer(place(service), "First", human=True)
     service.message_delivery.notify(ic(service), "Second")
     await service.settled()
 
@@ -185,7 +185,7 @@ async def test_a_server_stopped_while_teams_wait_starts_them_in_order_once_resum
     await use(first, manager(first), ApproveTeamsTool, APPROVE)
     top = place(first)
     for team in first.org.below(top):
-        first.tell_writer(team.id, "Begin.")
+        first.team_messaging.tell_writer(team.id, "Begin.")
     await eventually(
         lambda: sum(team.waiting_to_start for team in first.org.below(top)) == 3
     )
@@ -231,7 +231,7 @@ async def test_a_team_start_cut_off_by_a_crash_is_finished_without_a_second_of_a
     # The server ends as the first sub-team's IC has just been started.
     ended = end_server_at(launcher, "derived")
     api = place(first, "services.api")
-    first.tell_writer(api, "Begin.")
+    first.team_messaging.tell_writer(api, "Begin.")
     await ended.wait()
     assert len(launcher.derived) <= 2
 

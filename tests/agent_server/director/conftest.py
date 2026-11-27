@@ -621,7 +621,7 @@ async def tasked(service: DirectorService) -> None:
     """Give every team that was only set up its first message, which starts it."""
     for team in service.org.places():
         if not team.agents:
-            service.tell_writer(team.id, "Begin.")
+            service.team_messaging.tell_writer(team.id, "Begin.")
     await service.settled()
 
 
@@ -822,7 +822,9 @@ def manager(service: DirectorService, node_id: str = "root") -> str | None:
 async def woken(service: DirectorService, node_id: str = "root") -> str:
     """The Manager of a team, started as the first message to it does."""
     if manager(service, node_id) is None:
-        service.tell_manager(node(service, node_id).id, "Look in on your team.")
+        service.team_messaging.tell_manager(
+            node(service, node_id).id, "Look in on your team."
+        )
         await service.settled()
     found = manager(service, node_id)
     assert found is not None

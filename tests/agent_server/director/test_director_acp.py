@@ -699,7 +699,7 @@ async def test_what_the_human_says_reaches_such_an_agent_in_the_middle_of_a_turn
     )
     launcher.report(agent, ConversationExecutionStatus.RUNNING)
 
-    service.tell_writer(top, "The human: stop, use Go.", human=True)
+    service.team_messaging.tell_writer(top, "The human: stop, use Go.", human=True)
     service.answer_escalation(top, "jwt", "Opaque.")
     await service.settled()
 

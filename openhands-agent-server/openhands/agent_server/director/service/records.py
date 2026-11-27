@@ -16,6 +16,7 @@ from openhands.agent_server.director.models import (
     SessionTeam,
 )
 from openhands.agent_server.director.org_store import (
+    instant,
     is_division_lead,
     session_of,
     team_ref,
@@ -35,7 +36,6 @@ from openhands.agent_server.director.service.session_landing_service import (
 )
 from openhands.agent_server.director.service.state import (
     ServiceState,
-    _instant,
 )
 from openhands.agent_server.director.service.team_context_service import (
     TeamContextService,
@@ -176,7 +176,7 @@ class Records(ServiceState):
         # Its session's alone until the session's work is accepted.
         self.session_drafts.keep_report(
             place.id,
-            entry.model_copy(update={"at": entry.at or _instant(), **said_where}),
+            entry.model_copy(update={"at": entry.at or instant(), **said_where}),
         )
 
     def drafts(self, session: str) -> dict[str, tuple[str | None, str | None]]:
