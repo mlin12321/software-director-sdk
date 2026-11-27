@@ -132,6 +132,12 @@ class DirectorService(Sync):
                 "file tools, and nothing holds the process of an ACP agent"
             )
         bind_director(self)
+        # What reviewers check work by is fetched now, off the loop, so
+        # that no review request is the first to wait for it.
+        self._review_instructions_ready = asyncio.create_task(
+            asyncio.to_thread(self._load_review_instructions),
+            name="director-review-instructions",
+        )
         self._stall_timer = asyncio.create_task(
             self._watch_for_stalls(), name="director-stall-watch"
         )
@@ -165,10 +171,15 @@ class DirectorService(Sync):
             self._stop_resume()
             self._stop_resume = None
         await self.lanes.__aexit__(None, None, None)
-        if self._stall_timer is not None:
-            self._stall_timer.cancel()
-            await asyncio.gather(self._stall_timer, return_exceptions=True)
-            self._stall_timer = None
+        timers = [
+            task
+            for task in (self._stall_timer, self._review_instructions_ready)
+            if task is not None
+        ]
+        self._stall_timer = self._review_instructions_ready = None
+        for task in timers:
+            task.cancel()
+        await asyncio.gather(*timers, return_exceptions=True)
         # A save that was cut off goes on in its thread: nothing of this
         # director may write the tree after it has closed.
         await asyncio.to_thread(self._wait_for_save)

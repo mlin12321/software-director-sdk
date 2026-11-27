@@ -452,6 +452,8 @@ class ServiceState:
         # The public skills that were looked for, by name; '' for one that
         # could not be loaded.
         self._review_instructions: dict[str, str] = {}
+        self._review_instructions_ready: asyncio.Task[None] | None = None
+        self._loading_review_instructions = threading.Lock()
         self._run: RunState | None = None
         self._run_of: Path | None = None
         self._paused: PauseReason | None = None
@@ -564,16 +566,27 @@ class ServiceState:
         parts: list[str] = []
         skill = kind.review.checklist_skill
         if skill:
-            if skill not in self._review_instructions:
-                found = (
-                    self._find_review_instructions()
-                    if skill in bugbot.CODE_REVIEW_SKILLS
-                    else bugbot.public_skill((skill,))
-                )
-                self._review_instructions[skill] = found.strip() if found else ""
+            # One fetch at a time: two would clone the same repository.
+            with self._loading_review_instructions:
+                if skill not in self._review_instructions:
+                    found = (
+                        self._find_review_instructions()
+                        if skill in bugbot.CODE_REVIEW_SKILLS
+                        else bugbot.public_skill((skill,))
+                    )
+                    self._review_instructions[skill] = found.strip() if found else ""
             parts.append(self._review_instructions[skill])
         parts.append(kind.review.checklist.strip())
         return "\n\n".join(part for part in parts if part)
+
+    def _load_review_instructions(self) -> None:
+        """Fetch what reviewers of every type check work by, so that it is
+        there when a review is requested. Safe from any thread."""
+        try:
+            for kind in self.agent_types.values():
+                self.review_instructions(kind)
+        except Exception:
+            logger.exception("Could not load the review instructions")
 
     @classmethod
     def from_config(cls, config: Config) -> Self:

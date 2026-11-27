@@ -1,6 +1,7 @@
 """How work a team submits is reviewed by the IC above and taken in."""
 
 import asyncio
+import threading
 from collections.abc import AsyncIterator
 from pathlib import Path
 from types import SimpleNamespace
@@ -146,6 +147,42 @@ async def test_a_review_request_says_when_the_team_gave_no_account(
     assert review is not None and review.description == ""
     request = launcher.messages_to(ic(service))[-1]
     assert "gave no account" in request and INSTRUCTIONS in request
+
+
+async def test_review_instructions_are_never_fetched_on_the_event_loop(
+    repo: Path, launcher: FakeLauncher
+):
+    loop_thread = threading.get_ident()
+    fetched_on: list[int] = []
+
+    def fetch() -> str:
+        # In the server this clones a repository: every agent's turn would
+        # wait for it on the loop.
+        fetched_on.append(threading.get_ident())
+        return INSTRUCTIONS
+
+    service = DirectorService(
+        repo, save_delay=0, run_limit_retry=0, find_review_instructions=fetch
+    )
+    await service.start(launcher)
+    try:
+        await service.create_org(
+            CreateOrgRequest(
+                title="Checkout",
+                task="Build the checkout flow",
+                conversation=root_conversation(repo),
+            )
+        )
+        await service.settled()
+        await split_root(service)
+        commit(repo, "services/api/app.py", "print('hi')\n")
+        await use(service, ic(service, "services.api"), SubmitReviewTool, DONE)
+        await service.settled()
+
+        assert INSTRUCTIONS in launcher.messages_to(ic(service))[-1]
+        assert fetched_on and loop_thread not in fetched_on
+    finally:
+        await service.aclose()
 
 
 async def test_without_review_instructions_the_team_is_only_asked_for_its_account(
