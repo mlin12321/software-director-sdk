@@ -1,8 +1,11 @@
 """How a team works inside its folder."""
 
+from collections.abc import Sequence
 from typing import ClassVar
 
+from openhands.agent_server.director.documents.declared import Document
 from openhands.agent_server.director.documents.protocol import (
+    DocumentArgument,
     DocumentProtocolBase,
     DocumentToolCall,
     DocumentToolResult,
@@ -16,6 +19,23 @@ class SpecProtocol(DocumentProtocolBase):
     may write it while it does."""
 
     usable_in_hand_over: ClassVar[bool] = True
+
+    @classmethod
+    def arguments_in_other_tools(
+        cls,
+        document: Document,  # noqa: ARG003
+    ) -> Sequence[DocumentArgument]:
+        return (
+            DocumentArgument(
+                "review_team",
+                "specs",
+                "Only when you accept the work of a session: for the spec of a "
+                "folder in it, whether the org's stays, the session's holds, "
+                "or a text you write from both does. Unnamed, the session's "
+                "holds.",
+                per_folder=True,
+            ),
+        )
 
     def write(self, call: DocumentToolCall) -> DocumentToolResult:
         written = super().write(call)

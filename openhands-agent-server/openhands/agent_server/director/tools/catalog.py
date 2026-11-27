@@ -17,7 +17,6 @@ from openhands.agent_server.director.documents.protocol import (
 from openhands.agent_server.director.models import (
     EscalationKind,
     ReviewFinding,
-    SpecChoice,
     TeamChoice,
 )
 from openhands.agent_server.director.split import ProposedTeam
@@ -177,15 +176,6 @@ class ReviewTeamArguments(BaseModel):
             "merged since it began: what you decided, having read both. It "
             "holds for what you were shown: if that changed since, you are "
             "shown it again. Leave empty otherwise."
-        ),
-    )
-    specs: list[SpecChoice] = Field(
-        default_factory=list,
-        description=(
-            "Only when you accept the work of a session: for the spec of a "
-            "folder in it, whether the org's stays, the session's holds, "
-            "or a text you write from both does. Unnamed, the session's "
-            "holds."
         ),
     )
 
@@ -421,7 +411,7 @@ REVIEW_TEAM = ToolSpec(
         action.findings,
         action.needed_above,
         action.reconciled,
-        action.specs,
+        document_choices("review_team", action),
         documents_given("review_team", action),
     ),
 )

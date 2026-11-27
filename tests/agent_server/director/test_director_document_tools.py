@@ -192,7 +192,16 @@ def test_the_directors_tools_ask_for_what_the_shipped_documents_say():
 
     assert set(asked("propose_teams")) == {"contracts"}
     assert "types, endpoints" in asked("propose_teams")["contracts"]
-    assert set(asked("review_team")) == {"contracts"}
+    assert set(asked("review_team")) == {"contracts", "specs"}
+    reviewed = tool_named("review_team")
+    assert reviewed is not None
+    accepted = reviewed.action()(
+        team="services.api",
+        decision="accept",
+        specs=[{"path": "services/api", "take": "org"}],
+    )
+    assert list(document_choices("review_team", accepted)) == ["spec"]
+    assert documents_given("review_team", accepted) == {"contracts": ""}
     settle = tool_named("settle_teams")
     assert settle is not None
     chosen = settle.action()(

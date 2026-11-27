@@ -18,7 +18,6 @@ from openhands.agent_server.director.models import (
     Report,
     RouteMessageRequest,
     SessionTeam,
-    SpecChoice,
     TeamChoice,
 )
 from openhands.agent_server.director.org_persistence import create_org_board, load_org
@@ -1181,7 +1180,9 @@ async def test_a_reviewer_writes_the_spec_that_holds(service: DirectorService):
             decision="accept",
             reconciled="Both.",
             specs=[
-                SpecChoice.model_validate({"path": path, "take": take, "text": text})
+                DocumentChoice.model_validate(
+                    {"path": path, "take": take, "text": text}
+                )
             ],
         )
 
@@ -1231,7 +1232,7 @@ async def test_a_reviewer_keeps_the_orgs_spec(service: DirectorService):
             team=top,
             decision="accept",
             reconciled="Theirs.",
-            specs=[SpecChoice(path="services/api", take="org")],
+            specs=[DocumentChoice(path="services/api", take="org")],
         ),
     )
     await service.settled()
@@ -1324,7 +1325,9 @@ async def test_a_spec_written_for_a_team_the_org_lost_is_left_to_the_team_that_h
             team=top,
             decision="accept",
             reconciled="Kept what holds.",
-            specs=[SpecChoice(path="", take="text", text="# Checkout, with refunds")]
+            specs=[
+                DocumentChoice(path="", take="text", text="# Checkout, with refunds")
+            ]
             if rewritten
             else [],
         ),
@@ -1510,7 +1513,7 @@ async def test_work_that_waited_for_the_human_is_merged_as_its_reviewer_decided(
     )
     await use(service, ic(service), SubmitReviewTool, DONE)
     top = node(service, "root")
-    decided = SpecChoice.model_validate(
+    decided = DocumentChoice.model_validate(
         {"path": "", "take": "text", "text": "# Reviewer"}
     )
     await use(

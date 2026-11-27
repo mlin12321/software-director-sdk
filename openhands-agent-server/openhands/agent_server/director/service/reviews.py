@@ -51,7 +51,6 @@ from openhands.agent_server.director.models import (
     ReviewFinding,
     SessionInput,
     SessionTeam,
-    SpecChoice,
     Take,
     TeamChoice,
 )
@@ -102,7 +101,6 @@ from openhands.agent_server.director.service.state import (
     ORG_WAITS,
     _branch_of,
     _contracts_file,
-    _spec_file,
     checkout_root,
 )
 from openhands.agent_server.director.split import (
@@ -379,45 +377,63 @@ class Reviews(Requests):
         session = self.org.session_of(team)
         return session.request if session else ""
 
-    def spec_choices(
-        self, place_id: str, specs: list[SpecChoice]
+    def document_choices(
+        self, place_id: str, choices: Mapping[str, list[DocumentChoice]]
     ) -> list[dict[str, str]]:
-        """What a reviewer decided about the specs of a session's work, as
-        it is kept with the acceptance.
+        """What a reviewer decided about the documents of a session's
+        work, as it is kept with the acceptance.
+
+        Args:
+            choices: What holds for each folder, by the name of the
+                document.
 
         Raises:
             Invalid: The work is not a session's, a directory is not in
                 it, or a text is missing.
         """
-        if not specs:
+        decided = [
+            (document, choice)
+            for document, of_it in choices.items()
+            for choice in of_it
+        ]
+        if not decided:
             return []
         place = self.org.place(place_id)
         if place is None or not self.org.opens_session(place):
             raise Invalid(
-                "Specs are decided where the work of a session is accepted. "
-                "Leave `specs` empty."
+                "What holds of a document is decided where the work of a "
+                "session is accepted. Leave that empty."
             )
         own = normalize_store_path(place.boundary.path)
         homes = {home for home, *_ in self.specs_inherited(place)}
         chosen = []
-        for choice in specs:
+        for document, choice in decided:
             path = normalize_store_path(choice.path)
             if not (path == own or is_inside(path, own) or path in homes):
                 raise Invalid(
                     f"{choice.path!r} is not a folder of this work "
-                    f"({own or 'the repository'}), so its spec is not yours "
+                    f"({own or 'the repository'}), so its {document} is not yours "
                     "to decide here."
                 )
             if choice.take == "text" and not choice.text.strip():
-                raise Invalid(f"Write the spec of {choice.path!r} in `text`.")
-            chosen.append({"path": path, "take": choice.take, "text": choice.text})
+                raise Invalid(f"Write the {document} of {choice.path!r} in `text`.")
+            chosen.append(
+                {
+                    "document": document,
+                    "path": path,
+                    "take": choice.take,
+                    "text": choice.text,
+                }
+            )
         return chosen
 
-    def _take_spec_choices(self, top: SessionTeam, specs: list[dict[str, str]]) -> None:
-        """Make of the specs a session wrote what its reviewer decided,
-        before they land."""
-        for choice in specs:
-            file = _spec_file(choice["path"])
+    def _take_document_choices(
+        self, top: SessionTeam, chosen: list[dict[str, str]]
+    ) -> None:
+        """Make of the documents a session wrote what its reviewer
+        decided, before they land."""
+        for choice in chosen:
+            file = DocumentRef(choice["path"], choice["document"]).path
             if choice["take"] == "org":
                 self._undraft(top.session, file)
             elif choice["take"] == "text":
@@ -1748,7 +1764,7 @@ class Reviews(Requests):
             if merge is not None and not merge.code_landed:
                 # What its reviewer made of its specs lands with it, as the
                 # first time.
-                self._take_spec_choices(place, specs or [])
+                self._take_document_choices(place, specs or [])
                 await asyncio.to_thread(self._land_accepted, place, None)
             await self._pass_up(above.id, acted=True)
             # Whoever waited behind this work is still to hear it is their turn.
@@ -1927,7 +1943,7 @@ class Reviews(Requests):
             between=(place.base_commit, tip) if place.base_commit and tip else ("", ""),
         )
         if opens:
-            self._take_spec_choices(place, specs or [])
+            self._take_document_choices(place, specs or [])
             await asyncio.to_thread(
                 self._land_accepted, place, meets.seen if meets else None
             )

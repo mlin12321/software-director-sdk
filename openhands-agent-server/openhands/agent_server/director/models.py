@@ -1410,9 +1410,10 @@ class OpenSessionRequest(BaseModel):
 
 
 class DocumentChoice(BaseModel):
-    """What a Manager decides about a document that waits for it."""
+    """What is decided about a document of a directory that the session
+    and the org each made something else of."""
 
-    path: str = Field(description="The directory whose document waits.")
+    path: str = Field(description="The directory whose document it is.")
     take: Literal["org", "session", "text"] = Field(
         description=(
             "'org': the org's stay. 'session': the session's hold. 'text': "
@@ -1420,19 +1421,6 @@ class DocumentChoice(BaseModel):
         )
     )
     text: str = Field(default="", description="What holds, for 'text'.")
-
-
-class SpecChoice(BaseModel):
-    """What a reviewing IC decides about the spec of a directory."""
-
-    path: str = Field(description="The directory whose spec it is.")
-    take: Literal["org", "session", "text"] = Field(
-        description=(
-            "'org': the org's stays. 'session': the session's holds. 'text': "
-            "what is written in `text` holds."
-        )
-    )
-    text: str = Field(default="", description="The spec, for 'text'.")
 
 
 class TeamChoice(BaseModel):

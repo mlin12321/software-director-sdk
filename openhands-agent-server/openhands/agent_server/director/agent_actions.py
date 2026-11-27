@@ -26,7 +26,6 @@ from openhands.agent_server.director.models import (
     Review,
     ReviewFinding,
     SessionTeam,
-    SpecChoice,
     SplitProposal,
     TeamChoice,
 )
@@ -680,12 +679,15 @@ def review_team(
     findings: list[ReviewFinding],
     needed_above: str,
     reconciled: str = "",
-    specs: list[SpecChoice] | None = None,
+    choices: Mapping[str, list[DocumentChoice]] | None = None,
     given: Mapping[str, str] | None = None,
 ) -> str:
     """Accept the work a team directly below submitted, or send it back.
 
     Args:
+        choices: For the documents the work and the org each made
+            something else of: what holds for each folder, by the name of
+            the document.
         given: What the accepted work establishes, for the documents of
             the caller's team that keep such a thing: by the name of each.
     """
@@ -716,7 +718,7 @@ def review_team(
             raise Invalid("Say what must change before you can accept the work")
         service.request_changes(place_id, findings)
         return f"Sent back to {team.title!r} with what must change."
-    chosen = service.spec_choices(place_id, specs or [])
+    chosen = service.document_choices(place_id, choices or {})
     service.check_accept(place_id, reconciled.strip())
     service.accept_review(place_id, needed_above.strip(), reconciled.strip(), chosen)
     if given:
