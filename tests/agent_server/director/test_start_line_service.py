@@ -37,7 +37,7 @@ def line(tmp_path: Path) -> StartLineService:
 def full_until(room: asyncio.Event, started: list[str], name: str):
     async def start() -> str:
         if not room.is_set():
-            raise ConversationRunLimitExceeded(1)
+            raise ConversationRunLimitExceeded("full")
         started.append(name)
         return name
 
