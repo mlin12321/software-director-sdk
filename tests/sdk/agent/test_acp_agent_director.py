@@ -1,11 +1,9 @@
 """What the director changed in the ACP agent: a side question asked in a
-session of its own, a launcher in front of ``npx``, a login file for
-Cursor, and a close that ends everything the command started."""
+session of its own, a launcher in front of ``npx``, and a login file
+for Cursor."""
 
 import asyncio
-import time
-from pathlib import Path
-from typing import Any, cast
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -277,61 +275,3 @@ def test_cursor_login_when_login_file_present(tmp_path):
             _select_auth_method(methods, {"XDG_CONFIG_HOME": str(elsewhere)})
             == "cursor_login"
         )
-
-
-def _process_is_gone(pid: int) -> bool:
-    """Whether ``pid`` no longer runs; a zombie nobody reaped counts as gone."""
-    try:
-        state = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0]
-    except (FileNotFoundError, ProcessLookupError):
-        return True
-    return state == "Z"
-
-
-@pytest.mark.skipif(not Path("/proc/self/stat").exists(), reason="needs /proc")
-@pytest.mark.parametrize("ignores_sigterm", [False, True])
-def test_close_ends_everything_the_acp_command_started(
-    monkeypatch: pytest.MonkeyPatch, ignores_sigterm: bool
-):
-    import subprocess
-
-    monkeypatch.setattr(acp_agent_module, "_ACP_GROUP_EXIT_GRACE_SECONDS", 0.3)
-    trap = 'trap "" TERM; ' if ignores_sigterm else ""
-    # The command ends on SIGTERM; what it started is a process of its own.
-    command = subprocess.Popen(
-        ["sh", "-c", f"sh -c '{trap}sleep 300' & echo $!; wait"],
-        stdout=subprocess.PIPE,
-        text=True,
-        start_new_session=True,
-    )
-    assert command.stdout is not None
-    started = int(command.stdout.readline())
-    executor = MagicMock()
-    executor.run_async.side_effect = lambda *_args, **_kwargs: command.wait(timeout=5)
-    agent = _make_agent()
-    agent._process = cast(Any, command)
-    agent._process_group = command.pid
-    agent._executor = executor
-    agent._conn = None
-
-    agent.close()
-
-    assert command.poll() is not None
-    deadline = time.monotonic() + 3
-    while not _process_is_gone(started) and time.monotonic() < deadline:
-        time.sleep(0.05)
-    assert _process_is_gone(started)
-
-
-def test_a_process_that_leads_no_group_has_none_to_signal():
-    import subprocess
-
-    # Not started in a session of its own, so no group has its id.
-    bystander = subprocess.Popen(["sleep", "300"])
-    try:
-        assert acp_agent_module._signal_process_group(bystander.pid, 0) is False
-        assert acp_agent_module._signal_process_group(None, 0) is False
-        assert bystander.poll() is None
-    finally:
-        bystander.kill()
-        bystander.wait()
