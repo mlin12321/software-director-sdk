@@ -661,6 +661,13 @@ async def test_contracts_both_changed_wait_for_the_manager_above(
     ]
     assert str(started.parent_id) == conversation
     assert "the contracts between the sub-teams of services/api" in told
+    merge = node(service, division_lead_of(service, top)).merge
+    assert merge is not None
+    assert [
+        (item.kind, item.document, item.key)
+        for item in merge.items
+        if item.gate == "manager"
+    ] == [("document", "contracts", "services/api")]
     # Its Division Lead IC judged the code by the contracts it was written to.
     request = [
         start.task for start in launcher.derived if "submits its work" in start.task

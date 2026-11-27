@@ -448,10 +448,10 @@ export interface DirectorSessionTeam extends DirectorOrgNode {
 
 /**
  * What a session and the org each made something else of. `code`: a file
- * both changed. `spec`, `contracts`: the text of one directory. `team`: a
- * sub-team.
+ * both changed. `document`: the text of a document of one directory.
+ * `team`: a sub-team.
  */
-export type DirectorMergeKind = 'code' | 'spec' | 'contracts' | 'team';
+export type DirectorMergeKind = 'code' | 'document' | 'team';
 
 /** Who settles it: the IC that reviews the work, or its Manager. */
 export type DirectorMergeGate = 'ic' | 'manager';
@@ -460,10 +460,12 @@ export type DirectorMergeGate = 'ic' | 'manager';
 export interface DirectorMergeItem {
   kind: DirectorMergeKind;
   /**
-   * What it is about: a file for `code`, a directory for `spec` and
-   * `contracts`, a team's id for `team`.
+   * What it is about: a file for `code`, a directory for `document`, a
+   * team's id for `team`.
    */
   key: string;
+  /** Only with `document`: the name of the document. */
+  document?: string;
   gate: DirectorMergeGate;
   /** What a team is called. */
   title?: string;

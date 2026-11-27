@@ -12,6 +12,7 @@ from pydantic import TypeAdapter
 
 from openhands.agent_server.director import bugbot
 from openhands.agent_server.director.boundary import owns
+from openhands.agent_server.director.documents.store import DocumentRef
 from openhands.agent_server.director.git import (
     GitError,
     branch_of,
@@ -83,7 +84,11 @@ from openhands.agent_server.director.run_state import (
     TURN,
     Intent,
 )
-from openhands.agent_server.director.service.records import Taken
+from openhands.agent_server.director.service.records import (
+    CONTRACTS,
+    LEFT_BEHIND,
+    Taken,
+)
 from openhands.agent_server.director.service.requests import Requests
 from openhands.agent_server.director.service.state import (
     _LANE,
@@ -176,6 +181,7 @@ def _same(item: MergeItem) -> tuple[str | None, ...]:
     for as long as this is unchanged."""
     return (
         item.kind,
+        item.document,
         item.key,
         item.session,
         item.org,
@@ -633,7 +639,8 @@ class Reviews(Requests):
             return None
         both = f"{org.rstrip()}\n\n{theirs.strip()}\n" if org.strip() else theirs
         return MergeItem(
-            kind="contracts",
+            kind="document",
+            document=CONTRACTS,
             key=path,
             gate="manager",
             session=both,
@@ -705,7 +712,8 @@ class Reviews(Requests):
             if has != over and has != text:
                 items.append(
                     MergeItem(
-                        kind="contracts",
+                        kind="document",
+                        document=DocumentRef.at(file).name,
                         key=path,
                         gate="manager",
                         session=text or "",
@@ -908,7 +916,7 @@ class Reviews(Requests):
             placed = {choice.team: choice for choice in teams}
             for choice in teams:
                 self._check_placement(top, choice)
-            agreed = [item.key for item in waiting if item.kind == "contracts"]
+            agreed = [item.key for item in waiting if item.waits_with_teams]
             chosen = {
                 normalize_store_path(choice.path): choice for choice in contracts or []
             }
@@ -937,7 +945,7 @@ class Reviews(Requests):
                 )
             settled = []
             for item in waiting:
-                choice = chosen.get(item.key) if item.kind == "contracts" else None
+                choice = chosen.get(item.key) if item.waits_with_teams else None
                 place = placed.get(item.key) if item.kind == "team" else None
                 take: Take = "session"
                 if place is not None:
@@ -1139,7 +1147,7 @@ class Reviews(Requests):
             held: list[str] = []
             others: list[tuple[str, str]] = []
             for item in items:
-                if item.kind != "contracts":
+                if not item.waits_with_teams:
                     continue
                 file = _contracts_file(item.key)
                 if item.take == "org" or (
@@ -1412,13 +1420,19 @@ class Reviews(Requests):
                 *(MergeItem(kind="code", key=path, gate="ic") for path in files),
                 *(
                     MergeItem(
-                        kind="spec", key=directory, gate="ic", session=mine, org=now
+                        kind="document",
+                        document=LEFT_BEHIND,
+                        key=directory,
+                        gate="ic",
+                        session=mine,
+                        org=now,
                     )
                     for directory, now, mine in specs
                 ),
                 *(
                     MergeItem(
-                        kind="spec",
+                        kind="document",
+                        document=LEFT_BEHIND,
                         key=home,
                         gate="ic",
                         title=lost,

@@ -1028,7 +1028,7 @@ def merge_request(
                 + (f", under {item.under}" if item.under else "")
                 + (f", called {item.named!r}" if item.named else "")
             )
-    contracts = any(item.kind == "contracts" for item in waiting)
+    contracts = any(item.waits_with_teams for item in waiting)
     lines += [
         "",
         "Nothing the session made of its teams and contracts is the org's "

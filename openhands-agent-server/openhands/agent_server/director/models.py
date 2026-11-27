@@ -1,8 +1,8 @@
 """Wire models for the director API."""
 
-from typing import Any, Literal
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field
 
 from openhands.agent_server.models import StartConversationRequest
 
@@ -363,16 +363,6 @@ class OrgNodeInput(BaseModel):
             "directory, so a team that replaces another has its id."
         ),
     )
-
-    @model_validator(mode="before")
-    @classmethod
-    def _purpose_of_a_team_saved_earlier(cls, data: Any) -> Any:
-        """Read a team saved when its purpose was called ``spec_summary``.
-        For orgs saved before the rename; to be removed once none is left."""
-        if isinstance(data, dict) and "spec_summary" in data:
-            data = dict(data)
-            data.setdefault("purpose", data.pop("spec_summary"))
-        return data
 
 
 class OrgNode(OrgNodeInput):
@@ -1468,9 +1458,9 @@ class TeamChoice(BaseModel):
 
 
 # What a session and the org each made something else of. `code`: a file
-# both changed. `spec`, `contracts`: the text of one directory. `team`: a
-# sub-team.
-MergeKind = Literal["code", "spec", "contracts", "team"]
+# both changed. `document`: the text of a document of one directory.
+# `team`: a sub-team.
+MergeKind = Literal["code", "document", "team"]
 # Who settles it: the IC that reviews the session's work, before its code
 # is merged, or the Manager of its Division Lead place.
 Gate = Literal["ic", "manager"]
@@ -1484,10 +1474,20 @@ class MergeItem(BaseModel):
     kind: MergeKind
     key: str = Field(
         description=(
-            "What it is about: a file for `code`, a directory for `spec` and "
-            "`contracts`, a team's id for `team`."
+            "What it is about: a file for `code`, a directory for "
+            "`document`, a team's id for `team`."
         )
     )
+    document: str = Field(
+        default="", description="Only with `document`: the name of the document."
+    )
+
+    @property
+    def waits_with_teams(self) -> bool:
+        """Whether it is a document that becomes the org's only with the
+        session's changes to its teams."""
+        return self.kind == "document" and self.gate == "manager"
+
     gate: Gate
     title: str = Field(default="", description="What a team is called.")
     session: str = Field(
