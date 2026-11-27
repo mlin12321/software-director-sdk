@@ -566,7 +566,8 @@ async def test_a_request_to_the_org_opens_a_session_and_reaches_no_other(
         f"{API}@{tidy.id}",
     )
     assert (faster.team_id, tidy.team_id) == (API, API)
-    assert "Tidy the handlers." in launcher.derived[-1].task
+    # The two sessions start in lanes of their own, in either order.
+    assert any("Tidy the handlers." in started.task for started in launcher.derived)
     assert top in heard and heard == {
         place: len(launcher.messages_to(ic(service, place))) for place in heard
     }
