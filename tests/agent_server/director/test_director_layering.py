@@ -95,6 +95,7 @@ SERVICES_THE_DIRECTOR_HOLDS = [
     "service/session_document_service.py",
     "service/session_draft_service.py",
     "service/session_landing_service.py",
+    "service/session_lifecycle_service.py",
     "service/stall_watch_service.py",
     "service/start_line_service.py",
     "service/team_context_service.py",

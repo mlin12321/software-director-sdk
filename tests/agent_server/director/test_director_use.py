@@ -176,7 +176,7 @@ async def test_a_closed_sessions_count_goes_with_it(
     session = await counted(service)
     assert session.id in service.org_state.run_state().marked(USE)
 
-    service.close_session(session.id)
+    service.session_lifecycle.close_session(session.id)
     await service.settled()
 
     assert service.org_state.run_state().marked(USE) == {}
@@ -188,12 +188,12 @@ async def test_no_more_sessions_are_opened_than_the_settings_allow(
     service.org_settings.update_settings(DirectorSettingsUpdate(max_open_sessions=1))
 
     with pytest.raises(Conflict, match="allow 1 open session at once"):
-        await service.open_session(
+        await service.session_lifecycle.open_session(
             OpenSessionRequest(text="Add refunds", node_id="root")
         )
 
     service.org_settings.update_settings(DirectorSettingsUpdate(max_open_sessions=2))
-    opened = await service.open_session(
+    opened = await service.session_lifecycle.open_session(
         OpenSessionRequest(text="Add refunds", node_id="root")
     )
     await service.settled()

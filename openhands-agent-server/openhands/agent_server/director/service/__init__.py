@@ -114,7 +114,7 @@ class DirectorService(Sync):
             "accept": self._do_accept,
             "land_org": self._do_land_org,
             "prune": self.team_splits.do_prune,
-            "close_session": self._do_close_session,
+            "close_session": self.session_lifecycle.do_close_session,
         }.items():
             self.resumable_work.register(kind, step)
 
@@ -235,7 +235,7 @@ class DirectorService(Sync):
                 # The repository holds an org already, which this server
                 # was not pointed at: it is taken up, never written over.
                 await self._came_back()
-                return await self.open_session(
+                return await self.session_lifecycle.open_session(
                     OpenSessionRequest(text=request.task, title=request.title or ""),
                     conversation,
                 )
@@ -256,7 +256,7 @@ class DirectorService(Sync):
                 )
             )
             try:
-                opened = await self.open_session(
+                opened = await self.session_lifecycle.open_session(
                     OpenSessionRequest(
                         text=request.task, title=request.title or "", node_id=ROOT_ID
                     ),
@@ -395,7 +395,7 @@ class DirectorService(Sync):
             node = store.team(choice.node_id) or node
         elif path != node.boundary.path:
             text = f"{text}\n\n(The human sent this from {path}.)"
-        opened = await self.open_session(
+        opened = await self.session_lifecycle.open_session(
             OpenSessionRequest(text=text, node_id=node.id), request.conversation
         )
         top = opened.session.teams[0]

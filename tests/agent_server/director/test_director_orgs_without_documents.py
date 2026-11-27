@@ -218,7 +218,7 @@ async def test_a_document_of_an_orgs_own_is_settled_with_the_teams(
     service = await _an_org_with_documents_of_its_own(repo, launcher, tmp_path)
     await split_root(service)
     await landed(service)
-    opened = await service.open_session(
+    opened = await service.session_lifecycle.open_session(
         OpenSessionRequest(text="Add refunds.", node_id="services.api")
     )
     await service.settled()

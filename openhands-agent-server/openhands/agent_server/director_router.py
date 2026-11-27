@@ -145,7 +145,7 @@ def _require_place(service: DirectorService, node_id: str) -> SessionTeam:
 
 
 def _require_session(service: DirectorService, session_id: str) -> Session:
-    for session in service.sessions():
+    for session in service.org.sessions():
         if session.id == session_id:
             return session
     raise NotFound(f"No session {session_id!r} is open")
@@ -562,7 +562,7 @@ def list_sessions(
     team it was opened at and, once they are given a task in it, at the
     teams below that one (`teams`).
     """
-    return service.sessions()
+    return service.org.sessions()
 
 
 @director_router.get(
@@ -654,7 +654,7 @@ async def open_session(
     concerns, as for a message sent with `auto`. Opening a session adds no
     team to the org, so `max_teams` and `max_depth` do not count it.
     """
-    return await service.open_session(request)
+    return await service.session_lifecycle.open_session(request)
 
 
 @director_router.delete(
@@ -675,7 +675,7 @@ def close_session(
     is kept as a commit under `refs/agents/pruned/`, and commits that were
     never merged stay reachable from `refs/agents/sessions/<session id>/`.
     """
-    service.close_session(session_id)
+    service.session_lifecycle.close_session(session_id)
 
 
 @director_router.get(

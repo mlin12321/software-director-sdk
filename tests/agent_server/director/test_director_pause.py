@@ -623,10 +623,10 @@ async def test_a_session_stays_when_the_org_no_longer_has_its_team(
     first = await started(repo, launcher)
     await split_root(first)
     await landed(first)
-    at_api = await first.open_session(
+    at_api = await first.session_lifecycle.open_session(
         OpenSessionRequest(text="Rename it", node_id="services.api")
     )
-    at_web = await first.open_session(
+    at_web = await first.session_lifecycle.open_session(
         OpenSessionRequest(text="Restyle it", node_id="apps.web")
     )
     await first.settled()

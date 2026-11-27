@@ -884,7 +884,7 @@ async def test_a_message_opens_a_session_at_the_nearest_team_above_where_it_was_
         sent_from.format("services/billing"),
     )
     assert (await send(None))[:2] == ("root", False)
-    assert len(service.sessions()) == 5
+    assert len(service.org.sessions()) == 5
 
 
 async def test_a_message_opens_a_session_at_a_team_whose_ic_in_another_is_gone(

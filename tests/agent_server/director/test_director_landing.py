@@ -229,7 +229,7 @@ async def test_the_end_of_a_session_the_org_knows_is_on_its_record(
 ):
     await landed(service)
 
-    service.close_session(node(service, "root").session)
+    service.session_lifecycle.close_session(node(service, "root").session)
     await service.settled()
 
     kinds = [event.kind for event in service.team_memory.history("root")]
@@ -822,7 +822,7 @@ async def test_closing_a_session_leaves_the_org_nothing_it_never_had_accepted(
     await use(service, conversation, ReportTool, ReportAction(text="Chose a ledger."))
     place = api_place(service, top)
 
-    service.close_session(place.session)
+    service.session_lifecycle.close_session(place.session)
     await service.settled()
 
     assert service.team_memory.read(API_SPEC) is None
@@ -846,7 +846,7 @@ async def test_closing_a_session_keeps_what_waited_of_its_accepted_work(
     await session_accepted(service, top, conversation)
     assert waiting(service, top) == [JOBS]
 
-    service.close_session(jobs.session)
+    service.session_lifecycle.close_session(jobs.session)
     await service.settled()
 
     # Nobody settled it, so the org's team stays and what the session wrote
@@ -949,7 +949,7 @@ async def test_what_later_work_makes_of_the_org_waits_for_earlier_work(
     service: DirectorService, launcher: FakeLauncher, repo: Path
 ):
     first, conversation = await at_api(service)
-    opened = await service.open_session(
+    opened = await service.session_lifecycle.open_session(
         OpenSessionRequest(text="Add workers.", node_id="services.api")
     )
     await service.settled()
@@ -1440,7 +1440,7 @@ async def test_what_a_session_has_is_kept_at_once(repo: Path, launcher: FakeLaun
         )
     )
     await service.settled()
-    opened = await service.open_session(
+    opened = await service.session_lifecycle.open_session(
         OpenSessionRequest(text="Add refunds.", node_id="root")
     )
     await service.settled()
@@ -1465,7 +1465,7 @@ async def test_closing_a_session_leaves_the_humans_own_checkout_as_it_is(
     assert node(service, division_lead_of(service)).agents
     (repo / "notes.txt").write_text("the human's, not committed\n")
 
-    service.close_session(top.session)
+    service.session_lifecycle.close_session(top.session)
     await service.settled()
 
     assert (repo / "notes.txt").read_text() == "the human's, not committed\n"
@@ -1585,7 +1585,7 @@ async def test_contracts_the_org_did_not_take_are_on_record_when_the_session_clo
     )
     await session_accepted(service, top, conversation)
 
-    service.close_session(api_place(service, top).session)
+    service.session_lifecycle.close_session(api_place(service, top).session)
     await service.settled()
 
     assert any(
@@ -1600,7 +1600,7 @@ async def test_contracts_for_a_team_the_org_lost_wait_with_the_rest_of_the_landi
     await split_root(service)
     await landed(service)
     # Work of another session waits ahead of this one's.
-    web = await service.open_session(
+    web = await service.session_lifecycle.open_session(
         OpenSessionRequest(text="Web work.", node_id="apps.web")
     )
     await service.settled()
@@ -1608,7 +1608,7 @@ async def test_contracts_for_a_team_the_org_lost_wait_with_the_rest_of_the_landi
     session_contracts(service, node(service, ahead), "The web session's contracts.")
     service.team_memory.write("apps/web", "contracts.md", "The org's.\n")
     await session_accepted(service, ahead, web.conversation_id)
-    opened = await service.open_session(
+    opened = await service.session_lifecycle.open_session(
         OpenSessionRequest(text="Add refunds.", node_id="services.api")
     )
     await service.settled()
@@ -1696,7 +1696,7 @@ async def test_a_team_set_up_in_place_of_one_whose_folder_it_holds_is_the_orgs(
     await split_root(service)
     await landed(service)
     org_gains(service, "services.api.workers.fast", "services/api/workers/fast")
-    opened = await service.open_session(
+    opened = await service.session_lifecycle.open_session(
         OpenSessionRequest(text="Widen it.", node_id="services.api")
     )
     await service.settled()

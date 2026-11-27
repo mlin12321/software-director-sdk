@@ -108,7 +108,7 @@ async def opened(
     text: str = REFUNDS,
     title: str = "Refunds",
 ) -> OpenedSession:
-    session = await service.open_session(
+    session = await service.session_lifecycle.open_session(
         OpenSessionRequest(text=text, title=title, node_id=at)
     )
     await service.settled()
@@ -132,7 +132,7 @@ async def test_a_session_is_beside_the_org_tree_with_a_place_at_each_of_its_team
     service: DirectorService, launcher: FakeLauncher
 ):
     tree_before = [team.model_dump() for team in service.org.teams()]
-    [first] = service.sessions()
+    [first] = service.org.sessions()
     api = service.org.team(API)
     assert api is not None
     events: list[str] = []
@@ -171,7 +171,7 @@ async def test_a_session_is_beside_the_org_tree_with_a_place_at_each_of_its_team
     assert [open.id for open in snapshot.sessions] == [first.id]
     assert [open.id for open in now.sessions] == [first.id, found.id]
     assert "sessions" in events and "node_upsert" not in events
-    assert [open.id for open in service.sessions()] == [first.id, found.id]
+    assert [open.id for open in service.org.sessions()] == [first.id, found.id]
     [event] = [
         event
         for event in record_of(service, "root")
@@ -229,7 +229,7 @@ async def test_a_session_the_human_gave_no_name_is_called_what_it_is_for(
 async def test_a_conversation_links_to_the_ones_a_level_from_it(
     service: DirectorService,
 ):
-    [first] = service.sessions()
+    [first] = service.org.sessions()
     session = await opened(service)
     top = session.session.teams[0].id
     await use(
@@ -306,7 +306,7 @@ async def test_a_session_is_refused_where_it_cannot_be_found_or_started(
     del launcher.known[UUID(ic(service) or "")]
     with pytest.raises(Conflict, match="No conversation of the org"):
         await opened(service)
-    assert [open.title for open in service.sessions()] == ["Checkout"]
+    assert [open.title for open in service.org.sessions()] == ["Checkout"]
 
 
 async def test_the_director_chooses_the_team_when_none_is_named(
@@ -389,7 +389,7 @@ async def test_each_session_has_a_reviewer_of_its_own_and_the_second_meets_the_f
     # An accepted session stays open, with its conversation, until the human
     # closes it.
     await service.settled()
-    assert [open.title for open in service.sessions()] == [
+    assert [open.title for open in service.org.sessions()] == [
         "Checkout",
         "Refunds",
         "Vouchers",
@@ -560,7 +560,7 @@ async def test_a_request_to_the_org_opens_a_session_and_reaches_no_other(
     )
     await service.settled()
 
-    *_, faster, tidy = service.sessions()
+    *_, faster, tidy = service.org.sessions()
     assert (routed.node_id, by_path.node_id) == (
         f"{API}@{faster.id}",
         f"{API}@{tidy.id}",
@@ -609,7 +609,7 @@ async def test_what_a_session_waits_on_the_human_for_is_told_with_its_team(
 async def test_a_session_is_kept_on_its_machine_and_what_it_changes_with_the_org(
     service: DirectorService, repo: Path, launcher: FakeLauncher
 ):
-    [first] = service.sessions()
+    [first] = service.org.sessions()
     session = await opened(service)
     top = session.session.teams[0].id
     await use(
@@ -639,11 +639,11 @@ async def test_a_session_is_kept_on_its_machine_and_what_it_changes_with_the_org
         ] == ["Checkout", "Refunds"]
         # The sessions themselves come back from what this machine kept,
         # with what their agents recorded.
-        assert [found.id for found in restarted.sessions()] == [
+        assert [found.id for found in restarted.org.sessions()] == [
             first.id,
             session.session.id,
         ]
-        found = restarted.sessions()[-1]
+        found = restarted.org.sessions()[-1]
         assert [team.id for team in found.teams] == [
             team.id for team in session.session.teams
         ]
@@ -668,10 +668,10 @@ async def test_closing_a_session_removes_it_and_keeps_what_was_not_merged(
     (repo / "services/api").mkdir(parents=True, exist_ok=True)
     (repo / "services/api/own.ts").write_text("another's, not committed\n")
 
-    service.close_session(session.session.id)
+    service.session_lifecycle.close_session(session.session.id)
     await service.settled()
 
-    assert [open.title for open in service.sessions()] == ["Checkout"]
+    assert [open.title for open in service.org.sessions()] == ["Checkout"]
     assert service.org.session(session.session.id) == []
     assert conversation is not None and UUID(conversation) in launcher.deleted
     kept = run_git(
@@ -682,7 +682,7 @@ async def test_closing_a_session_removes_it_and_keeps_what_was_not_merged(
     # None of its work was accepted, so it is not on the org's record.
     assert "session_closed" not in [e.kind for e in record_of(service, "root")]
     with pytest.raises(NotFound):
-        service.close_session(session.session.id)
+        service.session_lifecycle.close_session(session.session.id)
 
 
 async def test_closing_a_session_that_never_started_touches_no_checkout(
@@ -696,7 +696,7 @@ async def test_closing_a_session_that_never_started_touches_no_checkout(
     (repo / "services/api").mkdir(parents=True, exist_ok=True)
     (repo / "services/api/own.ts").write_text("the team's own, not committed\n")
 
-    service.close_session(session.session.id)
+    service.session_lifecycle.close_session(session.session.id)
     await service.settled()
 
     assert (repo / "services/api/own.ts").read_text() == (
@@ -931,7 +931,7 @@ async def test_a_spec_of_a_closed_session_is_dropped(service: DirectorService):
         WriteSpecAction(file_text="# Refunds"),
     )
 
-    service.close_session(session.id)
+    service.session_lifecycle.close_session(session.id)
     await service.settled()
 
     assert service.team_memory.read("services/api/spec.md") == before
@@ -994,7 +994,7 @@ async def test_a_session_whose_ic_could_not_be_started_leaves_nothing_in_the_his
     launcher.root_error = Unprocessable("cannot start")
 
     with pytest.raises(Unprocessable):
-        await service.open_session(
+        await service.session_lifecycle.open_session(
             OpenSessionRequest(text="Add refunds", node_id="root"),
             root_conversation(repo),
         )
@@ -1024,7 +1024,7 @@ async def test_no_team_is_set_up_in_a_session_that_is_being_closed(
     await service.settled()
     [session] = service.org.sessions()
     places = {place.id for place in service.org.session(session.id)}
-    service.close_session(session.id)
+    service.session_lifecycle.close_session(session.id)
     await service.settled()
 
     # In the turn it is finishing, the Manager approves the sub-teams.
@@ -1035,7 +1035,7 @@ async def test_no_team_is_set_up_in_a_session_that_is_being_closed(
     launcher.report(root_manager, ConversationExecutionStatus.FINISHED)
     launcher.report(root_ic, ConversationExecutionStatus.FINISHED)
     await service.settled()
-    assert service.sessions() == []
+    assert service.org.sessions() == []
     await service.aclose()
 
 
@@ -1043,7 +1043,7 @@ async def test_a_close_cut_off_records_no_end_of_a_session_the_org_never_knew(
     repo: Path, launcher: FakeLauncher
 ):
     first = await started(repo, launcher)
-    opened = await first.open_session(
+    opened = await first.session_lifecycle.open_session(
         OpenSessionRequest(text="Add refunds", node_id="root")
     )
     await first.settled()
@@ -1057,7 +1057,7 @@ async def test_a_close_cut_off_records_no_end_of_a_session_the_org_never_knew(
     first.org.close_session = server_ends  # type: ignore[method-assign]
 
     async def closing() -> None:
-        first.close_session(opened.session.id)
+        first.session_lifecycle.close_session(opened.session.id)
         await first.settled()
 
     await cut_off(launcher, ended, closing())
@@ -1067,7 +1067,7 @@ async def test_a_close_cut_off_records_no_end_of_a_session_the_org_never_knew(
     await second.resume()
     await second.settled()
 
-    assert all(session.id != opened.session.id for session in second.sessions())
+    assert all(session.id != opened.session.id for session in second.org.sessions())
     kinds = [event.kind for event in second.team_memory.history("root")]
     assert "session_closed" not in kinds
     await second.aclose()

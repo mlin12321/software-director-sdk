@@ -630,7 +630,7 @@ async def test_the_first_message_starts_an_org_and_later_ones_open_sessions_in_i
     await service.settled()
 
     assert first.status_code == 200
-    [session] = service.sessions()
+    [session] = service.org.sessions()
     top = session.teams[0]
     assert top.title == "Build the checkout flow"
     assert first.json() == {
@@ -648,7 +648,7 @@ async def test_the_first_message_starts_an_org_and_later_ones_open_sessions_in_i
     )
     await service.settled()
 
-    _, opened = service.sessions()
+    _, opened = service.org.sessions()
     place = opened.teams[0]
     assert (opened.team_id, place.id) == ("root", f"root@{opened.id}")
     assert later.json() == {
@@ -673,7 +673,7 @@ async def test_the_first_message_starts_an_org_and_later_ones_open_sessions_in_i
     # What is said in a session goes to its IC and opens no other session.
     assert said.json() == {**later.json(), "chosen_by": "path", "reason": ""}
     assert unknown.status_code == 404
-    assert len(service.sessions()) == 2
+    assert len(service.org.sessions()) == 2
     assert launcher.messages_to(said.json()["conversation_id"])[-1] == (
         "And partial ones."
     )

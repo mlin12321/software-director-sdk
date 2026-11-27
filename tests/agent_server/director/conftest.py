@@ -1099,7 +1099,7 @@ async def at_api(service: DirectorService) -> tuple[str, str]:
     """
     await split_root(service)
     await landed(service)
-    opened = await service.open_session(
+    opened = await service.session_lifecycle.open_session(
         OpenSessionRequest(text="Add refunds.", node_id="services.api")
     )
     await service.settled()
