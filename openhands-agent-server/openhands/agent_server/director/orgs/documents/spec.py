@@ -16,6 +16,8 @@ class SpecProtocol(DocumentProtocolBase):
     may write it while it does."""
 
     usable_in_hand_over: ClassVar[bool] = True
+    # How a removed team worked is where the next team in its folder starts.
+    stays_when_team_is_removed: ClassVar[bool] = True
 
     def write(self, call: DocumentToolCall) -> DocumentToolResult:
         written = super().write(call)

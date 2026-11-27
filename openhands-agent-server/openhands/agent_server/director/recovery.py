@@ -44,7 +44,7 @@ STEP_NAMES: dict[str, str] = {
     "accept": "Its accepted work is merged into the team above",
     "prune": "Pruning it is finished",
     "hand_over": "What its removed teams left is handed over",
-    "land_org": "Its accepted teams and contracts become the org's",
+    "land_org": "Its accepted teams become the org's",
     "close_session": "Its session is closed",
 }
 

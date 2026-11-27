@@ -567,8 +567,12 @@ async def test_an_approved_split_sets_up_each_sub_team(
 
     assert node(service, "root").pending_split is None
     assert "API (services/api)" in launcher.messages_to(ic(service))[-1]
-    [contracts] = service.contracts_of(node(service, "services.api"))
-    assert not contracts.own and "POST /checkout" in contracts.contracts
+    [contracts] = [
+        shown
+        for shown in service.documents_shown(node(service, "services.api"))
+        if shown.name == "contracts"
+    ]
+    assert not contracts.own and "POST /checkout" in contracts.text
     # They are the session's alone until its work is accepted.
     assert service.team_memory.read("contracts.md") is None
 

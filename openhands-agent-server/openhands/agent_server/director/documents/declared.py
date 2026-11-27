@@ -70,6 +70,7 @@ class Document(BaseModel):
             "lead_manager",
             "hand_over",
             "teams_replaced",
+            "sub_teams_changed",
             "handed_over",
         ],
         str,
@@ -84,8 +85,10 @@ class Document(BaseModel):
             "for the two that take a session's work into the org, and "
             "`hand_over` for the conversation that passes on what removed "
             "teams left, `teams_replaced` for the {writer} once sub-teams it "
-            "had were replaced, and `handed_over` for the {writer} of a team "
-            "that is handed what the teams before it left. A text may name a member as "
+            "had were replaced, `sub_teams_changed` for the {writer} once "
+            "sub-teams were set up below it or one was pruned, and "
+            "`handed_over` for the {writer} of a team that is handed what "
+            "the teams before it left. A text may name a member as "
             "`{writer}`, `{reviewer}` or `{manager}`, and the number of the "
             "team's agents as `{count}`."
         ),

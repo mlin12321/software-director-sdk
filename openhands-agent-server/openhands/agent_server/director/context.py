@@ -6,20 +6,15 @@ next message the agent gets anyway.
 """
 
 import json
+from collections.abc import Collection
 from typing import Any
 
 
 UPDATE_HEADING = "[director] context update"
 
-# What the briefing says in its own words; the rest is listed below them.
-IN_THE_BRIEFING = (
-    "boundary",
-    "spec",
-    "specs_left_by_teams_before_you",
-    "contracts_with_the_teams_beside_you",
-    "contracts_between_your_sub_teams",
-    "reports_of_your_team",
-)
+# What every briefing says in its own words, with what the team's
+# documents add to the context; the rest is listed below them.
+IN_EVERY_BRIEFING = ("boundary", "documents_left_by_teams_before_you")
 # Lists an agent adds to itself; what it added is not told back to it.
 _OWN = {"escalations_you_raised": None, "reports_of_your_team": "by"}
 # Lists with one entry for each team, told team by team.
@@ -149,13 +144,19 @@ def _cut(value: Any) -> Any:
     return value
 
 
-def briefing_block(context: dict[str, Any]) -> str:
+def briefing_block(context: dict[str, Any], of_documents: Collection[str] = ()) -> str:
     """The rest of the context, for the end of a briefing: what is there,
-    without the parts that are empty."""
+    without the parts that are empty.
+
+    Args:
+        of_documents: The parts the team's documents add to the context,
+            which the briefing has said in each document's own words.
+    """
+    said = {*IN_EVERY_BRIEFING, *of_documents}
     rest = {
         key: value
         for key, value in context.items()
-        if key not in IN_THE_BRIEFING and value not in (None, "", [], {})
+        if key not in said and value not in (None, "", [], {})
     }
     return (
         "The rest of your team's context. When any of the context changes, "

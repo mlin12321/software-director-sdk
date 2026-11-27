@@ -4,7 +4,7 @@ A session is not part of the org: the org tree and the team memory are
 stored under git refs and exchanged with other machines, and a session's
 agents, conversations and checkouts are here only. So the sessions are kept
 with what else the director is in the middle of (:mod:`run_state`), and what
-a session changes of the org (reports, the record, specs, contracts) is
+a session changes of the org (reports, the record, its teams' documents) is
 written to the team memory like anybody's.
 """
 

@@ -3,7 +3,7 @@
 import asyncio
 import hashlib
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import NamedTuple
@@ -26,7 +26,6 @@ from openhands.agent_server.director.git import (
     uncommitted,
 )
 from openhands.agent_server.director.git_store import (
-    SPEC_FILE,
     normalize_store_path,
 )
 from openhands.agent_server.director.intents import Accept, LandOrg, RequestReview
@@ -85,8 +84,6 @@ from openhands.agent_server.director.run_state import (
     Intent,
 )
 from openhands.agent_server.director.service.records import (
-    CONTRACTS,
-    LEFT_BEHIND,
     Taken,
 )
 from openhands.agent_server.director.service.requests import Requests
@@ -100,7 +97,6 @@ from openhands.agent_server.director.service.state import (
     MERGE_WAITS,
     ORG_WAITS,
     _branch_of,
-    _contracts_file,
     checkout_root,
 )
 from openhands.agent_server.director.split import (
@@ -145,7 +141,7 @@ class Meets(NamedTuple):
     text: str
     # Names what was compared, so that an answer is held to what was shown.
     mark: str
-    # The spec each file had when it was shown.
+    # What each document's file said when it was shown.
     seen: dict[str, str | None]
     items: list[MergeItem]
 
@@ -161,13 +157,13 @@ class Landed(NamedTuple):
     taken: list[str]
     # The teams that waited and stay as the org has them.
     kept: list[str]
-    # The directories whose contracts waited and are settled.
-    agreed: list[str]
-    # The directories whose contracts waited and stay the org's.
-    held: list[str]
-    # Where the contracts the session wrote do not hold: each directory
-    # with the contracts that do.
-    others: list[tuple[str, str]]
+    # The documents that waited and are settled: each by name and folder.
+    agreed: list[tuple[str, str]]
+    # The documents that waited and stay the org's.
+    held: list[tuple[str, str]]
+    # Where what the session wrote does not hold: each document by name
+    # and folder, with the text that does.
+    others: list[tuple[str, str, str]]
 
 
 def _submitted(team: SessionTeam) -> tuple[int, str]:
@@ -337,8 +333,9 @@ class Reviews(Requests):
                             team,
                             store.session_title(team),
                             self._asked_for(team),
-                            self._contracts_written(team),
+                            self._documents_waiting(team),
                             names=self.team(team).names,
+                            kept=self.kept_documents(node),
                         )
                         if store.opens_session(team)
                         else ""
@@ -349,6 +346,7 @@ class Reviews(Requests):
                         self._so_far(team),
                         self.asked_of(team),
                         self.review_instructions(self.type_of(team)),
+                        self.kept_documents(node).read_by_sub_teams,
                     )
                 )
         # What it was asked before and has not decided: it may have waited
@@ -397,7 +395,7 @@ class Reviews(Requests):
                 "session is accepted. Leave that empty."
             )
         own = normalize_store_path(place.boundary.path)
-        homes = {home for home, *_ in self.specs_inherited(place)}
+        homes = {found.home for found in self.documents_inherited(place)}
         chosen = []
         for choice in choices:
             document = choice.document.strip()
@@ -447,7 +445,7 @@ class Reviews(Requests):
         place_id: str,
         needed_above: str,
         reconciled: str = "",
-        specs: list[dict[str, str]] | None = None,
+        choices: list[dict[str, str]] | None = None,
     ) -> None:
         """Take a team's reviewed work into the team above. Safe from any
         thread.
@@ -457,7 +455,7 @@ class Reviews(Requests):
                 none does.
             reconciled: What the reviewer decided about what the work meets
                 in the checkout above; '' when it was asked nothing.
-            specs: What it decided about the specs of a session's work.
+            choices: What it decided about the documents of a session's work.
         """
         place = self.org.place(place_id)
         self._begin(
@@ -465,7 +463,7 @@ class Reviews(Requests):
             Accept(
                 needed_above=needed_above,
                 reconciled=reconciled,
-                specs=specs or [],
+                choices=choices or [],
                 # The work of a session goes into what the org shares.
                 base=place is not None and self.org.opens_session(place),
             ),
@@ -603,8 +601,8 @@ class Reviews(Requests):
 
     def _open_merge(self, top: SessionTeam) -> Merge | None:
         """Give the work a session submits its place in the order it goes
-        into the org in. Work whose teams and contracts still wait from
-        an earlier acceptance keeps the place it has."""
+        into the org in. Work whose teams still wait from an earlier
+        acceptance, with what is settled with them, keeps the place it has."""
         with self._weighing:
             merge = self._merge_of(top)
             if merge is None and self._review_of(top) is not None:
@@ -631,48 +629,59 @@ class Reviews(Requests):
                 found.append((merge.seq, places[0]))
         return [top for _, top in sorted(found, key=lambda one: one[0])]
 
-    def _contracts_with(
+    def _documents_coming_with(
         self,
         lost: SessionTeam,
         home_id: str,
         team_id: str,
-        before: MergeItem | None,
-    ) -> MergeItem | None:
-        """The contracts a lost team set between its sub-teams, to wait
-        with the sub-team that would go under ``home_id``: they would be
-        added to the contracts of that team.
+        before: Mapping[str, MergeItem],
+    ) -> list[MergeItem]:
+        """What a lost team wrote of the documents that wait with the
+        teams, to wait with the sub-team that would go under ``home_id``:
+        each would be added to that team's own.
 
         Args:
-            before: What waited of them when this was last worked out.
-                The lost team's own record may have landed since, and
-                then this is where its contracts are kept.
+            before: What waited of them when this was last worked out, by
+                document. The lost team's own record may have landed
+                since, and then this is where its text is kept.
         """
         home = self.org.team(home_id)
-        theirs = self.read_file(lost, _contracts_file(lost.boundary.path))
-        if before is not None and not (theirs and theirs.strip()):
-            theirs = before.session[len(before.org.rstrip()) :]
-        if home is None or not theirs or not theirs.strip():
-            return None
+        if home is None:
+            return []
         path = normalize_store_path(home.boundary.path)
-        org = self._memory().read(_contracts_file(path)) or ""
-        if theirs.strip() in org:
-            return None
-        both = f"{org.rstrip()}\n\n{theirs.strip()}\n" if org.strip() else theirs
-        return MergeItem(
-            kind="document",
-            document=CONTRACTS,
-            key=path,
-            gate="manager",
-            session=both,
-            org=org,
-            with_team=team_id,
-        )
+        folder = normalize_store_path(lost.boundary.path)
+        found = []
+        for name, protocol in self.protocols.items():
+            if not protocol.waits_for_team_changes:
+                continue
+            theirs = self.read_file(lost, DocumentRef(folder, name).path)
+            was = before.get(name)
+            if was is not None and not (theirs and theirs.strip()):
+                theirs = was.session[len(was.org.rstrip()) :]
+            if not theirs or not theirs.strip():
+                continue
+            org = self._memory().read(DocumentRef(path, name).path) or ""
+            if theirs.strip() in org:
+                continue
+            both = f"{org.rstrip()}\n\n{theirs.strip()}\n" if org.strip() else theirs
+            found.append(
+                MergeItem(
+                    kind="document",
+                    document=name,
+                    key=path,
+                    gate="manager",
+                    session=both,
+                    org=org,
+                    with_team=team_id,
+                )
+            )
+        return found
 
     def _manager_items(
         self, top: SessionTeam, before: list[MergeItem]
     ) -> tuple[dict[str, Side], list[MergeItem]]:
-        """What a session's work makes of the org's teams and contracts as
-        the org is now.
+        """What a session's work makes of the org's teams, and of the
+        documents that wait with them, as the org is now.
 
         Args:
             before: What waited when this was last worked out. What was
@@ -692,8 +701,11 @@ class Reviews(Requests):
         take, clashes = merge_shapes(session.shape, theirs, now)
         places = {place.team_id: place for place in session_places}
         items: list[MergeItem] = []
-        coming: dict[str, MergeItem] = {}
-        came = {item.with_team: item for item in before if item.with_team}
+        coming: dict[tuple[str, str], MergeItem] = {}
+        came: dict[str, dict[str, MergeItem]] = {}
+        for item in before:
+            if item.with_team:
+                came.setdefault(item.with_team, {})[item.document] = item
         for clash in clashes:
             place = places.get(clash.team)
             known = place or store.team(clash.team)
@@ -707,11 +719,10 @@ class Reviews(Requests):
                 and store.team(above.team_id) is None
             ):
                 moved_to = self._home_of(top, place.boundary.path)
-                agreed = self._contracts_with(
-                    above, moved_to, clash.team, came.get(clash.team)
-                )
-                if agreed is not None:
-                    coming.setdefault(agreed.key, agreed)
+                for agreed in self._documents_coming_with(
+                    above, moved_to, clash.team, came.get(clash.team, {})
+                ):
+                    coming.setdefault((agreed.document, agreed.key), agreed)
             items.append(
                 MergeItem(
                     kind="team",
@@ -726,14 +737,15 @@ class Reviews(Requests):
         memory = self._memory()
         for file, (text, over) in sorted(self.drafts(top.session).items()):
             path = file.rpartition("/")[0]
-            if not self._waits_for_team_changes(file) or path in coming:
+            name = DocumentRef.at(file).name
+            if not self._waits_for_team_changes(file) or (name, path) in coming:
                 continue
             has = memory.read(file)
             if has != over and has != text:
                 items.append(
                     MergeItem(
                         kind="document",
-                        document=DocumentRef.at(file).name,
+                        document=name,
                         key=path,
                         gate="manager",
                         session=text or "",
@@ -757,10 +769,10 @@ class Reviews(Requests):
         ]
 
     def _org_turn(self) -> None:
-        """Move on what the sessions' work makes of the org's teams and
-        contracts, strictly in the order the work was submitted: only the
-        first in order is worked out, asked about and landed. Safe from
-        any thread, and to call again."""
+        """Move on what the sessions' work makes of the org's teams and of
+        what is settled with them, strictly in the order the work was
+        submitted: only the first in order is worked out, asked about and
+        landed. Safe from any thread, and to call again."""
         with self._weighing:
             for index, top in enumerate(self._in_order()):
                 merge = self._merge_of(top)
@@ -825,8 +837,8 @@ class Reviews(Requests):
 
     def _check_managers(self) -> None:
         """Move on what waits for a Manager that does not answer. It
-        holds back the teams and contracts of every session that
-        submitted later, so it is asked once more after the time a team
+        holds back what every session that submitted later made of
+        the org's teams, so it is asked once more after the time a team
         may show no progress, and after as long again the human is asked:
         their answer lets the org's stand wherever nothing was decided."""
         limit = self.settings.soft_check_in_minutes
@@ -854,8 +866,8 @@ class Reviews(Requests):
                 )
                 self.tell_manager(
                     review.id,
-                    "This still waits for you, and with it the teams and "
-                    "contracts of every session that submitted later.\n\n"
+                    "This still waits for you, and with it what every session "
+                    "that submitted later made of its teams.\n\n"
                     + merge_request(
                         top,
                         self.org.session_title(top),
@@ -876,10 +888,10 @@ class Reviews(Requests):
                 "of accepted work",
                 detail=(
                     f"The code of {top.title!r} is accepted and merged. What "
-                    "it makes of the org's teams and contracts waits for the "
+                    "it makes of the org's teams waits for the "
                     f"{self.team(top).names.manager} that reviews it, which has "
                     "not answered, and the "
-                    "teams and contracts of sessions that submitted later "
+                    "teams of sessions that submitted later "
                     "wait behind it. Answer this to go on without the "
                     f"{self.team(top).names.manager}: the org's stay wherever it "
                     "has not decided, and "
@@ -897,8 +909,9 @@ class Reviews(Requests):
         note: str,
         choices: Sequence[DocumentChoice] = (),
     ) -> str:
-        """Settle what a session's work makes of the org's teams and
-        contracts that waits at its Division Lead place. A team
+        """Settle what a session's work makes of the org's teams, and of
+        the documents settled with them, that waits at its Division Lead
+        place. A team
         becomes what the session has unless ``teams`` says the org's
         stays; taken from the session, it may be put under another team
         of the org or called otherwise. Of a document that waits, the
@@ -1092,11 +1105,12 @@ class Reviews(Requests):
         is in the repository's checkout.
 
         Args:
-            seen: The specs the reviewer was shown, by file.
-            org: What its work makes of the org's teams and contracts, all
-                of it settled; None when that waits. Then only its specs
-                and the records of the teams the org has land, and the
-                rest stays the session's.
+            seen: The documents the reviewer was shown, by file.
+            org: What its work makes of the org's teams and of the
+                documents that wait with them, all of it settled; None
+                when that waits. Then only the documents that land with
+                its work and the records of the teams the org has land,
+                and the rest stays the session's.
         """
         # No save of the tree comes between what this changes of the org
         # and the one commit that takes it and team memory together.
@@ -1178,25 +1192,25 @@ class Reviews(Requests):
             # it once more.
             store.set_shape(session.id, theirs)
             texts: dict[str, str | None] = {}
-            agreed: list[str] = []
-            held: list[str] = []
-            others: list[tuple[str, str]] = []
+            agreed: list[tuple[str, str]] = []
+            held: list[tuple[str, str]] = []
+            others: list[tuple[str, str, str]] = []
             for item in items:
                 if not item.waits_with_teams:
                     continue
-                file = _contracts_file(item.key)
+                file = DocumentRef(item.key, item.document).path
                 if item.use == "org" or (
                     item.with_team is not None and item.with_team not in taken
                 ):
                     self._undraft(top.session, file)
-                    held.append(item.key or "the repository")
-                    others.append((item.key, item.org))
+                    held.append((item.document, item.key))
+                    others.append((item.document, item.key, item.org))
                     continue
                 text = item.replacement if item.use == "replacement" else item.session
                 texts[file] = f"{text.strip()}\n" if text.strip() else None
-                agreed.append(item.key or "the repository")
+                agreed.append((item.document, item.key))
                 if item.use == "replacement":
-                    others.append((item.key, text))
+                    others.append((item.document, item.key, text))
             self._keep_merge(top, None)
             records = self._land_records(top, seen, chosen=texts, tree=True)
         except BaseException:
@@ -1210,8 +1224,8 @@ class Reviews(Requests):
         self, top: SessionTeam, seen: dict[str, str | None] | None
     ) -> None:
         """Land the work of a session whose code was just merged: with
-        what it makes of the org's teams and contracts when that is
-        settled and it is its turn, and without it otherwise."""
+        what it makes of the org's teams, and what is settled with them,
+        when that is settled and it is its turn, and without it otherwise."""
         with self._weighing:
             merge = self._open_merge(top)
             order = self._in_order()
@@ -1260,23 +1274,23 @@ class Reviews(Requests):
         self._org_turn()
 
     def _record_not_taken(self, top: SessionTeam, landed: Landed) -> None:
-        """Keep on record the contracts of a session that the org did not
-        take, also when the session is closed and nobody is told."""
-        for directory, _ in landed.others:
+        """Keep on record what a session wrote of a document that the org
+        did not take, also when the session is closed and nobody is told."""
+        for name, directory, _ in landed.others:
             self._land_event(
                 self._home_of(top, directory),
                 self._event(
                     "not_taken",
                     top,
-                    "the contracts it wrote for "
+                    f"the {name} it wrote for "
                     f"{directory or 'the repository'}: its merged code was "
-                    "written to them",
+                    "written to it",
                 ),
             )
 
     async def _do_land_org(self, intent: Intent) -> None:
-        """Land what a session's accepted work makes of the org's teams
-        and contracts, when it is its turn and all of it is settled."""
+        """Land what a session's accepted work makes of the org's teams,
+        and what is settled with them, when it is its turn and all of it is settled."""
         top = self.org.place(intent.node_id)
         if top is None:
             return
@@ -1316,10 +1330,10 @@ class Reviews(Requests):
 
     def _settle_on_close(self, top: SessionTeam) -> None:
         """Settle what waits of a session that is being closed: of work
-        whose code is in the repository, the org's teams and contracts
-        stay wherever nobody decided otherwise, and what the session wrote
-        lands where the org has the team and is that team's record where
-        it has not."""
+        whose code is in the repository, the org's teams and what is
+        settled with them stay wherever nobody decided otherwise, and what
+        the session wrote lands where the org has the team and is that
+        team's record where it has not."""
         with self._weighing:
             merge = self._merge_of(top)
             if merge is None:
@@ -1345,8 +1359,7 @@ class Reviews(Requests):
 
     def _sent_back(self, top: SessionTeam) -> None:
         """The work of a session was sent back: it has no place in the
-        order any more, unless teams and contracts of work accepted before
-        still wait."""
+        order any more, unless teams of work accepted before still wait."""
         with self._weighing:
             merge = self._merge_of(top)
             review = self._review_of(top)
@@ -1378,12 +1391,13 @@ class Reviews(Requests):
         protocol = self.protocol_at(file)
         return protocol is not None and protocol.waits_for_team_changes
 
-    def _contracts_written(self, top: SessionTeam) -> list[tuple[str, str]]:
-        """The contracts a session wrote that are not the org's: each
-        directory with the session's text."""
+    def _documents_waiting(self, top: SessionTeam) -> list[tuple[str, str, str]]:
+        """What a session wrote of the documents that wait with its teams
+        and is not the org's: each by name and folder, with the session's
+        text."""
         memory = self._memory()
         return [
-            (file.rpartition("/")[0], text or "")
+            (DocumentRef.at(file).name, file.rpartition("/")[0], text or "")
             for file, (text, _) in sorted(self.drafts(top.session).items())
             if self._waits_for_team_changes(file) and memory.read(file) != text
         ]
@@ -1397,7 +1411,7 @@ class Reviews(Requests):
     def _to_reconcile(self, place: SessionTeam, above: SessionTeam) -> Meets | None:
         """What the IC above has to settle before the work of a team is
         merged: the files both it and the checkout above changed since it
-        began, and the specs it wrote over ones that changed meanwhile.
+        began, and the documents it wrote over ones that changed meanwhile.
 
         Returns:
             What to tell that IC, with what names the state it was said
@@ -1426,9 +1440,9 @@ class Reviews(Requests):
             if not unmergeable:
                 files = [path for path in changes.both if owns(place, path)]
         opens = self.org.opens_session(place)
-        specs = self.specs_to_reconcile(place) if opens else []
-        inherited = self.specs_inherited(place) if opens else []
-        if not files and not specs and not inherited:
+        changed = self.documents_to_reconcile(place) if opens else []
+        inherited = self.documents_inherited(place) if opens else []
+        if not files and not changed and not inherited:
             return None
         text = reconcile_request(
             place,
@@ -1436,45 +1450,46 @@ class Reviews(Requests):
             changes.tip if changes else "",
             files,
             list(changes.landed) if changes else [],
-            specs,
+            changed,
             inherited,
             names=self.team(place).names,
+            reports=self.kept_documents(above).reports,
         )
         there = git(checkout, ["ls-tree", "HEAD", "--", *files]) if files else ""
         compared = json.dumps(
-            [changes.tip if changes else "", there, specs, *inherited]
+            [changes.tip if changes else "", there, changed, *inherited]
         )
         return Meets(
             text,
             hashlib.sha256(compared.encode()).hexdigest(),
             {
-                (f"{directory}/{SPEC_FILE}" if directory else SPEC_FILE): now or None
-                for directory, now, _ in specs
+                DocumentRef(found.folder, found.name).path: found.now or None
+                for found in changed
             },
             [
                 *(MergeItem(kind="code", key=path, gate="ic") for path in files),
                 *(
                     MergeItem(
                         kind="document",
-                        document=LEFT_BEHIND,
-                        key=directory,
+                        document=found.name,
+                        key=found.folder,
                         gate="ic",
-                        session=mine,
-                        org=now,
+                        session=found.written,
+                        org=found.now,
                     )
-                    for directory, now, mine in specs
+                    for found in changed
                 ),
                 *(
                     MergeItem(
                         kind="document",
-                        document=LEFT_BEHIND,
-                        key=home,
+                        document=found.name,
+                        key=found.home,
                         gate="ic",
-                        title=lost,
-                        session=written,
-                        org=now,
+                        title=found.lost,
+                        session=found.written,
+                        org=found.now,
                     )
-                    for home, now, lost, written in inherited
+                    for found in inherited
                 ),
             ],
         )
@@ -1678,7 +1693,7 @@ class Reviews(Requests):
         await self._request_review(intent.node_id)
 
     def _ask_to_clear(
-        self, place_id: str, detail: str, reconciled: str, specs: list[dict[str, str]]
+        self, place_id: str, detail: str, reconciled: str, choices: list[dict[str, str]]
     ) -> None:
         """Ask the human, once, to clear the way for accepted work into
         their own checkout. Their answer merges it, as its reviewer
@@ -1687,7 +1702,9 @@ class Reviews(Requests):
         if place is None or any(e.id == MERGE_WAITS for e in place.escalations):
             return
         self._runs().mark(
-            CLEARING, place_id, json.dumps({"reconciled": reconciled, "specs": specs})
+            CLEARING,
+            place_id,
+            json.dumps({"reconciled": reconciled, "choices": choices}),
         )
         self.org.raise_escalation(
             place_id,
@@ -1702,7 +1719,7 @@ class Reviews(Requests):
     async def _do_accept(self, intent: Intent) -> None:
         accept = intent.of(Accept)
         await self._accept(
-            intent.node_id, accept.needed_above, accept.reconciled, accept.specs
+            intent.node_id, accept.needed_above, accept.reconciled, accept.choices
         )
 
     async def _own_account(self, place: SessionTeam) -> str:
@@ -1753,7 +1770,7 @@ class Reviews(Requests):
         place_id: str,
         needed_above: str,
         reconciled: str = "",
-        specs: list[dict[str, str]] | None = None,
+        choices: list[dict[str, str]] | None = None,
     ) -> None:
         names = self.names_at(place_id)
         store = self.org
@@ -1766,9 +1783,9 @@ class Reviews(Requests):
             # still owed.
             merge = self._merge_of(place) if store.opens_session(place) else None
             if merge is not None and not merge.code_landed:
-                # What its reviewer made of its specs lands with it, as the
+                # What its reviewer made of its documents lands with it, as the
                 # first time.
-                self._take_document_choices(place, specs or [])
+                self._take_document_choices(place, choices or [])
                 await asyncio.to_thread(self._land_accepted, place, None)
             await self._pass_up(above.id, acted=True)
             # Whoever waited behind this work is still to hear it is their turn.
@@ -1821,7 +1838,7 @@ class Reviews(Requests):
                     + f".\nSwitch it back to {started_on!r}, then answer "
                     "this: the work is merged then.",
                     reconciled,
-                    specs or [],
+                    choices or [],
                 )
                 self.notify(
                     reviewer,
@@ -1872,7 +1889,7 @@ class Reviews(Requests):
                     f"{result.detail}\nCommit or put aside what is in "
                     "the way, then answer this: the work is merged then.",
                     reconciled,
-                    specs or [],
+                    choices or [],
                 )
                 self.notify(
                     reviewer,
@@ -1947,7 +1964,7 @@ class Reviews(Requests):
             between=(place.base_commit, tip) if place.base_commit and tip else ("", ""),
         )
         if opens:
-            self._take_document_choices(place, specs or [])
+            self._take_document_choices(place, choices or [])
             await asyncio.to_thread(
                 self._land_accepted, place, meets.seen if meets else None
             )

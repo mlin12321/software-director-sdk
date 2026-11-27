@@ -57,14 +57,14 @@ class Accept(_Payload):
     Attributes:
         needed_above: Why a team further up waits on the work.
         reconciled: What the reviewer decided about what the work meets.
-        specs: What it decided about the specs of a session's work.
+        choices: What it decided about the documents of a session's work.
         base: The work goes into what the org shares.
     """
 
     kind: Literal["accept"] = "accept"
     needed_above: str
     reconciled: str = ""
-    specs: list[dict[str, str]] = Field(default_factory=list)
+    choices: list[dict[str, str]] = Field(default_factory=list)
     base: bool = False
 
 

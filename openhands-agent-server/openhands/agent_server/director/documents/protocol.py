@@ -168,6 +168,9 @@ class DocumentProtocolBase(ABC):
     waits_for_team_changes: ClassVar[bool] = False
     """Whether what a session wrote of it becomes the org's only once the
     session's changes to the teams are settled, and not with its code."""
+    stays_when_team_is_removed: ClassVar[bool] = False
+    """Whether the one a removed team wrote stays in its folder, for the
+    team that has the folder next to read as an old one."""
 
     @classmethod
     def arguments_for(cls, document: Document) -> type[BaseModel]:

@@ -835,6 +835,19 @@ def proposing(
     return ProposeTeamsAction(teams=as_proposed(children), keep=keep or [], text=text)
 
 
+def own_document(service: DirectorService, place: SessionTeam, name: str) -> str | None:
+    """The document named ``name`` that is a team's own, as its session
+    has it; None when it has none, also when it was only left one."""
+    return next(
+        (
+            shown.text
+            for shown in service.documents_shown(place)
+            if shown.name == name and shown.own
+        ),
+        None,
+    )
+
+
 def own_contracts(service: DirectorService, place: SessionTeam) -> str:
     """The contracts between the sub-teams of a place, as its session has
     them."""

@@ -21,3 +21,6 @@ rules:
         the org's spec, the session's, or a text you write. Keep promises
         between teams out of a spec.
     hand_over: "`write_spec` works here: rewrite your team's spec."
+    sub_teams_changed: >-
+        Rewrite your own spec with `write_spec` to say how your folder is
+        divided now.

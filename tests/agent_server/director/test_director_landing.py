@@ -66,6 +66,7 @@ from tests.agent_server.director.conftest import (
     manager,
     node,
     org_gains,
+    own_contracts,
     path_of,
     record_of,
     root_conversation,
@@ -507,7 +508,7 @@ async def test_a_team_both_made_something_else_of_waits_for_the_manager_above(
     assert "the session: 'API' in services/api/jobs, under services.api" in told
     assert "the org now: 'API' in services/api/workers, under services.api" in told
     # What the session wrote for it waits with it.
-    assert service.spec_draft(place) is not None
+    assert service.document_draft(place, "spec") is not None
 
     by_ic = await use(
         service, division_lead_ic(service, top), SettleTeamsTool, SettleTeamsAction()
@@ -536,7 +537,7 @@ async def test_a_team_both_made_something_else_of_waits_for_the_manager_above(
     assert path_of(service, JOBS) == (
         "services/api/workers" if org_holds else "services/api/jobs"
     )
-    assert service.spec_draft(place) is None
+    assert service.document_draft(place, "spec") is None
     said = launcher.messages_to(conversation)[-1]
     assert "One queue." in said
     assert ("The org's teams stay" in said) is org_holds
@@ -570,7 +571,7 @@ async def test_a_team_set_up_under_one_the_org_lost_goes_under_the_nearest_team(
     assert "it goes under team root" in told and "is not put back" in told
     # The contracts the lost team set for it come with it, and nothing of
     # them is the org's before it is settled.
-    assert f"they come with team {JOBS}" in told and IDEMPOTENT in told
+    assert f"it comes with team {JOBS}" in told and IDEMPOTENT in told
     before = service.team_memory.read("contracts.md")
     assert before is not None and IDEMPOTENT not in before
 
@@ -611,9 +612,7 @@ async def test_contracts_and_reports_a_session_writes_are_the_orgs_on_accept(
     # Until its work is accepted they are the session's alone.
     assert service.team_memory.read(API_CONTRACTS) is None
     assert service.team_memory.reports("services/api", "ic") == []
-    assert [c.contracts for c in service.contracts_of(place) if c.own] == [
-        "Jobs are idempotent.\n"
-    ]
+    assert own_contracts(service, place) == "Jobs are idempotent.\n"
     assert [r.text for r in service.reports_of(place)] == [
         "The old jobs team retried forever."
     ]
@@ -659,7 +658,7 @@ async def test_contracts_both_changed_wait_for_the_manager_above(
         start for start in launcher.derived if str(start.conversation_id) == asked
     ]
     assert str(started.parent_id) == conversation
-    assert "the contracts between the sub-teams of services/api" in told
+    assert "the contracts of services/api" in told
     merge = node(service, division_lead_of(service, top)).merge
     assert merge is not None
     assert [
@@ -671,7 +670,7 @@ async def test_contracts_both_changed_wait_for_the_manager_above(
     request = [
         start.task for start in launcher.derived if "submits its work" in start.task
     ][-1]
-    assert "Contracts it wrote for services/api" in request
+    assert "What it wrote as the contracts of services/api" in request
     assert "Refunds go through Jobs." in request
 
     # What the Manager decided on is held to what it was shown.
@@ -715,10 +714,14 @@ async def test_contracts_both_changed_wait_for_the_manager_above(
     place = service.org.place(division_lead_of(service, top))
     assert place is not None and place.merge is None
     # The session reads what holds now, not what it wrote.
-    contracts = service.contracts_of(api_place(service, top))
-    assert [c.contracts for c in contracts if c.own] == [holds]
+    contracts = [
+        shown
+        for shown in service.documents_shown(api_place(service, top))
+        if shown.name == "contracts"
+    ]
+    assert [shown.text for shown in contracts if shown.own] == [holds]
     # Its opening place also works to the contracts of the team above.
-    assert [c.path for c in contracts] == ["", "services/api"]
+    assert [shown.folder for shown in contracts] == ["", "services/api"]
     # Where its own do not hold, its IC is told the ones that do, to follow
     # up on the code it delivered, and it is on the team's record.
     last = launcher.messages_to(conversation)[-1]
@@ -728,12 +731,11 @@ async def test_contracts_both_changed_wait_for_the_manager_above(
         if event.kind == "not_taken" and "the contracts it wrote" in event.detail
     ]
     if which == "session":
-        assert "are not the ones you wrote" not in last and not on_record
+        assert "is not what you wrote" not in last and not on_record
     else:
-        assert "are not the ones you wrote" in last and holds.strip() in last
+        assert "is not what you wrote" in last and holds.strip() in last
         assert [event.detail for event in on_record] == [
-            "the contracts it wrote for services/api: its merged code was "
-            "written to them"
+            "the contracts it wrote for services/api: its merged code was written to it"
         ]
 
 
@@ -1231,7 +1233,7 @@ async def test_a_reviewer_writes_the_spec_that_holds(service: DirectorService):
 
     assert not written.is_error
     assert service.team_memory.read(API_SPEC) == "# Orders and refunds"
-    assert service.spec_draft(api_place(service, top)) is None
+    assert service.document_draft(api_place(service, top), "spec") is None
 
 
 async def test_a_reviewer_keeps_the_orgs_spec(service: DirectorService):
@@ -1259,7 +1261,7 @@ async def test_a_reviewer_keeps_the_orgs_spec(service: DirectorService):
     await service.settled()
 
     assert service.team_memory.read(API_SPEC) == "# Orders"
-    assert service.spec_draft(api_place(service, top)) is None
+    assert service.document_draft(api_place(service, top), "spec") is None
 
 
 async def test_a_manager_puts_a_team_it_takes_where_it_fits_the_org(

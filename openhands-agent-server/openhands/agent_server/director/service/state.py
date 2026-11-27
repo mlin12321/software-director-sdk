@@ -61,8 +61,6 @@ from openhands.agent_server.director.git import (
     is_git_repository,
 )
 from openhands.agent_server.director.git_store import (
-    CONTRACTS_FILE,
-    SPEC_FILE,
     GitStore,
     Landing,
     normalize_store_path,
@@ -119,7 +117,7 @@ from openhands.agent_server.director.orgs import (
     SHIPPED_DOCUMENTS,
     SHIPPED_TYPES,
 )
-from openhands.agent_server.director.prompts import role_text
+from openhands.agent_server.director.prompts import KeptDocuments, role_text
 from openhands.agent_server.director.run_state import (
     MERGING,
     PROGRESS,
@@ -221,6 +219,10 @@ DECLINED_TOLD = 3
 # How long a model may take to name a team before the team keeps the name
 # it has; a session's first IC is not briefed until then.
 SUMMARY_TIMEOUT_SECONDS = 20.0
+# The record every member of a team keeps of what it learned. It is the
+# director's own, as messages are, and not a document an org invents: the
+# one log the store keeps.
+REPORT = "report"
 # How long a model may take over a team's diff, or over an agent's reports.
 MODEL_CALL_TIMEOUT_SECONDS = 120.0
 # A team whose work is sent back this many times is stopped.
@@ -277,7 +279,7 @@ _REVIEW_STEPS = ("request_review", "accept")
 # The escalation that asks the human to clear the way for a merge.
 MERGE_WAITS = "merge-waits"
 # The id of the escalation raised when a Manager does not settle the teams
-# and contracts of accepted work.
+# of accepted work, and what is settled with them.
 ORG_WAITS = "org-waits"
 # The escalation that asks the human whether a session that reached its
 # token limit goes on.
@@ -832,11 +834,6 @@ class ServiceState:
         types = self.agent_types
         return types.get(node.agent_type) or types[DEFAULT_TYPE]
 
-    def member_names(self) -> tuple[str, ...]:
-        """Every member a team of the org may have, by the types it knows."""
-        named = (name for kind in self.agent_types.values() for name in kind.agents)
-        return tuple(dict.fromkeys(named))
-
     def names_at(self, place_id: str) -> Names:
         """What the members the director turns to are called in a team; in
         one that is gone, what they are called in a team of the default
@@ -863,6 +860,26 @@ class ServiceState:
             lead=team.is_lead,
             own=found.protocol if found else "",
             rules=self.document_rules(place),
+        )
+
+    def kept_documents(self, place: OrgNodeInput) -> KeptDocuments:
+        """The documents a team keeps, as the director's own messages name
+        them: what each is called and what its protocol says of it."""
+        kept = [
+            protocol
+            for protocol in self.protocols_of(place)
+            if protocol.document.name != REPORT
+        ]
+
+        def named(fact: str) -> tuple[str, ...]:
+            return tuple(found.document.name for found in kept if getattr(found, fact))
+
+        return KeptDocuments(
+            names=tuple(found.document.name for found in kept),
+            wait_with_teams=named("waits_for_team_changes"),
+            read_by_sub_teams=named("read_by_sub_teams"),
+            stay_when_removed=named("stays_when_team_is_removed"),
+            reports=REPORT in self.type_of(place).documents,
         )
 
     def document_rules(self, place: SessionTeam) -> list[dict[str, str]]:
@@ -1781,16 +1798,6 @@ class ServiceState:
 
     async def _came_back(self) -> None:
         """Take up what the org had begun before the server stopped."""
-
-
-def _spec_file(directory: str) -> str:
-    return f"{directory}/{SPEC_FILE}" if directory else SPEC_FILE
-
-
-def _contracts_file(directory: str) -> str:
-    """The contracts between the sub-teams of ``directory``, in team memory."""
-    path = normalize_store_path(directory)
-    return f"{path}/{CONTRACTS_FILE}" if path else CONTRACTS_FILE
 
 
 def _child_node(

@@ -48,7 +48,7 @@ from openhands.agent_server.director.org_store import (
     is_division_lead,
 )
 from openhands.agent_server.director.prompts import (
-    CHANGED_SINCE_ACCEPT,
+    changed_since_accept,
 )
 from openhands.agent_server.director.recovery import (
     STARTING,
@@ -394,8 +394,9 @@ class Sync(Sessions):
         """Start afresh a team whose agents have no conversation on this
         server, on the work its branch has.
 
-        The team's IC starts in the team's own checkout and is briefed from
-        the team's spec and last headline; its Manager is derived from it.
+        The team's IC starts in the team's own checkout and is briefed
+        from what the org kept of the team and its last headline; its
+        Manager is derived from it.
         The IC starts as the given conversation, or without one like the IC
         of the team above (from the team's own agent profile if it has one).
         What the human ``said`` when asked about the lost IC ends its briefing.
@@ -892,7 +893,10 @@ class Sync(Sessions):
         top = places[0] if places else None
         if top is None or top.review is None or top.review.state != "accepted":
             return
-        self.notify(self.writer_conversation(top), CHANGED_SINCE_ACCEPT)
+        self.notify(
+            self.writer_conversation(top),
+            changed_since_accept(self.kept_documents(top)),
+        )
 
     async def _resync(self) -> None:
         """Read every agent's status back from its conversation."""

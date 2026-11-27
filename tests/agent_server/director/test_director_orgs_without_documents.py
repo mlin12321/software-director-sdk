@@ -1,32 +1,53 @@
 """An org whose types keep no documents works from a split to landed work,
-and what a team reads follows where it stands in the tree."""
+what a team reads follows where it stands in the tree, and a document of an
+org's own is left behind or settled as its protocol says, by no name the
+director knows."""
 
 from pathlib import Path
+from typing import ClassVar
 
+from openhands.agent_server.director.documents.protocol import (
+    DocumentProtocolBase,
+    register_protocol,
+)
 from openhands.agent_server.director.git import git
-from openhands.agent_server.director.models import OrgSettings, SplitChild
+from openhands.agent_server.director.models import (
+    DocumentChoice,
+    LeftoverDocument,
+    OpenSessionRequest,
+    OrgSettings,
+    SplitChild,
+)
 from openhands.agent_server.director.orgs.software import SoftwareOrg
+from openhands.agent_server.director.prompts import KeptDocuments, session_brief
+from openhands.agent_server.director.service import DirectorService
 from openhands.agent_server.director.service.state import team_ref
+from openhands.agent_server.director.tools import PruneTeamTool, SettleTeamsTool
 from tests.agent_server.director.conftest import (
     API,
     APPROVE,
+    PRUNE_API,
     SPLIT,
     SPLIT_CONTRACTS,
     ApproveTeamsTool,
     FakeLauncher,
     ProposeTeamsTool,
     an_org,
+    division_lead_manager,
+    division_lead_of,
     ic,
     landed,
     manager,
     node,
     proposing,
+    session_accepted,
     split_root,
     started,
     tasked,
     use,
     write_contracts,
 )
+from tests.agent_server.director.document_tools import SettleTeamsAction
 
 
 def _a_type_that_keeps_nothing() -> str:
@@ -110,3 +131,160 @@ async def test_a_team_reads_the_contracts_of_whichever_team_is_above_it_now(
 
     assert read_from_above() == ["POST /checkout returns {order_id}"]
     await service.aclose()
+
+
+class _Runbook(DocumentProtocolBase):
+    """A document of an org's own that a removed team leaves behind."""
+
+    stays_when_team_is_removed: ClassVar[bool] = True
+
+
+class _Ledger(DocumentProtocolBase):
+    """A document of an org's own that is settled with the teams."""
+
+    waits_for_team_changes: ClassVar[bool] = True
+
+
+register_protocol("left-behind", _Runbook)
+register_protocol("settled-with-teams", _Ledger)
+
+
+async def _an_org_with_documents_of_its_own(
+    repo: Path, launcher: FakeLauncher, tmp_path: Path
+) -> DirectorService:
+    assert SoftwareOrg.types_folder is not None
+    shipped = (SoftwareOrg.types_folder / "software-engineer.yaml").read_text()
+    ops = shipped.replace("name: software-engineer", "name: ops", 1).replace(
+        "documents:\n", "documents:\n    runbook:\n    ledger:\n", 1
+    )
+    assert ops.count("    runbook:\n") == 1
+    config = tmp_path / "config" / "director.yaml"
+    (config.parent / "types").mkdir(parents=True)
+    (config.parent / "documents").mkdir()
+    config.write_text("")
+    (config.parent / "types" / "ops.yaml").write_text(ops)
+    (config.parent / "documents" / "runbook.yaml").write_text(
+        "description: How the team runs what it built.\nprotocol: left-behind\n"
+    )
+    (config.parent / "documents" / "ledger.yaml").write_text(
+        "description: What the sub-teams owe each other.\n"
+        "protocol: settled-with-teams\n"
+    )
+    service = await an_org(repo, launcher, config, agent_type="ops")
+    service.update_org_settings(OrgSettings(default_agent_type="ops"))
+    return service
+
+
+async def test_a_document_of_an_orgs_own_stays_when_its_team_is_removed(
+    repo: Path, launcher: FakeLauncher, tmp_path: Path
+):
+    service = await _an_org_with_documents_of_its_own(repo, launcher, tmp_path)
+    await split_root(service)
+    api = node(service, API)
+    service.documents.write(
+        api.session, team_ref(api).keeps("runbook"), "Restart the queue first.\n"
+    )
+
+    await use(service, manager(service), PruneTeamTool, PRUNE_API)
+    await service.settled()
+
+    # The director knows no document by name: the runbook stays because
+    # its protocol says so, as the spec does.
+    root = node(service, "root")
+    assert root.leftover_documents == [
+        LeftoverDocument(name="runbook", path="services/api", team="API")
+    ]
+    [left] = service.documents_left_to(root)
+    assert (left.name, left.text) == ("runbook", "Restart the queue first.\n")
+    context = service.context_of(root, "ic")
+    assert context["documents_left_by_teams_before_you"] == [
+        {
+            "document": "runbook",
+            "directory": "services/api",
+            "team": "API",
+            "text": "Restart the queue first.\n",
+        }
+    ]
+    assert service.kept_documents(root).stay_when_removed == ("runbook", "spec")
+    await service.aclose()
+
+
+async def test_a_document_of_an_orgs_own_is_settled_with_the_teams(
+    repo: Path, launcher: FakeLauncher, tmp_path: Path
+):
+    service = await _an_org_with_documents_of_its_own(repo, launcher, tmp_path)
+    await split_root(service)
+    await landed(service)
+    opened = await service.open_session(
+        OpenSessionRequest(text="Add refunds.", node_id="services.api")
+    )
+    await service.settled()
+    top, conversation = opened.session.teams[0].id, opened.conversation_id
+    place = node(service, top)
+    service.documents.write(
+        place.session, team_ref(place).keeps("ledger"), "Refunds owe Jobs a retry."
+    )
+    # Other accepted work wrote the ledger of the same folder meanwhile.
+    service.team_memory.write("services/api", "ledger.md", "Orders owe Jobs.\n")
+
+    await session_accepted(service, top, conversation)
+
+    # The code is merged, and the ledger waits for the Manager above as
+    # contracts do.
+    assert service.team_memory.read("services/api/ledger.md") == "Orders owe Jobs.\n"
+    merge = node(service, division_lead_of(service, top)).merge
+    assert merge is not None
+    assert [(item.document, item.key, item.gate) for item in merge.items] == [
+        ("ledger", "services/api", "manager")
+    ]
+    asked = division_lead_manager(service, top)
+    assert asked is not None
+    assert "the ledger of services/api" in launcher.messages_to(asked)[-1]
+
+    settled = await use(
+        service,
+        asked,
+        SettleTeamsTool,
+        SettleTeamsAction(
+            merge_choices=[
+                DocumentChoice(
+                    document="ledger",
+                    folder="services/api",
+                    use="replacement",
+                    replacement="Orders and refunds owe Jobs.",
+                )
+            ]
+        ),
+    )
+
+    assert not settled.is_error
+    assert service.team_memory.read("services/api/ledger.md") == (
+        "Orders and refunds owe Jobs.\n"
+    )
+    told = launcher.messages_to(conversation)[-1]
+    assert "What holds as the ledger of services/api is not what you wrote" in told
+    await service.aclose()
+
+
+async def test_a_team_that_keeps_no_record_is_not_told_to_report(
+    repo: Path, launcher: FakeLauncher, tmp_path: Path
+):
+    config = tmp_path / "config" / "director.yaml"
+    (config.parent / "types").mkdir(parents=True)
+    config.write_text("")
+    (config.parent / "types" / "bare.yaml").write_text(_a_type_that_keeps_nothing())
+    bare = await an_org(repo, launcher, config, agent_type="bare")
+    root = node(bare, "root")
+    names = bare.team(root).names
+
+    assert bare.kept_documents(root) == KeptDocuments()
+    brief = session_brief(root, "Refunds", [], names=names, kept=KeptDocuments())
+    assert "`report`" not in brief and "spec" not in brief
+    assert "You start from the team's records." in brief
+    await bare.aclose()
+
+    # A team that keeps one is told to.
+    kept = KeptDocuments(names=["spec", "contracts"], reports=True)
+    assert "`report` what they must know" in session_brief(
+        root, "Refunds", [], names=names, kept=kept
+    )

@@ -27,21 +27,18 @@ from openhands.agent_server.director.git import (
     tracked_files,
 )
 from openhands.agent_server.director.git_store import (
-    SPEC_FILE,
     GitStore,
     Landing,
     normalize_store_path,
     team_key,
 )
 from openhands.agent_server.director.models import (
-    BoundaryContracts,
     ConversationLink,
     ConversationPlace,
     ConversationRelation,
     FormerTeam,
     FormerThread,
     HistoryEvent,
-    InheritedSpec,
     LeftoverDocument,
     OrgHistory,
     OrgNode,
@@ -93,10 +90,10 @@ from openhands.agent_server.director.service.state import (
     DECLINED_TOLD,
     HISTORY_TOLD,
     NOT_STARTED,
+    REPORT,
     TOGETHER_WORTH_SAYING,
     ServiceState,
     _instant,
-    _spec_file,
     team_ref,
 )
 from openhands.agent_server.director.split import (
@@ -114,7 +111,7 @@ _MESSAGES = TypeAdapter(list[ThreadMessage])
 
 
 def _directory_of(file: str) -> str:
-    """The directory a spec or contracts file of team memory is of."""
+    """The folder a document's file of team memory is of."""
     return file.rpartition("/")[0]
 
 
@@ -135,6 +132,29 @@ def thread_name(writer_node_id: str, ic_node_id: str, ic_to_ic: bool) -> str:
     return f"{kind}/{writer_node_id}/{ic_node_id}.json"
 
 
+class Inherited(NamedTuple):
+    """A document a session wrote for a team the org no longer has."""
+
+    name: str
+    # The folder of the team of the org that holds the lost team's now.
+    home: str
+    # That team's own document of the name, as the org has it.
+    now: str
+    # What the lost team was called.
+    lost: str
+    written: str
+
+
+class Changed(NamedTuple):
+    """A document a session wrote while the org's was changed too."""
+
+    name: str
+    folder: str
+    # The org's now, and the session's.
+    now: str
+    written: str
+
+
 class Taken(NamedTuple):
     """What became of a session's records when its work was accepted."""
 
@@ -147,15 +167,6 @@ class Taken(NamedTuple):
 _CHANGES_THE_ORG: frozenset[TeamEventKind] = frozenset(
     {"set_up", "replaced", "pruned", "moved"}
 )
-
-
-# The document a team's ``leftover_documents`` are what was left of, until what is
-# left behind carries the name of its document.
-LEFT_BEHIND = "spec"
-# The one log the director keeps: what a team's members recorded.
-REPORT = "report"
-# The name of the document the wire still calls a team's contracts.
-CONTRACTS = "contracts"
 
 
 class Records(ServiceState):
@@ -635,7 +646,6 @@ class Records(ServiceState):
                 left, which is otherwise only named.
         """
         store = self.org
-        specs = self.specs_of(place)
         to_settle = [
             {
                 "team_id": other.id,
@@ -687,14 +697,14 @@ class Records(ServiceState):
                 }
                 for passed in self.documents_passed_to(place)
             ],
-            "specs_left_by_teams_before_you": [
+            "documents_left_by_teams_before_you": [
                 {
-                    "directory": spec.path or "the repository",
-                    "team": spec.left_by,
-                    "spec": spec.spec,
+                    "document": old.name,
+                    "directory": old.path or "the repository",
+                    "team": old.left_by,
+                    "text": old.text,
                 }
-                for spec in specs
-                if spec.old
+                for old in self.documents_left_to(place)
             ],
             "sub_teams": [
                 {
@@ -965,16 +975,6 @@ class Records(ServiceState):
         their session wrote there, else the org's."""
         return self.documents.read(session_of(node), DocumentRef.at(file))
 
-    def contracts_of(self, node: OrgNode) -> list[BoundaryContracts]:
-        """The contracts a team works to: the ones between it and the teams
-        beside it, set by the team above, and the ones between its own
-        sub-teams."""
-        return [
-            BoundaryContracts(path=shown.folder, contracts=shown.text, own=shown.own)
-            for shown in self.documents_shown(node)
-            if shown.name == CONTRACTS
-        ]
-
     def documents_told(self, node: OrgNode) -> dict[str, Any]:
         """What the context of a team's agents says of the documents it
         reads, as each document has it said: the ones its type keeps, in
@@ -1006,7 +1006,7 @@ class Records(ServiceState):
                 protocol.document.name for protocol in self._protocols_for(place)
             )
         ]
-        left = [found for found in self.documents_of(place) if found.left]
+        left = self.documents_left_to(place)
         parts: list[tuple[str, str]] = []
         for protocol, told in zip(self._protocols_for(place), briefed):
             document = protocol.document
@@ -1061,7 +1061,7 @@ class Records(ServiceState):
         folder."""
         by_type = self.type_of(node).documents
         shown = self.documents_shown(node)
-        left = [spec for spec in self.specs_of(node) if spec.old]
+        left = self.documents_left_to(node)
         found: list[TeamDocument] = []
         for protocol in self._protocols_for(node):
             document = protocol.document
@@ -1077,27 +1077,48 @@ class Records(ServiceState):
                 for one in shown
                 if one.name == document.name
             ]
-            if document.name == LEFT_BEHIND:
-                found += [
-                    TeamDocument(
-                        name=document.name,
-                        description=said,
-                        path=spec.path,
-                        text=spec.spec,
-                        own=False,
-                        left=True,
-                        left_by=spec.left_by,
-                    )
-                    for spec in left
-                ]
+            found += [old for old in left if old.name == document.name]
         return found
+
+    def documents_left_to(self, node: OrgNode) -> list[TeamDocument]:
+        """What teams before this one left in its folder: each is old, and
+        none is the team's own until it writes one itself."""
+        by_type = self.type_of(node).documents
+        found = []
+        for old in node.leftover_documents:
+            protocol = self.protocols.get(old.name)
+            path = normalize_store_path(old.path)
+            text = self.read_file(node, DocumentRef(path, old.name).path)
+            if protocol is None or not text:
+                continue
+            found.append(
+                TeamDocument(
+                    name=old.name,
+                    description=by_type.get(old.name) or protocol.document.description,
+                    path=path,
+                    text=text,
+                    own=False,
+                    left=True,
+                    left_by=old.team,
+                )
+            )
+        return found
+
+    def _stays_when_team_is_removed(self, name: str) -> bool:
+        """Whether the document named ``name`` is one a removed team
+        leaves in its folder: its protocol says."""
+        protocol = self.protocols.get(name)
+        return protocol is not None and protocol.stays_when_team_is_removed
 
     def documents_shown(self, node: OrgNode) -> list[ShownDocument]:
         """Every document a team reads, as its session has it: of each
         kind of document, the ones of the teams its protocol names, where
         the org allows it."""
         reader = team_ref(node)
-        left = {normalize_store_path(old.path) for old in node.leftover_documents}
+        left = {
+            (old.name, normalize_store_path(old.path))
+            for old in node.leftover_documents
+        }
         found: dict[DocumentRef, ShownDocument] = {}
         for protocol in self._protocols_for(node):
             name = protocol.document.name
@@ -1109,7 +1130,7 @@ class Records(ServiceState):
                     continue
                 # What a team before this one left in the folder is not
                 # this team's own until it writes one itself.
-                if name == LEFT_BEHIND and ref.folder in left:
+                if (name, ref.folder) in left:
                     continue
                 text = self.documents.read(reader.session, ref)
                 if text:
@@ -1121,67 +1142,30 @@ class Records(ServiceState):
                     )
         return list(found.values())
 
-    def specs_of(self, node: OrgNode) -> list[InheritedSpec]:
-        """The spec of a team's own boundary and the ones teams before it
-        left in its directory, which are old."""
-        own = normalize_store_path(node.boundary.path)
-        text = self.read_file(node, _spec_file(own))
-        specs = (
-            [] if text is None else [InheritedSpec(path=own, spec=text, readonly=False)]
-        )
-        left = {old.path: old for old in node.leftover_documents}
-        found = [
-            spec.model_copy(
-                update={"old": spec.path in left, "left_by": left[spec.path].team}
-            )
-            if spec.path in left
-            else spec
-            for spec in specs
-        ]
-        for old in node.leftover_documents:
-            if old.path == own:
-                continue
-            text = self.read_file(node, _spec_file(old.path))
-            if text:
-                found.append(
-                    InheritedSpec(
-                        path=old.path,
-                        spec=text,
-                        readonly=True,
-                        old=True,
-                        left_by=old.team,
-                    )
-                )
-        return found
-
-    def spec_draft(self, node: OrgNode) -> tuple[str, str | None] | None:
-        """The spec a session wrote for one of its teams, which is its own
-        until its work is accepted.
+    def document_draft(self, node: OrgNode, name: str) -> tuple[str, str | None] | None:
+        """The document named ``name`` a session wrote for one of its
+        teams, which is its own until its work is accepted.
 
         Returns:
-            The spec and the team's spec it was written over, None when
-            the team had none; None when the session wrote no spec there.
+            The text and the team's text it was written over, None when
+            the team had none; None when the session wrote none there.
         """
-        file = _spec_file(normalize_store_path(node.boundary.path))
+        file = DocumentRef(normalize_store_path(node.boundary.path), name).path
         draft = self.drafts(session_of(node)).get(file)
         if draft is None or draft[0] is None:
             return None
         return draft[0], draft[1]
 
-    def specs_inherited(self, top: SessionTeam) -> list[tuple[str, str, str, str]]:
-        """The specs a session wrote for teams the org had when it began
-        and has no more.
-
-        Returns:
-            For each, the directory of the team of the org that holds the
-            lost team's directory now, that team's spec, what the lost team
-            was called and the spec the session wrote for it.
-        """
+    def documents_inherited(self, top: SessionTeam) -> list[Inherited]:
+        """The documents a session wrote for teams the org had when it
+        began and has no more, of the kind that stays when a team is
+        removed: each is left with the team that holds the folder now."""
         store = self.org
         session = store.session_of(top)
         if session is None:
             return []
         began = {team for team, *_ in session.shape}
+        memory = self._memory()
         found = []
         for place in store.session(top.session):
             if (
@@ -1190,30 +1174,35 @@ class Records(ServiceState):
                 or store.team(place.team_id) is not None
             ):
                 continue
-            draft = self.spec_draft(place)
             home = store.team(self._home_of(top, place.boundary.path))
-            if draft is None or home is None:
+            if home is None:
                 continue
             path = normalize_store_path(home.boundary.path)
-            now = self._memory().read(_spec_file(path)) or ""
-            found.append((path, now, place.title, draft[0]))
+            for name, protocol in self.protocols.items():
+                draft = self.document_draft(place, name)
+                if draft is None or not protocol.stays_when_team_is_removed:
+                    continue
+                now = memory.read(DocumentRef(path, name).path) or ""
+                found.append(Inherited(name, path, now, place.title, draft[0]))
         return found
 
-    def specs_to_reconcile(self, top: SessionTeam) -> list[tuple[str, str, str]]:
-        """The specs a session wrote while the team's spec in the same
-        directory was changed by someone else.
-
-        Returns:
-            For each, the directory, the team's spec now and the session's.
-        """
+    def documents_to_reconcile(self, top: SessionTeam) -> list[Changed]:
+        """The documents a session wrote while the team's document in the
+        same folder was changed by someone else: the ones that land with
+        its work, and not those that wait with its teams."""
         team_memory = self._memory()
         found = []
         for file, (text, over) in sorted(self.drafts(top.session).items()):
-            if not file.endswith(SPEC_FILE) or text is None:
+            protocol = self.protocol_at(file)
+            if protocol is None or protocol.waits_for_team_changes or text is None:
                 continue
             now = team_memory.read(file)
             if now != over and now != text:
-                found.append((_directory_of(file), now or "", text))
+                found.append(
+                    Changed(
+                        protocol.document.name, _directory_of(file), now or "", text
+                    )
+                )
         return found
 
     def _home_of(self, top: SessionTeam, path: str) -> str:
@@ -1257,20 +1246,20 @@ class Records(ServiceState):
         tree: bool = False,
     ) -> Taken:
         """Make what a session kept to itself the org's, now that its work
-        is accepted: the specs and contracts it wrote, what its agents
+        is accepted: the documents it wrote, what its agents
         recorded and the records of the teams it removed. All of it is one
         commit of team memory.
 
         What is of a team that waits stays the session's until then. What
         is of a team the org does not have, or has another team in place
         of, is kept as that team's record with the nearest team of the org
-        that holds its directory. A spec is put in place of one that
+        that holds its directory. A document is put in place of one that
         changed only where its reviewer was shown that one.
 
         Args:
-            seen: The specs the reviewer was shown, by file.
-            chosen: The contracts that were settled, by file: the text
-                that holds.
+            seen: The documents the reviewer was shown, by file.
+            chosen: The documents that waited with the teams and are
+                settled, by file: the text that holds.
             waits: The teams whose records stay the session's for now.
             held: The files that stay the session's for now.
             tree: Whether the org tree as it is now lands with it.
@@ -1299,7 +1288,7 @@ class Records(ServiceState):
         drafts = self.drafts(session)
         for file, text in (chosen or {}).items():
             if file not in drafts:
-                # Contracts that came with a team: there is no draft of them.
+                # What came with a team: there is no draft of it.
                 files[file] = (text, self._memory().read(file))
         for file, (text, over) in drafts.items():
             owner = by_path.get(_directory_of(file))
@@ -1311,7 +1300,7 @@ class Records(ServiceState):
                 if text:
                     kept_of_it[kind] = text
                 if (
-                    kind == LEFT_BEHIND
+                    self._stays_when_team_is_removed(kind)
                     and text
                     and store.team(owner.team_id) is None
                     and all(
@@ -1319,8 +1308,8 @@ class Records(ServiceState):
                         for team in store.teams()
                     )
                 ):
-                    # No team has the directory: the spec stays there as an
-                    # old one of the team that holds it now.
+                    # No team has the directory: the document stays there
+                    # as an old one of the team that holds it now.
                     files[file] = (text, over)
                     passed_on[file] = owner
                 continue
@@ -1441,8 +1430,11 @@ class Records(ServiceState):
             if file in passed_on:
                 lost = passed_on[file]
                 home = store.team(self._home_of(top, lost.boundary.path))
+                name = DocumentRef.at(file).name
                 rewritten = (
-                    _spec_file(normalize_store_path(home.boundary.path)) if home else ""
+                    DocumentRef(normalize_store_path(home.boundary.path), name).path
+                    if home
+                    else ""
                 )
                 directory = _directory_of(file)
                 if (
@@ -1450,26 +1442,39 @@ class Records(ServiceState):
                     and not (
                         files.get(rewritten, (None,))[0] and rewritten not in conflicts
                     )
-                    and all(old.path != directory for old in home.leftover_documents)
+                    and all(
+                        (old.name, old.path) != (name, directory)
+                        for old in home.leftover_documents
+                    )
                 ):
                     store.update_team(
                         home.id,
                         leftover_documents=[
                             *home.leftover_documents,
                             LeftoverDocument(
-                                name=LEFT_BEHIND, path=directory, team=lost.title
+                                name=name, path=directory, team=lost.title
                             ),
                         ],
                     )
                 continue
             owner = by_path.get(_directory_of(file))
+            name = DocumentRef.at(file).name
             if (
                 owner is not None
-                and file.endswith(SPEC_FILE)
+                and self._stays_when_team_is_removed(name)
                 and files[file][0] is not None
             ):
+                # The team has one of its own now: what teams before it
+                # left of that document is no longer its guide.
+                team = store.team(owner.team_id)
                 store.update_team(
-                    owner.team_id, summary=owner.summary, leftover_documents=[]
+                    owner.team_id,
+                    summary=owner.summary,
+                    leftover_documents=[
+                        old
+                        for old in (team.leftover_documents if team else [])
+                        if old.name != name
+                    ],
                 )
         for place in left.values():
             for file in self.drafts(session):
@@ -1529,15 +1534,21 @@ class Records(ServiceState):
             if said
         )
 
-    def _specs_left_in(
+    def _documents_left_in(
         self, place: SessionTeam, path: str, removed: list[SessionTeam]
     ) -> list[LeftoverDocument]:
-        """The specs a team that is given ``path`` in the session of
-        ``node`` finds there: the one of the directory itself and those of
-        the ``removed`` teams whose directories hold it or lie in it. None
-        of them is its own."""
+        """The documents a team that is given ``path`` in the session of
+        ``place`` finds there, of the kind that stays when a team is
+        removed: the ones of the folder itself and those of the
+        ``removed`` teams whose folders hold it or lie in it. None of
+        them is its own."""
         own = normalize_store_path(path)
-        left: dict[str, str | None] = {}
+        staying = [
+            name
+            for name, protocol in self.protocols.items()
+            if protocol.stays_when_team_is_removed
+        ]
+        left: dict[tuple[str, str], str | None] = {}
 
         def concerns(directory: str) -> bool:
             return (
@@ -1550,17 +1561,19 @@ class Records(ServiceState):
             # What a removed team was left and never rewrote is passed on.
             for old in team.leftover_documents:
                 if concerns(old.path):
-                    left.setdefault(old.path, old.team)
+                    left.setdefault((old.name, old.path), old.team)
             theirs = normalize_store_path(team.boundary.path)
             if concerns(theirs):
-                left[theirs] = team.title
-        # A spec in the directory itself that no team here is known to have
+                for name in staying:
+                    left[(name, theirs)] = team.title
+        # One in the folder itself that no team here is known to have
         # left: a team pruned long ago, or one written by hand.
-        left.setdefault(own, None)
+        for name in staying:
+            left.setdefault((name, own), None)
         return [
-            LeftoverDocument(name=LEFT_BEHIND, path=directory, team=team)
-            for directory, team in left.items()
-            if self.read_file(place, _spec_file(directory))
+            LeftoverDocument(name=name, path=directory, team=team)
+            for (name, directory), team in left.items()
+            if self.read_file(place, DocumentRef(directory, name).path)
         ]
 
     def documents_sub_teams_read(self, place: SessionTeam) -> list[tuple[str, str]]:
