@@ -2,6 +2,8 @@
 repository, a store of teams and a run state in memory."""
 
 from pathlib import Path
+from types import SimpleNamespace
+from typing import cast
 
 import pytest
 
@@ -14,6 +16,9 @@ from openhands.agent_server.director.environment.git.git_store import GitStore
 from openhands.agent_server.director.models import Report, SessionTeam
 from openhands.agent_server.director.org_store import OrgStore
 from openhands.agent_server.director.run_state import USE, RunState
+from openhands.agent_server.director.service.agent_confinement_service import (
+    AgentConfinementService,
+)
 from openhands.agent_server.director.service.session_document_service import (
     SessionDocumentService,
 )
@@ -58,7 +63,10 @@ class Documents:
             team_types=team_types,
             session_drafts=self.drafts,
             home_of=lambda top, path: "root",
-            drop_merge_checkout=self.dropped.append,
+            confinement=cast(
+                AgentConfinementService,
+                SimpleNamespace(drop_merge_checkout=self.dropped.append),
+            ),
         )
 
     def place(self, place_id: str) -> SessionTeam:

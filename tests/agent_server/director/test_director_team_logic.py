@@ -218,7 +218,7 @@ async def test_a_manager_is_told_what_the_runtime_knows_of_proposed_teams(
     commit(repo, "services/api/db.py", "rows = []\n")
     await escalates(service, API, times=3)
     await use(service, manager(service), PruneTeamTool, PRUNE)
-    await service.settled()
+    await service.work_queue.settled()
 
     await use(service, ic(service), ProposeTeamsTool, ORDERS)
 
@@ -273,7 +273,7 @@ async def test_what_an_ic_proposed_and_what_was_approved_is_kept(
 ):
     await use(service, ic(service), ProposeTeamsTool, ORDERS)
     await use(service, manager(service), ApproveTeamsTool, APPROVE)
-    await service.settled()
+    await service.work_queue.settled()
 
     kept = [
         (event.kind, event.detail)
@@ -339,7 +339,7 @@ async def test_a_refused_write_into_a_team_beside_is_kept_once_for_each_file(
     assert refused_in_web(service, repo, "page.js") is not None
     # A file that is no team's says nothing of two teams.
     attempt(service, ic(service, API), "file_editor", create(repo / "README.md"))
-    await service.settled()
+    await service.work_queue.settled()
 
     [kept] = [e for e in record_of(service, "root") if e.kind == "needed"]
     assert (kept.team_id, kept.other_id, kept.other) == (API, WEB, "Web")
@@ -352,7 +352,7 @@ async def test_a_need_is_kept_once_across_a_restart_of_the_server(
     service: DirectorService, launcher: FakeLauncher, repo: Path
 ):
     refused_in_web(service, repo, "page.js")
-    await service.settled()
+    await service.work_queue.settled()
     again = DirectorService(
         repo,
         save_delay=0,
@@ -363,7 +363,7 @@ async def test_a_need_is_kept_once_across_a_restart_of_the_server(
     try:
         refused_in_web(again, repo, "page.js")
         refused_in_web(again, repo, "other.js")
-        await again.settled()
+        await again.work_queue.settled()
         needed_files = [
             event.paths for event in record_of(again, "root") if event.kind == "needed"
         ]

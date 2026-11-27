@@ -76,7 +76,7 @@ async def tell(service: DirectorService, launcher: FakeLauncher, to: str) -> str
     """Send the IC of a team a message from the human; what it got."""
     team = "apps.web" if to else "root"
     service.team_messaging.tell_writer(node(service, team).id, "Go on.", human=True)
-    await service.settled()
+    await service.work_queue.settled()
     return launcher.messages_to(ic(service, team))[-1]
 
 
@@ -205,7 +205,7 @@ async def test_an_ic_is_not_sent_back_what_it_wrote_itself(
     await use(service, api, SubmitReviewTool, DONE)
     await reviewer_wakes(service, launcher)
     await use(service, ic(service), ReviewTeamTool, accept())
-    await service.settled()
+    await service.work_queue.settled()
 
     updates = [
         told for told in map(update_of, launcher.messages_to(api)) if told is not None

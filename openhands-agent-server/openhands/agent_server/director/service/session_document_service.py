@@ -30,6 +30,9 @@ from openhands.agent_server.director.run_state import (
     USE,
     RunState,
 )
+from openhands.agent_server.director.service.agent_confinement_service import (
+    AgentConfinementService,
+)
 from openhands.agent_server.director.service.session_draft_service import (
     SessionDraftService,
 )
@@ -75,8 +78,8 @@ class SessionDocumentService:
     home_of: Callable[[SessionTeam, str], str]
     """The team of the org that holds a folder once a session lands
     (``SessionLandingService.home_of``)."""
-    drop_merge_checkout: Callable[[str], None]
-    """Discards the merge of a team's work that its reviewer finishes."""
+    confinement: AgentConfinementService
+    """Keeps the merges that are laid out for reviewers to finish."""
 
     def drafts(self, session: str) -> dict[str, tuple[str | None, str | None]]:
         """The files of team memory a session wrote, which are its own
@@ -172,7 +175,7 @@ class SessionDocumentService:
             self.session_drafts.forget_reports(place.id)
             self.session_drafts.forget_passed(place.id)
             self.session_drafts.forget_handed_over(place.id)
-            self.drop_merge_checkout(place.id)
+            self.confinement.drop_merge_checkout(place.id)
         for file in files:
             self.undraft(session, file)
         self.session_drafts.forget_session(session)

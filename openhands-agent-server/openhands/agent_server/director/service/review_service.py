@@ -48,7 +48,6 @@ from openhands.agent_server.director.prompts import (
 from openhands.agent_server.director.run_state import (
     CLEARING,
     HELD,
-    MERGING,
     SHOWN,
     TURN,
     Intent,
@@ -156,14 +155,6 @@ class ReviewService:
     session_documents: SessionDocumentService
     session_merges: SessionMergeService
     """What a session's accepted work makes of the org."""
-    merge_checkout: Callable[[str], MergeCheckout | None]
-    """The merge of a team's work that its reviewer finishes."""
-    drop_merge_checkout: Callable[[str], None]
-    next_submission: Callable[[], int]
-    """The place in the order of the work that is submitted now."""
-    changed_since_accept: dict[str, bool]
-    """The sessions that changed something after their work was accepted;
-    shared with what notes such a change."""
     _review_instructions: dict[str, str] = field(default_factory=dict, init=False)
     _loading_review_instructions: threading.Lock = field(
         default_factory=threading.Lock, init=False
@@ -234,7 +225,7 @@ class ReviewService:
         )
         above = store.place(place.parent_id) if place.parent_id else None
         store.set_review(place_id, review)
-        self.drop_merge_checkout(place_id)
+        self.confinement.drop_merge_checkout(place_id)
         self.tell_turns()
         self.team_messaging.progressed(place_id, by_above=True)
         self.team_history.record_event(
@@ -786,7 +777,7 @@ class ReviewService:
                 result = finished
                 resolved = result.files if result.outcome == "merged" else ()
             else:
-                await asyncio.to_thread(self.drop_merge_checkout, place_id)
+                await asyncio.to_thread(self.confinement.drop_merge_checkout, place_id)
             if result.outcome == "refused" and is_division_lead(above):
                 # Only the human can clear their own checkout: they are
                 # asked, and their answer merges the work.
@@ -875,7 +866,7 @@ class ReviewService:
             await asyncio.to_thread(
                 self.session_merges.land_accepted, place, meets.seen if meets else None
             )
-            self.changed_since_accept.pop(place.session, None)
+            self.session_merges.changed_since_accept.pop(place.session, None)
         self.org_state.run_state().unmark(SHOWN, place_id)
         self.org_state.run_state().unmark(CLEARING, place_id)
         self.tell_turns()
@@ -914,7 +905,7 @@ class ReviewService:
         """
         checkout = Path(above.worktree_path)
         ours = self.checkouts.version(checkout)
-        merge = self.merge_checkout(place.id)
+        merge = self.confinement.merge_checkout(place.id)
         if (
             ours is None
             or merge is None
@@ -935,7 +926,7 @@ class ReviewService:
                     f"checkout ({', '.join(found.files)}), and the merge could "
                     f"not be laid out for you: {error}"
                 )
-            self.org_state.run_state().mark(MERGING, place.id, merge.model_dump_json())
+            self.confinement.keep_merge_checkout(place.id, merge)
             return merge_prepared(place, merge.where, merge.files)
         try:
             commit = self.checkouts.finish_merge(
@@ -954,7 +945,7 @@ class ReviewService:
         taken = self.checkouts.take_merge(checkout, commit)
         if taken.outcome != "merged":
             return taken
-        self.drop_merge_checkout(place.id)
+        self.confinement.drop_merge_checkout(place.id)
         return MergeBack("merged", found.tip, tuple(merge.files))
 
     def _elsewhere(
@@ -1081,7 +1072,7 @@ class ReviewService:
                 commit=tip or "",
                 at=utc_now(),
                 # It goes into the org after what was submitted before now.
-                seq=self.next_submission() if opens else 0,
+                seq=self.session_merges.next_submission() if opens else 0,
             ),
             base_commit=tip or place.base_commit,
         )
@@ -1091,7 +1082,7 @@ class ReviewService:
                 self.session_merges.land_accepted, store.place(place_id) or place, None
             )
             # As after any accept: what changes from now is said once more.
-            self.changed_since_accept.pop(place.session, None)
+            self.session_merges.changed_since_accept.pop(place.session, None)
         self.tell_turns()
         if acted:
             self.message_delivery.notify(

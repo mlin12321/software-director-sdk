@@ -55,6 +55,7 @@ def service_for(
         remembered=RememberedFile(repo.parent / "director.json"),
         team_types=team_types,
         tree=tree,
+        documents=team_types.documents,
         org=lambda: store,
         repo_dir=lambda: repo,
         max_concurrent_runs=max_concurrent_runs,

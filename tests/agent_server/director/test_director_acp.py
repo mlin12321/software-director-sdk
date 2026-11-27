@@ -316,12 +316,12 @@ async def test_an_agent_calls_the_directors_tools_with_its_token_alone(
     running, repo: Path
 ):
     client, service = running
-    await service.create_org(
+    await service.session_lifecycle.create_org(
         CreateOrgRequest(
             title="Checkout", task="Build", conversation=root_conversation(repo)
         )
     )
-    await service.settled()
+    await service.work_queue.settled()
     token = token_of(service, str(ic(service)))
     headers = {mcp_shim.TOKEN_HEADER: token}
 
@@ -356,12 +356,12 @@ async def test_a_manager_is_listed_its_own_tools_and_a_stranger_none(
     running, repo: Path
 ):
     client, service = running
-    await service.create_org(
+    await service.session_lifecycle.create_org(
         CreateOrgRequest(
             title="Checkout", task="Build", conversation=root_conversation(repo)
         )
     )
-    await service.settled()
+    await service.work_queue.settled()
     asking = await woken(service)
 
     listed = await client.get(
@@ -384,16 +384,16 @@ async def test_an_ic_that_only_reviews_a_session_has_the_tools_for_that_alone(
     running, repo: Path
 ):
     client, service = running
-    await service.create_org(
+    await service.session_lifecycle.create_org(
         CreateOrgRequest(
             title="Checkout", task="Build", conversation=root_conversation(repo)
         )
     )
-    await service.settled()
+    await service.work_queue.settled()
     await use(
         service, ic(service), SubmitReviewTool, SubmitReviewAction(summary="Done")
     )
-    await service.settled()
+    await service.work_queue.settled()
     reviewing = division_lead_ic(service)
     assert reviewing is not None
     headers = {mcp_shim.TOKEN_HEADER: token_of(service, reviewing)}
@@ -416,7 +416,7 @@ async def test_an_ic_that_only_reviews_a_session_has_the_tools_for_that_alone(
 
 async def test_the_tool_routes_refuse_whoever_has_no_agents_token(running, repo: Path):
     client, service = running
-    await service.create_org(
+    await service.session_lifecycle.create_org(
         CreateOrgRequest(
             title="Checkout", task="Build", conversation=root_conversation(repo)
         )
@@ -645,11 +645,11 @@ async def test_a_notice_waits_for_the_turn_of_an_agent_that_runs_its_own_tools(
     service.message_delivery.notify(
         agent, "The work of 'Web' is merged into your checkout."
     )
-    await service.settled()
+    await service.work_queue.settled()
     waiting = said_to(launcher, agent)
 
     launcher.report(agent, ConversationExecutionStatus.FINISHED)
-    await service.settled()
+    await service.work_queue.settled()
 
     assert waiting == []
     # As one message: a second would end the turn the first began.
@@ -664,7 +664,7 @@ async def test_a_second_notice_waits_for_the_turn_the_first_one_began(repo: Path
     agent = ic(service)
     assert agent is not None
     launcher.report(agent, ConversationExecutionStatus.FINISHED)
-    await service.settled()
+    await service.work_queue.settled()
     before = len(said_to(launcher, agent))
 
     # The conversation has not said yet that it is running when the second
@@ -675,11 +675,11 @@ async def test_a_second_notice_waits_for_the_turn_the_first_one_began(repo: Path
     service.message_delivery.notify(
         agent, "The work of 'Web' is merged into your checkout."
     )
-    await service.settled()
+    await service.work_queue.settled()
     first = said_to(launcher, agent)[before:]
 
     launcher.report(agent, ConversationExecutionStatus.FINISHED)
-    await service.settled()
+    await service.work_queue.settled()
 
     assert [text.split("'")[1] for text in first] == ["API"]
     assert said_to(launcher, agent)[-1].split("'")[1] == "Web"
@@ -694,14 +694,14 @@ async def test_what_the_human_says_reaches_such_an_agent_in_the_middle_of_a_turn
     agent = ic(service)
     assert agent is not None
     top = node(service, "root").id
-    service.org.raise_escalation(
+    service.org_load.org.raise_escalation(
         top, "jwt", kind="design_decision", title="JWT or opaque tokens?"
     )
     launcher.report(agent, ConversationExecutionStatus.RUNNING)
 
     service.team_messaging.tell_writer(top, "The human: stop, use Go.", human=True)
-    service.answer_escalation(top, "jwt", "Opaque.")
-    await service.settled()
+    service.org_run.answer_escalation(top, "jwt", "Opaque.")
+    await service.work_queue.settled()
 
     said = said_to(launcher, agent)
     assert len(said) == 2
@@ -721,7 +721,7 @@ async def test_a_notice_does_not_wait_for_an_agent_whose_tools_the_server_runs(
     service.message_delivery.notify(
         agent, "The work of 'API' is merged into your checkout."
     )
-    await service.settled()
+    await service.work_queue.settled()
 
     assert len(said_to(launcher, agent)) == 1
     await service.aclose()
@@ -741,7 +741,7 @@ async def test_an_acp_ic_that_ends_its_turn_after_submitting_is_left_alone(
     )
 
     await use(service, root_ic, SubmitReviewTool, SubmitReviewAction(summary="Done."))
-    await service.settled()
+    await service.work_queue.settled()
 
     # Pausing it would end its process, and it stopped by itself.
     assert launcher.paused == [] and launcher.stopped == []
@@ -761,7 +761,7 @@ async def test_an_acp_ic_that_carries_on_after_submitting_is_cut_short(
     launcher.report(root_ic, ConversationExecutionStatus.RUNNING)
 
     await use(service, root_ic, SubmitReviewTool, SubmitReviewAction(summary="Done."))
-    await service.settled()
+    await service.work_queue.settled()
 
     assert launcher.paused == [] and launcher.stopped == [UUID(root_ic)]
     await service.aclose()
@@ -812,20 +812,22 @@ async def test_an_org_without_a_name_is_named_with_its_division_lead(repo: Path)
         server_url="http://127.0.0.1:8000",
     )
     await service.start(launcher)
-    await service.create_org(
+    await service.session_lifecycle.create_org(
         CreateOrgRequest(
             task="Build the checkout of the shop, with a cart and a way to pay.",
             conversation=root_conversation(repo),
         )
     )
-    await service.settled()
+    await service.work_queue.settled()
 
     # Nothing waits for the agent's first turn.
-    top = service.org.team("root")
+    top = service.org_load.org.team("root")
     assert top is not None
     assert (top.title, top.headline) == ("Checkout", "Builds the checkout.")
-    assert [session.title for session in service.org.sessions()] == ["Checkout"]
-    leads = [place for place in service.org.places() if place.division_lead]
+    assert [session.title for session in service.org_load.org.sessions()] == [
+        "Checkout"
+    ]
+    leads = [place for place in service.org_load.org.places() if place.division_lead]
     assert [lead.title for lead in leads] == ["Checkout"]
 
     agent = ic(service)
@@ -833,7 +835,7 @@ async def test_an_org_without_a_name_is_named_with_its_division_lead(repo: Path)
     asked = len(launcher.summarized)
     launcher.report(agent, ConversationExecutionStatus.RUNNING)
     launcher.report(agent, ConversationExecutionStatus.FINISHED)
-    await service.settled()
+    await service.work_queue.settled()
     assert len(launcher.summarized) == asked
     await service.aclose()
 
@@ -892,7 +894,7 @@ async def test_a_division_lead_ic_has_no_folder_to_write_from_its_shell(repo: Pa
     done = SubmitReviewAction(summary="Shipped.")
 
     await use(service, ic(service), SubmitReviewTool, done)
-    await service.settled()
+    await service.work_queue.settled()
 
     lead = division_lead_ic(service)
     assert lead is not None
@@ -910,12 +912,12 @@ async def test_the_tools_are_reached_where_the_server_is_bound(
     launcher = FakeLauncher(root_kind="acp")
     service = DirectorService(repo, save_delay=0, run_limit_retry=0)
     await service.start(launcher)
-    await service.create_org(
+    await service.session_lifecycle.create_org(
         CreateOrgRequest(
             title="Checkout", task="Build", conversation=root_conversation(repo)
         )
     )
-    await service.settled()
+    await service.work_queue.settled()
     assert launcher.root_adapt is not None
 
     adapted = launcher.root_adapt(ACPAgent(acp_command=CLAUDE))

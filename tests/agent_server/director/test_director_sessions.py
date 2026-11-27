@@ -111,7 +111,7 @@ async def opened(
     session = await service.session_lifecycle.open_session(
         OpenSessionRequest(text=text, title=title, node_id=at)
     )
-    await service.settled()
+    await service.work_queue.settled()
     return session
 
 
@@ -122,21 +122,23 @@ def own_checkout(
     name = node_id.replace("@", "-")
     worktree = tmp_path / name
     run_git(repo, "worktree", "add", "--quiet", "-b", name, str(worktree))
-    for team in service.org.session(session_id_of(node(service, node_id))):
+    for team in service.org_load.org.session(session_id_of(node(service, node_id))):
         if not team.division_lead:
-            service.org.update_place(team.id, worktree_path=str(worktree), branch=name)
+            service.org_load.org.update_place(
+                team.id, worktree_path=str(worktree), branch=name
+            )
     return worktree
 
 
 async def test_a_session_is_beside_the_org_tree_with_a_place_at_each_of_its_teams(
     service: DirectorService, launcher: FakeLauncher
 ):
-    tree_before = [team.model_dump() for team in service.org.teams()]
-    [first] = service.org.sessions()
-    api = service.org.team(API)
+    tree_before = [team.model_dump() for team in service.org_load.org.teams()]
+    [first] = service.org_load.org.sessions()
+    api = service.org_load.org.team(API)
     assert api is not None
     events: list[str] = []
-    snapshot, unsubscribe = service.org.subscribe(
+    snapshot, unsubscribe = service.org_load.org.subscribe(
         "root", lambda event: events.append(event.type), full=True
     )
 
@@ -162,16 +164,16 @@ async def test_a_session_is_beside_the_org_tree_with_a_place_at_each_of_its_team
     assert REFUNDS in start.task and "session 'Refunds'" in start.task
     assert session.conversation_id == found.conversation_id
     # The tree is what it was: no node, no child and no count is the session's.
-    assert [team.model_dump() for team in service.org.teams()] == tree_before
-    assert service.org.team(top.id) is None and len(service.org) == 4
-    assert [team.id for team in service.org.sub_teams("root")] == [API, WEB]
-    now = service.org.snapshot("root", full=True)
+    assert [team.model_dump() for team in service.org_load.org.teams()] == tree_before
+    assert service.org_load.org.team(top.id) is None and len(service.org_load.org) == 4
+    assert [team.id for team in service.org_load.org.sub_teams("root")] == [API, WEB]
+    now = service.org_load.org.snapshot("root", full=True)
     assert snapshot is not None and now is not None
     assert [team.id for team in now.nodes] == [team.id for team in snapshot.nodes]
     assert [open.id for open in snapshot.sessions] == [first.id]
     assert [open.id for open in now.sessions] == [first.id, found.id]
     assert "sessions" in events and "node_upsert" not in events
-    assert [open.id for open in service.org.sessions()] == [first.id, found.id]
+    assert [open.id for open in service.org_load.org.sessions()] == [first.id, found.id]
     [event] = [
         event
         for event in record_of(service, "root")
@@ -184,16 +186,16 @@ async def test_a_conversation_the_human_writes_in_is_marked_and_named(
     service: DirectorService, launcher: FakeLauncher
 ):
     session = await opened(service)
-    await service.settled()
+    await service.work_queue.settled()
     top = ic(service, session.session.teams[0].id)
     assert top is not None
 
-    routed = await service.route_message(
+    routed = await service.session_lifecycle.route_message(
         RouteMessageRequest(text="Tidy the handlers.", path="services/api")
     )
-    await service.settled()
+    await service.work_queue.settled()
     service.message_delivery.joined(top)
-    await service.settled()
+    await service.work_queue.settled()
 
     # The IC of each session the human's words opened, once each; not one
     # only the director wrote to.
@@ -217,11 +219,11 @@ async def test_a_session_the_human_gave_no_name_is_called_what_it_is_for(
     unnamed = await opened(service, title="")
     named = await opened(service, title="Refunds")
 
-    titles = {s.id: s.title for s in service.org.sessions()}
+    titles = {s.id: s.title for s in service.org_load.org.sessions()}
     assert titles[unnamed.session.id] == "Order Refunds"
     assert titles[named.session.id] == "Refunds"
     # The team keeps its own name; its IC is called by both.
-    found = service.org.find_by_conversation(unnamed.conversation_id)
+    found = service.org_load.org.find_by_conversation(unnamed.conversation_id)
     assert found is not None and found[0].title == "API"
     assert launcher.titles[UUID(unnamed.conversation_id)] == "API · Order Refunds (IC)"
 
@@ -229,7 +231,7 @@ async def test_a_session_the_human_gave_no_name_is_called_what_it_is_for(
 async def test_a_conversation_links_to_the_ones_a_level_from_it(
     service: DirectorService,
 ):
-    [first] = service.org.sessions()
+    [first] = service.org_load.org.sessions()
     session = await opened(service)
     top = session.session.teams[0].id
     await use(
@@ -238,7 +240,7 @@ async def test_a_conversation_links_to_the_ones_a_level_from_it(
         MsgTeamTool,
         MsgTeamAction(team=f"{DB}@{session.session.id}", text="Add a refunds table."),
     )
-    await service.settled()
+    await service.work_queue.settled()
 
     def links(conversation_id: str | None) -> list[tuple[str, str, str, str]]:
         place = service.team_context.place_of(conversation_id or "")
@@ -294,7 +296,7 @@ async def test_a_session_at_the_top_team_is_reviewed_from_a_place_of_that_team(
         False,
     ]
     # The top team keeps its sub-teams and gains none.
-    assert [team.id for team in service.org.sub_teams("root")] == [API, WEB]
+    assert [team.id for team in service.org_load.org.sub_teams("root")] == [API, WEB]
 
 
 async def test_a_session_is_refused_where_it_cannot_be_found_or_started(
@@ -306,7 +308,7 @@ async def test_a_session_is_refused_where_it_cannot_be_found_or_started(
     del launcher.known[UUID(ic(service) or "")]
     with pytest.raises(Conflict, match="No conversation of the org"):
         await opened(service)
-    assert [open.title for open in service.org.sessions()] == ["Checkout"]
+    assert [open.title for open in service.org_load.org.sessions()] == ["Checkout"]
 
 
 async def test_the_director_chooses_the_team_when_none_is_named(
@@ -371,7 +373,7 @@ async def test_each_session_has_a_reviewer_of_its_own_and_the_second_meets_the_f
     assert (repo / "services/api/routes.ts").read_text() == "refunds\n"
     reviews = [node(service, team).review for team in (first, second)]
     assert [review.state for review in reviews if review] == ["accepted", "pending"]
-    merge = service.merge_checkout(second)
+    merge = service.confinement.merge_checkout(second)
     assert merge is not None and merge.files == ["services/api/routes.ts"]
     assert merge.where in launcher.messages_to(division_lead_ic(service, second))[-1]
     waits = node(service, division_lead_of(service, second)).merge
@@ -388,8 +390,8 @@ async def test_each_session_has_a_reviewer_of_its_own_and_the_second_meets_the_f
     assert review is not None and review.state == "accepted"
     # An accepted session stays open, with its conversation, until the human
     # closes it.
-    await service.settled()
-    assert [open.title for open in service.org.sessions()] == [
+    await service.work_queue.settled()
+    assert [open.title for open in service.org_load.org.sessions()] == [
         "Checkout",
         "Refunds",
         "Vouchers",
@@ -456,16 +458,18 @@ async def test_sub_teams_a_session_changes_are_its_own_until_its_work_is_accepte
         PruneTeamAction(team=top, reason="Not needed"),
     )
 
-    assert [team.title for team in service.org.below(top)] == ["DB", "Routes"]
+    assert [team.title for team in service.org_load.org.below(top)] == ["DB", "Routes"]
     assert "not a team directly below yours" in by_another.text
     # Neither the org nor the other session at the team has the new one.
-    assert [team.id for team in service.org.sub_teams(API)] == [DB]
-    assert [team.title for team in service.org.below(node(service, API).id)] == ["DB"]
+    assert [team.id for team in service.org_load.org.sub_teams(API)] == [DB]
+    assert [
+        team.title for team in service.org_load.org.below(node(service, API).id)
+    ] == ["DB"]
 
     await use(service, ic(service, top), SubmitReviewTool, DONE)
     await use(service, division_lead_ic(service, top), ReviewTeamTool, accept(top))
 
-    assert [team.id for team in service.org.sub_teams(API)] == [
+    assert [team.id for team in service.org_load.org.sub_teams(API)] == [
         DB,
         "services.api.routes",
     ]
@@ -533,7 +537,7 @@ async def test_a_session_opened_below_the_top_has_its_teams_contracts(
     service: DirectorService,
 ):
     # What the top team agreed between API and Web, as the org has it.
-    service.team_memory.write("", "contracts.md", "API serves JSON to Web.")
+    service.org_load.team_memory.write("", "contracts.md", "API serves JSON to Web.")
 
     top = (await opened(service)).session.teams[0].id
 
@@ -548,19 +552,19 @@ async def test_a_request_to_the_org_opens_a_session_and_reaches_no_other(
     launcher.answers[USAGE_ID] = f"Teams: {API}\nReason: It is the API's."
     heard = {
         place.id: len(launcher.messages_to(ic(service, place.id)))
-        for place in service.org.places()
+        for place in service.org_load.org.places()
         if place.agents
     }
 
-    routed = await service.route_message(
+    routed = await service.session_lifecycle.route_message(
         RouteMessageRequest(text="Make services/api faster.", path="", auto=True)
     )
-    by_path = await service.route_message(
+    by_path = await service.session_lifecycle.route_message(
         RouteMessageRequest(text="Tidy the handlers.", path="services/api")
     )
-    await service.settled()
+    await service.work_queue.settled()
 
-    *_, faster, tidy = service.org.sessions()
+    *_, faster, tidy = service.org_load.org.sessions()
     assert (routed.node_id, by_path.node_id) == (
         f"{API}@{faster.id}",
         f"{API}@{tidy.id}",
@@ -590,11 +594,11 @@ async def test_what_a_session_waits_on_the_human_for_is_told_with_its_team(
     session = await opened(service, "root", "Rename the product everywhere.")
     top = session.session.teams[0].id
     # Nobody stands above the team a session was opened at.
-    raised = service.org.raise_escalation(
+    raised = service.org_load.org.raise_escalation(
         top, "name", kind="design_decision", title="Which name?"
     )
 
-    [waiting] = service.org.escalations()
+    [waiting] = service.org_load.org.escalations()
 
     assert raised.held_by is None
     # It names the team of the org, which a client can show, and the session.
@@ -609,7 +613,7 @@ async def test_what_a_session_waits_on_the_human_for_is_told_with_its_team(
 async def test_a_session_is_kept_on_its_machine_and_what_it_changes_with_the_org(
     service: DirectorService, repo: Path, launcher: FakeLauncher
 ):
-    [first] = service.org.sessions()
+    [first] = service.org_load.org.sessions()
     session = await opened(service)
     top = session.session.teams[0].id
     await use(
@@ -618,7 +622,7 @@ async def test_a_session_is_kept_on_its_machine_and_what_it_changes_with_the_org
         ReportTool,
         ReportAction(text="Refunds need the order id."),
     )
-    await service.settled()
+    await service.work_queue.settled()
     await service.aclose()
 
     board = GitCodingEnvironment().org_tree(repo)
@@ -630,7 +634,7 @@ async def test_a_session_is_kept_on_its_machine_and_what_it_changes_with_the_org
         assert set(saved) == {"version", "nodes"}
         assert [team["id"] for team in saved["nodes"]] == ["root", API, WEB, DB]
         assert all("session" not in team for team in saved["nodes"])
-        assert restarted.team_memory.reports(API, "ic") == []
+        assert restarted.org_load.team_memory.reports(API, "ic") == []
         # That it was opened is with the team's memory.
         assert [
             event.session
@@ -639,11 +643,11 @@ async def test_a_session_is_kept_on_its_machine_and_what_it_changes_with_the_org
         ] == ["Checkout", "Refunds"]
         # The sessions themselves come back from what this machine kept,
         # with what their agents recorded.
-        assert [found.id for found in restarted.org.sessions()] == [
+        assert [found.id for found in restarted.org_load.org.sessions()] == [
             first.id,
             session.session.id,
         ]
-        found = restarted.org.sessions()[-1]
+        found = restarted.org_load.org.sessions()[-1]
         assert [team.id for team in found.teams] == [
             team.id for team in session.session.teams
         ]
@@ -669,10 +673,10 @@ async def test_closing_a_session_removes_it_and_keeps_what_was_not_merged(
     (repo / "services/api/own.ts").write_text("another's, not committed\n")
 
     service.session_lifecycle.close_session(session.session.id)
-    await service.settled()
+    await service.work_queue.settled()
 
-    assert [open.title for open in service.org.sessions()] == ["Checkout"]
-    assert service.org.session(session.session.id) == []
+    assert [open.title for open in service.org_load.org.sessions()] == ["Checkout"]
+    assert service.org_load.org.session(session.session.id) == []
     assert conversation is not None and UUID(conversation) in launcher.deleted
     kept = run_git(
         repo, "for-each-ref", "--format=%(objectname)", "refs/agents/sessions/"
@@ -697,7 +701,7 @@ async def test_closing_a_session_that_never_started_touches_no_checkout(
     (repo / "services/api/own.ts").write_text("the team's own, not committed\n")
 
     service.session_lifecycle.close_session(session.session.id)
-    await service.settled()
+    await service.work_queue.settled()
 
     assert (repo / "services/api/own.ts").read_text() == (
         "the team's own, not committed\n"
@@ -785,7 +789,7 @@ async def two_submitted(
         await use(service, ic(service, team), SubmitReviewTool, DONE)
         review = node(service, team).review
         assert review is not None
-        service.org.set_review(team, review.model_copy(update={"at": at}))
+        service.org_load.org.set_review(team, review.model_copy(update={"at": at}))
     return first, second
 
 
@@ -842,13 +846,13 @@ async def test_a_spec_a_session_writes_is_its_own_until_its_work_is_accepted(
     service: DirectorService, repo: Path, tmp_path: Path
 ):
     top = (await opened(service)).session.teams[0].id
-    before = service.team_memory.read("services/api/spec.md")
+    before = service.org_load.team_memory.read("services/api/spec.md")
 
     await use(
         service, ic(service, top), WriteSpecTool, WriteSpecAction(file_text="# Refunds")
     )
 
-    assert service.team_memory.read("services/api/spec.md") == before
+    assert service.org_load.team_memory.read("services/api/spec.md") == before
     assert own_document(service, node(service, top), "spec") == "# Refunds"
     assert own_document(service, node(service, API), "spec") != "# Refunds"
 
@@ -856,8 +860,8 @@ async def test_a_spec_a_session_writes_is_its_own_until_its_work_is_accepted(
     await use(service, ic(service, top), SubmitReviewTool, DONE)
     await use(service, division_lead_ic(service, top), ReviewTeamTool, accept(top))
 
-    assert service.team_memory.read("services/api/spec.md") == "# Refunds"
-    api = service.org.team(API)
+    assert service.org_load.team_memory.read("services/api/spec.md") == "# Refunds"
+    api = service.org_load.org.team(API)
     assert api is not None and api.summary == "Refunds"
 
 
@@ -871,7 +875,7 @@ async def test_any_document_a_session_writes_is_merged_with_its_accepted_work(
 
     service.documents.write(node(service, top).session, glossary, "A run is a job.")
 
-    assert service.team_memory.read(glossary.path) is None
+    assert service.org_load.team_memory.read(glossary.path) is None
     assert service.documents.read(node(service, top).session, glossary) == (
         "A run is a job."
     )
@@ -881,7 +885,7 @@ async def test_any_document_a_session_writes_is_merged_with_its_accepted_work(
     await use(service, ic(service, top), SubmitReviewTool, DONE)
     await use(service, division_lead_ic(service, top), ReviewTeamTool, accept(top))
 
-    assert service.team_memory.read(glossary.path) == "A run is a job."
+    assert service.org_load.team_memory.read(glossary.path) == "A run is a job."
 
 
 async def test_a_spec_written_over_one_that_changed_meanwhile_is_reconciled(
@@ -909,7 +913,7 @@ async def test_a_spec_written_over_one_that_changed_meanwhile_is_reconciled(
 
     assert "It wrote a spec for services/api" in asked
     assert "# The API" in asked and "# Refunds" in asked
-    assert service.team_memory.read("services/api/spec.md") == "# The API"
+    assert service.org_load.team_memory.read("services/api/spec.md") == "# The API"
 
     await use(
         service,
@@ -918,12 +922,12 @@ async def test_a_spec_written_over_one_that_changed_meanwhile_is_reconciled(
         ReviewTeamAction(team=top, decision="accept", reconciled="Refunds holds."),
     )
 
-    assert service.team_memory.read("services/api/spec.md") == "# Refunds"
+    assert service.org_load.team_memory.read("services/api/spec.md") == "# Refunds"
 
 
 async def test_a_spec_of_a_closed_session_is_dropped(service: DirectorService):
     session = (await opened(service)).session
-    before = service.team_memory.read("services/api/spec.md")
+    before = service.org_load.team_memory.read("services/api/spec.md")
     await use(
         service,
         ic(service, session.teams[0].id),
@@ -932,10 +936,13 @@ async def test_a_spec_of_a_closed_session_is_dropped(service: DirectorService):
     )
 
     service.session_lifecycle.close_session(session.id)
-    await service.settled()
+    await service.work_queue.settled()
 
-    assert service.team_memory.read("services/api/spec.md") == before
-    assert service.team_documents.draft(team_ref(session.teams[0]), "spec") is None
+    assert service.org_load.team_memory.read("services/api/spec.md") == before
+    assert (
+        service.org_settings.team_documents().draft(team_ref(session.teams[0]), "spec")
+        is None
+    )
 
 
 async def test_work_that_goes_up_by_itself_takes_its_place_after_what_waits(
@@ -955,7 +962,7 @@ async def test_work_that_goes_up_by_itself_takes_its_place_after_what_waits(
     commit(repo, "apps/web/x.txt", "x\n")
     await use(service, ic(service, "apps.web"), SubmitReviewTool, DONE)
     await use(service, ic(service), ReviewTeamTool, accept("apps.web"))
-    await service.settled()
+    await service.work_queue.settled()
 
     went_up = node(service, "root").review
     assert went_up is not None and went_up.passed_up
@@ -979,7 +986,7 @@ async def test_work_is_not_accepted_past_earlier_work_that_still_waits(
     for team in (first, second):
         service.reviews.check_accept(team, "")
         service.reviews.accept_review(team, "")
-    await service.settled()
+    await service.work_queue.settled()
 
     states = [node(service, team).review for team in (first, second)]
     assert [review.state for review in states if review] == ["pending", "pending"]
@@ -998,7 +1005,7 @@ async def test_a_session_whose_ic_could_not_be_started_leaves_nothing_in_the_his
             OpenSessionRequest(text="Add refunds", node_id="root"),
             root_conversation(repo),
         )
-    await service.settled()
+    await service.work_queue.settled()
     launcher.root_error = None
 
     assert [
@@ -1021,21 +1028,21 @@ async def test_no_team_is_set_up_in_a_session_that_is_being_closed(
     # Both agents are in a turn as the human closes the session.
     launcher.report(root_ic, ConversationExecutionStatus.RUNNING)
     launcher.report(root_manager, ConversationExecutionStatus.RUNNING)
-    await service.settled()
-    [session] = service.org.sessions()
-    places = {place.id for place in service.org.session(session.id)}
+    await service.work_queue.settled()
+    [session] = service.org_load.org.sessions()
+    places = {place.id for place in service.org_load.org.session(session.id)}
     service.session_lifecycle.close_session(session.id)
-    await service.settled()
+    await service.work_queue.settled()
 
     # In the turn it is finishing, the Manager approves the sub-teams.
     await use(service, root_manager, ApproveTeamsTool, APPROVE)
-    await service.settled()
+    await service.work_queue.settled()
 
-    assert {place.id for place in service.org.session(session.id)} == places
+    assert {place.id for place in service.org_load.org.session(session.id)} == places
     launcher.report(root_manager, ConversationExecutionStatus.FINISHED)
     launcher.report(root_ic, ConversationExecutionStatus.FINISHED)
-    await service.settled()
-    assert service.org.sessions() == []
+    await service.work_queue.settled()
+    assert service.org_load.org.sessions() == []
     await service.aclose()
 
 
@@ -1046,28 +1053,30 @@ async def test_a_close_cut_off_records_no_end_of_a_session_the_org_never_knew(
     opened = await first.session_lifecycle.open_session(
         OpenSessionRequest(text="Add refunds", node_id="root")
     )
-    await first.settled()
+    await first.work_queue.settled()
     ended = asyncio.Event()
-    real = first.org.close_session
+    real = first.org_load.org.close_session
 
     def server_ends(session_id: str) -> bool:
         ended.set()
         raise ServerEnded
 
-    first.org.close_session = server_ends  # type: ignore[method-assign]
+    first.org_load.org.close_session = server_ends  # type: ignore[method-assign]
 
     async def closing() -> None:
         first.session_lifecycle.close_session(opened.session.id)
-        await first.settled()
+        await first.work_queue.settled()
 
     await cut_off(launcher, ended, closing())
-    first.org.close_session = real  # type: ignore[method-assign]
+    first.org_load.org.close_session = real  # type: ignore[method-assign]
 
     second = await again(repo, launcher)
     await second.org_run.resume()
-    await second.settled()
+    await second.work_queue.settled()
 
-    assert all(session.id != opened.session.id for session in second.org.sessions())
-    kinds = [event.kind for event in second.team_memory.history("root")]
+    assert all(
+        session.id != opened.session.id for session in second.org_load.org.sessions()
+    )
+    kinds = [event.kind for event in second.org_load.team_memory.history("root")]
     assert "session_closed" not in kinds
     await second.aclose()

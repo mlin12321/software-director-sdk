@@ -623,10 +623,10 @@ def root_conversation(workspace: Path) -> StartConversationRequest:
 
 async def tasked(service: DirectorService) -> None:
     """Give every team that was only set up its first message, which starts it."""
-    for team in service.org.places():
+    for team in service.org_load.org.places():
         if not team.agents:
             service.team_messaging.tell_writer(team.id, "Begin.")
-    await service.settled()
+    await service.work_queue.settled()
 
 
 def former_of(service: DirectorService, team_id: str) -> list[FormerTeam]:
@@ -634,11 +634,11 @@ def former_of(service: DirectorService, team_id: str) -> list[FormerTeam]:
     sessions keep to themselves until their work is accepted."""
     kept = [
         record
-        for session in service.org.sessions()
+        for session in service.org_load.org.sessions()
         for record in service.session_drafts.former(session.id)
         if record.id == team_key(team_id)
     ]
-    return [*service.team_memory.former(team_id), *kept]
+    return [*service.org_load.team_memory.former(team_id), *kept]
 
 
 def record_of(service: DirectorService, team_id: str) -> list[TeamEvent]:
@@ -646,10 +646,10 @@ def record_of(service: DirectorService, team_id: str) -> list[TeamEvent]:
     the open sessions kept since their work was last accepted."""
     own = [
         event
-        for session in service.org.sessions()
+        for session in service.org_load.org.sessions()
         for event in service.session_drafts.events(session.id, team_id)
     ]
-    return [*service.team_memory.history(team_id), *own]
+    return [*service.org_load.team_memory.history(team_id), *own]
 
 
 def take_in(
@@ -677,8 +677,10 @@ def take_in(
 def memory_of(service: DirectorService, file: str) -> str | None:
     """A file of team memory as the first session has it: what it wrote
     there and nobody accepted yet, else the org's."""
-    [session, *_] = service.org.sessions()
-    return service.session_documents.read_file(service.org.session(session.id)[0], file)
+    [session, *_] = service.org_load.org.sessions()
+    return service.session_documents.read_file(
+        service.org_load.org.session(session.id)[0], file
+    )
 
 
 def commit(checkout: Path, path: str, content: str) -> None:
@@ -740,12 +742,12 @@ async def started_with_server(
         **options,
     )
     await service.start(launcher)
-    await service.create_org(
+    await service.session_lifecycle.create_org(
         CreateOrgRequest(
             title="Checkout", task="Build", conversation=root_conversation(repo)
         )
     )
-    await service.settled()
+    await service.work_queue.settled()
     return service
 
 
@@ -780,7 +782,7 @@ async def use(
     executor = tool.create(state)[0].executor
     assert executor is not None
     observation = await asyncio.to_thread(executor, action)
-    await service.settled()
+    await service.work_queue.settled()
     assert isinstance(observation, DirectorObservation)
     return observation
 
@@ -788,12 +790,12 @@ async def use(
 def node(service: DirectorService, node_id: str) -> SessionTeam:
     """A place by its id, or the place of the session opened first at the
     team of that id."""
-    found = service.org.place(node_id)
+    found = service.org_load.org.place(node_id)
     if "@" not in node_id:
         found = next(
             (
                 place
-                for place in service.org.places()
+                for place in service.org_load.org.places()
                 if not place.division_lead and place.team_id == node_id
             ),
             None,
@@ -804,13 +806,13 @@ def node(service: DirectorService, node_id: str) -> SessionTeam:
 
 def division_lead_ic(service: DirectorService, node_id: str = "root") -> str | None:
     """The IC that reviews the session of the place ``node_id``."""
-    place = service.org.place(division_lead_of(service, node_id))
+    place = service.org_load.org.place(division_lead_of(service, node_id))
     assert place is not None
     return agent_conversation(place, "ic")
 
 
 def division_lead_of(service: DirectorService, node_id: str = "root") -> str:
-    session = service.org.session_of(node(service, node_id))
+    session = service.org_load.org.session_of(node(service, node_id))
     assert session is not None
     return division_lead_id(session.above_id, session.id)
 
@@ -829,7 +831,7 @@ async def woken(service: DirectorService, node_id: str = "root") -> str:
         service.team_messaging.tell_manager(
             node(service, node_id).id, "Look in on your team."
         )
-        await service.settled()
+        await service.work_queue.settled()
     found = manager(service, node_id)
     assert found is not None
     return found
@@ -849,7 +851,7 @@ def own_document(service: DirectorService, place: SessionTeam, name: str) -> str
     return next(
         (
             shown.text
-            for shown in service.team_documents.shown(
+            for shown in service.org_settings.team_documents().shown(
                 service.team_types.reader_of(place)
             )
             if shown.name == name and shown.own
@@ -911,14 +913,14 @@ async def split_root(service: DirectorService) -> None:
 
 def sub_teams(service: DirectorService, node_id: str = "root") -> list[SessionTeam]:
     """What the session opened first has directly below a team."""
-    return service.org.below(node(service, node_id).id)
+    return service.org_load.org.below(node(service, node_id).id)
 
 
 def has_place(service: DirectorService, team_id: str) -> bool:
     """Whether a session has the team ``team_id``."""
     return any(
         session_id_of(place) and team_id_of(place) == team_id
-        for place in service.org.places()
+        for place in service.org_load.org.places()
     )
 
 
@@ -989,7 +991,7 @@ async def an_org(
         remembered=repo.parent / "director.json",
     )
     await service.start(launcher)
-    await service.create_org(
+    await service.session_lifecycle.create_org(
         CreateOrgRequest(
             title="Lab",
             task="Find out what helps training",
@@ -997,7 +999,7 @@ async def an_org(
             conversation=root_conversation(repo),
         )
     )
-    await service.settled()
+    await service.work_queue.settled()
     return service
 
 
@@ -1029,7 +1031,7 @@ async def reviewer_wakes(
     reviewer = ic(service, node_id)
     assert reviewer is not None
     launcher.report(reviewer, ConversationExecutionStatus.RUNNING)
-    await service.settled()
+    await service.work_queue.settled()
 
 
 def requests(service: DirectorService, launcher: FakeLauncher) -> list[str]:
@@ -1075,7 +1077,7 @@ def in_own_worktree(
     worktree = tmp_path / name
     run_git(repo, "worktree", "add", "--quiet", "-b", name, str(worktree))
     for team in teams:
-        service.org.update_place(
+        service.org_load.org.update_place(
             node(service, team).id, worktree_path=str(worktree), branch=name
         )
     return worktree
@@ -1106,7 +1108,7 @@ async def at_api(service: DirectorService) -> tuple[str, str]:
     opened = await service.session_lifecycle.open_session(
         OpenSessionRequest(text="Add refunds.", node_id="services.api")
     )
-    await service.settled()
+    await service.work_queue.settled()
     return opened.session.teams[0].id, opened.conversation_id
 
 
@@ -1121,9 +1123,9 @@ def sets_up_jobs(
 ):
     """Have a session set up a team for a directory under the team it was
     opened at."""
-    place = service.org.place(top)
+    place = service.org_load.org.place(top)
     assert isinstance(place, SessionTeam)
-    service.org.upsert(
+    service.org_load.org.upsert(
         SessionTeamInput(
             **place.model_dump(include={"session", "title", "isolation", "status"}),
             worktree_path=place.worktree_path,
@@ -1140,9 +1142,9 @@ def sets_up_jobs(
 
 def org_gains(service: DirectorService, team_id: str, path: str) -> None:
     """Have other accepted work give the org a team under API."""
-    api = service.org.team("services.api")
+    api = service.org_load.org.team("services.api")
     assert api is not None
-    service.org.upsert(
+    service.org_load.org.upsert(
         OrgNodeInput(
             **api.model_dump(include={"title", "isolation"}),
             id=team_id,
@@ -1155,7 +1157,7 @@ def org_gains(service: DirectorService, team_id: str, path: str) -> None:
 
 def waiting(service: DirectorService, top: str) -> list[str]:
     """The teams of a session that wait to be settled."""
-    place = service.org.place(division_lead_of(service, top))
+    place = service.org_load.org.place(division_lead_of(service, top))
     assert isinstance(place, SessionTeam)
     return [
         item.key
@@ -1165,13 +1167,13 @@ def waiting(service: DirectorService, top: str) -> list[str]:
 
 
 def division_lead_manager(service: DirectorService, top: str) -> str | None:
-    place = service.org.place(division_lead_of(service, top))
+    place = service.org_load.org.place(division_lead_of(service, top))
     assert place is not None
     return agent_conversation(place, "manager")
 
 
 def path_of(service: DirectorService, team_id: str) -> str | None:
-    team = service.org.team(team_id)
+    team = service.org_load.org.team(team_id)
     return team.boundary.path if team else None
 
 
@@ -1187,7 +1189,7 @@ async def session_accepted(
     answer = await use(
         service, division_lead_ic(service, top), ReviewTeamTool, accept(top)
     )
-    await service.settled()
+    await service.work_queue.settled()
     return answer.text
 
 
@@ -1199,12 +1201,12 @@ async def started(repo: Path, launcher: FakeLauncher, **options) -> DirectorServ
         **{"run_limit_retry": 0, **options},
     )
     await service.start(launcher)
-    await service.create_org(
+    await service.session_lifecycle.create_org(
         CreateOrgRequest(
             title="Checkout", task="Build", conversation=root_conversation(repo)
         )
     )
-    await service.settled()
+    await service.work_queue.settled()
     return service
 
 
@@ -1244,7 +1246,7 @@ async def team_accepted(
         commit(repo, f"{directory}/part{count}.txt", "done\n")
         await use(service, ic(service, team), SubmitReviewTool, DONE)
         await use(service, ic(service), ReviewTeamTool, accept(team))
-    await service.settled()
+    await service.work_queue.settled()
 
 
 async def escalates(service: DirectorService, team: str, times: int = 1) -> None:
@@ -1255,7 +1257,7 @@ async def escalates(service: DirectorService, team: str, times: int = 1) -> None
             RaiseEscalationTool,
             RaiseEscalationAction(category="design_decision", title=f"Q{number}?"),
         )
-    await service.settled()
+    await service.work_queue.settled()
 
 
 async def sent_back(service: DirectorService, repo: Path, team: str, times: int = 1):
@@ -1266,7 +1268,7 @@ async def sent_back(service: DirectorService, repo: Path, team: str, times: int 
         commit(repo, f"{directory}/try{count}.txt", "again\n")
         await use(service, ic(service, team), SubmitReviewTool, DONE)
         await use(service, ic(service), ReviewTeamTool, reject(team))
-    await service.settled()
+    await service.work_queue.settled()
 
 
 class ServerEnded(BaseException):
@@ -1286,7 +1288,7 @@ async def again(repo: Path, launcher: FakeLauncher, **options) -> DirectorServic
         **options,
     )
     await service.start(launcher)
-    await service.settled()
+    await service.work_queue.settled()
     return service
 
 
@@ -1337,7 +1339,7 @@ def attempt(
 ) -> str | None:
     """What the director says to an agent that is about to use ``tool``."""
     event = cast(ActionEvent, SimpleNamespace(tool_name=tool, action=action))
-    return service.guard_action(UUID(conversation_id or ""), event)
+    return service.confinement.guard_action(UUID(conversation_id or ""), event)
 
 
 def create(path: Path | str) -> FileEditorAction:

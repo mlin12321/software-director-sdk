@@ -213,7 +213,7 @@ def test_returns_what_applies_to_the_nodes_boundary_and_what_its_agents_reported
 async def test_returns_the_threads_a_places_agents_take_part_in(running, repo: Path):
     client, _, service = running
     opened = (await client.post("/api/director/org", json=org_body(repo))).json()
-    await service.settled()
+    await service.work_queue.settled()
     top = opened["session"]["teams"][0]["id"]
     asked = ThreadMessage(at="2026-11-01T00:00:00+00:00", sender="ic", text="Split?")
     told = ThreadMessage(
@@ -250,7 +250,7 @@ async def test_returns_the_threads_a_places_agents_take_part_in(running, repo: P
 @pytest.fixture
 def tree_stream_service(tmp_path: Path) -> DirectorService:
     tree_stream_service = DirectorService(tmp_path)
-    tree_stream_service.org.replace_all(small_tree())
+    tree_stream_service.org_load.org.replace_all(small_tree())
     return tree_stream_service
 
 
@@ -293,10 +293,11 @@ async def test_starts_with_a_snapshot_of_the_root_then_follows_changes(
 
     name, snapshot = await next_event(body)
     await asyncio.to_thread(
-        tree_stream_service.org.upsert, renamed(make_team("b", "root"), "Billing")
+        tree_stream_service.org_load.org.upsert,
+        renamed(make_team("b", "root"), "Billing"),
     )
     _, upsert = await next_event(body)
-    await asyncio.to_thread(tree_stream_service.org.remove, "b")
+    await asyncio.to_thread(tree_stream_service.org_load.org.remove, "b")
     _, removed = await next_event(body)
     _, above = await next_event(body)
 
@@ -312,8 +313,8 @@ async def test_follows_only_the_requested_node(tree_stream_service: DirectorServ
     body = await open_stream(tree_stream_service, "b")
 
     _, snapshot = await next_event(body)
-    tree_stream_service.org.upsert(renamed(make_team("a1", "a"), "One"))
-    tree_stream_service.org.upsert(renamed(make_team("b", "root"), "Billing"))
+    tree_stream_service.org_load.org.upsert(renamed(make_team("a1", "a"), "One"))
+    tree_stream_service.org_load.org.upsert(renamed(make_team("b", "root"), "Billing"))
     _, first_change = await next_event(body)
 
     assert [node["id"] for node in snapshot["nodes"]] == ["root", "b"]
@@ -327,7 +328,7 @@ async def test_follows_the_reports_of_expanded_nodes(
     body = await open_stream(tree_stream_service, expanded=["a", "missing"])
 
     _, snapshot = await next_event(body)
-    tree_stream_service.org.upsert(renamed(make_team("a1", "a"), "One"))
+    tree_stream_service.org_load.org.upsert(renamed(make_team("a1", "a"), "One"))
     _, change = await next_event(body)
 
     assert [node["id"] for node in snapshot["nodes"]] == [
@@ -346,7 +347,7 @@ async def test_a_full_stream_follows_every_node_below_the_focus(
     body = await open_stream(tree_stream_service, "a", full=True)
 
     _, snapshot = await next_event(body)
-    tree_stream_service.org.upsert(make_team("deep", "a1"))
+    tree_stream_service.org_load.org.upsert(make_team("deep", "a1"))
     _, change = await next_event(body)
 
     assert [node["id"] for node in snapshot["nodes"]] == ["root", "a", "a1", "a2"]
@@ -356,7 +357,7 @@ async def test_a_full_stream_follows_every_node_below_the_focus(
 async def test_sends_what_waits_on_the_human_and_each_change_to_it(
     tree_stream_service: DirectorService,
 ):
-    store = tree_stream_service.org
+    store = tree_stream_service.org_load.org
     top = open_session_in(store, "a", "s1")
     store.raise_escalation(top.id, "jwt", kind="design_decision", title="jwt")
     body = await open_stream(tree_stream_service)
@@ -411,11 +412,11 @@ async def test_a_closed_stream_stops_listening(tree_stream_service: DirectorServ
     await next_event(other)
 
     await body.aclose()  # type: ignore[attr-defined]
-    tree_stream_service.org.subscribe("root", delivered.append)
-    tree_stream_service.org.upsert(renamed(make_team("b", "root"), "Billing"))
+    tree_stream_service.org_load.org.subscribe("root", delivered.append)
+    tree_stream_service.org_load.org.upsert(renamed(make_team("b", "root"), "Billing"))
 
     # The store has exactly the open stream and this test's listener left.
-    assert len(tree_stream_service.org._listeners) == 2
+    assert len(tree_stream_service.org_load.org._listeners) == 2
     assert (await next_event(other))[0] == "node_upsert"
     assert len(delivered) == 1
 
@@ -428,7 +429,7 @@ async def test_an_empty_tree_or_unknown_node_is_refused_before_streaming(
     with pytest.raises(NotFound):
         await open_stream(tree_stream_service, "missing")
 
-    assert tree_stream_service.org._listeners == {}
+    assert tree_stream_service.org_load.org._listeners == {}
 
 
 def org_body(workspace: Path) -> dict:
@@ -521,7 +522,7 @@ async def test_an_org_is_paused_asked_what_it_holds_and_resumed(running, repo):
     client, launcher, service = running
     no_org = await client.post("/api/director/org/pause")
     created = await client.post("/api/director/org", json=org_body(repo))
-    await service.settled()
+    await service.work_queue.settled()
     root_ic = created.json()["conversation_id"]
     top = created.json()["session"]["teams"][0]
     delivered = len(launcher.messages_to(root_ic))
@@ -529,7 +530,7 @@ async def test_an_org_is_paused_asked_what_it_holds_and_resumed(running, repo):
     paused = await client.post("/api/director/org/pause")
     asked = await client.post("/api/director/org/messages", json={"text": "Refunds"})
     service.team_messaging.tell_writer(top["id"], "Add a cart", human=True)
-    await service.settled()
+    await service.work_queue.settled()
     summary = await client.get("/api/director/org")
     recovery = await client.get("/api/director/org/recovery")
 
@@ -551,7 +552,7 @@ async def test_an_org_is_paused_asked_what_it_holds_and_resumed(running, repo):
     assert len(launcher.messages_to(root_ic)) == delivered
 
     resumed = await client.post("/api/director/org/resume")
-    await service.settled()
+    await service.work_queue.settled()
 
     assert resumed.json() == {"paused": None, "items": [], "messages_held": 0}
     assert launcher.messages_to(root_ic)[-1] == "Add a cart"
@@ -562,7 +563,7 @@ async def test_an_org_is_pushed_pulled_and_its_merge_asked_for(running, repo, tm
     client, _, service = running
     nothing = await client.post("/api/director/org/push")
     created = await client.post("/api/director/org", json=org_body(repo))
-    await service.settled()
+    await service.work_queue.settled()
     session = created.json()["session"]["id"]
     start_again = f"/api/director/org/sessions/{session}/teams/root/start-again"
     no_remote = await client.post("/api/director/org/pull", json={"remote": "nope"})
@@ -594,7 +595,7 @@ async def test_answering_an_escalation_settles_it_and_tells_the_team(running, re
     client, launcher, service = running
     opened = (await client.post("/api/director/org", json=org_body(repo))).json()
     session = opened["session"]
-    service.org.raise_escalation(
+    service.org_load.org.raise_escalation(
         session["teams"][0]["id"],
         "jwt",
         kind="design_decision",
@@ -607,7 +608,7 @@ async def test_answering_an_escalation_settles_it_and_tells_the_team(running, re
     blank = await client.post(url.format("jwt"), json={"answer": ""})
     unknown = await client.post(url.format("nothing"), json={"answer": "Opaque."})
     answered = await client.post(url.format("jwt"), json={"answer": "Opaque."})
-    await service.settled()
+    await service.work_queue.settled()
 
     assert (blank.status_code, unknown.status_code) == (422, 404)
     assert answered.status_code == 200
@@ -625,10 +626,10 @@ async def test_the_first_message_starts_an_org_and_later_ones_open_sessions_in_i
         "/api/director/org/messages",
         json={"text": "Build the checkout flow", "conversation": conversation},
     )
-    await service.settled()
+    await service.work_queue.settled()
 
     assert first.status_code == 200
-    [session] = service.org.sessions()
+    [session] = service.org_load.org.sessions()
     top = session.teams[0]
     assert top.title == "Build the checkout flow"
     assert first.json() == {
@@ -644,9 +645,9 @@ async def test_the_first_message_starts_an_org_and_later_ones_open_sessions_in_i
         "/api/director/org/messages",
         json={"text": "Add refunds", "path": "services/api"},
     )
-    await service.settled()
+    await service.work_queue.settled()
 
-    _, opened = service.org.sessions()
+    _, opened = service.org_load.org.sessions()
     place = opened.teams[0]
     assert (opened.team_id, place.id) == ("root", f"root@{opened.id}")
     assert later.json() == {
@@ -666,12 +667,12 @@ async def test_the_first_message_starts_an_org_and_later_ones_open_sessions_in_i
     unknown = await client.post(
         "/api/director/org/messages", json={"text": "Hi", "session_id": "s000000"}
     )
-    await service.settled()
+    await service.work_queue.settled()
 
     # What is said in a session goes to its IC and opens no other session.
     assert said.json() == {**later.json(), "chosen_by": "path", "reason": ""}
     assert unknown.status_code == 404
-    assert len(service.org.sessions()) == 2
+    assert len(service.org_load.org.sessions()) == 2
     assert launcher.messages_to(said.json()["conversation_id"])[-1] == (
         "And partial ones."
     )
@@ -684,7 +685,7 @@ async def test_a_message_that_cannot_be_routed_is_refused(running, repo):
     assert no_org.status_code == 422
 
     await client.post("/api/director/org", json=org_body(repo))
-    await service.settled()
+    await service.work_queue.settled()
     outside = await client.post(
         "/api/director/org/messages", json={"text": "Hi", "path": "/etc"}
     )
@@ -774,7 +775,7 @@ def test_teams_are_searched_by_title_and_directory(client: TestClient):
 async def test_a_teams_changes_are_listed_shown_and_edited_by_hand(running, repo):
     client, launcher, service = running
     opened = (await client.post("/api/director/org", json=org_body(repo))).json()
-    await service.settled()
+    await service.work_queue.settled()
     ic = opened["conversation_id"]
     (repo / "README.md").write_text("hello\nfrom the agent\n")
     url = f"/api/director/org/nodes/{opened['session']['teams'][0]['id']}"
@@ -792,7 +793,7 @@ async def test_a_teams_changes_are_listed_shown_and_edited_by_hand(running, repo
     saved = await client.put(
         f"{url}/files", params={"path": "README.md"}, json={"content": "mine\n"}
     )
-    await service.settled()
+    await service.work_queue.settled()
     outside = await client.put(
         f"{url}/files", params={"path": "../x"}, json={"content": "no\n"}
     )
@@ -830,9 +831,11 @@ async def test_an_escalation_at_a_division_lead_place_is_answered_there(running,
     session = opened["session"]
     # A session opened at the top team has two places there.
     [lead] = [
-        place for place in service.org.session(session["id"]) if place.division_lead
+        place
+        for place in service.org_load.org.session(session["id"])
+        if place.division_lead
     ]
-    service.org.raise_escalation(
+    service.org_load.org.raise_escalation(
         lead.id, "agent-failed", kind="critical_issue", title="Its IC failed"
     )
 
@@ -841,10 +844,10 @@ async def test_an_escalation_at_a_division_lead_place_is_answered_there(running,
         "/escalations/agent-failed/answer",
         json={"answer": "Start it again."},
     )
-    await service.settled()
+    await service.work_queue.settled()
 
     assert answered.status_code == 200
-    now = service.org.place(lead.id)
+    now = service.org_load.org.place(lead.id)
     assert now is not None and now.escalations == []
 
 

@@ -55,7 +55,7 @@ def test_the_rewrite_must_be_shorter_than_what_it_replaces():
 async def reporting_service(repo: Path, launcher: FakeLauncher) -> DirectorService:
     service = DirectorService(repo, save_delay=0, run_limit_retry=0)
     await service.start(launcher)
-    await service.create_org(
+    await service.session_lifecycle.create_org(
         CreateOrgRequest(
             title="Checkout", task="Build", conversation=root_conversation(repo)
         )
@@ -63,7 +63,7 @@ async def reporting_service(repo: Path, launcher: FakeLauncher) -> DirectorServi
     service.org_settings.update_settings(
         DirectorSettingsUpdate(report_compaction_chars=1_000)
     )
-    await service.settled()
+    await service.work_queue.settled()
     return service
 
 
@@ -76,14 +76,14 @@ async def test_long_reports_are_rewritten_by_a_model_once_they_are_the_teams(
         root = node(service, "root")
         report(service, root, "ic", "a" * 600)
         service.team_messaging.tell_manager(root.id, "Look in on your team.")
-        await service.settled()
+        await service.work_queue.settled()
         report(service, root, "manager", "m" * 600)
         report(service, root, "ic", "b" * 600)
-        await service.settled()
+        await service.work_queue.settled()
         asked_before = len(launcher.asked)
         await landed(service)
         report(service, root, "ic", "Then this.")
-        await service.settled()
+        await service.work_queue.settled()
         kept = service.team_reports.reports_of(root)
     finally:
         await service.aclose()

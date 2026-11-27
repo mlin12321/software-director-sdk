@@ -80,6 +80,7 @@ class Summaries:
                 remembered=RememberedFile(None),
                 team_types=team_types,
                 tree=tree,
+                documents=team_types.documents,
                 org=lambda: self.store,
                 repo_dir=lambda: repo,
                 max_concurrent_runs=None,

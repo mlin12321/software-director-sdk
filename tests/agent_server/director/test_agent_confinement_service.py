@@ -44,6 +44,8 @@ def service_for(
         store.upsert(node)
     kept = run or RunState(None)
     return AgentConfinementService(
+        find_org=lambda: None,
+        record_need=lambda *said: None,
         environment=GitCodingEnvironment(),
         repo_dir=lambda: repo,
         worktree_root=None,

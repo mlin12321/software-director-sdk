@@ -135,7 +135,9 @@ async def test_a_team_is_told_the_documents_its_type_keeps_under_their_names(
     # Whoever looks at the team is given it as the team reads it.
     assert [
         found.model_dump()
-        for found in service.team_documents.listed(service.team_types.reader_of(root))
+        for found in service.org_settings.team_documents().listed(
+            service.team_types.reader_of(root)
+        )
     ] == [
         {
             "name": "glossary",

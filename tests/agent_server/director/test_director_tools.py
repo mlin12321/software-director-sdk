@@ -88,14 +88,14 @@ from tests.agent_server.director.document_tools import (
 async def service(repo: Path, launcher: FakeLauncher) -> AsyncIterator[DirectorService]:
     service = DirectorService(repo, save_delay=0, run_limit_retry=0)
     await service.start(launcher)
-    await service.create_org(
+    await service.session_lifecycle.create_org(
         CreateOrgRequest(
             title="Checkout",
             task="Build the checkout flow",
             conversation=root_conversation(repo),
         )
     )
-    await service.settled()
+    await service.work_queue.settled()
     yield service
     await service.aclose()
 
@@ -151,7 +151,7 @@ async def test_the_ic_writes_the_spec_its_sub_teams_inherit(service: DirectorSer
     read = await use(service, ic(service), ReadTeamContextTool, ReadTeamContextAction())
     assert "integer cents" in json.loads(read.text)["spec"]
     # It is the team's once the work it was written with is accepted.
-    assert service.team_memory.read("spec.md") is None
+    assert service.org_load.team_memory.read("spec.md") is None
 
     await use(
         service, ic(service), SubmitReviewTool, SubmitReviewAction(summary="Done.")
@@ -163,7 +163,7 @@ async def test_the_ic_writes_the_spec_its_sub_teams_inherit(service: DirectorSer
         ReviewTeamAction(team=node(service, "root").id, decision="accept"),
     )
 
-    assert "integer cents" in (service.team_memory.read("spec.md") or "")
+    assert "integer cents" in (service.org_load.team_memory.read("spec.md") or "")
 
 
 async def test_proposed_sub_teams_wait_for_the_manager(
@@ -546,7 +546,7 @@ async def test_an_approved_split_sets_up_each_sub_team(
     )
     assert (team_id_of(web), web.isolation) == ("apps.web", "worktree")
     # They are the session's until its work is accepted.
-    assert [team.id for team in service.org.teams()] == ["root"]
+    assert [team.id for team in service.org_load.org.teams()] == ["root"]
     starts = {str(start.conversation_id): start for start in launcher.derived}
     api_ic, web_ic = starts[str(ic(service, api.id))], starts[str(ic(service, web.id))]
     # Each IC continues from the IC above.
@@ -571,14 +571,14 @@ async def test_an_approved_split_sets_up_each_sub_team(
     assert "API (services/api)" in launcher.messages_to(ic(service))[-1]
     [contracts] = [
         shown
-        for shown in service.team_documents.shown(
+        for shown in service.org_settings.team_documents().shown(
             service.team_types.reader_of(node(service, "services.api"))
         )
         if shown.name == "contracts"
     ]
     assert not contracts.own and "POST /checkout" in contracts.text
     # They are the session's alone until its work is accepted.
-    assert service.team_memory.read("contracts.md") is None
+    assert service.org_load.team_memory.read("contracts.md") is None
 
 
 async def test_a_sub_team_that_cannot_start_is_shown_as_blocked(
@@ -627,7 +627,7 @@ async def test_what_an_ic_escalates_goes_to_the_ic_above_and_then_to_the_human(
     told = launcher.messages_to(ic(service))[-1]
     assert "The IC of team 'API'" in told and "Cents or decimals?" in told
     assert len(launcher.messages_to(manager(service))) == to_manager
-    assert service.org.escalations() == []
+    assert service.org_load.org.escalations() == []
     seen = {
         role: json.loads((await use(service, agent, ReadTeamContextTool, READ)).text)
         for role, agent in (("ic", ic(service)), ("manager", manager(service)))
@@ -663,12 +663,12 @@ async def test_what_an_ic_escalates_goes_to_the_ic_above_and_then_to_the_human(
         and "raised by the IC of its team" in by_the_manager.text
     )
     assert not passed.is_error and "waits on the human" in passed.text
-    [waiting] = service.org.escalations()
+    [waiting] = service.org_load.org.escalations()
     assert waiting.escalation.held_by is None
     assert waiting.escalation.handoffs[0].reason == "Finance has to choose."
 
-    service.answer_escalation(node(service, api).id, escalation.id, "Cents.")
-    await service.settled()
+    service.org_run.answer_escalation(node(service, api).id, escalation.id, "Cents.")
+    await service.work_queue.settled()
 
     assert "Cents." in launcher.messages_to(ic(service, api))[-1]
     assert node(service, api).escalations == []
@@ -756,12 +756,14 @@ async def test_what_the_top_team_escalates_waits_on_the_human(
     raised = await use(service, raiser, RaiseEscalationTool, CENTS)
 
     assert "waits on the human" in raised.text
-    [waiting] = service.org.escalations()
+    [waiting] = service.org_load.org.escalations()
     assert waiting.escalation.held_by is None
     assert node(service, "root").status == ("blocked" if role == "ic" else "idle")
 
-    service.answer_escalation(node(service, "root").id, waiting.escalation.id, "Cents.")
-    await service.settled()
+    service.org_run.answer_escalation(
+        node(service, "root").id, waiting.escalation.id, "Cents."
+    )
+    await service.work_queue.settled()
 
     assert "The human answered" in launcher.messages_to(raiser)[-1]
     assert len(launcher.messages_to(other)) == heard
@@ -934,9 +936,9 @@ async def test_every_message_between_agents_goes_one_way(
     stopped = service.team_messaging.send_msg(
         top, "ic", top, "manager", "Split in two?"
     )
-    await service.settled()
+    await service.work_queue.settled()
     service.team_messaging.send_msg(top, "manager", top, "ic", "Not yet.")
-    await service.settled()
+    await service.work_queue.settled()
 
     assert stopped is False
     assert launcher.messages_to(manager(service))[-1].startswith(

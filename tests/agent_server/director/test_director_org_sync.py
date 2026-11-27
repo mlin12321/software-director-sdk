@@ -229,19 +229,19 @@ async def an_org_on_two_machines(
     await here.org_sync.push_org("origin")
     there, _ = await elsewhere(remote, tmp_path)
     await there.org_sync.pull_org("origin")
-    await there.settled()
+    await there.work_queue.settled()
     return here, there
 
 
 def team(service: DirectorService, team_id: str) -> OrgNode:
     """A team as the org has it, whatever a session has there."""
-    found = service.org.team(team_id)
+    found = service.org_load.org.team(team_id)
     assert found is not None
     return found
 
 
 def change(service: DirectorService, node_id: str, **fields: object) -> None:
-    service.org.update_team(node_id, **fields)
+    service.org_load.org.update_team(node_id, **fields)
 
 
 async def test_a_pushed_org_is_whole_in_another_clone_except_for_its_sessions(
@@ -255,18 +255,23 @@ async def test_a_pushed_org_is_whole_in_another_clone_except_for_its_sessions(
     pushed = await here.org_sync.push_org("origin")
     there, _ = await elsewhere(remote, tmp_path)
     pulled = await there.org_sync.pull_org("origin")
-    await there.settled()
+    await there.work_queue.settled()
 
     assert pushed.result == "pushed" and pulled.result == "fast_forward"
-    assert [found.id for found in there.org.teams()] == ["root", API, WEB]
+    assert [found.id for found in there.org_load.org.teams()] == ["root", API, WEB]
     assert team(there, API).title == "API" and team(there, API).summary
     [carried] = there.team_reports.reports_of(team(there, API))
     assert carried.text == "Never log card numbers"
-    assert there.team_memory.read("contracts.md")
+    assert there.org_load.team_memory.read("contracts.md")
     # Who works on it is the first machine's alone.
-    assert there.org.sessions() == [] and len(here.org.sessions()) == 1
-    assert there.org.places() == []
-    assert there.summary().paused is None and here.summary().paused is None
+    assert (
+        there.org_load.org.sessions() == [] and len(here.org_load.org.sessions()) == 1
+    )
+    assert there.org_load.org.places() == []
+    assert (
+        there.org_load.summary().paused is None
+        and here.org_load.summary().paused is None
+    )
     await here.aclose()
     await there.aclose()
 
@@ -289,7 +294,7 @@ async def test_a_pull_takes_only_the_org_and_team_memory(
 
     there, clone = await elsewhere(remote, tmp_path)
     await there.org_sync.pull_org("origin")
-    await there.settled()
+    await there.work_queue.settled()
 
     assert sorted(
         run_git(
@@ -315,7 +320,7 @@ async def test_what_each_side_changed_is_merged_and_goes_back_with_the_next_push
     merged = await there.org_sync.pull_org("origin")
     await there.org_sync.push_org("origin")
     back = await here.org_sync.pull_org("origin")
-    await here.settled()
+    await here.work_queue.settled()
 
     assert merged.result == "merged" and merged.merge is None
     for side in (here, there):
@@ -326,7 +331,7 @@ async def test_what_each_side_changed_is_merged_and_goes_back_with_the_next_push
     # The session that works here is as it was.
     assert ic(here, API) == mine
     assert merged.head is not None
-    clone = there.repo_dir
+    clone = there.org_load.repo_dir
     commit, *parents = run_git(
         clone, "rev-list", "--parents", "-n", "1", merged.head
     ).split()
@@ -367,7 +372,7 @@ async def test_a_pull_stops_on_a_conflict_and_writes_nothing(
         "Web moved on"
     )
     assert GitCodingEnvironment().org_tree(repo).head() == before
-    assert here.summary().merging and here.summary().paused == "human"
+    assert here.org_load.summary().merging and here.org_load.summary().paused == "human"
     assert await here.org_sync.merge() == pulled.merge
     with pytest.raises(Conflict, match="merge waits"):
         await here.org_sync.pull_org("origin")
@@ -394,7 +399,9 @@ async def test_a_pull_that_fails_while_it_merges_leaves_the_org_running(
         await here.org_sync.pull_org("origin")
 
     # Nothing waits to be resolved, so nothing holds the org.
-    assert not here.summary().merging and here.summary().paused is None
+    assert (
+        not here.org_load.summary().merging and here.org_load.summary().paused is None
+    )
     await here.aclose()
     await there.aclose()
 
@@ -414,12 +421,12 @@ async def test_a_conflict_is_resolved_either_way_and_the_merge_is_finished(
     done = await here.org_sync.resolve_merge(
         ResolveMergeRequest.model_validate({"choices": {f"field:{API}:headline": side}})
     )
-    await here.settled()
+    await here.work_queue.settled()
 
     assert done.result == "merged" and done.merge is None
     assert team(here, API).headline == headline
     assert team(here, WEB).headline == "Web moved on"
-    summary = here.summary()
+    summary = here.org_load.summary()
     assert not summary.merging and summary.paused is None
     assert (await here.org_sync.push_org("origin")).result == "pushed"
     await here.aclose()
@@ -440,7 +447,7 @@ async def test_a_merge_that_waits_survives_a_restart_and_can_be_abandoned(
         remembered=repo.parent / "state" / "director.json",
     )
     await again.start(launcher)
-    await again.settled()
+    await again.work_queue.settled()
 
     waiting = await again.org_sync.merge()
     with pytest.raises(Unprocessable, match="no conflict named"):
@@ -448,12 +455,14 @@ async def test_a_merge_that_waits_survives_a_restart_and_can_be_abandoned(
             ResolveMergeRequest.model_validate({"choices": {"field:x:y": "mine"}})
         )
     abandoned = await again.org_sync.abort_merge()
-    await again.settled()
+    await again.work_queue.settled()
 
     assert waiting is not None and len(waiting.conflicts) == 1
     assert abandoned.result == "up_to_date" and await again.org_sync.merge() is None
     assert team(again, API).headline == "Mine"
-    assert not again.summary().merging and again.summary().paused is None
+    assert (
+        not again.org_load.summary().merging and again.org_load.summary().paused is None
+    )
     taken = await again.org_sync.pull_org("origin")
     everything = await again.org_sync.resolve_merge(
         ResolveMergeRequest.model_validate({"rest": "theirs"})
@@ -468,9 +477,13 @@ async def test_a_spec_both_sides_rewrote_is_a_conflict_about_the_file(
     repo: Path, launcher: FakeLauncher, remote: Path, tmp_path: Path
 ):
     here, there = await an_org_on_two_machines(repo, launcher, remote, tmp_path)
-    here.team_memory.write("services/api", "spec.md", "Serve orders over REST\n")
-    there.team_memory.write("services/api", "spec.md", "Serve orders over gRPC\n")
-    there.team_memory.write("apps/web", "spec.md", "Pages for checkout\n")
+    here.org_load.team_memory.write(
+        "services/api", "spec.md", "Serve orders over REST\n"
+    )
+    there.org_load.team_memory.write(
+        "services/api", "spec.md", "Serve orders over gRPC\n"
+    )
+    there.org_load.team_memory.write("apps/web", "spec.md", "Pages for checkout\n")
     await there.org_sync.push_org("origin")
 
     pulled = await here.org_sync.pull_org("origin")
@@ -487,8 +500,11 @@ async def test_a_spec_both_sides_rewrote_is_a_conflict_about_the_file(
     assert conflict.theirs == "Serve orders over gRPC\n"
     assert done.result == "merged"
     assert done.memory is not None and done.memory.kept_local == []
-    assert here.team_memory.read("services/api/spec.md") == "Serve orders over gRPC\n"
-    assert here.team_memory.read("apps/web/spec.md") == "Pages for checkout\n"
+    assert (
+        here.org_load.team_memory.read("services/api/spec.md")
+        == "Serve orders over gRPC\n"
+    )
+    assert here.org_load.team_memory.read("apps/web/spec.md") == "Pages for checkout\n"
     await here.aclose()
     await there.aclose()
 
@@ -497,20 +513,20 @@ async def test_a_session_goes_on_with_a_team_the_pull_removed(
     repo: Path, launcher: FakeLauncher, remote: Path, tmp_path: Path
 ):
     here, there = await an_org_on_two_machines(repo, launcher, remote, tmp_path)
-    there.org.remove(API)
+    there.org_load.org.remove(API)
     await there.org_sync.push_org("origin")
     await here.org_run.pause()
     here.message_delivery.notify(ic(here, API), "Use idempotency keys")
-    await here.settled()
+    await here.work_queue.settled()
 
     pulled = await here.org_sync.pull_org("origin")
 
     assert pulled.result in ("merged", "fast_forward")
-    assert here.org.team(API) is None
+    assert here.org_load.org.team(API) is None
     # The session has the team as it set it up; it is not made to catch up
     # while it works.
     assert team_id_of(node(here, API)) == API and ic(here, API) is not None
-    assert here.summary().paused == "human"
+    assert here.org_load.summary().paused == "human"
     assert (await here.org_run.recovery()).messages_held == 1
     await here.aclose()
     await there.aclose()
@@ -521,7 +537,9 @@ async def test_a_team_whose_conversation_is_gone_is_started_again_on_its_work(
 ):
     here = await started(repo, launcher)
     await split_root(here)
-    here.team_memory.write("services/api", "spec.md", "Serve orders over REST\n")
+    here.org_load.team_memory.write(
+        "services/api", "spec.md", "Serve orders over REST\n"
+    )
     lost = ic(here, API)
     assert lost is not None
     del launcher.known[UUID(lost)]
@@ -531,7 +549,7 @@ async def test_a_team_whose_conversation_is_gone_is_started_again_on_its_work(
     started_again = await here.org_run.start_again(
         api, StartAgainRequest(conversation=root_conversation(repo))
     )
-    await here.settled()
+    await here.work_queue.settled()
 
     assert ic(here, API) != lost
     assert launcher.root is not None
@@ -570,7 +588,7 @@ async def test_such_a_team_is_started_again_like_the_ic_above_in_its_own_checkou
 
     before = len(launcher.derived)
     await here.org_run.start_again(api, StartAgainRequest())
-    await here.settled()
+    await here.work_queue.settled()
 
     [again] = launcher.derived[before:]
     assert str(again.parent_id) == top_ic
@@ -586,21 +604,21 @@ async def test_a_message_with_a_conversation_opens_a_session_in_a_pulled_org(
     repo: Path, launcher: FakeLauncher, remote: Path, tmp_path: Path
 ):
     here, there = await an_org_on_two_machines(repo, launcher, remote, tmp_path)
-    clone = there.repo_dir
+    clone = there.org_load.repo_dir
     fake = there._require_launcher()
     assert isinstance(fake, FakeLauncher)
 
-    routed = await there.route_message(
+    routed = await there.session_lifecycle.route_message(
         RouteMessageRequest(
             text="Add a health check",
             path="services/api",
             conversation=root_conversation(clone),
         )
     )
-    await there.settled()
+    await there.work_queue.settled()
 
     # The team nearest to where it was said, in a session of this machine.
-    [session] = there.org.sessions()
+    [session] = there.org_load.org.sessions()
     assert (session.team_id, session.request) == (API, "Add a health check")
     assert routed.node_id == session.teams[0].id
     assert fake.root is not None
@@ -618,7 +636,7 @@ async def test_a_pull_shows_the_tree_again_to_a_page_that_has_it_open(
     change(here, API, title="Payments")
     await here.org_sync.push_org("origin")
     events: list[OrgChange] = []
-    there.org.subscribe("root", events.append, full=True)
+    there.org_load.org.subscribe("root", events.append, full=True)
 
     await there.org_sync.pull_org("origin")
 
@@ -634,14 +652,14 @@ async def test_a_sessions_reviewer_that_is_lost_is_started_again(
 ):
     here = await started(repo, launcher)
     await use(here, ic(here), SubmitReviewTool, DONE)
-    await here.settled()
+    await here.work_queue.settled()
     lead, lost = division_lead_of(here), division_lead_ic(here)
     assert lost is not None
     del launcher.known[UUID(lost)]
 
     before = len(launcher.derived)
     await here.org_run.start_again(lead, StartAgainRequest())
-    await here.settled()
+    await here.work_queue.settled()
 
     # Like the first time: from the IC the session works with.
     [again] = launcher.derived[before:]
@@ -657,7 +675,7 @@ async def test_a_team_started_again_keeps_its_manager_and_hears_the_human(
     await split_root(here)
     api = node(here, API).id
     here.team_messaging.tell_manager(api, "Look in on your team.")
-    await here.settled()
+    await here.work_queue.settled()
     kept, lost = manager(here, API), ic(here, API)
     assert kept is not None and lost is not None
     del launcher.known[UUID(lost)]
@@ -666,7 +684,7 @@ async def test_a_team_started_again_keeps_its_manager_and_hears_the_human(
     await here.org_run.start_again(
         api, StartAgainRequest(), said="Use the smaller migration."
     )
-    await here.settled()
+    await here.work_queue.settled()
 
     assert manager(here, API) == kept and ic(here, API) != lost
     [again] = launcher.derived[before:]

@@ -182,7 +182,9 @@ async def test_the_spec_of_the_team_before_stays_and_is_shown_as_old(
     assert orders.leftover_documents == [
         LeftoverDocument(name="spec", path="services/api", team="API")
     ]
-    [left] = service.team_documents.left_to(service.team_types.reader_of(orders))
+    [left] = service.org_settings.team_documents().left_to(
+        service.team_types.reader_of(orders)
+    )
     assert (left.name, left.text, left.left_by) == ("spec", "# API by hand", "API")
     assert own_document(service, orders, "spec") is None
 
@@ -207,7 +209,12 @@ async def test_the_spec_of_the_team_before_stays_and_is_shown_as_old(
     orders = node(service, API)
     assert orders.leftover_documents == []
     assert own_document(service, orders, "spec") == "# Orders"
-    assert service.team_documents.left_to(service.team_types.reader_of(orders)) == []
+    assert (
+        service.org_settings.team_documents().left_to(
+            service.team_types.reader_of(orders)
+        )
+        == []
+    )
 
 
 async def test_teams_that_split_or_merge_directories_are_shown_the_specs_left_there(
@@ -229,7 +236,9 @@ async def test_teams_that_split_or_merge_directories_are_shown_the_specs_left_th
     ]
     assert {
         old.text
-        for old in service.team_documents.left_to(service.team_types.reader_of(merged))
+        for old in service.org_settings.team_documents().left_to(
+            service.team_types.reader_of(merged)
+        )
     } == {
         "# API by hand",
         "# Web",
@@ -326,7 +335,7 @@ async def test_a_pruned_team_is_recorded_and_its_spec_is_old_for_the_team_above(
     [left] = context["documents_left_by_teams_before_you"]
     assert (left["document"], left["text"]) == ("spec", "# API by hand")
     # The record is the session's own until its work is accepted.
-    assert service.team_memory.former(API) == []
+    assert service.org_load.team_memory.former(API) == []
 
 
 async def test_sub_teams_of_a_stopped_team_that_is_replaced_go_on(
@@ -341,14 +350,14 @@ async def test_sub_teams_of_a_stopped_team_that_is_replaced_go_on(
     await use(
         service, ic(service), StopTeamTool, StopTeamAction(team=API, reason="Stuck.")
     )
-    await service.settled()
+    await service.work_queue.settled()
     launcher.report(db_ic, ConversationExecutionStatus.IDLE)
     before = len(launcher.resumed)
 
     await replace(
         service, SplitChild(title="Services", path="services", task="Serve"), keep=[]
     )
-    await service.settled()
+    await service.work_queue.settled()
 
     assert node(service, "services.api.db").parent_id == node(service, "services").id
     assert db_ic in [str(conversation) for conversation, _ in launcher.resumed[before:]]
@@ -652,7 +661,7 @@ async def test_the_ic_is_told_what_its_hand_over_conversation_did_when_it_ends(
     await use(service, side, HandOverTool, HandOverAction(team=API, text="Keep it."))
     await use(service, side, WriteSpecTool, WriteSpecAction(file_text="# Shop"))
     launcher.report(side, ConversationExecutionStatus.FINISHED)
-    await service.settled()
+    await service.work_queue.settled()
 
     told = launcher.messages_to(ic(service))[-1]
     assert "Your hand-over mode has ended." in told
@@ -661,7 +670,7 @@ async def test_the_ic_is_told_what_its_hand_over_conversation_did_when_it_ends(
     # Told once.
     launcher.report(side, ConversationExecutionStatus.RUNNING)
     launcher.report(side, ConversationExecutionStatus.FINISHED)
-    await service.settled()
+    await service.work_queue.settled()
     ended = [
         text
         for text in launcher.messages_to(ic(service))
@@ -679,7 +688,7 @@ async def test_a_hand_over_conversation_that_did_nothing_leaves_it_to_the_ic(
 
     launcher.report(side, ConversationExecutionStatus.RUNNING)
     launcher.report(side, ConversationExecutionStatus.FINISHED)
-    await service.settled()
+    await service.work_queue.settled()
 
     told = launcher.messages_to(ic(service))[-1]
     assert "It gave nothing to any team." in told
@@ -776,7 +785,7 @@ async def test_a_hand_over_that_ended_while_the_server_was_down_is_told_at_its_s
 
     second = await again(repo, launcher)
     await second.org_run.resume()
-    await second.settled()
+    await second.work_queue.settled()
 
     mode = hand_over_of(node(second, "root"))
     assert mode is not None and mode.conversation_id == side
@@ -798,7 +807,7 @@ async def test_a_hand_over_conversation_gone_with_the_server_is_shown_as_lost(
 
     second = await again(repo, launcher)
     await second.org_run.resume()
-    await second.settled()
+    await second.work_queue.settled()
 
     mode = hand_over_of(node(second, "root"))
     assert mode is not None and mode.status == "lost"
@@ -819,7 +828,7 @@ async def test_a_server_that_ends_as_a_hand_over_starts_starts_it_at_its_next_st
 
     second = await again(repo, launcher)
     await second.org_run.resume()
-    await second.settled()
+    await second.work_queue.settled()
 
     assert "Team 'API'" in given_aside(second, launcher)
     mode = hand_over_of(node(second, "root"))
@@ -837,7 +846,7 @@ async def test_a_paused_org_pauses_a_hand_over_and_it_goes_on_when_resumed(
     launcher.report(side, ConversationExecutionStatus.RUNNING)
 
     await service.org_run.pause()
-    await service.settled()
+    await service.work_queue.settled()
 
     assert UUID(side) in launcher.paused
     assert ended_notices(service, launcher) == []
@@ -848,12 +857,12 @@ async def test_a_paused_org_pauses_a_hand_over_and_it_goes_on_when_resumed(
     ]
 
     await service.org_run.resume()
-    await service.settled()
+    await service.work_queue.settled()
 
     assert UUID(side) in [conversation for conversation, _ in launcher.resumed]
     launcher.report(side, ConversationExecutionStatus.RUNNING)
     launcher.report(side, ConversationExecutionStatus.FINISHED)
-    await service.settled()
+    await service.work_queue.settled()
     assert len(ended_notices(service, launcher)) == 1
 
 
@@ -900,7 +909,7 @@ async def test_a_pruned_teams_hand_over_goes_with_it(
     await use(service, manager(service), PruneTeamTool, PRUNE_API)
 
     assert [team_id_of(team) for team in sub_teams(service)] == [WEB]
-    assert service.org.find_hand_over(side) is None
+    assert service.org_load.org.find_hand_over(side) is None
     late = await use(
         service, side, HandOverTool, HandOverAction(team="services.api.http", text="x")
     )
@@ -964,7 +973,7 @@ async def test_a_split_finished_again_after_a_restart_hands_over_once(
 
     second = await again(repo, launcher)
     await second.org_run.resume()
-    await second.settled()
+    await second.work_queue.settled()
 
     asides = [s for s in launcher.derived if shipped(HAND_OVER_ROLE) in s.task]
     assert len(asides) == 1

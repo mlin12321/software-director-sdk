@@ -45,7 +45,7 @@ async def test_what_a_member_of_a_shipped_team_is_told_of_the_org(
     service = await started(repo, launcher)
     place = node(service, "root")
     if lead:
-        above = service.org.place(division_lead_of(service))
+        above = service.org_load.org.place(division_lead_of(service))
         assert above is not None
         place = above
 

@@ -228,11 +228,11 @@ async def test_teams_are_replaced_only_once_their_agents_are_at_rest(
     assert not any("Hold on." in text for text in launcher.messages_to(api_ic))
 
     launcher.report(api_ic, ConversationExecutionStatus.FINISHED)
-    await service.settled()
+    await service.work_queue.settled()
     assert below(service, "root") == ["apps.web", API]
 
     launcher.report(db_ic, ConversationExecutionStatus.FINISHED)
-    await service.settled()
+    await service.work_queue.settled()
 
     assert below(service, "root") == ["apps.web", "services"]
     assert below(service, "services") == [DB]
@@ -250,7 +250,7 @@ async def test_a_team_is_pruned_only_once_it_and_the_teams_below_are_at_rest(
     assert has_place(service, API) and launcher.stopped == []
 
     launcher.report(db_ic, ConversationExecutionStatus.FINISHED)
-    await service.settled()
+    await service.work_queue.settled()
 
     assert not has_place(service, API) and not has_place(service, DB)
     assert "services/api is yours again" in launcher.messages_to(ic(service))[-1]
@@ -302,7 +302,7 @@ async def test_a_replacement_cut_off_by_a_crash_is_finished_once(
 
     second = await again(repo, launcher)
     await second.org_run.resume()
-    await second.settled()
+    await second.work_queue.settled()
     await tasked(second)
 
     assert below(second, "root") == ["apps.web", "services"]
@@ -321,7 +321,7 @@ async def test_an_approval_the_kept_session_does_not_have_is_dropped_and_given_a
     first = await started(repo, launcher)
     await split_root(first)
     await use(first, ic(first), ProposeTeamsTool, SERVICES)
-    proposed = kept_sessions(first.org)
+    proposed = kept_sessions(first.org_load.org)
     ended = end_server_at(launcher, "stop")
     await cut_off(
         launcher, ended, use(first, manager(first), ApproveTeamsTool, APPROVE)
@@ -335,7 +335,7 @@ async def test_an_approval_the_kept_session_does_not_have_is_dropped_and_given_a
 
     second = await again(repo, launcher)
     await second.org_run.resume()
-    await second.settled()
+    await second.work_queue.settled()
 
     assert below(second, "root") == ["apps.web", API]
     waiting = node(second, "root").pending_split
@@ -451,7 +451,7 @@ async def test_a_split_says_what_the_ic_left_and_lets_it_finish_until_the_team_s
     given = await use(
         service, ic(service), MsgTeamTool, MsgTeamAction(team=API, text="Take payments")
     )
-    await service.settled()
+    await service.work_queue.settled()
 
     assert "The 1 file(s) you left uncommitted in its folder" in given.text
     assert "belongs to your sub-team 'API'" in (
@@ -532,10 +532,10 @@ async def test_a_message_from_the_human_starts_the_team_in_a_session_of_its_own(
     await landed(service)
     before = len(launcher.derived)
 
-    routed = await service.route_message(
+    routed = await service.session_lifecycle.route_message(
         RouteMessageRequest(text="Start with the cart page.", path="apps/web")
     )
-    await service.settled()
+    await service.work_queue.settled()
 
     [start] = launcher.derived[before:]
     assert start.title.startswith("Web · ") and start.title.endswith("(IC)")
@@ -604,12 +604,14 @@ async def test_a_team_made_in_place_of_one_is_not_taken_for_it(
     save = first.org_save.save
 
     async def server_ends() -> None:
-        made = first.org.place(api)
+        made = first.org_load.org.place(api)
         if made is None or made.title != "Orders":
             return await save()
         # The session is kept with the new team in it, and the split is
         # not on record as done.
-        first.org_state.run_state().replace_marks(SESSION, kept_sessions(first.org))
+        first.org_state.run_state().replace_marks(
+            SESSION, kept_sessions(first.org_load.org)
+        )
         ended.set()
         raise ServerEnded
 
@@ -620,7 +622,7 @@ async def test_a_team_made_in_place_of_one_is_not_taken_for_it(
 
     second = await again(repo, launcher)
     await second.org_run.resume()
-    await second.settled()
+    await second.work_queue.settled()
 
     assert node(second, API).title == "Orders"
     gone = [event for event in record_of(second, "root") if event.kind == "replaced"]
@@ -633,13 +635,13 @@ async def test_nothing_is_sent_straight_to_a_team_under_a_stopped_one(
 ):
     await woken(service, DB)
     launcher.answers[USAGE_ID] = "Teams: services.api.db\nReason: The schema is DB's."
-    [session] = service.org.sessions()
-    service.org.update_place(
+    [session] = service.org_load.org.sessions()
+    service.org_load.org.update_place(
         node(service, API).id,
         stopped=Stopped(at="2026-01-01T00:00:00+00:00", reason="Waits", running=[]),
     )
 
-    said = await service.route_message(
+    said = await service.session_lifecycle.route_message(
         RouteMessageRequest(text="Add an index on orders.", session_id=session.id)
     )
 
@@ -663,7 +665,7 @@ async def test_sub_teams_that_fail_to_be_set_up_are_put_aside_and_told(
         ),
     )
     await use(service, manager(service, "apps.web"), ApproveTeamsTool, APPROVE)
-    await service.settled()
+    await service.work_queue.settled()
 
     # Another proposal is not refused for one that is "still being set up".
     assert node(service, "apps.web").pending_split is None
@@ -677,13 +679,13 @@ async def test_a_manager_that_could_not_be_started_is_started_again_by_the_answe
     top = node(service, "root")
     launcher.derive_error = RuntimeError("npx is not installed")
     service.team_messaging.tell_manager(top.id, "Look in on your team.")
-    await service.settled()
+    await service.work_queue.settled()
     [asked] = node(service, "root").escalations
     assert asked.id == failure_waits("manager")
     derived = len(launcher.derived)
 
-    service.answer_escalation(top.id, asked.id, "Fixed, go on.")
-    await service.settled()
+    service.org_run.answer_escalation(top.id, asked.id, "Fixed, go on.")
+    await service.work_queue.settled()
 
     top = node(service, "root")
     [manager] = [agent for agent in top.agents if agent.role == "manager"]
@@ -702,13 +704,13 @@ async def test_what_was_held_for_a_pruned_team_does_not_pause_the_org_on_a_resta
     await woken(first, "root")
     await use(first, ic(first), StopTeamTool, StopTeamAction(team=API, reason="Stuck."))
     first.message_delivery.notify(ic(first, API), "A notice for the stopped team.")
-    await first.settled()
+    await first.work_queue.settled()
     assert first.org_state.run_state().held()
     await use(first, manager(first), PruneTeamTool, PRUNE_API)
-    await first.settled()
+    await first.work_queue.settled()
     assert first.org_state.run_state().held() == []
     await first.aclose()
 
     second = await again(repo, launcher)
-    assert second.summary().paused is None
+    assert second.org_load.summary().paused is None
     await second.aclose()

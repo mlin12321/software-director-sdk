@@ -84,6 +84,7 @@ SERVICES_THE_DIRECTOR_HOLDS = [
     "service/agent_confinement_service.py",
     "service/team_member_start_service.py",
     "service/check_count_service.py",
+    "service/org_load_service.py",
     "service/org_run_service.py",
     "service/org_save_service.py",
     "service/org_settings_service.py",
@@ -212,7 +213,7 @@ def test_the_director_names_no_document_an_org_declares(module: str):
 
 GIT = "openhands.agent_server.director.environment.git"
 # The one place the environment is built.
-_MAY_REACH_GIT = {"director/service/state.py"}
+_MAY_REACH_GIT = {"director/service/__init__.py"}
 
 
 def _reached(path: Path) -> set[str]:
@@ -274,14 +275,12 @@ def test_the_environment_is_said_without_git(module: str):
     }
 
 
-def test_the_director_is_one_class_over_its_state():
+def test_the_director_is_one_class_that_holds_services():
     # Everything else it does is done by a service it holds.
     from openhands.agent_server.director.service import DirectorService
-    from openhands.agent_server.director.service.state import ServiceState
 
-    assert DirectorService.__mro__ == (DirectorService, ServiceState, object)
+    assert DirectorService.__mro__ == (DirectorService, object)
     modules = {path.name for path in (DIRECTOR / "service").glob("*.py")}
     assert {name for name in modules if not name.endswith("_service.py")} == {
-        "__init__.py",
-        "state.py",
+        "__init__.py"
     }

@@ -36,6 +36,7 @@ from openhands.agent_server.director.models import (
     SessionTeamInput,
     SnapshotEvent,
     Stopped,
+    TeamMatch,
     Usage,
 )
 from openhands.sdk.errors import Invalid, NotFound
@@ -283,6 +284,22 @@ class OrgStore:
         """The org tree, parents before children."""
         with self._lock:
             return self._ordered(self._nodes, self._root_id)
+
+    def search(self, query: str, limit: int) -> list[TeamMatch]:
+        """Teams whose title or directory has every word of ``query``."""
+        words = query.lower().split()
+        found: list[TeamMatch] = []
+        if not words:
+            return found
+        for node in self.teams():
+            text = f"{node.title}\n{node.boundary.path}".lower()
+            if all(word in text for word in words):
+                found.append(
+                    TeamMatch(id=node.id, title=node.title, path=node.boundary.path)
+                )
+                if len(found) == limit:
+                    break
+        return found
 
     def session_of(self, node: OrgNodeInput) -> SessionInput | None:
         """The session ``node`` belongs to; None for a team of the org."""

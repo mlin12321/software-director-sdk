@@ -10,7 +10,7 @@ from pathlib import Path
 from uuid import UUID, uuid4
 
 from openhands.agent_server.director.environment.checkouts import Checkouts
-from openhands.agent_server.director.intents import Brief, StartTeam
+from openhands.agent_server.director.intents import Brief, LandOrg, StartTeam
 from openhands.agent_server.director.launch import TeamLauncher
 from openhands.agent_server.director.models import (
     FileEdit,
@@ -36,6 +36,7 @@ from openhands.agent_server.director.recovery import (
     put_aside_stale,
 )
 from openhands.agent_server.director.run_state import (
+    CLEARING,
     HELD,
     RUNNING,
     WAITING,
@@ -55,10 +56,19 @@ from openhands.agent_server.director.service.org_state_service import OrgStateSe
 from openhands.agent_server.director.service.resumable_work_service import (
     ResumableWorkService,
 )
-from openhands.agent_server.director.service.review_service import ReviewService
-from openhands.agent_server.director.service.stall_watch_service import (
-    STALL_WAITS,
+from openhands.agent_server.director.service.review_service import (
+    MERGE_WAITS,
+    ReviewService,
 )
+from openhands.agent_server.director.service.session_limit_service import (
+    LIMIT_WAITS,
+    SessionLimitService,
+)
+from openhands.agent_server.director.service.session_merge_service import (
+    ORG_WAITS,
+    SessionMergeService,
+)
+from openhands.agent_server.director.service.stall_watch_service import STALL_WAITS
 from openhands.agent_server.director.service.start_line_service import StartLineService
 from openhands.agent_server.director.service.team_member_start_service import (
     TeamMemberStartService,
@@ -151,10 +161,9 @@ class OrgRunService:
     lane_of: Callable[[Intent], str]
     """The lane a step is carried out in."""
     reviews: ReviewService
-    changed_since_accept: dict[str, bool]
-    """The sessions that changed something of the org's after their work
-    was accepted, and whether their IC was told to submit it. Shared
-    with what accepts work."""
+    session_merges: SessionMergeService
+    session_limits: SessionLimitService
+    """Lets a session that rests at its limit go on."""
     _resume_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False)
 
     def shown(self, conversation_id: str, status: ConversationExecutionStatus) -> str:
@@ -686,12 +695,27 @@ class OrgRunService:
             self.team_splits.hand_over_ended(node.id)
             self._remind_to_submit(node.session)
 
+    def profile_exists(self, name: str) -> bool:
+        """Whether the server has an agent profile of that name. Called
+        from an agent's tool, off the loop; where it cannot be asked, the
+        answer is yes and the team's start says otherwise."""
+        launcher, loop = self.find_launcher(), self.loop()
+        if launcher is None or loop is None:
+            return True
+        try:
+            if asyncio.get_running_loop() is loop:
+                return True
+        except RuntimeError:
+            pass
+        asked = asyncio.run_coroutine_threadsafe(launcher.profile_kind(name), loop)
+        return asked.result(timeout=30) is not None
+
     def _remind_to_submit(self, session: str) -> None:
         """Tell the IC of a session at rest that what it changed since its
         work was accepted is not the org's until it submits again. Once for
         each accept. Safe from any thread."""
         if (
-            self.changed_since_accept.get(session, True)
+            self.session_merges.changed_since_accept.get(session, True)
             or self.org_state.paused is not None
         ):
             return
@@ -703,7 +727,7 @@ class OrgRunService:
             for place in places
         ):
             return
-        self.changed_since_accept[session] = True
+        self.session_merges.changed_since_accept[session] = True
         top = places[0] if places else None
         if top is None or top.review is None or top.review.state != "accepted":
             return
@@ -777,3 +801,92 @@ class OrgRunService:
                     place_id, mode.model_copy(update={"status": AGENT_LOST})
                 )
                 self.team_splits.hand_over_ended(place_id)
+
+    def answer_escalation(
+        self, place_id: str, escalation_id: str, answer: str
+    ) -> SessionTeam:
+        """Settle an escalation that waits on the human with their answer.
+
+        The answer goes to the agent that raised it. An escalation the
+        director raised itself for a merge or a Manager that waits has
+        nobody to send it to: answering only lets the work go on. One it
+        raised for an agent that failed or a team without progress goes to
+        that agent, which runs again; a team whose agent has no conversation
+        here is started again.
+
+        Raises:
+            NotFound: The team or the escalation does not exist.
+            Conflict: The escalation is still held by a team.
+            Unavailable: The director is not running.
+        """
+        names = self.team_types.names_at(place_id)
+        self.launcher()
+        store = self.org()
+        place = store.place(place_id)
+        escalation = next(
+            (e for e in place.escalations if e.id == escalation_id)
+            if place
+            else iter(()),
+            None,
+        )
+        if place is None or escalation is None:
+            raise NotFound(f"Team {place_id} has no escalation {escalation_id}")
+        if escalation.held_by is not None:
+            raise Conflict(
+                f"Escalation {escalation_id} is still with team "
+                f"{escalation.held_by}; it does not wait on the human"
+            )
+        role = escalation.raised_by
+        lost = escalation_id == failure_waits(role) and any(
+            a.role == role and a.status == AGENT_LOST for a in place.agents
+        )
+        if lost and role == self.team_types.team(place).writer:
+            # It has no conversation to answer in: the team starts again
+            # with the answer, and is asked of no longer once it has.
+            async def again() -> None:
+                await self.start_again(place_id, StartAgainRequest(), said=answer)
+                with suppress(NotFound):
+                    store.settle_escalation(place_id, escalation_id)
+
+            self.work_queue.enqueue(again, place_id)
+            return place
+        store.settle_escalation(place_id, escalation_id)
+        if escalation_id == MERGE_WAITS:
+            # The way into the checkout was cleared: the accepted work is
+            # merged now as its reviewer decided, with nobody asked again.
+            decided = json.loads(
+                self.org_state.run_state().marked(CLEARING).get(place_id) or "{}"
+            )
+            self.reviews.accept_review(place_id, "", **decided)
+            return store.place(place_id) or place
+        if escalation_id == ORG_WAITS:
+            # The human goes on without the Manager.
+            self.resumable_work.begin(place_id, LandOrg(org_holds=True))
+            return store.place(place_id) or place
+        if escalation_id == LIMIT_WAITS:
+            self.session_limits.go_on_past_limit(place_id)
+        if lost:
+            # A new Manager starts with the answer; the IC goes on as it was.
+            self.team_messaging.tell_manager(
+                place_id,
+                f"The {names.manager} before you could not be started. The human was "
+                f"told, and says:\n{answer}",
+                division_lead=is_division_lead(place),
+            )
+            return store.place(place_id) or place
+        told = (
+            "The human was told that your conversation failed, and says"
+            if escalation_id == failure_waits(role)
+            else "The human was told that your team shows no progress, and says"
+            if escalation_id == STALL_WAITS
+            else "Your session had reached its cost limit and its agents were "
+            "put to rest. The human lets it go on, and says"
+            if escalation_id == LIMIT_WAITS
+            else f"The human answered your escalation {escalation.title!r}"
+        )
+        self.message_delivery.notify(
+            self.team_types.team(place).conversation(role),
+            f"{told}:\n{answer}",
+            at_once=True,
+        )
+        return store.place(place_id) or place

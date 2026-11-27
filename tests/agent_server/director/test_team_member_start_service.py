@@ -136,6 +136,8 @@ class Starts:
             start_line=start_line,
             message_delivery=message_delivery,
             confinement=AgentConfinementService(
+                find_org=lambda: None,
+                record_need=lambda *said: None,
                 environment=GitCodingEnvironment(),
                 repo_dir=lambda: repo,
                 worktree_root=None,

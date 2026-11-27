@@ -115,7 +115,7 @@ def _calling_agent(
 
 def _require_node(service: DirectorService, node_id: str) -> OrgNode:
     """A team of the org tree. What a session has at a team is no team."""
-    node = service.org.team(node_id)
+    node = service.org_load.org.team(node_id)
     if node is None:
         raise NotFound(f"Unknown team: {node_id}")
     return node
@@ -123,7 +123,7 @@ def _require_node(service: DirectorService, node_id: str) -> OrgNode:
 
 def _require_any(service: DirectorService, node_id: str) -> OrgNode:
     """A team of the org tree, or a place of a session, by its id."""
-    node = service.org.get(node_id)
+    node = service.org_load.org.get(node_id)
     if node is None:
         raise NotFound(f"Unknown team: {node_id}")
     return node
@@ -131,14 +131,14 @@ def _require_any(service: DirectorService, node_id: str) -> OrgNode:
 
 def _require_place(service: DirectorService, node_id: str) -> SessionTeam:
     """A place of a session: where a team is worked on."""
-    node = service.org.place(node_id)
+    node = service.org_load.org.place(node_id)
     if node is None:
         raise NotFound(f"Nobody works at {node_id}: name a team of a session")
     return node
 
 
 def _require_session(service: DirectorService, session_id: str) -> Session:
-    for session in service.org.sessions():
+    for session in service.org_load.org.sessions():
         if session.id == session_id:
             return session
     raise NotFound(f"No session {session_id!r} is open")
@@ -205,7 +205,7 @@ async def stream_org_tree(
     The teams are the teams of the org; the work at them is in `sessions`.
     """
     # The first use reads the tree from git.
-    store = await asyncio.to_thread(lambda: service.org)
+    store = await asyncio.to_thread(lambda: service.org_load.org)
     focus_id = node if node is not None else store.root_id
     if focus_id is None:
         raise NotFound("The org tree is empty")
@@ -266,7 +266,7 @@ def get_org(service: DirectorService = Depends(get_director_service)) -> OrgSumm
     Without an org `root_id` is null and the tree stream answers 404; start
     one with `POST /org`.
     """
-    return service.summary()
+    return service.org_load.summary()
 
 
 @director_router.get("/settings", response_model=DirectorSettingsState)
@@ -335,7 +335,7 @@ def search_org(
     service: DirectorService = Depends(get_director_service),
 ) -> list[TeamMatch]:
     """Find teams by title or directory, parents before their sub-teams."""
-    return service.search(q, limit)
+    return service.org_load.org.search(q, limit)
 
 
 @director_router.post(
@@ -367,7 +367,7 @@ async def create_org(
     workspace is in, which the server keeps for its next start. Follow the
     org on the tree stream.
     """
-    return await service.create_org(request)
+    return await service.session_lifecycle.create_org(request)
 
 
 @director_router.post(
@@ -477,7 +477,7 @@ async def route_message(
     session is briefed with it as its task, and the root team is named by a
     model that summarizes it.
     """
-    return await service.route_message(request)
+    return await service.session_lifecycle.route_message(request)
 
 
 @director_router.get(
@@ -493,8 +493,8 @@ def get_org_node(
     node = _require_node(service, node_id)
     return OrgNodeDetail(
         node=node,
-        ancestors=service.org.teams_above(node_id),
-        children=service.org.sub_teams(node_id),
+        ancestors=service.org_load.org.teams_above(node_id),
+        children=service.org_load.org.sub_teams(node_id),
     )
 
 
@@ -555,7 +555,7 @@ def list_sessions(
     team it was opened at and, once they are given a task in it, at the
     teams below that one (`teams`).
     """
-    return service.org.sessions()
+    return service.org_load.org.sessions()
 
 
 @director_router.get(
@@ -610,7 +610,7 @@ def answer_session_escalation(
         ),
         places[0],
     )
-    return service.answer_escalation(team.id, escalation_id, request.answer)
+    return service.org_run.answer_escalation(team.id, escalation_id, request.answer)
 
 
 @director_router.post(
@@ -699,7 +699,9 @@ def get_node_memory(
     ones a team above keeps for it, and what its agents reported."""
     node = _require_any(service, node_id)
     return NodeMemory(
-        documents=service.team_documents.listed(service.team_types.reader_of(node)),
+        documents=service.org_settings.team_documents().listed(
+            service.team_types.reader_of(node)
+        ),
         reports=service.team_reports.reports_of(node),
         former_teams=[
             FormerTeamSummary.model_validate(former.model_dump())
@@ -721,7 +723,7 @@ def get_node_messages(
     and ICs: its IC and its Manager to each other, its Manager and its IC to
     the ICs directly below, and the Manager and the IC above to its IC.
     Empty for a team of the org tree."""
-    place = service.org.place(node_id)
+    place = service.org_load.org.place(node_id)
     if place is None:
         # Nobody works at a team of the org itself, so nothing was said there.
         _require_node(service, node_id)
@@ -746,14 +748,16 @@ def get_node_ownership(
     place below it that works in a git worktree of its own is compared by
     the tip of that worktree.
     """
-    store = service.org
+    store = service.org_load.org
     place = store.place(node_id)
     if place is not None:
         return service.checkouts.ownership(
             place, store.below(node_id), Path(place.worktree_path)
         )
     node = _require_node(service, node_id)
-    return service.checkouts.ownership(node, store.sub_teams(node_id), service.repo_dir)
+    return service.checkouts.ownership(
+        node, store.sub_teams(node_id), service.org_load.repo_dir
+    )
 
 
 _NO_CHECKOUT: dict[type[DomainError], str] = {
@@ -819,7 +823,9 @@ def get_accepted_changes(
     """List the files an accept took: what differs under `path` between the
     `base` and the `head` of an `accepted` event in the history. It can be
     read after the team's session is closed."""
-    return service.checkouts.accepted_changes(service.repo_dir, base, head, path)
+    return service.checkouts.accepted_changes(
+        service.org_load.repo_dir, base, head, path
+    )
 
 
 @director_router.get(
@@ -834,7 +840,7 @@ def get_accepted_file(
     service: DirectorService = Depends(get_director_service),
 ) -> FileSides:
     """Get one file as it was before an accept and as it was accepted."""
-    return service.checkouts.accepted_file(service.repo_dir, base, head, path)
+    return service.checkouts.accepted_file(service.org_load.repo_dir, base, head, path)
 
 
 @director_router.put(

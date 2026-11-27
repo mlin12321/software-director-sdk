@@ -115,7 +115,7 @@ async def test_a_lowered_limit_removes_nothing_and_stops_the_next_split(
     )
 
     assert (state.teams, state.depth) == (3, 2)
-    assert len(service.org) == 3
+    assert len(service.org_load.org) == 3
     refused = await use(service, ic(service), ProposeTeamsTool, split("a", 1))
     assert refused.is_error
 
@@ -180,7 +180,10 @@ async def test_settings_are_kept_for_the_next_start_beside_the_repository(
         "max_open_sessions": 0,
     }
     assert kept["repo_path"] == str(repo)
-    assert again.org_settings.settings.max_depth == 3 and again.org.root_id == "root"
+    assert (
+        again.org_settings.settings.max_depth == 3
+        and again.org_load.org.root_id == "root"
+    )
 
 
 async def test_a_limit_kept_as_agents_is_no_longer_read(
@@ -201,10 +204,17 @@ async def test_a_team_is_found_by_words_of_its_title_or_directory(
     await split_root(service)
     await accepted(service)
 
-    assert [found.id for found in service.search("API", 5)] == ["services.api"]
-    assert [found.id for found in service.search("apps web", 5)] == ["apps.web"]
-    assert service.search("  ", 5) == [] and service.search("nothing", 5) == []
-    assert len(service.search("e", 1)) == 1
+    assert [found.id for found in service.org_load.org.search("API", 5)] == [
+        "services.api"
+    ]
+    assert [found.id for found in service.org_load.org.search("apps web", 5)] == [
+        "apps.web"
+    ]
+    assert (
+        service.org_load.org.search("  ", 5) == []
+        and service.org_load.org.search("nothing", 5) == []
+    )
+    assert len(service.org_load.org.search("e", 1)) == 1
 
 
 async def test_a_team_whose_review_is_slow_does_not_hold_up_another_team(
@@ -248,11 +258,12 @@ async def test_teams_wait_for_a_free_run_and_start_when_one_ends(
     await use(service, ic(service), ProposeTeamsTool, split("a", 2))
     await use(service, manager(service), ApproveTeamsTool, APPROVE)
     top = node(service, "root").id
-    for team in service.org.below(top):
+    for team in service.org_load.org.below(top):
         service.team_messaging.tell_writer(team.id, "Begin.")
     await eventually(
         lambda: (
-            [team.waiting_to_start for team in service.org.below(top)] == [True, True]
+            [team.waiting_to_start for team in service.org_load.org.below(top)]
+            == [True, True]
         )
     )
     assert len(launcher.derived) == 1
@@ -261,9 +272,9 @@ async def test_teams_wait_for_a_free_run_and_start_when_one_ends(
     root_ic = ic(service)
     assert root_ic is not None
     launcher.report(root_ic, ConversationExecutionStatus.IDLE)
-    await service.settled()
+    await service.work_queue.settled()
 
-    teams = service.org.below(top)
+    teams = service.org_load.org.below(top)
     assert [team.waiting_to_start for team in teams] == [False, False]
     assert len(launcher.derived) == 3 and node(service, "root").pending_split is None
     await service.aclose()

@@ -6,6 +6,7 @@ import os
 import secrets
 import threading
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import suppress
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
@@ -13,7 +14,7 @@ from uuid import UUID
 
 from openhands.agent_server.conversation_service import ToolParams
 from openhands.agent_server.director.acp import conversation_of
-from openhands.agent_server.director.boundary import scope_within
+from openhands.agent_server.director.boundary import scope_within, worded
 from openhands.agent_server.director.environment import (
     CodingEnvironment,
     Confinement,
@@ -28,14 +29,22 @@ from openhands.agent_server.director.models import (
     TeamEnforcement,
 )
 from openhands.agent_server.director.org_store import OrgStore, is_division_lead
+from openhands.agent_server.director.prompts import NEED_WRITE
 from openhands.agent_server.director.remembered import RememberedFile
 from openhands.agent_server.director.run_state import MERGING, RunState
-from openhands.agent_server.director.scope import Denied, MergeArea, Scope
+from openhands.agent_server.director.scope import (
+    Denied,
+    MergeArea,
+    Scope,
+    named_paths,
+    searched_folder,
+)
 from openhands.agent_server.director.service.team_type_service import (
     TeamTypeService,
 )
 from openhands.sdk.agent.base import AgentBase
 from openhands.sdk.errors import NotFound
+from openhands.sdk.event import ActionEvent
 from openhands.sdk.logger import get_logger
 
 
@@ -72,6 +81,11 @@ class AgentConfinementService:
     repo_dir: Callable[[], Path]
     """The repository the org is in."""
     worktree_root: Path | None
+    find_org: Callable[[], OrgStore | None]
+    """The org if it is loaded; asking does not load it."""
+    record_need: Callable[[SessionTeam, str, str], object]
+    """Keeps that a team needed to write outside its folder
+    (:meth:`TeamHistoryService.record_need`)."""
     """Where the server makes the git worktrees of conversations."""
     find_sandbox: Callable[[], str | None]
     """Looks for the bubblewrap binary to confine shells with."""
@@ -157,6 +171,23 @@ class AgentConfinementService:
         one folder for each reviewer, which its shell alone may write."""
         root = self.environment.state_dir(self.repo_dir()) / _MERGING_DIR
         return root / place_id.replace("@", "-")
+
+    def merge_checkout(self, place_id: str) -> MergeCheckout | None:
+        """The merge of a team's work that its reviewer finishes."""
+        kept = self.run_state().marked(MERGING).get(place_id)
+        return MergeCheckout.model_validate_json(kept) if kept else None
+
+    def keep_merge_checkout(self, place_id: str, merge: MergeCheckout) -> None:
+        """Remember the merge that was laid out for a team's work, so that
+        it is found again after a restart."""
+        self.run_state().mark(MERGING, place_id, merge.model_dump_json())
+
+    def drop_merge_checkout(self, place_id: str) -> None:
+        """Remove the merge laid out for a team's work, if there is one."""
+        merge = self.merge_checkout(place_id)
+        if merge is not None:
+            self.environment.checkouts.drop_merge(self.repo_dir(), Path(merge.where))
+            self.run_state().unmark(MERGING, place_id)
 
     def scope_of(
         self, place: SessionTeam, role: str, hand_over: str | None = None
@@ -290,3 +321,45 @@ class AgentConfinementService:
         """The saved agent of a conversation that is loaded again, able to
         reach the director's tools. Safe from any thread."""
         return self._confinement().with_tools_again(str(conversation_id), agent)
+
+    def guard_action(self, conversation_id: UUID, event: ActionEvent) -> str | None:
+        """Why an agent of the org may not carry out an action, if it may not.
+
+        A file tool is refused a write outside the boundary of the agent's
+        team. Called on the agent's own thread, before the action runs.
+        """
+        store = self.find_org()
+        if store is None or event.action is None:
+            return None
+        action = event.action.model_dump()
+        if (
+            not named_paths(event.tool_name, action)
+            and searched_folder(event.tool_name, action) is None
+        ):
+            # Nothing a scope is asked about: most actions.
+            return None
+        found = store.find_by_conversation(str(conversation_id))
+        if found is not None:
+            scope = self.scope_of(*found)
+        else:
+            aside = store.find_hand_over(str(conversation_id))
+            scope = (
+                self.scope_of(
+                    aside, self.team_types.team(aside).writer, str(conversation_id)
+                )
+                if aside
+                else None
+            )
+        denied = self.check(scope, event.tool_name, action)
+        if denied is None:
+            return None
+        works = found is not None and found[1] == self.team_types.team(found[0]).writer
+        if found is not None and works and denied.relative is not None:
+            # The refusal stands whether or not it could be kept.
+            with suppress(Exception):
+                self.record_need(found[0], denied.relative or ".", NEED_WRITE)
+        return worded(
+            denied,
+            scope or Scope(checkout="", directory=""),
+            names=self.team_types.names_at(found[0].id if found else ""),
+        )
