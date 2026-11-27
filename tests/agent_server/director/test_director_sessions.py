@@ -649,7 +649,8 @@ async def test_a_session_is_kept_on_its_machine_and_what_it_changes_with_the_org
         ]
         assert found.conversation_id == session.conversation_id
         assert [
-            report.text for report in restarted.own_reports(node(restarted, top))
+            report.text
+            for report in restarted.session_drafts.reports(node(restarted, top).id)
         ] == ["Refunds need the order id."]
     finally:
         await restarted.aclose()

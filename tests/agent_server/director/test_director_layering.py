@@ -85,6 +85,7 @@ SERVICES_THE_DIRECTOR_HOLDS = [
     "service/work_queue_service.py",
     "service/model_call_service.py",
     "service/request_routing_service.py",
+    "service/session_draft_service.py",
     "service/stall_watch_service.py",
 ]
 

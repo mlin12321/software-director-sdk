@@ -136,6 +136,9 @@ from openhands.agent_server.director.scope import MergeArea, Scope
 from openhands.agent_server.director.service.model_call_service import (
     ModelCallService,
 )
+from openhands.agent_server.director.service.session_draft_service import (
+    SessionDraftService,
+)
 from openhands.agent_server.director.service.stall_watch_service import progress_of
 from openhands.agent_server.director.service.work_queue_service import (
     WorkQueueService,
@@ -493,8 +496,7 @@ class ServiceState:
         # Held from looking a need up in the record to keeping it, so that
         # an agent that tries the same file again is counted once.
         self._keeping_needs = threading.Lock()
-        # Held while one of a session's own records is read and added to.
-        self._keeping = threading.RLock()
+        self.session_drafts = SessionDraftService(run_state=self._runs)
         self.documents: DocumentStore = GitDocumentStore(
             self._memory, self._runs, self._document_changed, self
         )

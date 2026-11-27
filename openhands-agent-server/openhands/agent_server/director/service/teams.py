@@ -48,13 +48,15 @@ from openhands.agent_server.director.run_state import (
     HANDING,
     PROGRESS,
     RUNNING,
-    SENT,
     TASK,
     TOLD,
     Intent,
 )
 from openhands.agent_server.director.service.delivery import Delivery
 from openhands.agent_server.director.service.resumable_work_service import Held
+from openhands.agent_server.director.service.session_draft_service import (
+    thread_name,
+)
 from openhands.agent_server.director.service.stall_watch_service import (
     progress_of,
 )
@@ -124,14 +126,7 @@ class Teams(Delivery):
                 f"This org does not let the {self.team(sender_place).title(sender)} "
                 f"of {sender_place.title!r} pass a document to {target_place.title!r}"
             )
-        with self._keeping:
-            run = self._runs()
-            kept = run.marked(SENT).get(target_place_id)
-            passed = json.loads(kept) if kept else []
-            if [ref.folder, ref.name] not in passed:
-                run.mark(
-                    SENT, target_place_id, json.dumps([*passed, [ref.folder, ref.name]])
-                )
+        self.session_drafts.keep_passed(target_place_id, ref.folder, ref.name)
 
     def send_msg(
         self,
@@ -185,11 +180,9 @@ class Teams(Delivery):
             first, second = sender_place_id, target_place_id
         else:
             first, second = target_place_id, sender_place_id
-        self._keep_message(
-            first,
-            second,
+        self.session_drafts.keep_message(
+            thread_name(first, second, between_ics),
             ThreadMessage(at=_instant(), sender=sender, text=text),
-            ic_to_ic=between_ics,
         )
         stopped = self._assign(target_place_id) if between_ics else None
         writer = self.team(sender_place).title(sender)

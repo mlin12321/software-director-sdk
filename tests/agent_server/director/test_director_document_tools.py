@@ -179,7 +179,7 @@ async def test_a_report_is_an_entry_its_teams_members_are_told(
     assert empty.is_error and "cannot be empty" in empty.text
     [told] = service.context_of(root, "manager")["reports_of_your_team"]
     assert (told["by"], told["text"]) == ("ic", "Chose SQLite.")
-    [kept] = service.own_reports(root)
+    [kept] = service.session_drafts.reports(root.id)
     assert kept.session_id == root.session and kept.at and kept.id
     await service.aclose()
 

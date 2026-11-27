@@ -558,7 +558,9 @@ class Sessions(Splits):
                 # recorded.
                 known=all(
                     event.kind != "session_opened" or event.team_id != top.team_id
-                    for event in self.own_events(session.id, session.above_id)
+                    for event in self.session_drafts.events(
+                        session.id, session.above_id
+                    )
                 ),
             )
         plan = intent.of(CloseSession)
