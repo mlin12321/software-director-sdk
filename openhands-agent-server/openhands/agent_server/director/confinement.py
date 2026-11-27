@@ -27,6 +27,7 @@ from openhands.agent_server.director.git_index import (
     git_script,
     rcfile,
 )
+from openhands.agent_server.director.models import SessionTeam
 from openhands.agent_server.director.sandbox import (
     command_script,
     shell_script,
@@ -358,3 +359,9 @@ class Confinement:
                     shutil.rmtree(left, ignore_errors=True)
                 else:
                     left.unlink(missing_ok=True)
+
+
+def apart(team: SessionTeam, above: SessionTeam) -> bool:
+    """Whether a team works in a checkout of its own, not in the one of
+    the team above."""
+    return checkout_root(team.worktree_path) != checkout_root(above.worktree_path)

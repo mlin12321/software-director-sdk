@@ -174,12 +174,12 @@ async def test_a_closed_sessions_count_goes_with_it(
 ):
     uses(launcher, ic(service), 1000, 200, 0.5)
     session = await counted(service)
-    assert session.id in service._runs().marked(USE)
+    assert session.id in service.org_state.run_state().marked(USE)
 
-    service.close_session(session.id)
+    service.session_lifecycle.close_session(session.id)
     await service.settled()
 
-    assert service._runs().marked(USE) == {}
+    assert service.org_state.run_state().marked(USE) == {}
 
 
 async def test_no_more_sessions_are_opened_than_the_settings_allow(
@@ -188,12 +188,12 @@ async def test_no_more_sessions_are_opened_than_the_settings_allow(
     service.org_settings.update_settings(DirectorSettingsUpdate(max_open_sessions=1))
 
     with pytest.raises(Conflict, match="allow 1 open session at once"):
-        await service.open_session(
+        await service.session_lifecycle.open_session(
             OpenSessionRequest(text="Add refunds", node_id="root")
         )
 
     service.org_settings.update_settings(DirectorSettingsUpdate(max_open_sessions=2))
-    opened = await service.open_session(
+    opened = await service.session_lifecycle.open_session(
         OpenSessionRequest(text="Add refunds", node_id="root")
     )
     await service.settled()
@@ -482,12 +482,12 @@ async def test_a_session_set_going_while_the_org_is_paused_goes_on_when_it_resum
     await counted(service)
     top = node(service, "root")
     assert top.stopped is not None and top.stopped.running == [api]
-    await service.pause()
+    await service.org_run.pause()
     await service.settled()
 
     service.answer_escalation(top.id, LIMIT_WAITS, "Go on.")
     await service.settled()
-    await service.resume()
+    await service.org_run.resume()
     await service.settled()
 
     # The agent that was cut off in its turn runs again.

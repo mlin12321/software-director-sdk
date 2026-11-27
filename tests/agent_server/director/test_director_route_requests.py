@@ -130,7 +130,7 @@ async def test_it_is_on_the_record_of_the_team_above_and_told_to_its_reviewer(
 
     [event] = [e for e in record_of(service, API) if e.kind == "asked"]
     assert (event.team_id, event.detail) == (DB, "Add an index on orders.")
-    [kept] = service.routed_requests()
+    [kept] = service.team_history.routed_requests()
     # It is its session's alone until the session's work is accepted.
     assert service.team_memory.routed() == []
     assert (kept.team, kept.text, kept.chosen_by) == (
@@ -156,7 +156,7 @@ async def test_answers_that_differ_leave_the_request_with_the_top_team(
 
     assert (team_of(service, sent), sent.chosen_by) == ("root", "top")
     assert "Make checkout faster." in briefing(launcher, sent.conversation_id)
-    assert service.routed_requests() == []
+    assert service.team_history.routed_requests() == []
 
 
 async def test_named_files_decide_when_no_model_answers(
@@ -339,4 +339,6 @@ async def test_a_review_request_says_what_the_human_asked_the_team_directly(
     launcher.answers[USAGE_ID] = TO_DB
     sent = await ask(service, "Add an index on orders.")
 
-    assert service.asked_of(node(service, sent.node_id)) == ["Add an index on orders."]
+    assert service.team_context.asked_of(node(service, sent.node_id)) == [
+        "Add an index on orders."
+    ]

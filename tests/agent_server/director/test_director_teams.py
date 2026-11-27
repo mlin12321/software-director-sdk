@@ -15,7 +15,7 @@ from openhands.agent_server.director.org_store import team_id_of
 from openhands.agent_server.director.routing import USAGE_ID
 from openhands.agent_server.director.run_state import SESSION, RunState
 from openhands.agent_server.director.service import DirectorService
-from openhands.agent_server.director.service.state import failure_waits
+from openhands.agent_server.director.service.team_messaging_service import failure_waits
 from openhands.agent_server.director.session_state import kept_sessions
 from openhands.agent_server.director.tools import (
     ApproveTeamsTool,
@@ -301,7 +301,7 @@ async def test_a_replacement_cut_off_by_a_crash_is_finished_once(
     assert has_place(first, API)
 
     second = await again(repo, launcher)
-    await second.resume()
+    await second.org_run.resume()
     await second.settled()
     await tasked(second)
 
@@ -334,7 +334,7 @@ async def test_an_approval_the_kept_session_does_not_have_is_dropped_and_given_a
     run.close()
 
     second = await again(repo, launcher)
-    await second.resume()
+    await second.org_run.resume()
     await second.settled()
 
     assert below(second, "root") == ["apps.web", API]
@@ -609,7 +609,7 @@ async def test_a_team_made_in_place_of_one_is_not_taken_for_it(
             return await save()
         # The session is kept with the new team in it, and the split is
         # not on record as done.
-        first._runs().replace_marks(SESSION, kept_sessions(first.org))
+        first.org_state.run_state().replace_marks(SESSION, kept_sessions(first.org))
         ended.set()
         raise ServerEnded
 
@@ -619,7 +619,7 @@ async def test_a_team_made_in_place_of_one_is_not_taken_for_it(
     )
 
     second = await again(repo, launcher)
-    await second.resume()
+    await second.org_run.resume()
     await second.settled()
 
     assert node(second, API).title == "Orders"
@@ -653,7 +653,7 @@ async def test_sub_teams_that_fail_to_be_set_up_are_put_aside_and_told(
     def fails(*_: object) -> None:
         raise OSError("disk full")
 
-    monkeypatch.setattr(service, "_let_go", fails)
+    monkeypatch.setattr(service.message_delivery, "let_go", fails)
     await use(
         service,
         ic(service, "apps.web"),
@@ -676,7 +676,7 @@ async def test_a_manager_that_could_not_be_started_is_started_again_by_the_answe
     service = await started(repo, launcher)
     top = node(service, "root")
     launcher.derive_error = RuntimeError("npx is not installed")
-    service.tell_manager(top.id, "Look in on your team.")
+    service.team_messaging.tell_manager(top.id, "Look in on your team.")
     await service.settled()
     [asked] = node(service, "root").escalations
     assert asked.id == failure_waits("manager")
@@ -701,12 +701,12 @@ async def test_what_was_held_for_a_pruned_team_does_not_pause_the_org_on_a_resta
     await split_root(first)
     await woken(first, "root")
     await use(first, ic(first), StopTeamTool, StopTeamAction(team=API, reason="Stuck."))
-    first.notify(ic(first, API), "A notice for the stopped team.")
+    first.message_delivery.notify(ic(first, API), "A notice for the stopped team.")
     await first.settled()
-    assert first._runs().held()
+    assert first.org_state.run_state().held()
     await use(first, manager(first), PruneTeamTool, PRUNE_API)
     await first.settled()
-    assert first._runs().held() == []
+    assert first.org_state.run_state().held() == []
     await first.aclose()
 
     second = await again(repo, launcher)

@@ -8,12 +8,14 @@ import threading
 from collections.abc import Callable, Collection, Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from uuid import UUID
 
 from openhands.agent_server.director.agent_types import TeamTemplate
 from openhands.agent_server.director.documents.store import TeamRef
 from openhands.agent_server.director.git_store import normalize_store_path
 from openhands.agent_server.director.models import (
     AgentKind,
+    AgentRef,
     Escalation,
     EscalationHandoff,
     EscalationKind,
@@ -109,6 +111,51 @@ def is_division_lead(node: OrgNodeInput | None) -> bool:
 def session_id_of(node: OrgNodeInput) -> str:
     """The session ``node`` belongs to; '' for a team of the org."""
     return node.session if isinstance(node, SessionTeamInput) else ""
+
+
+def conversations_of(teams: Iterable[SessionTeam]) -> list[str]:
+    """Every conversation of ``teams``' agents, hand-over ones included."""
+    return [
+        conversation_id
+        for team in teams
+        for agent in team.agents
+        for conversation_id in (
+            agent.conversation_id,
+            agent.hand_over.conversation_id if agent.hand_over else None,
+        )
+        if conversation_id is not None
+    ]
+
+
+def instant() -> str:
+    """Now, fine enough to put what two agents record in order."""
+    return datetime.now(UTC).isoformat()
+
+
+def new_agents(ic_id: UUID, member: str) -> list[AgentRef]:
+    """The agents a team starts with: the member that works in its folder.
+    Any other joins when something is first sent to it (see
+    :meth:`DirectorService.tell`)."""
+    return [AgentRef(role=member, conversation_id=str(ic_id), status="idle")]
+
+
+def hand_over_of(place: SessionTeam) -> HandOverMode | None:
+    """The hand-over mode of the team's IC, if it is or was in it."""
+    for agent in place.agents:
+        if agent.hand_over is not None:
+            return agent.hand_over
+    return None
+
+
+def session_of(node: OrgNodeInput) -> str:
+    """The session a place belongs to; '' for a team of the org."""
+    return node.session if isinstance(node, SessionTeam) else ""
+
+
+def session_in(node_id: str) -> str:
+    """The session the id of a place names; '' for the id of a team of the
+    org."""
+    return node_id.split("@")[1] if "@" in node_id else ""
 
 
 def team_ref(node: OrgNodeInput) -> TeamRef:
@@ -457,6 +504,23 @@ class OrgStore:
         """Every place of every session."""
         with self._lock:
             return list(self._places.values())
+
+    def conversations_below(self, team: SessionTeam) -> list[str]:
+        """The conversations of a team and of every team below it."""
+        teams = [team]
+        for found in teams:
+            teams.extend(self.below(found.id))
+        return conversations_of(teams)
+
+    def is_stopped(self, conversation_id: str) -> bool:
+        """Whether the agent's team, or a team above it, is stopped."""
+        found = self.find_by_conversation(conversation_id)
+        if found is None:
+            return False
+        node = found[0]
+        return node.stopped is not None or any(
+            above.stopped is not None for above in self.above(node.id)
+        )
 
     def find_by_conversation(
         self, conversation_id: str

@@ -250,10 +250,10 @@ async def test_the_time_an_org_is_paused_does_not_count(
 ):
     await looked(service)
     clock.passes(100)
-    await service.pause()
+    await service.org_run.pause()
     clock.passes(500)
     await looked(service)
-    await service.resume()
+    await service.org_run.resume()
     await service.settled()
     clock.passes(100)
     await looked(service)
@@ -308,13 +308,19 @@ async def test_an_ic_writes_to_the_ic_of_a_team_below_and_to_no_other(
     assert "The IC of the team above (Checkout) writes:" in told
     assert "Use the orders table that exists." in told
     for team in ("root", API):
-        [thread] = [t for t in service.threads_of(node(service, team)) if t.ic_to_ic]
+        [thread] = [
+            t
+            for t in service.team_context.threads_of(node(service, team))
+            if t.ic_to_ic
+        ]
         assert (thread.manager_node_id, thread.ic_node_id) == (
             node(service, "root").id,
             node(service, API).id,
         )
         assert [message.text for message in thread.messages] == [hint.text]
-    assert not any(t.ic_to_ic for t in service.threads_of(node(service, WEB)))
+    assert not any(
+        t.ic_to_ic for t in service.team_context.threads_of(node(service, WEB))
+    )
 
 
 async def test_a_stopped_team_rests_with_all_below_it_and_is_sent_nothing(
@@ -332,7 +338,7 @@ async def test_a_stopped_team_rests_with_all_below_it_and_is_sent_nothing(
     stopped = await use(service, ic(service), StopTeamTool, STOP_API)
     twice = await use(service, ic(service), StopTeamTool, STOP_API)
     by_manager = await use(service, manager(service), StopTeamTool, STOP_API)
-    service.notify(db_ic, "Something for later.")
+    service.message_delivery.notify(db_ic, "Something for later.")
     await service.settled()
 
     assert not stopped.is_error and twice.is_error and by_manager.is_error
@@ -429,7 +435,7 @@ async def test_a_stopped_team_is_still_stopped_after_a_restart(
     await use(first, ic(first), StopTeamTool, STOP_API)
     api_ic = str(ic(first, API))
     heard = len(launcher.messages_to(api_ic))
-    first.notify(api_ic, "Something for later.")
+    first.message_delivery.notify(api_ic, "Something for later.")
     await first.settled()
     await first.aclose()
 
@@ -444,7 +450,7 @@ async def test_a_stopped_team_is_still_stopped_after_a_restart(
     await second.start(launcher)
     await second.settled()
     if second.summary().paused is not None:
-        await second.resume()
+        await second.org_run.resume()
         await second.settled()
 
     stopped = node(second, API).stopped
@@ -466,7 +472,7 @@ async def test_a_team_set_up_and_given_no_task_is_told_to_the_ic_above(
     service = await started_with_server(repo, launcher, clock=clock, stall_poll=3600)
     await use(service, ic(service), ProposeTeamsTool, SPLIT)
     await use(service, manager(service), ApproveTeamsTool, APPROVE)
-    service.tell_writer(node(service, WEB).id, "Begin.")
+    service.team_messaging.tell_writer(node(service, WEB).id, "Begin.")
     await service.settled()
 
     await looked(service)
@@ -491,11 +497,11 @@ async def test_a_team_set_up_and_given_no_task_is_told_to_the_ic_above(
     # that was paused in between does not say it again.
     clock.passes(240)
     await looked(service)
-    await service.pause()
-    await service.resume()
+    await service.org_run.pause()
+    await service.org_run.resume()
     clock.passes(240)
     await looked(service)
-    service.tell_writer(api, "Begin.")
+    service.team_messaging.tell_writer(api, "Begin.")
     await service.settled()
     clock.passes(120)
     await looked(service)

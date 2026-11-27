@@ -9,7 +9,7 @@ from uuid import UUID
 
 from openhands.agent_server.director.boundary import nearest_team, worded
 from openhands.agent_server.director.git import is_git_repository
-from openhands.agent_server.director.headline import provisional_summary
+from openhands.agent_server.director.headline import provisional_summary, summary_of
 from openhands.agent_server.director.intents import LandOrg
 from openhands.agent_server.director.launch import TeamLauncher
 from openhands.agent_server.director.models import (
@@ -26,6 +26,8 @@ from openhands.agent_server.director.models import (
 )
 from openhands.agent_server.director.org_store import (
     AGENT_LOST,
+    hand_over_of,
+    instant,
     is_division_lead,
 )
 from openhands.agent_server.director.prompts import (
@@ -37,27 +39,26 @@ from openhands.agent_server.director.recovery import (
 from openhands.agent_server.director.run_state import CLEARING
 from openhands.agent_server.director.runtime import bind_director
 from openhands.agent_server.director.scope import Scope, named_paths, searched_folder
+from openhands.agent_server.director.service.org_run_service import (
+    AGENT_PAUSED,
+    RESTART_NOTE,
+)
 from openhands.agent_server.director.service.stall_watch_service import (
     STALL_WAITS,
 )
 from openhands.agent_server.director.service.state import (
-    AGENT_PAUSED,
-    BASE_LANE,
     LIMIT_WAITS,
     MERGE_WAITS,
     ORG_WAITS,
-    RESTART_NOTE,
     ROOT_ID,
-    _instant,
-    _summary_of,
     checkout_root,
-    failure_waits,
-    hand_over_of,
 )
 from openhands.agent_server.director.service.sync import Sync
+from openhands.agent_server.director.service.team_messaging_service import failure_waits
 from openhands.agent_server.director.service.team_type_service import (
     DIRECTOR_TOOL_NAMES,
 )
+from openhands.agent_server.director.service.work_queue_service import BASE_LANE
 from openhands.sdk.errors import (
     Conflict,
     NotFound,
@@ -107,15 +108,15 @@ class DirectorService(Sync):
         for kind, step in {
             "brief": self._do_brief,
             "launch_member": self._do_launch_member,
-            "split": self._do_split,
+            "split": self.team_splits.do_split,
             "start_team": self._do_start_team,
-            "finish_split": self._do_finish_split,
-            "hand_over": self._do_hand_over,
+            "finish_split": self.team_splits.do_finish_split,
+            "hand_over": self.team_splits.do_hand_over,
             "request_review": self._do_request_review,
             "accept": self._do_accept,
             "land_org": self._do_land_org,
-            "prune": self._do_prune,
-            "close_session": self._do_close_session,
+            "prune": self.team_splits.do_prune,
+            "close_session": self.session_lifecycle.do_close_session,
         }.items():
             self.resumable_work.register(kind, step)
 
@@ -125,7 +126,7 @@ class DirectorService(Sync):
         self._launcher = launcher
         await self.work_queue.__aenter__()
         await self.org_save.__aenter__()
-        self._stop_status = launcher.on_status(self._on_status)
+        self._stop_status = launcher.on_status(self.org_run.on_status)
         self._stop_guard = launcher.on_action(self.guard_action)
         self._stop_resume = launcher.on_resume(self.confinement.with_tools_again)
         await asyncio.to_thread(self.confinement.look_for_sandbox)
@@ -155,9 +156,10 @@ class DirectorService(Sync):
         bind_director(None)
         store = self._store
         if store is not None and store.root_id is not None:
-            run = self._runs()
-            if self._paused is None and has_work(run):
-                self._hold("shutdown")
+            run = self.org_state.run_state()
+            if self.org_state.paused is None and has_work(run):
+                self.org_state.hold("shutdown")
+                self.start_line.org_held()
             run.put("clean", "1")
         if self._stop_status is not None:
             self._stop_status()
@@ -181,10 +183,7 @@ class DirectorService(Sync):
         await self.org_save.__aexit__(None, None, None)
         self._launcher = None
         self._loop = None
-        with self._lock:
-            if self._run is not None:
-                self._run.close()
-                self._run = None
+        self.org_state.close()
 
     async def create_org(self, request: CreateOrgRequest) -> OpenedSession:
         """Start a new org: its top team, and the session that works on
@@ -238,7 +237,7 @@ class DirectorService(Sync):
                 # The repository holds an org already, which this server
                 # was not pointed at: it is taken up, never written over.
                 await self._came_back()
-                return await self.open_session(
+                return await self.session_lifecycle.open_session(
                     OpenSessionRequest(text=request.task, title=request.title or ""),
                     conversation,
                 )
@@ -254,12 +253,12 @@ class DirectorService(Sync):
                     isolation="shared",
                     agent_type=root_type,
                     headline=named.headline,
-                    summary=_summary_of(request.task),
-                    since=_instant(),
+                    summary=summary_of(request.task),
+                    since=instant(),
                 )
             )
             try:
-                opened = await self.open_session(
+                opened = await self.session_lifecycle.open_session(
                     OpenSessionRequest(
                         text=request.task, title=request.title or "", node_id=ROOT_ID
                     ),
@@ -278,7 +277,9 @@ class DirectorService(Sync):
             top = opened.session.teams[0].id
             # In the lane of that team, after the model that names it.
             self.work_queue.enqueue(
-                lambda: self.work_queue.run_in(BASE_LANE, lambda: self._name_org(top)),
+                lambda: self.work_queue.run_in(
+                    BASE_LANE, lambda: self.team_summaries.name_org(top)
+                ),
                 top,
             )
         return opened
@@ -307,12 +308,12 @@ class DirectorService(Sync):
             chosen_by, reason = choice.by, choice.reason
             place = store.instance(choice.node_id, session_id) or top
         conversation_id = await asyncio.to_thread(
-            lambda: self.tell_writer(place.id, text, human=True)
+            lambda: self.team_messaging.tell_writer(place.id, text, human=True)
         )
         if place.id != top.id:
             # Its IC may say it is not the team's own: the IC above has it then.
             await asyncio.to_thread(
-                self.keep_routed, "asked", place, text, chosen_by, reason
+                self.team_history.keep_routed, "asked", place, text, chosen_by, reason
             )
         return RoutedMessage(
             node_id=place.id,
@@ -396,13 +397,18 @@ class DirectorService(Sync):
             node = store.team(choice.node_id) or node
         elif path != node.boundary.path:
             text = f"{text}\n\n(The human sent this from {path}.)"
-        opened = await self.open_session(
+        opened = await self.session_lifecycle.open_session(
             OpenSessionRequest(text=text, node_id=node.id), request.conversation
         )
         top = opened.session.teams[0]
         if chosen_by not in ("path", "top"):
             await asyncio.to_thread(
-                self.keep_routed, "asked", top, request.text, chosen_by, reason
+                self.team_history.keep_routed,
+                "asked",
+                top,
+                request.text,
+                chosen_by,
+                reason,
             )
         return RoutedMessage(
             node_id=top.id,
@@ -456,7 +462,9 @@ class DirectorService(Sync):
         if found is not None and works and denied.relative is not None:
             # The refusal stands whether or not it could be kept.
             with suppress(Exception):
-                self.record_need(found[0], denied.relative or ".", NEED_WRITE)
+                self.team_history.record_need(
+                    found[0], denied.relative or ".", NEED_WRITE
+                )
         return worded(
             denied,
             scope or Scope(checkout="", directory=""),
@@ -505,7 +513,9 @@ class DirectorService(Sync):
             # It has no conversation to answer in: the team starts again
             # with the answer, and is asked of no longer once it has.
             async def again() -> None:
-                await self.start_again(place_id, StartAgainRequest(), said=answer)
+                await self.org_run.start_again(
+                    place_id, StartAgainRequest(), said=answer
+                )
                 with suppress(NotFound):
                     store.settle_escalation(place_id, escalation_id)
 
@@ -515,7 +525,9 @@ class DirectorService(Sync):
         if escalation_id == MERGE_WAITS:
             # The way into the checkout was cleared: the accepted work is
             # merged now as its reviewer decided, with nobody asked again.
-            decided = json.loads(self._runs().marked(CLEARING).get(place_id) or "{}")
+            decided = json.loads(
+                self.org_state.run_state().marked(CLEARING).get(place_id) or "{}"
+            )
             self.accept_review(place_id, "", **decided)
             return store.place(place_id) or place
         if escalation_id == ORG_WAITS:
@@ -526,7 +538,7 @@ class DirectorService(Sync):
             self.go_on_past_limit(place_id)
         if lost:
             # A new Manager starts with the answer; the IC goes on as it was.
-            self.tell_manager(
+            self.team_messaging.tell_manager(
                 place_id,
                 f"The {names.manager} before you could not be started. The human was "
                 f"told, and says:\n{answer}",
@@ -543,7 +555,7 @@ class DirectorService(Sync):
             if escalation_id == LIMIT_WAITS
             else f"The human answered your escalation {escalation.title!r}"
         )
-        self.notify(
+        self.message_delivery.notify(
             self.team_types.team(place).conversation(role),
             f"{told}:\n{answer}",
             at_once=True,

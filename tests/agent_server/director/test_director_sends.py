@@ -85,19 +85,19 @@ async def test_a_document_passed_to_a_team_is_in_its_context_as_it_is_now(
     root, api = node(service, "root"), node(service, API)
     ref = _write_spec(service, "root", "# Checkout\nCards only.")
 
-    service.send_ref(root.id, "ic", api.id, "ic", ref)
-    service.send_ref(root.id, "ic", api.id, "ic", ref)
+    service.team_messaging.send_ref(root.id, "ic", api.id, "ic", ref)
+    service.team_messaging.send_ref(root.id, "ic", api.id, "ic", ref)
 
-    [passed] = service.context_of(api, "ic")["documents_passed_to_you"]
+    [passed] = service.team_context.context_of(api, "ic")["documents_passed_to_you"]
     assert passed == {
         "document": "spec",
         "of": "the repository",
         "text": "# Checkout\nCards only.",
     }
     _write_spec(service, "root", "# Checkout\nCards and wallets.")
-    [passed] = service.context_of(api, "ic")["documents_passed_to_you"]
+    [passed] = service.team_context.context_of(api, "ic")["documents_passed_to_you"]
     assert passed["text"].endswith("Cards and wallets.")
-    assert service.context_of(root, "ic")["documents_passed_to_you"] == []
+    assert service.team_context.context_of(root, "ic")["documents_passed_to_you"] == []
     await service.aclose()
 
 
@@ -110,13 +110,15 @@ async def test_the_shipped_orgs_pass_no_document_up_or_sideways(
     ref = _write_spec(service, API, "# API")
 
     with pytest.raises(Invalid, match="does not let"):
-        service.send_ref(api.id, "ic", root.id, "ic", ref)
+        service.team_messaging.send_ref(api.id, "ic", root.id, "ic", ref)
     with pytest.raises(Invalid, match="does not let"):
-        service.send_ref(api.id, "ic", web.id, "ic", ref)
+        service.team_messaging.send_ref(api.id, "ic", web.id, "ic", ref)
     with pytest.raises(NotFound, match="There is no contracts"):
-        service.send_ref(root.id, "ic", api.id, "ic", team_ref(web).keeps("contracts"))
+        service.team_messaging.send_ref(
+            root.id, "ic", api.id, "ic", team_ref(web).keeps("contracts")
+        )
 
-    assert service.context_of(root, "ic")["documents_passed_to_you"] == []
+    assert service.team_context.context_of(root, "ic")["documents_passed_to_you"] == []
     await service.aclose()
 
 
@@ -129,12 +131,14 @@ async def test_an_open_org_passes_a_document_anywhere(
     ref = _write_spec(service, API, "# API")
 
     service.org_settings.update_settings(DirectorSettingsUpdate(org_kind="open"))
-    service.send_ref(api.id, "ic", root.id, "ic", ref)
-    service.send_ref(api.id, "ic", web.id, "ic", ref)
+    service.team_messaging.send_ref(api.id, "ic", root.id, "ic", ref)
+    service.team_messaging.send_ref(api.id, "ic", web.id, "ic", ref)
 
     assert [
         passed["of"]
-        for passed in service.context_of(web, "ic")["documents_passed_to_you"]
+        for passed in service.team_context.context_of(web, "ic")[
+            "documents_passed_to_you"
+        ]
     ] == ["services/api"]
     with pytest.raises(Invalid, match="no kind of org named 'flat'"):
         service.org_settings.update_settings(DirectorSettingsUpdate(org_kind="flat"))
@@ -157,9 +161,9 @@ async def test_the_kind_of_an_org_may_refuse_a_message(
     monkeypatch.setitem(ORG_KINDS, "silent", _Silent)
     service.org_settings.update_settings(DirectorSettingsUpdate(org_kind="silent"))
 
-    service.send_msg(root.id, "manager", root.id, "ic", "Go on.")
+    service.team_messaging.send_msg(root.id, "manager", root.id, "ic", "Go on.")
     with pytest.raises(Invalid, match="does not let"):
-        service.send_msg(root.id, "ic", api.id, "ic", "Use cents.")
+        service.team_messaging.send_msg(root.id, "ic", api.id, "ic", "Use cents.")
     await service.aclose()
 
 
@@ -196,6 +200,8 @@ async def test_a_type_gives_the_tool_a_document_is_passed_with(
 
     assert not sent.is_error and "reads your team's spec" in sent.text
     assert unknown.is_error and "no document named 'minutes'" in unknown.text
-    [passed] = service.context_of(node(service, API), "ic")["documents_passed_to_you"]
+    [passed] = service.team_context.context_of(node(service, API), "ic")[
+        "documents_passed_to_you"
+    ]
     assert passed["text"] == "# Lab"
     await service.aclose()

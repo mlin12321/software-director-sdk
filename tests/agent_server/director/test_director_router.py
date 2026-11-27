@@ -379,18 +379,18 @@ async def test_sends_what_waits_on_the_human_and_each_change_to_it(
 async def test_says_when_the_org_is_paused_and_when_it_runs_again(
     tree_stream_service: DirectorService,
 ):
-    tree_stream_service._hold("human")
+    tree_stream_service.org_state.hold("human")
     body = await open_stream(tree_stream_service)
 
     _, snapshot = await next_event(body)
-    await asyncio.to_thread(tree_stream_service._release)
+    await asyncio.to_thread(tree_stream_service.org_state.release)
     name, running = await next_event(body)
     await body.aclose()  # type: ignore[attr-defined]
 
     assert (snapshot["paused"], snapshot["merging"]) == ("human", False)
     assert name == "org_state"
     assert running == {"type": "org_state", "paused": None, "merging": False}
-    assert tree_stream_service._state_listeners == []
+    assert tree_stream_service.org_state._listeners == []
 
 
 async def test_an_idle_stream_sends_heartbeats(
@@ -530,7 +530,7 @@ async def test_an_org_is_paused_asked_what_it_holds_and_resumed(running, repo):
 
     paused = await client.post("/api/director/org/pause")
     asked = await client.post("/api/director/org/messages", json={"text": "Refunds"})
-    service.tell_writer(top["id"], "Add a cart", human=True)
+    service.team_messaging.tell_writer(top["id"], "Add a cart", human=True)
     await service.settled()
     summary = await client.get("/api/director/org")
     recovery = await client.get("/api/director/org/recovery")
@@ -630,7 +630,7 @@ async def test_the_first_message_starts_an_org_and_later_ones_open_sessions_in_i
     await service.settled()
 
     assert first.status_code == 200
-    [session] = service.sessions()
+    [session] = service.org.sessions()
     top = session.teams[0]
     assert top.title == "Build the checkout flow"
     assert first.json() == {
@@ -648,7 +648,7 @@ async def test_the_first_message_starts_an_org_and_later_ones_open_sessions_in_i
     )
     await service.settled()
 
-    _, opened = service.sessions()
+    _, opened = service.org.sessions()
     place = opened.teams[0]
     assert (opened.team_id, place.id) == ("root", f"root@{opened.id}")
     assert later.json() == {
@@ -673,7 +673,7 @@ async def test_the_first_message_starts_an_org_and_later_ones_open_sessions_in_i
     # What is said in a session goes to its IC and opens no other session.
     assert said.json() == {**later.json(), "chosen_by": "path", "reason": ""}
     assert unknown.status_code == 404
-    assert len(service.sessions()) == 2
+    assert len(service.org.sessions()) == 2
     assert launcher.messages_to(said.json()["conversation_id"])[-1] == (
         "And partial ones."
     )

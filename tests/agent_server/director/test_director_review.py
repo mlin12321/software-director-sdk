@@ -383,13 +383,13 @@ async def test_reviews_that_waited_through_a_pause_go_out_after_it(
     service: DirectorService, launcher: FakeLauncher, repo: Path
 ):
     await split_root(service)
-    await service.pause()
+    await service.org_run.pause()
     await api_submits(service, repo)
     commit(repo, "apps/web/page.tsx", "export {}\n")
     await use(service, ic(service, "apps.web"), SubmitReviewTool, DONE)
     assert requests(service, launcher) == []
 
-    await service.resume()
+    await service.org_run.resume()
     await service.settled()
 
     asked = "\n".join(requests(service, launcher))
@@ -706,7 +706,7 @@ async def test_a_file_in_the_folder_of_a_team_never_given_work_is_not_the_ics_ow
     )
     await use(service, manager(service, "services.api"), ApproveTeamsTool, APPROVE)
     # Only one of the two is given work.
-    service.tell_writer(node(service, SCHEMA).id, "Begin.")
+    service.team_messaging.tell_writer(node(service, SCHEMA).id, "Begin.")
     await service.settled()
     # What a run of the tests leaves in the other's folder.
     (repo / "services" / "api" / "jobs").mkdir(parents=True)

@@ -261,7 +261,7 @@ async def test_sub_teams_that_fail_a_check_never_reach_the_manager(
     assert observation.is_error and refusal in observation.text
     assert node(service, "root").pending_split is None
     assert launcher.messages_to(manager(service)) == before
-    assert service.threads_of(node(service, "root")) == []
+    assert service.team_context.threads_of(node(service, "root")) == []
 
 
 @pytest.mark.parametrize(
@@ -517,11 +517,13 @@ async def test_each_agent_sees_the_threads_it_takes_part_in(service: DirectorSer
                 thread.ic_node_id,
                 [(message.sender, message.text) for message in thread.messages],
             )
-            for thread in service.threads_of(node(service, node_id))
+            for thread in service.team_context.threads_of(node(service, node_id))
         ]
 
     top = node(service, "root").id
-    [proposal, said] = service.threads_of(node(service, "root"))[0].messages
+    [proposal, said] = service.team_context.threads_of(node(service, "root"))[
+        0
+    ].messages
     assert proposal.text.startswith("I propose these sub-teams.\n\nProposed sub-teams:")
     own = (top, top, [("ic", proposal.text), ("ic", said.text)])
     assert said.text == "API is slow."
@@ -929,9 +931,11 @@ async def test_every_message_between_agents_goes_one_way(
 ):
     top = node(service, "root").id
 
-    stopped = service.send_msg(top, "ic", top, "manager", "Split in two?")
+    stopped = service.team_messaging.send_msg(
+        top, "ic", top, "manager", "Split in two?"
+    )
     await service.settled()
-    service.send_msg(top, "manager", top, "ic", "Not yet.")
+    service.team_messaging.send_msg(top, "manager", top, "ic", "Not yet.")
     await service.settled()
 
     assert stopped is False
@@ -941,7 +945,7 @@ async def test_every_message_between_agents_goes_one_way(
     assert launcher.messages_to(ic(service))[-1].startswith(
         "[director] Your Manager writes:\nNot yet."
     )
-    [thread] = service.threads_of(node(service, "root"))
+    [thread] = service.team_context.threads_of(node(service, "root"))
     assert [(said.sender, said.text) for said in thread.messages] == [
         ("ic", "Split in two?"),
         ("manager", "Not yet."),
@@ -952,7 +956,7 @@ async def test_a_message_to_a_team_that_is_gone_is_refused(service: DirectorServ
     top = node(service, "root").id
 
     with pytest.raises(NotFound):
-        service.send_msg(top, "ic", "gone@nowhere", "ic", "Anyone?")
+        service.team_messaging.send_msg(top, "ic", "gone@nowhere", "ic", "Anyone?")
 
 
 async def test_an_agent_reads_how_the_org_works_again_with_its_context(

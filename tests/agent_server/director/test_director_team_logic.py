@@ -345,7 +345,7 @@ async def test_a_refused_write_into_a_team_beside_is_kept_once_for_each_file(
     assert (kept.team_id, kept.other_id, kept.other) == (API, WEB, "Web")
     assert (kept.detail, kept.paths) == ("write refused", ["apps/web/page.js"])
     # Once is not worth saying.
-    assert service.needs_below("root") == []
+    assert service.team_context.needs_below("root") == []
 
 
 async def test_a_need_is_kept_once_across_a_restart_of_the_server(
@@ -399,7 +399,7 @@ async def test_an_ic_is_told_of_teams_that_keep_needing_each_other(
     asked = "\n".join(requests(service, launcher))
     assert f"Its work so far: 1 sent back; it and 'Web' {words}." in asked
     assert f"Its work so far: it and 'API' {words}." in asked
-    context = service.context_of(node(service, "root"), "ic", in_full=True)
+    context = service.team_context.context_of(node(service, "root"), "ic", in_full=True)
     assert context["teams_below_that_needed_each_other"] == [f"'API' and 'Web' {words}"]
 
 

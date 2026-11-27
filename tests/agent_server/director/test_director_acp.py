@@ -639,8 +639,12 @@ async def test_a_notice_waits_for_the_turn_of_an_agent_that_runs_its_own_tools(
     assert agent is not None
     launcher.report(agent, ConversationExecutionStatus.RUNNING)
 
-    service.notify(agent, "The work of 'API' is merged into your checkout.")
-    service.notify(agent, "The work of 'Web' is merged into your checkout.")
+    service.message_delivery.notify(
+        agent, "The work of 'API' is merged into your checkout."
+    )
+    service.message_delivery.notify(
+        agent, "The work of 'Web' is merged into your checkout."
+    )
     await service.settled()
     waiting = said_to(launcher, agent)
 
@@ -665,8 +669,12 @@ async def test_a_second_notice_waits_for_the_turn_the_first_one_began(repo: Path
 
     # The conversation has not said yet that it is running when the second
     # one comes.
-    service.notify(agent, "The work of 'API' is merged into your checkout.")
-    service.notify(agent, "The work of 'Web' is merged into your checkout.")
+    service.message_delivery.notify(
+        agent, "The work of 'API' is merged into your checkout."
+    )
+    service.message_delivery.notify(
+        agent, "The work of 'Web' is merged into your checkout."
+    )
     await service.settled()
     first = said_to(launcher, agent)[before:]
 
@@ -691,7 +699,7 @@ async def test_what_the_human_says_reaches_such_an_agent_in_the_middle_of_a_turn
     )
     launcher.report(agent, ConversationExecutionStatus.RUNNING)
 
-    service.tell_writer(top, "The human: stop, use Go.", human=True)
+    service.team_messaging.tell_writer(top, "The human: stop, use Go.", human=True)
     service.answer_escalation(top, "jwt", "Opaque.")
     await service.settled()
 
@@ -710,7 +718,9 @@ async def test_a_notice_does_not_wait_for_an_agent_whose_tools_the_server_runs(
     assert agent is not None
     launcher.report(agent, ConversationExecutionStatus.RUNNING)
 
-    service.notify(agent, "The work of 'API' is merged into your checkout.")
+    service.message_delivery.notify(
+        agent, "The work of 'API' is merged into your checkout."
+    )
     await service.settled()
 
     assert len(said_to(launcher, agent)) == 1

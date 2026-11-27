@@ -228,8 +228,8 @@ async def test_a_team_whose_review_is_slow_does_not_hold_up_another_team(
     await eventually(lambda: launcher.agents_asked)
 
     web = node(service, "apps.web").id
-    service.tell_writer(web, "First", human=True)
-    service.tell_writer(web, "Second", human=True)
+    service.team_messaging.tell_writer(web, "First", human=True)
+    service.team_messaging.tell_writer(web, "Second", human=True)
     await eventually(lambda: len(launcher.messages_to(ic(service, "apps.web"))) == 2)
 
     assert launcher.messages_to(ic(service, "apps.web")) == ["First", "Second"]
@@ -249,7 +249,7 @@ async def test_teams_wait_for_a_free_run_and_start_when_one_ends(
     await use(service, manager(service), ApproveTeamsTool, APPROVE)
     top = node(service, "root").id
     for team in service.org.below(top):
-        service.tell_writer(team.id, "Begin.")
+        service.team_messaging.tell_writer(team.id, "Begin.")
     await eventually(
         lambda: (
             [team.waiting_to_start for team in service.org.below(top)] == [True, True]

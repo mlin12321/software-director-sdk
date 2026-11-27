@@ -75,7 +75,7 @@ async def test_long_reports_are_rewritten_by_a_model_once_they_are_the_teams(
     try:
         root = node(service, "root")
         report(service, root, "ic", "a" * 600)
-        service.tell_manager(root.id, "Look in on your team.")
+        service.team_messaging.tell_manager(root.id, "Look in on your team.")
         await service.settled()
         report(service, root, "manager", "m" * 600)
         report(service, root, "ic", "b" * 600)
@@ -84,7 +84,7 @@ async def test_long_reports_are_rewritten_by_a_model_once_they_are_the_teams(
         await landed(service)
         report(service, root, "ic", "Then this.")
         await service.settled()
-        kept = service.reports_of(root)
+        kept = service.team_reports.reports_of(root)
     finally:
         await service.aclose()
 
@@ -107,7 +107,7 @@ async def test_an_answer_that_is_no_shorter_leaves_the_reports_as_they_are(
         root = node(service, "root")
         report(service, root, "ic", "a" * 1_200)
         await landed(service)
-        kept = service.reports_of(root)
+        kept = service.team_reports.reports_of(root)
     finally:
         await service.aclose()
 

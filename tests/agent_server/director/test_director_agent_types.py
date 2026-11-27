@@ -102,7 +102,7 @@ def test_a_type_that_says_what_no_type_may_is_refused(tmp_path: Path, body: str)
 async def test_a_team_is_told_what_its_own_type_says_and_not_its_parents(
     service: DirectorService, launcher: FakeLauncher
 ):
-    context = service.context_of(node(service, "root"), "ic")
+    context = service.team_context.context_of(node(service, "root"), "ic")
     assert context["types_a_sub_team_may_be"]["analyst"] == (
         "Reads results and says what they mean."
     )
@@ -407,7 +407,7 @@ async def test_a_type_can_name_the_profile_its_teams_run_on(
     service.org_settings.update_settings(
         DirectorSettingsUpdate(allowed_profiles=["other"])
     )
-    context = service.context_of(node(service, "root"), "ic")
+    context = service.team_context.context_of(node(service, "root"), "ic")
     assert "'checker'" in context["types_a_sub_team_may_be"]["auditor"]
     [info] = [
         kind

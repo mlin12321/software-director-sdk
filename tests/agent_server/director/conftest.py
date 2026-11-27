@@ -621,7 +621,7 @@ async def tasked(service: DirectorService) -> None:
     """Give every team that was only set up its first message, which starts it."""
     for team in service.org.places():
         if not team.agents:
-            service.tell_writer(team.id, "Begin.")
+            service.team_messaging.tell_writer(team.id, "Begin.")
     await service.settled()
 
 
@@ -674,7 +674,7 @@ def memory_of(service: DirectorService, file: str) -> str | None:
     """A file of team memory as the first session has it: what it wrote
     there and nobody accepted yet, else the org's."""
     [session, *_] = service.org.sessions()
-    return service.read_file(service.org.session(session.id)[0], file)
+    return service.session_documents.read_file(service.org.session(session.id)[0], file)
 
 
 def commit(checkout: Path, path: str, content: str) -> None:
@@ -822,7 +822,9 @@ def manager(service: DirectorService, node_id: str = "root") -> str | None:
 async def woken(service: DirectorService, node_id: str = "root") -> str:
     """The Manager of a team, started as the first message to it does."""
     if manager(service, node_id) is None:
-        service.tell_manager(node(service, node_id).id, "Look in on your team.")
+        service.team_messaging.tell_manager(
+            node(service, node_id).id, "Look in on your team."
+        )
         await service.settled()
     found = manager(service, node_id)
     assert found is not None
@@ -1097,7 +1099,7 @@ async def at_api(service: DirectorService) -> tuple[str, str]:
     """
     await split_root(service)
     await landed(service)
-    opened = await service.open_session(
+    opened = await service.session_lifecycle.open_session(
         OpenSessionRequest(text="Add refunds.", node_id="services.api")
     )
     await service.settled()

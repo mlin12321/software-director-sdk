@@ -145,7 +145,7 @@ def _require_place(service: DirectorService, node_id: str) -> SessionTeam:
 
 
 def _require_session(service: DirectorService, session_id: str) -> Session:
-    for session in service.sessions():
+    for session in service.org.sessions():
         if session.id == session_id:
             return session
     raise NotFound(f"No session {session_id!r} is open")
@@ -228,10 +228,10 @@ async def stream_org_tree(
     )
     if snapshot is None:
         raise NotFound(f"Unknown team: {focus_id}")
-    unwatch = service.watch_state(on_change)
+    unwatch = service.org_state.watch(on_change)
 
     async def with_state(snapshot: SnapshotEvent) -> SnapshotEvent:
-        state = await asyncio.to_thread(service.state)
+        state = await asyncio.to_thread(service.org_state.state)
         return snapshot.model_copy(
             update={"paused": state.paused, "merging": state.merging}
         )
@@ -398,7 +398,7 @@ async def pause_org(
     a paused org changes nothing. The answer says what `POST /org/resume`
     would do.
     """
-    return await service.pause()
+    return await service.org_run.pause()
 
 
 @director_router.post(
@@ -417,7 +417,7 @@ async def resume_org(
     ended in the middle of a step is told so first. The answer lists only
     what was put aside because it no longer fits the org.
     """
-    return await service.resume()
+    return await service.org_run.resume()
 
 
 @director_router.get("/org/recovery", response_model=Recovery)
@@ -431,7 +431,7 @@ async def get_recovery(
     (`OrgSummary.paused` says which). Without a paused org the list is
     empty.
     """
-    return await service.recovery()
+    return await service.org_run.recovery()
 
 
 @director_router.post(
@@ -521,7 +521,7 @@ def get_conversation_place(
     session's IC is the one below. A client shows them as links from one
     conversation to the next.
     """
-    return service.place_of(conversation_id)
+    return service.team_context.place_of(conversation_id)
 
 
 @director_router.post(
@@ -546,8 +546,8 @@ def join_conversation(
     an agent's conversation directly calls this. Calling it again changes
     nothing.
     """
-    service.joined(conversation_id)
-    return service.place_of(conversation_id)
+    service.message_delivery.joined(conversation_id)
+    return service.team_context.place_of(conversation_id)
 
 
 @director_router.get("/org/sessions", response_model=list[Session])
@@ -562,7 +562,7 @@ def list_sessions(
     team it was opened at and, once they are given a task in it, at the
     teams below that one (`teams`).
     """
-    return service.sessions()
+    return service.org.sessions()
 
 
 @director_router.get(
@@ -654,7 +654,7 @@ async def open_session(
     concerns, as for a message sent with `auto`. Opening a session adds no
     team to the org, so `max_teams` and `max_depth` do not count it.
     """
-    return await service.open_session(request)
+    return await service.session_lifecycle.open_session(request)
 
 
 @director_router.delete(
@@ -675,7 +675,7 @@ def close_session(
     is kept as a commit under `refs/agents/pruned/`, and commits that were
     never merged stay reachable from `refs/agents/sessions/<session id>/`.
     """
-    service.close_session(session_id)
+    service.session_lifecycle.close_session(session_id)
 
 
 @director_router.get(
@@ -691,7 +691,7 @@ def get_org_history(
     """Get what became of the teams of the whole org, newest first: set up,
     work accepted or sent back, stalled, stopped, replaced, pruned, and what
     was proposed, approved and declined."""
-    return service.org_history(limit, before)
+    return service.team_history.org_history(limit, before)
 
 
 @director_router.get(
@@ -707,12 +707,12 @@ def get_node_memory(
     node = _require_any(service, node_id)
     return NodeMemory(
         documents=service.team_documents.listed(service.team_types.reader_of(node)),
-        reports=service.reports_of(node),
+        reports=service.team_reports.reports_of(node),
         former_teams=[
             FormerTeamSummary.model_validate(former.model_dump())
-            for former in service.former_teams_of(node)
+            for former in service.team_history.former_teams_of(node)
         ],
-        history=service.history_of(node.id),
+        history=service.team_history.history_of(node.id),
     )
 
 
@@ -733,7 +733,7 @@ def get_node_messages(
         # Nobody works at a team of the org itself, so nothing was said there.
         _require_node(service, node_id)
         return []
-    return service.threads_of(place)
+    return service.team_context.threads_of(place)
 
 
 @director_router.get(
@@ -867,7 +867,7 @@ async def edit_node_file(
     for a file the team's own agents may not write.
     """
     _require_place(service, node_id)
-    return await service.edit_file(node_id, path, request.content)
+    return await service.org_run.edit_file(node_id, path, request.content)
 
 
 @director_router.post(
@@ -895,7 +895,7 @@ async def pull_org(
     nothing is written, the org stays paused, and `merge` lists what to
     choose with `POST /org/merge/resolve`.
     """
-    return await service.pull_org((request or OrgSyncRequest()).remote)
+    return await service.org_sync.pull_org((request or OrgSyncRequest()).remote)
 
 
 @director_router.post(
@@ -921,7 +921,7 @@ async def push_org(
     push is refused while the remote has changes of the org that are not
     here.
     """
-    return await service.push_org((request or OrgSyncRequest()).remote)
+    return await service.org_sync.push_org((request or OrgSyncRequest()).remote)
 
 
 @director_router.get("/org/merge", response_model=OrgMerge | None)
@@ -929,7 +929,7 @@ async def get_merge(
     service: DirectorService = Depends(get_director_service),
 ) -> OrgMerge | None:
     """The merge that waits for choices; null when none does."""
-    return await service.merge()
+    return await service.org_sync.merge()
 
 
 @director_router.post(
@@ -952,7 +952,7 @@ async def resolve_merge(
     both sides as parents, and the org is resumed if the pull had paused it.
     Until then the result is `conflicts` with what is still open.
     """
-    return await service.resolve_merge(request)
+    return await service.org_sync.resolve_merge(request)
 
 
 @director_router.post(
@@ -964,7 +964,7 @@ async def abort_merge(
     service: DirectorService = Depends(get_director_service),
 ) -> OrgSync:
     """Abandon the merge that waits. The org is as it was before the pull."""
-    return await service.abort_merge()
+    return await service.org_sync.abort_merge()
 
 
 @director_router.post(
@@ -1003,7 +1003,7 @@ async def start_team_again(
     )
     if team is None:
         raise NotFound(f"Session {session_id!r} has no team {node_id}")
-    return await service.start_again(team.id, request)
+    return await service.org_run.start_again(team.id, request)
 
 
 @director_tools_router.get("")

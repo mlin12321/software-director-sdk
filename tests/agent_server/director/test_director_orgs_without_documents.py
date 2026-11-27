@@ -69,7 +69,7 @@ async def test_an_org_whose_teams_keep_no_documents_splits_and_lands_its_work(
     service = await an_org(repo, launcher, config, agent_type="bare")
     root = node(service, "root")
     assert service.team_documents.listed(service.team_types.reader_of(root)) == []
-    context = service.context_of(root, "ic")
+    context = service.team_context.context_of(root, "ic")
     assert "spec" not in context and "reports_of_your_team" not in context
 
     service.org_settings.update_org_settings(OrgSettings(default_agent_type="bare"))
@@ -92,7 +92,7 @@ async def test_an_org_whose_teams_keep_no_documents_splits_and_lands_its_work(
     assert (repo / "README.md").read_text() == "# Checkout\n"
     review = node(service, "root").review
     assert review is not None and review.state == "accepted"
-    assert service.drafts(root.session) == {}
+    assert service.session_documents.drafts(root.session) == {}
     await service.aclose()
 
 
@@ -196,7 +196,7 @@ async def test_a_document_of_an_orgs_own_stays_when_its_team_is_removed(
     ]
     [left] = service.team_documents.left_to(service.team_types.reader_of(root))
     assert (left.name, left.text) == ("runbook", "Restart the queue first.\n")
-    context = service.context_of(root, "ic")
+    context = service.team_context.context_of(root, "ic")
     assert context["documents_left_by_teams_before_you"] == [
         {
             "document": "runbook",
@@ -218,7 +218,7 @@ async def test_a_document_of_an_orgs_own_is_settled_with_the_teams(
     service = await _an_org_with_documents_of_its_own(repo, launcher, tmp_path)
     await split_root(service)
     await landed(service)
-    opened = await service.open_session(
+    opened = await service.session_lifecycle.open_session(
         OpenSessionRequest(text="Add refunds.", node_id="services.api")
     )
     await service.settled()

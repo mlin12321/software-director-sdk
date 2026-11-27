@@ -13,7 +13,7 @@ import pytest
 from openhands.agent_server.director import compaction
 from openhands.agent_server.director.launch import StartedAgent
 from openhands.agent_server.director.models import LeftoverDocument, SplitChild
-from openhands.agent_server.director.org_store import team_id_of
+from openhands.agent_server.director.org_store import hand_over_of, team_id_of
 from openhands.agent_server.director.prompts import (
     HAND_OVER_ROLE,
     left_behind,
@@ -21,7 +21,6 @@ from openhands.agent_server.director.prompts import (
 from openhands.agent_server.director.run_state import TASK
 from openhands.agent_server.director.service import (
     DirectorService,
-    hand_over_of,
 )
 from openhands.agent_server.director.split import ProposedTeam
 from openhands.agent_server.director.tools import (
@@ -153,9 +152,9 @@ async def test_a_team_put_in_another_teams_directory_gets_none_of_its_memory(
 
     orders = node(service, API)
     assert orders.title == "Orders" and orders.agents == []
-    assert service.reports_of(orders) == []
-    assert service.threads_of(orders) == []
-    assert service._runs().marked(TASK)[orders.id] == "Keep the orders"
+    assert service.team_reports.reports_of(orders) == []
+    assert service.team_context.threads_of(orders) == []
+    assert service.org_state.run_state().marked(TASK)[orders.id] == "Keep the orders"
     [former] = former_of(service, API)
     assert (former.title, former.ended, former.path) == (
         "API",
@@ -191,7 +190,7 @@ async def test_the_spec_of_the_team_before_stays_and_is_shown_as_old(
     briefing = launcher.derived[-1].task
     assert "A spec left by a team before you (API), in services/api" in briefing
     assert "# API by hand" in briefing and "Chose SQLite." not in briefing
-    context = service.context_of(node(service, API), "ic")
+    context = service.team_context.context_of(node(service, API), "ic")
     assert context["spec"] is None
     assert context["documents_left_by_teams_before_you"] == [
         {
@@ -278,11 +277,11 @@ async def test_the_ic_is_told_who_has_each_replaced_teams_directory_now(
     # spec of the team it was cut from as old.
     for team_id in ("services.api.http", "services.api.db"):
         team = node(service, team_id)
-        assert team.agents == [] and service.reports_of(team) == []
+        assert team.agents == [] and service.team_reports.reports_of(team) == []
         assert team.leftover_documents == [
             LeftoverDocument(name="spec", path="services/api", team="API")
         ]
-    below = service.context_of(node(service, "root"), "ic")["sub_teams"]
+    below = service.team_context.context_of(node(service, "root"), "ic")["sub_teams"]
     assert {team["team"]: team["status"] for team in below} == {
         "Web": "idle",
         "HTTP": "not_started",
@@ -323,7 +322,7 @@ async def test_a_pruned_team_is_recorded_and_its_spec_is_old_for_the_team_above(
     assert node(service, "root").leftover_documents == [
         LeftoverDocument(name="spec", path="services/api", team="API")
     ]
-    context = service.context_of(node(service, "root"), "ic")
+    context = service.team_context.context_of(node(service, "root"), "ic")
     [left] = context["documents_left_by_teams_before_you"]
     assert (left["document"], left["text"]) == ("spec", "# API by hand")
     # The record is the session's own until its work is accepted.
@@ -376,7 +375,7 @@ async def test_what_was_said_to_a_manager_is_archived_with_its_team(
 
     [former] = former_of(service, API)
     assert f".threads/{api}/{api}.json" in [thread.file for thread in former.threads]
-    assert service.threads_of(node(service, API)) == []
+    assert service.team_context.threads_of(node(service, API)) == []
 
 
 async def test_the_ic_that_proposed_is_given_what_the_replaced_team_left(
@@ -425,13 +424,13 @@ async def test_what_the_ic_hands_over_is_in_the_new_teams_briefing(
 
     assert "It has not started" in handed.text and node(service, API).agents == []
     # It is kept for the team and written into none of its documents.
-    assert service.reports_of(node(service, API)) == []
+    assert service.team_reports.reports_of(node(service, API)) == []
 
     await tasked(service)
 
     briefing = launcher.derived[-1].task
     assert "API chose SQLite; keep it." in briefing
-    context = service.context_of(node(service, API), "ic")
+    context = service.team_context.context_of(node(service, API), "ic")
     [told] = context["handed_over_to_your_team"]
     assert (told["by"], told["text"]) == (
         "the IC of Checkout",
@@ -441,7 +440,7 @@ async def test_what_the_ic_hands_over_is_in_the_new_teams_briefing(
     todo = context["what_to_do_with_what_was_handed_over"]
     assert "`report` what of it your team must remember" in todo
     assert "`write_contracts`" in todo
-    assert "handed_over_to_your_team" not in service.context_of(
+    assert "handed_over_to_your_team" not in service.team_context.context_of(
         node(service, API), "manager"
     )
 
@@ -488,7 +487,9 @@ async def test_a_team_that_is_handed_contracts_writes_them_itself(
 
     # Nothing is written for the team: it is told, and writes its own.
     assert own_contracts(service, node(service, WEB)) == ""
-    [told] = service.context_of(node(service, WEB), "ic")["handed_over_to_your_team"]
+    [told] = service.team_context.context_of(node(service, WEB), "ic")[
+        "handed_over_to_your_team"
+    ]
     assert told["text"] == text
 
     await write_contracts(service, text, WEB)
@@ -525,9 +526,9 @@ async def test_what_a_removed_team_kept_of_its_documents_is_in_its_record(
     assert former.documents == {"contracts": "Order has an id.\n"}
     [told] = [
         team
-        for team in service.context_of(node(service, "root"), "ic", in_full=True)[
-            "former_teams"
-        ]
+        for team in service.team_context.context_of(
+            node(service, "root"), "ic", in_full=True
+        )["former_teams"]
         if team["team_id"] == API
     ]
     assert told["documents"] == former.documents
@@ -560,9 +561,13 @@ async def test_an_ic_can_read_again_what_removed_teams_left(
     assert (former["team"], former["ended"]) == ("API", "replaced")
     assert former["reports_as_one"] == "Chose SQLite.\n\nDropped the cache."
     # What is told with every message names the team and no more.
-    [named] = service.context_of(node(service, "root"), "ic")["former_teams"]
+    [named] = service.team_context.context_of(node(service, "root"), "ic")[
+        "former_teams"
+    ]
     assert sorted(named) == ["at", "directory", "ended", "team", "team_id"]
-    assert "former_teams" not in service.context_of(node(service, "root"), "manager")
+    assert "former_teams" not in service.team_context.context_of(
+        node(service, "root"), "manager"
+    )
 
 
 async def test_a_hand_over_is_a_side_conversation_of_the_ic_with_its_own_briefing(
@@ -621,7 +626,7 @@ async def test_a_hand_over_conversation_hands_over_and_writes_the_spec_and_no_mo
     ]
 
     assert not handed.is_error and not spec.is_error
-    assert service.reports_of(node(service, API)) == []
+    assert service.team_reports.reports_of(node(service, API)) == []
     [told] = service.session_drafts.handed_over_to(node(service, API).id)
     assert told["text"] == "Keep SQLite."
     assert node(service, "root").summary == "Shop"
@@ -770,7 +775,7 @@ async def test_a_hand_over_that_ended_while_the_server_was_down_is_told_at_its_s
     launcher.known[UUID(side)] = ConversationExecutionStatus.FINISHED
 
     second = await again(repo, launcher)
-    await second.resume()
+    await second.org_run.resume()
     await second.settled()
 
     mode = hand_over_of(node(second, "root"))
@@ -792,7 +797,7 @@ async def test_a_hand_over_conversation_gone_with_the_server_is_shown_as_lost(
     del launcher.known[UUID(side)]
 
     second = await again(repo, launcher)
-    await second.resume()
+    await second.org_run.resume()
     await second.settled()
 
     mode = hand_over_of(node(second, "root"))
@@ -813,7 +818,7 @@ async def test_a_server_that_ends_as_a_hand_over_starts_starts_it_at_its_next_st
     await service.aclose()
 
     second = await again(repo, launcher)
-    await second.resume()
+    await second.org_run.resume()
     await second.settled()
 
     assert "Team 'API'" in given_aside(second, launcher)
@@ -831,18 +836,18 @@ async def test_a_paused_org_pauses_a_hand_over_and_it_goes_on_when_resumed(
     assert side is not None
     launcher.report(side, ConversationExecutionStatus.RUNNING)
 
-    await service.pause()
+    await service.org_run.pause()
     await service.settled()
 
     assert UUID(side) in launcher.paused
     assert ended_notices(service, launcher) == []
     # What resuming does names the hand-over, whose conversation is there.
-    told = await service.recovery()
+    told = await service.org_run.recovery()
     assert [(item.kind, item.detail) for item in told.items] == [
         ("run_again", "Its IC in hand-over mode runs again.")
     ]
 
-    await service.resume()
+    await service.org_run.resume()
     await service.settled()
 
     assert UUID(side) in [conversation for conversation, _ in launcher.resumed]
@@ -943,7 +948,9 @@ async def test_a_split_finished_again_after_a_restart_hands_over_once(
         # Nothing is saved once the server has ended.
         if ended.is_set():
             return
-        if any(i.kind == "hand_over" for i in service._runs().open_intents()):
+        if any(
+            i.kind == "hand_over" for i in service.org_state.run_state().open_intents()
+        ):
             ended.set()
             raise ServerEnded
         save_tree(store)
@@ -956,7 +963,7 @@ async def test_a_split_finished_again_after_a_restart_hands_over_once(
     await service.aclose()
 
     second = await again(repo, launcher)
-    await second.resume()
+    await second.org_run.resume()
     await second.settled()
 
     asides = [s for s in launcher.derived if shipped(HAND_OVER_ROLE) in s.task]

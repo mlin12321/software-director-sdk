@@ -196,7 +196,7 @@ async def test_a_team_started_again_is_briefed_with_what_it_reported(
     root = node(service, "root")
     report(service, root, "manager", "The API team needs a schema first.")
 
-    briefing, _ = service._briefing(root, "ic", "Build")
+    briefing, _ = service.agent_start.briefing(root, "ic", "Build")
 
     assert "Manager, " in briefing
     assert "The API team needs a schema first." in briefing
@@ -463,7 +463,9 @@ async def test_an_escalation_a_team_still_holds_cannot_be_answered_by_the_human(
 
 async def woken_manager(service: DirectorService, node_id: str = "root") -> str:
     """The Manager of a team, started as the first message to it does."""
-    service.tell_manager(node(service, node_id).id, "Look in on your team.")
+    service.team_messaging.tell_manager(
+        node(service, node_id).id, "Look in on your team."
+    )
     await service.settled()
     manager = agent_conversation(node(service, node_id), "manager")
     assert manager is not None
@@ -589,7 +591,7 @@ async def test_a_report_made_before_the_first_summary_is_not_overwritten_by_it(
     def report_at_once(conversation_id: UUID) -> None:
         found = service.org.find_by_conversation(str(conversation_id))
         if found is not None and found[1] == "ic":
-            service.refresh_headline(found[0].id, "it is blocked.")
+            service.team_summaries.refresh_headline(found[0].id, "it is blocked.")
 
     launcher.on_derived = report_at_once
     await split_root(service, API)
@@ -607,7 +609,9 @@ async def test_a_report_rewrites_the_headline(
     await service.settled()
     launcher.summary = TeamSummary("Ignored", "Checkout is done; tax is left out.")
 
-    service.refresh_headline(node(service, "root").id, "it is done. Tax is left out.")
+    service.team_summaries.refresh_headline(
+        node(service, "root").id, "it is done. Tax is left out."
+    )
     await service.settled()
 
     assert node(service, "root").headline == "Checkout is done; tax is left out."
@@ -880,7 +884,7 @@ async def test_a_message_opens_a_session_at_the_nearest_team_above_where_it_was_
         sent_from.format("services/billing"),
     )
     assert (await send(None))[:2] == ("root", False)
-    assert len(service.sessions()) == 5
+    assert len(service.org.sessions()) == 5
 
 
 async def test_a_message_opens_a_session_at_a_team_whose_ic_in_another_is_gone(
@@ -1212,7 +1216,7 @@ async def test_a_pruned_agents_shell_and_index_are_removed(
     # agent would be started by, and the index with its marker.
     assert len(left) == 7
 
-    service.prune(node(service, "services.api").id, "x")
+    service.team_splits.prune(node(service, "services.api").id, "x")
     await service.settled()
 
     assert not [path for path in left if path.exists()]

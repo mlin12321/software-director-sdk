@@ -120,7 +120,7 @@ async def test_a_team_is_told_the_documents_its_type_keeps_under_their_names(
     service: DirectorService,
 ):
     root = node(service, "root")
-    before = service.context_of(root, "bench")
+    before = service.team_context.context_of(root, "bench")
     call_tool(
         service,
         UUID(bench(service)),
@@ -128,7 +128,7 @@ async def test_a_team_is_told_the_documents_its_type_keeps_under_their_names(
         {"file_text": "A run is a job."},
     )
 
-    after = service.context_of(root, "bench")
+    after = service.team_context.context_of(root, "bench")
 
     assert "glossary" in before and before["glossary"] is None
     assert after["glossary"] == "A run is a job."
@@ -156,7 +156,7 @@ async def test_a_team_is_told_nothing_of_a_document_it_does_not_keep(
 ):
     service = await an_org(repo, launcher)
 
-    context = service.context_of(node(service, "root"), "ic")
+    context = service.team_context.context_of(node(service, "root"), "ic")
 
     assert "glossary" not in context and "report" not in context
     assert context["spec"] is None
@@ -177,7 +177,7 @@ async def test_a_report_is_an_entry_its_teams_members_are_told(
 
     assert not recorded.is_error
     assert empty.is_error and "cannot be empty" in empty.text
-    [told] = service.context_of(root, "manager")["reports_of_your_team"]
+    [told] = service.team_context.context_of(root, "manager")["reports_of_your_team"]
     assert (told["by"], told["text"]) == ("ic", "Chose SQLite.")
     [kept] = service.session_drafts.reports(root.id)
     assert kept.session_id == root.session and kept.at and kept.id

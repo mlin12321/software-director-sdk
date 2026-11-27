@@ -45,18 +45,18 @@ class Watch(Reviews):
             org=lambda: self.org,
             has_org=lambda: self._store is not None,
             settings=lambda: self.org_settings.settings,
-            run_state=self._runs,
+            run_state=self.org_state.run_state,
             clock=self._clock,
-            paused=lambda: self._paused is not None,
-            running=lambda: self._running,
+            paused=lambda: self.org_state.paused is not None,
+            running=lambda: self.org_state.running,
             model_calls=self.model_calls,
             check_managers=self._check_managers,
             work_queue=self.work_queue,
-            progressed=self.progressed,
+            progressed=self.team_messaging.progressed,
             release_reviews=self._release_reviews,
-            record_event=self.record_event,
-            tell_writer=self.tell_writer,
-            tell_above=self.tell_above,
+            record_event=self.team_history.record_event,
+            tell_writer=self.team_messaging.tell_writer,
+            tell_above=self.team_messaging.tell_above,
         )
 
     def hand_escalation(
@@ -80,7 +80,7 @@ class Watch(Reviews):
         if escalation.raised_by == self.team_types.team(raiser).writer:
             # It is woken now anyway, so it gets what waits for its review too.
             self.release_reviews(holder_id)
-            self.count_escalation_from_below(holder_id, through.id)
+            self.team_messaging.count_escalation_from_below(holder_id, through.id)
         raised_by = escalation.raised_by
         text = (
             f"The {self.team_types.team(raiser).title(raised_by)} of team "
@@ -90,7 +90,7 @@ class Watch(Reviews):
             "Settle it with resolve_escalation if you can; pass it up only with "
             "the reason you cannot."
         )
-        self.tell(
+        self.team_messaging.tell(
             holder_id, self.team_types.team(holder).answers(escalation.raised_by), text
         )
 
@@ -112,20 +112,22 @@ class Watch(Reviews):
             raise Conflict(f"Team {place_id} is stopped already")
         running = [
             conversation_id
-            for conversation_id in self._conversations_below(team)
-            if conversation_id in self._running
+            for conversation_id in self.org.conversations_below(team)
+            if conversation_id in self.org_state.running
         ]
         store.set_stopped(
             place_id, Stopped(at=utc_now(), reason=reason, running=sorted(running))
         )
         if self._loop is not None:
-            self.work_queue.enqueue(lambda: self._stop(place_id), place_id)
+            self.work_queue.enqueue(
+                lambda: self.team_messaging.stop(place_id), place_id
+            )
         self.org_save.save_soon()
-        self.record_event(team.parent_id, "stopped", team, reason)
+        self.team_history.record_event(team.parent_id, "stopped", team, reason)
         # A stopped team is waited for no longer by the reviews beside it.
         self.release_reviews(team.parent_id)
         if team.parent_id is not None:
-            self.tell_manager(
+            self.team_messaging.tell_manager(
                 team.parent_id,
                 f"Your {names.writer} stopped the team {team.title!r} (id {team.id}): "
                 f"{reason}\nIts agents are at rest and nothing is sent to "
@@ -150,13 +152,13 @@ class Watch(Reviews):
         if store is None:
             return
         launcher = self._require_launcher()
-        run = self._runs()
+        run = self.org_state.run_state()
         marks = run.marked(USE)
         for session in store.sessions():
             conversations = {
                 conversation_id
                 for team in session.teams
-                for conversation_id in self._conversations_below(team)
+                for conversation_id in self.org.conversations_below(team)
             }
             now = await launcher.usage([UUID(each) for each in sorted(conversations)])
             last: dict[str, list[float]] = json.loads(marks.get(session.id) or "{}")
@@ -203,13 +205,13 @@ class Watch(Reviews):
             or session.usage.cost < limit
             or top is None
             or top.stopped is not None
-            or self._paused is not None
+            or self.org_state.paused is not None
         ):
             return
         running = [
             conversation_id
-            for conversation_id in self._conversations_below(top)
-            if conversation_id in self._running
+            for conversation_id in self.org.conversations_below(top)
+            if conversation_id in self.org_state.running
         ]
         store.set_stopped(
             top.id,
@@ -219,7 +221,7 @@ class Watch(Reviews):
                 running=sorted(running),
             ),
         )
-        self.work_queue.enqueue(lambda: self._stop(top.id), top.id)
+        self.work_queue.enqueue(lambda: self.team_messaging.stop(top.id), top.id)
         used = session.usage
         if all(e.id != LIMIT_WAITS for e in top.escalations):
             store.raise_escalation(
@@ -255,6 +257,9 @@ class Watch(Reviews):
         if stopped is not None:
             store.set_stopped(top.id, None)
             self.work_queue.enqueue(
-                lambda: self._go_on(top.id, stopped.running, own_too=True), top.id
+                lambda: self.team_messaging.go_on(
+                    top.id, stopped.running, own_too=True
+                ),
+                top.id,
             )
         self.org_save.save_soon()

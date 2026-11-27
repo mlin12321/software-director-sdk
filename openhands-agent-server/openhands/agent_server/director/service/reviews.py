@@ -83,6 +83,7 @@ from openhands.agent_server.director.run_state import (
     TURN,
     Intent,
 )
+from openhands.agent_server.director.service.agent_start_service import head_name_of
 from openhands.agent_server.director.service.session_landing_service import (
     Taken,
 )
@@ -90,14 +91,13 @@ from openhands.agent_server.director.service.state import (
     _REST_CHECK_SECONDS,
     _REST_CHECKS,
     ASIDE_REFS,
-    ASKED_KEPT,
-    BASE_LANE,
     MERGE_WAITS,
     ORG_WAITS,
-    _branch_of,
     checkout_root,
 )
+from openhands.agent_server.director.service.team_history_service import ASKED_KEPT
 from openhands.agent_server.director.service.teams import Teams
+from openhands.agent_server.director.service.work_queue_service import BASE_LANE
 from openhands.agent_server.director.split import (
     Shape,
     Side,
@@ -204,7 +204,11 @@ class Reviews(Teams):
     async def _rest(self, place_id: str) -> None:
         place = self.org.place(place_id)
         conversation_id = self.team_types.writer_conversation(place) if place else None
-        if place is None or conversation_id is None or self._paused is not None:
+        if (
+            place is None
+            or conversation_id is None
+            or self.org_state.paused is not None
+        ):
             return
         launcher = self._require_launcher()
         writer = self.team_types.team(place).writer
@@ -213,7 +217,7 @@ class Reviews(Teams):
             # it. Only one that carries on regardless is cut short, which
             # costs it the step it is in.
             await self._until_at_rest(conversation_id)
-            if conversation_id in self._running:
+            if conversation_id in self.org_state.running:
                 await launcher.stop(UUID(conversation_id))
         else:
             await launcher.pause(UUID(conversation_id))
@@ -223,7 +227,7 @@ class Reviews(Teams):
 
     async def _until_at_rest(self, conversation_id: str) -> None:
         for _ in range(_REST_CHECKS):
-            if conversation_id not in self._running:
+            if conversation_id not in self.org_state.running:
                 return
             await asyncio.sleep(_REST_CHECK_SECONDS)
 
@@ -250,8 +254,8 @@ class Reviews(Teams):
         store.set_review(place_id, review)
         self._drop_merge_checkout(place_id)
         self._tell_turns()
-        self.progressed(place_id, by_above=True)
-        self.record_event(
+        self.team_messaging.progressed(place_id, by_above=True)
+        self.team_history.record_event(
             place.parent_id,
             "sent_back",
             place,
@@ -261,19 +265,19 @@ class Reviews(Teams):
             # A finding of the runtime names several files in one.
             for path in finding.path.split(", "):
                 if path.strip():
-                    self.record_need(place, path.strip(), NEED_FINDING)
+                    self.team_history.record_need(place, path.strip(), NEED_FINDING)
         limit = self.org_settings.settings.manager_check_ic_setbacks
         if limit and place.parent_id is not None and review.round % limit == 0:
-            with self._counting:
-                counted = self._counted(place.parent_id)
-            self._wake_manager(
+            with self.check_counts.lock:
+                counted = self.check_counts.counted(place.parent_id)
+            self.team_messaging.wake_manager(
                 place.parent_id,
                 f"your {names.reviewer} has sent the work of {place.title!r} back "
                 f"{review.round} times.",
                 counted,
                 team=place,
             )
-        self.notify(
+        self.message_delivery.notify(
             self.team_types.writer_conversation(place),
             changes_requested(
                 above or place,
@@ -307,9 +311,9 @@ class Reviews(Teams):
         """
         store = self.org
         node = store.place(place_id) if place_id else None
-        if node is None or self._paused is not None:
+        if node is None or self.org_state.paused is not None:
             return
-        run = self._runs()
+        run = self.org_state.run_state()
         held = run.marked(HELD)
         teams = store.below(node.id)
         waiting: list[SessionTeam] = []
@@ -344,8 +348,8 @@ class Reviews(Teams):
                     + review_request(
                         team,
                         team.review,
-                        self._so_far(team),
-                        self.asked_of(team),
+                        self.team_context.so_far(team),
+                        self.team_context.asked_of(team),
                         self.review_instructions(self.team_types.type_of(team)),
                         self.team_types.kept_documents(node).read_by_sub_teams,
                     )
@@ -361,7 +365,7 @@ class Reviews(Teams):
         ]
         if asked_before:
             requests.append(still_undecided(sorted(asked_before, key=_submitted)))
-        self.tell(
+        self.team_messaging.tell(
             node.id,
             self.team_types.team(node).reviewer,
             "\n\n---\n\n".join(requests),
@@ -396,7 +400,9 @@ class Reviews(Teams):
                 "session is accepted. Leave that empty."
             )
         own = normalize_store_path(place.boundary.path)
-        homes = {found.home for found in self.documents_inherited(place)}
+        homes = {
+            found.home for found in self.session_documents.documents_inherited(place)
+        }
         chosen = []
         for choice in choices:
             document = choice.document.strip()
@@ -437,9 +443,9 @@ class Reviews(Teams):
         for choice in chosen:
             file = DocumentRef(choice["path"], choice["document"]).path
             if choice["use"] == "org":
-                self._undraft(top.session, file)
+                self.session_documents.undraft(top.session, file)
             elif choice["use"] == "replacement":
-                self._draft(top.session, file, choice["replacement"])
+                self.session_documents.draft(top.session, file, choice["replacement"])
 
     def accept_review(
         self,
@@ -581,7 +587,7 @@ class Reviews(Teams):
             for other in store.sub_teams(above_id):
                 if other.id != team_id and is_inside(other.boundary.path, path):
                     store.move(other.id, team_id)
-            self.record_event(
+            self.team_history.record_event(
                 above_id,
                 "moved",
                 place,
@@ -613,7 +619,7 @@ class Reviews(Teams):
             merge = self._merge_of(top)
             if merge is None and self._review_of(top) is not None:
                 seq = top.review.seq if top.review and top.review.seq else 0
-                run = self._runs()
+                run = self.org_state.run_state()
                 decided = run.marked(DECIDED).get(top.id)
                 run.unmark(DECIDED, top.id)
                 merge = Merge(
@@ -660,7 +666,9 @@ class Reviews(Teams):
         for name, protocol in self.team_types.protocols.items():
             if not protocol.waits_for_team_changes:
                 continue
-            theirs = self.read_file(lost, DocumentRef(folder, name).path)
+            theirs = self.session_documents.read_file(
+                lost, DocumentRef(folder, name).path
+            )
             was = before.get(name)
             if was is not None and not (theirs and theirs.strip()):
                 theirs = was.session[len(was.org.rstrip()) :]
@@ -741,7 +749,9 @@ class Reviews(Teams):
                 )
             )
         memory = self._memory()
-        for file, (text, over) in sorted(self.drafts(top.session).items()):
+        for file, (text, over) in sorted(
+            self.session_documents.drafts(top.session).items()
+        ):
             path = file.rpartition("/")[0]
             name = DocumentRef.at(file).name
             if not self._waits_for_team_changes(file) or (name, path) in coming:
@@ -805,7 +815,7 @@ class Reviews(Teams):
                     self._ask_manager(top, merge)
                 elif merge.code_landed and all(
                     intent.kind != "land_org" or intent.node_id != top.id
-                    for intent in self._runs().open_intents()
+                    for intent in self.org_state.run_state().open_intents()
                 ):
                     self.resumable_work.begin(top.id, LandOrg())
 
@@ -829,7 +839,7 @@ class Reviews(Teams):
                 }
             ),
         )
-        self.tell_manager(
+        self.team_messaging.tell_manager(
             review.id,
             merge_request(
                 top,
@@ -870,7 +880,7 @@ class Reviews(Teams):
                         update={"reminded": True, "asked_at": now.isoformat()}
                     ),
                 )
-                self.tell_manager(
+                self.team_messaging.tell_manager(
                     review.id,
                     "This still waits for you, and with it what every session "
                     "that submitted later made of its teams.\n\n"
@@ -1141,7 +1151,7 @@ class Reviews(Teams):
             waits = {*take, *(item.key for item in items if item.kind == "team")}
             agreements = {
                 file
-                for file in self.drafts(top.session)
+                for file in self.session_documents.drafts(top.session)
                 if self._waits_for_team_changes(file)
             }
             self._keep_merge(
@@ -1211,7 +1221,7 @@ class Reviews(Teams):
                 if item.use == "org" or (
                     item.with_team is not None and item.with_team not in taken
                 ):
-                    self._undraft(top.session, file)
+                    self.session_documents.undraft(top.session, file)
                     held.append((item.document, item.key))
                     others.append((item.document, item.key, item.org))
                     continue
@@ -1248,7 +1258,7 @@ class Reviews(Teams):
 
     def _after_landing(self, top: SessionTeam, landed: Landed, note: str) -> None:
         for folder, role in landed.records.grown:
-            self.reports_grew(folder, role)
+            self.team_summaries.reports_grew(folder, role)
         now = self.org.place(top.id)
         if (
             self._merge_of(top) is None
@@ -1259,14 +1269,14 @@ class Reviews(Teams):
             self.org.settle_escalation(top.id, ORG_WAITS)
         review = self._review_of(top)
         if review is not None and landed.records.left:
-            self.notify(
+            self.message_delivery.notify(
                 self.team_types.reviewer_conversation(review),
                 files_not_written(top.title, landed.records.left),
             )
         if review is not None and (
             landed.taken or landed.kept or landed.agreed or landed.held
         ):
-            self.tell_writer(
+            self.team_messaging.tell_writer(
                 top.id,
                 teams_settled(
                     review.title,
@@ -1286,9 +1296,9 @@ class Reviews(Teams):
         """Keep on record what a session wrote of a document that the org
         did not take, also when the session is closed and nobody is told."""
         for name, directory, _ in landed.others:
-            self._land_event(
+            self.team_history.land_event(
                 self.session_landing.home_of(top, directory),
-                self._event(
+                self.team_history.event(
                     "not_taken",
                     top,
                     f"the {name} it wrote for "
@@ -1363,7 +1373,7 @@ class Reviews(Teams):
                 ),
             )
         for folder, role in landed.records.grown:
-            self.reports_grew(folder, role)
+            self.team_summaries.reports_grew(folder, role)
         self._record_not_taken(top, landed)
 
     def _sent_back(self, top: SessionTeam) -> None:
@@ -1380,11 +1390,13 @@ class Reviews(Teams):
             ]
             if decided:
                 # They hold again for whatever is unchanged when it comes back.
-                self._runs().mark(DECIDED, top.id, _ITEMS.dump_json(decided).decode())
+                self.org_state.run_state().mark(
+                    DECIDED, top.id, _ITEMS.dump_json(decided).decode()
+                )
             if merge.asked and any(
                 item.gate == "manager" and item.use is None for item in merge.items
             ):
-                self.tell_manager(
+                self.team_messaging.tell_manager(
                     review.id,
                     f"The work of {top.title!r} was sent back to its team. "
                     "What waited of it for you waits no longer. What you "
@@ -1407,7 +1419,9 @@ class Reviews(Teams):
         memory = self._memory()
         return [
             (DocumentRef.at(file).name, file.rpartition("/")[0], text or "")
-            for file, (text, _) in sorted(self.drafts(top.session).items())
+            for file, (text, _) in sorted(
+                self.session_documents.drafts(top.session).items()
+            )
             if self._waits_for_team_changes(file) and memory.read(file) != text
         ]
 
@@ -1450,7 +1464,7 @@ class Reviews(Teams):
                 files = [path for path in changes.both if owns(place, path)]
         opens = self.org.opens_session(place)
         changed = self.team_documents.changed_elsewhere(place.session) if opens else []
-        inherited = self.documents_inherited(place) if opens else []
+        inherited = self.session_documents.documents_inherited(place) if opens else []
         if not files and not changed and not inherited:
             return None
         text = reconcile_request(
@@ -1523,7 +1537,7 @@ class Reviews(Teams):
         # Work whose acceptance is being carried out no longer waits.
         accepting = {
             intent.node_id
-            for intent in self._runs().open_intents()
+            for intent in self.org_state.run_state().open_intents()
             if intent.kind == "accept"
         }
         waiting = [
@@ -1542,7 +1556,7 @@ class Reviews(Teams):
         earlier that it is its turn, once that work is decided on. Safe
         from any thread."""
         store = self.org
-        run = self._runs()
+        run = self.org_state.run_state()
         for place_id in run.marked(TURN):
             place = store.place(place_id)
             above = store.place(place.parent_id or "") if place else None
@@ -1553,7 +1567,7 @@ class Reviews(Teams):
             if self._before(place) is not None:
                 continue
             run.unmark(TURN, place_id)
-            self.notify(
+            self.message_delivery.notify(
                 self.team_types.reviewer_conversation(above),
                 f"It is your turn: the work submitted before that of "
                 f"{place.title!r} (id {place.id}) is decided on. Accept it "
@@ -1576,7 +1590,7 @@ class Reviews(Teams):
             return
         if any(
             intent.kind == "accept" and intent.node_id == place_id
-            for intent in self._runs().open_intents()
+            for intent in self.org_state.run_state().open_intents()
         ):
             raise Conflict(f"The work of {place.title!r} is being accepted already.")
         first = self._before(place)
@@ -1584,7 +1598,7 @@ class Reviews(Teams):
             theirs = first.parent_id != place.parent_id
             if theirs:
                 # Its reviewer is told when the other reviewer has decided.
-                self._runs().mark(TURN, place.id)
+                self.org_state.run_state().mark(TURN, place.id)
             raise Conflict(
                 accept_in_order(
                     place,
@@ -1664,7 +1678,7 @@ class Reviews(Teams):
             self._show_reviewer_items(place, meets)
         if meets is None:
             return None
-        run = self._runs()
+        run = self.org_state.run_state()
         shown = run.marked(SHOWN).get(place.id)
         if reconciled and shown == meets.mark:
             return None
@@ -1710,7 +1724,7 @@ class Reviews(Teams):
         place = self.org.place(place_id)
         if place is None or any(e.id == MERGE_WAITS for e in place.escalations):
             return
-        self._runs().mark(
+        self.org_state.run_state().mark(
             CLEARING,
             place_id,
             json.dumps({"reconciled": reconciled, "choices": choices}),
@@ -1778,7 +1792,7 @@ class Reviews(Teams):
             await asyncio.to_thread(
                 self.review_instructions, self.team_types.type_of(place)
             )
-            self._runs().mark(HELD, place_id)
+            self.org_state.run_state().mark(HELD, place_id)
             self._release_reviews(place.parent_id)
 
     async def _accept(
@@ -1813,8 +1827,8 @@ class Reviews(Teams):
         if first is not None:
             # The acceptance of work submitted earlier was carried out
             # since this one was checked, and left that work waiting.
-            self._runs().mark(TURN, place.id)
-            self.notify(
+            self.org_state.run_state().mark(TURN, place.id)
+            self.message_delivery.notify(
                 reviewer,
                 accept_in_order(place, first, store.session_title(first), names=names),
             )
@@ -1831,12 +1845,12 @@ class Reviews(Teams):
         refusal = self._not_reconciled(place, meets, reconciled)
         if refusal is not None:
             # Something came into the checkout between the review and now.
-            self.notify(reviewer, refusal)
+            self.message_delivery.notify(reviewer, refusal)
             return
         astray = await asyncio.to_thread(self.work_astray, place)
         if astray is not None:
             # Accepted, part of the work would not be in what is merged.
-            self.notify(
+            self.message_delivery.notify(
                 reviewer,
                 f"The work of {place.title!r} is not accepted yet. {astray} "
                 "Send it back with `review_team` and that as what to change.",
@@ -1856,7 +1870,7 @@ class Reviews(Teams):
                     reconciled,
                     choices or [],
                 )
-                self.notify(
+                self.message_delivery.notify(
                     reviewer,
                     f"The work of {place.title!r} is accepted and waits for "
                     "the human, whose checkout is on another branch than the "
@@ -1877,7 +1891,7 @@ class Reviews(Teams):
                     self._merged_as(place),
                 )
             except (GitError, OSError) as error:
-                self.notify(
+                self.message_delivery.notify(
                     reviewer,
                     f"The work of {place.title!r} could not be merged into your "
                     f"checkout, and still waits for your review: {error}",
@@ -1890,7 +1904,7 @@ class Reviews(Teams):
                 if isinstance(finished, str):
                     if opens:
                         self._show_reviewer_items(place, meets)
-                    self.notify(reviewer, finished)
+                    self.message_delivery.notify(reviewer, finished)
                     return
                 result = finished
                 resolved = result.files if result.outcome == "merged" else ()
@@ -1907,7 +1921,7 @@ class Reviews(Teams):
                     reconciled,
                     choices or [],
                 )
-                self.notify(
+                self.message_delivery.notify(
                     reviewer,
                     f"The work of {place.title!r} is accepted and waits for "
                     "the human, whose uncommitted changes are in the way of "
@@ -1915,7 +1929,7 @@ class Reviews(Teams):
                 )
                 return
             if result.outcome == "refused":
-                self.notify(
+                self.message_delivery.notify(
                     reviewer,
                     f"git would not merge the work of {place.title!r} into your "
                     f"checkout as it is:\n{result.detail}\n"
@@ -1938,7 +1952,7 @@ class Reviews(Teams):
                     place_id,
                     [ReviewFinding(path=", ".join(result.files), issue=issue)],
                 )
-                self.notify(
+                self.message_delivery.notify(
                     reviewer,
                     f"The work of {place.title!r} was not taken into your "
                     f"checkout: {issue} ({', '.join(result.files)}) "
@@ -1947,7 +1961,7 @@ class Reviews(Teams):
                 return
             merged = result.outcome == "merged"
             if resolved:
-                self.notify(
+                self.message_delivery.notify(
                     self.team_types.writer_conversation(place),
                     f"Your team's work did not merge by itself. The {names.reviewer} "
                     "that "
@@ -1960,16 +1974,16 @@ class Reviews(Teams):
             place.review.model_copy(update={"state": "accepted", "at": utc_now()}),
             base_commit=tip or place.base_commit,
         )
-        self.progressed(above.id)
-        self._work_accepted(place)
+        self.team_messaging.progressed(above.id)
+        self.check_counts.work_accepted(place)
         if meets is not None or resolved:
-            self.record_event(
+            self.team_history.record_event(
                 above.id,
                 "reconciled",
                 place,
                 (reconciled or f"merged {', '.join(resolved)}")[:ASKED_KEPT],
             )
-        self.record_event(
+        self.team_history.record_event(
             above.id,
             "accepted",
             place,
@@ -1985,24 +1999,24 @@ class Reviews(Teams):
                 self._land_accepted, place, meets.seen if meets else None
             )
             self._changed_since_accept.pop(place.session, None)
-        self._runs().unmark(SHOWN, place_id)
-        self._runs().unmark(CLEARING, place_id)
+        self.org_state.run_state().unmark(SHOWN, place_id)
+        self.org_state.run_state().unmark(CLEARING, place_id)
         self._tell_turns()
         if not is_division_lead(above):
-            self.count_accepted_review(above.id)
-        self.notify(
+            self.team_messaging.count_accepted_review(above.id)
+        self.message_delivery.notify(
             self.team_types.writer_conversation(place),
             f"The {names.reviewer} of {above.title!r} accepted your team's work"
             + (" and it is merged into that team's checkout." if merged else "."),
         )
         if merged:
-            self.notify(
+            self.message_delivery.notify(
                 reviewer, f"The work of {place.title!r} is merged into your checkout."
             )
         await self._pass_up(above.id, acted=True)
         further = store.place(above.parent_id) if above.parent_id else None
         if needed_above and further is not None:
-            self.notify(
+            self.message_delivery.notify(
                 self.team_types.writer_conversation(further),
                 f"Team {above.title!r} (id {above.id}) below you accepted the "
                 f"work of its sub-team {place.title!r} in {where} and says a team "
@@ -2044,7 +2058,7 @@ class Reviews(Teams):
                     f"checkout ({', '.join(found.files)}), and the merge could "
                     f"not be laid out for you: {error}"
                 )
-            self._runs().mark(MERGING, place.id, merge.model_dump_json())
+            self.org_state.run_state().mark(MERGING, place.id, merge.model_dump_json())
             return merge_prepared(place, merge.where, merge.files)
         try:
             commit = finish(
@@ -2110,7 +2124,7 @@ class Reviews(Teams):
         started_on = session.branch if session else ""
         if not is_division_lead(above) or not started_on:
             return None
-        on = _branch_of(above.worktree_path)
+        on = head_name_of(above.worktree_path)
         return None if on == started_on else (started_on, on)
 
     async def _pass_up(self, place_id: str, *, acted: bool) -> None:
@@ -2174,7 +2188,7 @@ class Reviews(Teams):
                 meets = True
         if own or above is None or meets:
             if not acted:
-                self.notify(
+                self.message_delivery.notify(
                     ic,
                     "The work of all your sub-teams is accepted and in your "
                     "checkout. "
@@ -2201,7 +2215,7 @@ class Reviews(Teams):
             except (GitError, OSError) as error:
                 problem = str(error)
             if problem is not None:
-                self.notify(
+                self.message_delivery.notify(
                     ic,
                     "The work of all your sub-teams is accepted, but your "
                     "team's checkout does not merge into the checkout of "
@@ -2226,7 +2240,7 @@ class Reviews(Teams):
             ),
             base_commit=tip or place.base_commit,
         )
-        self._work_accepted(place)
+        self.check_counts.work_accepted(place)
         if opens:
             await asyncio.to_thread(
                 self._land_accepted, store.place(place_id) or place, None
@@ -2235,7 +2249,7 @@ class Reviews(Teams):
             self._changed_since_accept.pop(place.session, None)
         self._tell_turns()
         if acted:
-            self.notify(
+            self.message_delivery.notify(
                 ic,
                 f"Your team changed nothing itself, so its work went up to "
                 f"{above.title!r} without another review.",
@@ -2256,7 +2270,7 @@ class Reviews(Teams):
         except (GitError, OSError):
             logger.exception("Could not put aside what is in %s", path)
             return
-        self.notify(
+        self.message_delivery.notify(
             self.team_types.writer_conversation(above),
             put_aside_notice(team, files, ref),
         )

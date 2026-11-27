@@ -11,7 +11,7 @@ from openhands.agent_server.director.service import DirectorService
 from openhands.agent_server.director.service.stall_watch_service import (
     STALL_WAITS,
 )
-from openhands.agent_server.director.service.state import failure_waits
+from openhands.agent_server.director.service.team_messaging_service import failure_waits
 from openhands.agent_server.director.tools import MsgTeamTool, PruneTeamTool
 from openhands.agent_server.director.tools.definition import MsgTeamAction
 from openhands.sdk.conversation.state import ConversationExecutionStatus
@@ -195,7 +195,7 @@ async def test_an_agent_that_cannot_be_started_is_lost_with_the_reason(
     service: DirectorService, launcher: FakeLauncher
 ):
     launcher.derive_error = RuntimeError("npx is not installed")
-    service.tell_manager(node(service, API).id, "Look in on your team.")
+    service.team_messaging.tell_manager(node(service, API).id, "Look in on your team.")
     await service.settled()
 
     [agent] = [a for a in node(service, API).agents if a.role == "manager"]
@@ -212,7 +212,7 @@ async def test_a_step_of_the_director_that_fails_is_kept_in_the_record(
         raise RuntimeError("the disk is full")
 
     monkeypatch.setitem(service.resumable_work.steps, "launch_member", breaks)
-    service.tell_manager(node(service, API).id, "Look in on your team.")
+    service.team_messaging.tell_manager(node(service, API).id, "Look in on your team.")
     await service.settled()
 
     [event] = [e for e in record_of(service, "root") if e.kind == "failed"]
@@ -269,7 +269,7 @@ async def test_a_team_whose_removal_failed_is_still_told_things(
     launcher.before = lambda _: None
     told = len(launcher.messages_to(api_ic))
 
-    service.notify(api_ic, "Go on with the orders endpoint.")
+    service.message_delivery.notify(api_ic, "Go on with the orders endpoint.")
     await service.settled()
 
     assert launcher.messages_to(api_ic)[told:] == [
@@ -291,8 +291,8 @@ async def test_a_message_that_could_not_be_sent_is_sent_again_before_the_next(
     launcher.before = fail_once
     told = len(launcher.messages_to(top_ic))
 
-    service.notify(top_ic, "first")
-    service.notify(top_ic, "second")
+    service.message_delivery.notify(top_ic, "first")
+    service.message_delivery.notify(top_ic, "second")
     await service.settled()
 
     sent = [text.splitlines()[0] for text in launcher.messages_to(top_ic)[told:]]
@@ -304,11 +304,13 @@ async def test_no_agent_is_started_in_a_team_that_is_being_removed(
 ):
     api = node(service, API)
     # A step that removes the team waits for its agents to stop.
-    service._settling[0] = ({api.id}, api.id)
+    service.message_delivery._settling[0] = ({api.id}, api.id)
     starts = len(launcher.derived)
 
     with pytest.raises(Conflict, match="being replaced or removed"):
-        await service._start_new(api, "ic", str(uuid4()), ic(service), "Build it.")
+        await service.agent_start._start_new(
+            api, "ic", str(uuid4()), ic(service), "Build it."
+        )
 
     assert len(launcher.derived) == starts
 
@@ -326,7 +328,7 @@ async def test_an_answer_about_a_lost_ic_waits_until_the_team_has_started_again(
         if len(heard) == 1:
             raise Conflict("No conversation of the org runs on this server")
 
-    monkeypatch.setattr(service, "start_again", start_again)
+    monkeypatch.setattr(service.org_run, "start_again", start_again)
 
     service.answer_escalation(top, failure_waits("ic"), "The key is set.")
     await service.settled()

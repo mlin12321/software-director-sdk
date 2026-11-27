@@ -75,7 +75,7 @@ def update_of(message: str) -> dict[str, Any] | None:
 async def tell(service: DirectorService, launcher: FakeLauncher, to: str) -> str:
     """Send the IC of a team a message from the human; what it got."""
     team = "apps.web" if to else "root"
-    service.tell_writer(node(service, team).id, "Go on.", human=True)
+    service.team_messaging.tell_writer(node(service, team).id, "Go on.", human=True)
     await service.settled()
     return launcher.messages_to(ic(service, team))[-1]
 
@@ -352,7 +352,7 @@ async def test_what_an_agent_was_told_outlasts_the_server(
     await first.aclose()
 
     second = await again(repo, launcher)
-    await second.resume()
+    await second.org_run.resume()
 
     assert await tell(second, launcher, "") == "Go on."
     await second.aclose()
@@ -364,7 +364,7 @@ async def test_an_agent_never_told_its_context_gets_all_of_it_once(
     service = await started(repo, launcher)
     root = ic(service)
     assert root is not None
-    service._runs().unmark(TOLD, root)
+    service.org_state.run_state().unmark(TOLD, root)
 
     first = await tell(service, launcher, "")
     second = await tell(service, launcher, "")
@@ -381,7 +381,7 @@ async def test_what_the_agents_of_a_removed_team_were_told_is_forgotten(
     service = await started(repo, launcher)
     await split_root(service)
     gone = {ic(service, "services.api"), await woken(service, "services.api")}
-    assert gone <= set(service._runs().marked(TOLD))
+    assert gone <= set(service.org_state.run_state().marked(TOLD))
 
     await use(
         service,
@@ -390,8 +390,8 @@ async def test_what_the_agents_of_a_removed_team_were_told_is_forgotten(
         PruneTeamAction(team="services.api", reason="No way forward."),
     )
 
-    assert not gone & set(service._runs().marked(TOLD))
-    assert ic(service, "apps.web") in service._runs().marked(TOLD)
+    assert not gone & set(service.org_state.run_state().marked(TOLD))
+    assert ic(service, "apps.web") in service.org_state.run_state().marked(TOLD)
     await service.aclose()
 
 
