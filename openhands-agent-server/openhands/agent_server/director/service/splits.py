@@ -208,7 +208,7 @@ class Splits(Watch):
             teams = [
                 team.model_copy(
                     update={
-                        "old_specs": await asyncio.to_thread(
+                        "left_documents": await asyncio.to_thread(
                             self._specs_left_in,
                             place,
                             team.boundary.path,
@@ -462,11 +462,11 @@ class Splits(Watch):
                 left = await asyncio.to_thread(
                     self._specs_left_in, above, pruned.boundary.path, [pruned]
                 )
-                known = {old.path for old in above.old_specs}
+                known = {old.path for old in above.left_documents}
                 store.update_place(
                     above.id,
-                    old_specs=[
-                        *above.old_specs,
+                    left_documents=[
+                        *above.left_documents,
                         *(old for old in left if old.path not in known),
                     ],
                 )

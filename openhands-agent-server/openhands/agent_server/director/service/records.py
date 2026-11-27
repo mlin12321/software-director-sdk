@@ -43,7 +43,7 @@ from openhands.agent_server.director.models import (
     FormerThread,
     HistoryEvent,
     InheritedSpec,
-    OldSpec,
+    LeftDocument,
     OrgHistory,
     OrgNode,
     Report,
@@ -147,7 +147,7 @@ _CHANGES_THE_ORG: frozenset[TeamEventKind] = frozenset(
 )
 
 
-# The document a team's ``old_specs`` are what was left of, until what is
+# The document a team's ``left_documents`` are what was left of, until what is
 # left behind carries the name of its document.
 LEFT_BEHIND = "spec"
 # The one log the director keeps: what a team's members recorded.
@@ -1045,7 +1045,7 @@ class Records(ServiceState):
         kind of document, the ones of the teams its protocol names, where
         the org allows it."""
         reader = team_ref(node)
-        left = {normalize_store_path(old.path) for old in node.old_specs}
+        left = {normalize_store_path(old.path) for old in node.left_documents}
         found: dict[DocumentRef, ShownDocument] = {}
         for protocol in self._protocols_for(node):
             name = protocol.document.name
@@ -1077,7 +1077,7 @@ class Records(ServiceState):
         specs = (
             [] if text is None else [InheritedSpec(path=own, spec=text, readonly=False)]
         )
-        left = {old.path: old for old in node.old_specs}
+        left = {old.path: old for old in node.left_documents}
         found = [
             spec.model_copy(
                 update={"old": spec.path in left, "left_by": left[spec.path].team}
@@ -1086,7 +1086,7 @@ class Records(ServiceState):
             else spec
             for spec in specs
         ]
-        for old in node.old_specs:
+        for old in node.left_documents:
             if old.path == own:
                 continue
             text = self.read_file(node, _spec_file(old.path))
@@ -1398,13 +1398,15 @@ class Records(ServiceState):
                     and not (
                         files.get(rewritten, (None,))[0] and rewritten not in conflicts
                     )
-                    and all(old.path != directory for old in home.old_specs)
+                    and all(old.path != directory for old in home.left_documents)
                 ):
                     store.update_team(
                         home.id,
-                        old_specs=[
-                            *home.old_specs,
-                            OldSpec(path=directory, team=lost.title),
+                        left_documents=[
+                            *home.left_documents,
+                            LeftDocument(
+                                name=LEFT_BEHIND, path=directory, team=lost.title
+                            ),
                         ],
                     )
                 continue
@@ -1414,7 +1416,9 @@ class Records(ServiceState):
                 and file.endswith(SPEC_FILE)
                 and files[file][0] is not None
             ):
-                store.update_team(owner.team_id, purpose=owner.purpose, old_specs=[])
+                store.update_team(
+                    owner.team_id, purpose=owner.purpose, left_documents=[]
+                )
         for place in left.values():
             for file in self.drafts(session):
                 # What waits for the org's part of the landing stays a draft.
@@ -1474,7 +1478,7 @@ class Records(ServiceState):
 
     def _specs_left_in(
         self, place: SessionTeam, path: str, removed: list[SessionTeam]
-    ) -> list[OldSpec]:
+    ) -> list[LeftDocument]:
         """The specs a team that is given ``path`` in the session of
         ``node`` finds there: the one of the directory itself and those of
         the ``removed`` teams whose directories hold it or lie in it. None
@@ -1491,7 +1495,7 @@ class Records(ServiceState):
 
         for team in removed:
             # What a removed team was left and never rewrote is passed on.
-            for old in team.old_specs:
+            for old in team.left_documents:
                 if concerns(old.path):
                     left.setdefault(old.path, old.team)
             theirs = normalize_store_path(team.boundary.path)
@@ -1501,7 +1505,7 @@ class Records(ServiceState):
         # left: a team pruned long ago, or one written by hand.
         left.setdefault(own, None)
         return [
-            OldSpec(path=directory, team=team)
+            LeftDocument(name=LEFT_BEHIND, path=directory, team=team)
             for directory, team in left.items()
             if self.read_file(place, _spec_file(directory))
         ]

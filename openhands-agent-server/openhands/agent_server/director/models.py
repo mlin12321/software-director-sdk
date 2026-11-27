@@ -226,10 +226,11 @@ class SplitProposal(BaseModel):
     proposed_at: str = Field(description="ISO 8601 timestamp.")
 
 
-class OldSpec(BaseModel):
-    """A spec a team before left in a directory a team now owns."""
+class LeftDocument(BaseModel):
+    """A document a team before left in a directory a team now owns."""
 
-    path: str = Field(description="The directory of the spec; '' at the root.")
+    name: str = Field(description="The name of the document.")
+    path: str = Field(description="The directory it is in; '' at the root.")
     team: str | None = Field(
         default=None, description="The title of the team that left it, when known."
     )
@@ -333,11 +334,11 @@ class OrgNodeInput(BaseModel):
             "on from whichever of its documents says so."
         ),
     )
-    old_specs: list[OldSpec] = Field(
+    left_documents: list[LeftDocument] = Field(
         default_factory=list,
         description=(
-            "Specs that teams before this one left in its directory. They "
-            "are old until the team's IC writes its own spec."
+            "Documents that teams before this one left in its directory. "
+            "One is old until the team writes its own of that name."
         ),
     )
     agent_profile: str | None = Field(
@@ -367,11 +368,21 @@ class OrgNodeInput(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def _purpose_of_a_team_saved_earlier(cls, data: Any) -> Any:
-        """Read a team saved when its purpose was called ``spec_summary``.
-        For orgs saved before the rename; to be removed once none is left."""
+        """Read a team saved when its purpose was called ``spec_summary``
+        and the documents left in its directory ``old_specs``. For orgs
+        saved before the renames; to be removed once none is left."""
         if isinstance(data, dict) and "spec_summary" in data:
             data = dict(data)
             data.setdefault("purpose", data.pop("spec_summary"))
+        if isinstance(data, dict) and "old_specs" in data:
+            data = dict(data)
+            data.setdefault(
+                "left_documents",
+                [
+                    {"name": "spec", **(old if isinstance(old, dict) else dict(old))}
+                    for old in data.pop("old_specs")
+                ],
+            )
         return data
 
 

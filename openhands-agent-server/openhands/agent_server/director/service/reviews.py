@@ -533,7 +533,7 @@ class Reviews(Requests):
                     agent_type=place.agent_type,
                     headline=place.headline,
                     purpose=place.purpose,
-                    old_specs=place.old_specs,
+                    left_documents=place.left_documents,
                     since=place.since,
                 )
             )
@@ -550,7 +550,7 @@ class Reviews(Requests):
                 agent_profile=place.agent_profile,
                 agent_type=place.agent_type,
                 purpose=place.purpose,
-                old_specs=place.old_specs,
+                left_documents=place.left_documents,
                 since=place.since,
             )
         if moved:

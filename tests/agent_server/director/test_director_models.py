@@ -17,7 +17,14 @@ def test_a_team_saved_with_a_spec_summary_is_read_with_that_as_its_purpose():
         "spec_summary": "Take payments.",
     }
 
-    assert OrgNodeInput.model_validate(saved).purpose == "Take payments."
+    team = OrgNodeInput.model_validate(
+        {**saved, "old_specs": [{"path": "services/api", "team": "API"}]}
+    )
+
+    assert team.purpose == "Take payments."
+    assert [(left.name, left.path, left.team) for left in team.left_documents] == [
+        ("spec", "services/api", "API")
+    ]
 
 
 def test_an_item_kept_with_a_documents_name_as_its_kind_names_the_document():

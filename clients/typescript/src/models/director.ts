@@ -218,10 +218,10 @@ export interface DirectorOrgNode {
    */
   purpose: string;
   /**
-   * Specs that teams before this one left in its directory. They are old
-   * until the team's IC writes its own spec.
+   * Documents that teams before this one left in its directory. One is old
+   * until the team writes its own of that name.
    */
-  old_specs: DirectorOldSpec[];
+  left_documents: DirectorLeftDocument[];
   /**
    * The agent profile the team's agents were started from; `null` when
    * they were derived from the team above.
@@ -747,9 +747,11 @@ export interface DirectorTeamDocument {
   left_by?: string | null;
 }
 
-/** A spec a team before left in a directory a team now owns. */
-export interface DirectorOldSpec {
-  /** The directory of the spec; '' at the root. */
+/** A document a team before left in a directory a team now owns. */
+export interface DirectorLeftDocument {
+  /** The name of the document. */
+  name: string;
+  /** The directory it is in; '' at the root. */
   path: string;
   /** The title of the team that left it, when known. */
   team: string | null;
