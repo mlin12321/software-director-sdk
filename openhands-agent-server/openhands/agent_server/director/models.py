@@ -1402,20 +1402,23 @@ class DocumentChoice(BaseModel):
         description="The name of the document, as what waits is listed to you."
     )
     folder: str = Field(description="The directory whose document it is.")
-    take: Literal["org", "session", "text"] = Field(
+    use: Literal["org", "session", "replacement"] = Field(
         description=(
-            "'org': the org's stays. 'session': the session's holds. 'text': "
-            "what is written in `text` holds."
+            "'org': the org's stays. 'session': the session's holds. "
+            "'replacement': what is written in `replacement` holds."
         )
     )
-    text: str = Field(default="", description="What holds, for 'text'.")
+    replacement: str = Field(
+        default="",
+        description="Only with 'replacement': the whole document that holds.",
+    )
 
 
 class TeamChoice(BaseModel):
     """What a Manager decides about a team that waits for it."""
 
     team: str = Field(description="The id of the waiting team.")
-    take: Literal["org", "session"] = Field(
+    use: Literal["org", "session"] = Field(
         description=(
             "'org': it stays as the org has it. 'session': it becomes what "
             "the session made of it."
@@ -1442,7 +1445,7 @@ MergeKind = Literal["code", "document", "team"]
 # Who settles it: the IC that reviews the session's work, before its code
 # is merged, or the Manager of its Division Lead place.
 Gate = Literal["ic", "manager"]
-Take = Literal["org", "session", "text"]
+Use = Literal["org", "session", "replacement"]
 
 
 class MergeItem(BaseModel):
@@ -1472,14 +1475,16 @@ class MergeItem(BaseModel):
         default="", description="What the session has: a text, or a team in words."
     )
     org: str = Field(default="", description="What the org has there now.")
-    take: Take | None = Field(
+    use: Use | None = Field(
         default=None,
         description=(
             "What was decided: the org's stays, the session's holds, or "
-            "`text` does. None while nobody has decided."
+            "`replacement` does. None while nobody has decided."
         ),
     )
-    text: str = Field(default="", description="What holds when `take` is 'text'.")
+    replacement: str = Field(
+        default="", description="What holds when `use` is 'replacement'."
+    )
     moved_to: str | None = Field(
         default=None,
         description=(

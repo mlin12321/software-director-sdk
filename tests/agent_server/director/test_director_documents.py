@@ -11,9 +11,7 @@ from openhands.agent_server.director.documents.declared import (
     read_document,
 )
 from openhands.agent_server.director.documents.events import (
-    RemovedTeamHandedOver,
-    SubTeamsCreated,
-    SubTeamWorkAccepted,
+    SubTeamsProposed,
     TeamRef,
     TeamRemoved,
 )
@@ -42,6 +40,7 @@ from openhands.agent_server.director.prompts import org_protocol
 from openhands.agent_server.director.run_state import RunState
 from openhands.agent_server.director.service import DirectorService
 from openhands.agent_server.director.service.state import DIRECTOR_TOOL_NAMES
+from openhands.sdk.errors import Invalid
 from tests.agent_server.director.conftest import DEFAULT_TYPE, SHIPPED
 
 
@@ -219,7 +218,7 @@ def test_a_document_without_a_protocol_is_a_plain_text(
     protocol = protocol_of(read_document(tmp_path / "notes.yaml"), store, TREE)
 
     assert type(protocol) is DocumentProtocolBase
-    assert not protocol.waits_for_team_changes()
+    assert not protocol.waits_for_team_changes
 
 
 def test_a_document_does_what_the_protocol_it_names_does(
@@ -235,7 +234,7 @@ def test_a_document_does_what_the_protocol_it_names_does(
     protocol = protocol_of(read_document(tmp_path / "glossary.yaml"), store, TREE)
 
     assert isinstance(protocol, ContractsProtocol)
-    assert protocol.waits_for_team_changes()
+    assert protocol.waits_for_team_changes
     with pytest.raises(UnknownProtocol, match="nobodys"):
         protocol_of(read_document(tmp_path / "plan.yaml"), store, TREE)
 
@@ -245,9 +244,9 @@ def test_the_director_asks_a_files_document_what_it_does(repo: Path):
 
     assert set(service.protocols) == {"spec", "contracts", "report"}
     contracts = service.protocol_at("services/api/contracts.md")
-    assert contracts is not None and contracts.waits_for_team_changes()
+    assert contracts is not None and contracts.waits_for_team_changes
     spec = service.protocol_at("spec.md")
-    assert spec is not None and not spec.waits_for_team_changes()
+    assert spec is not None and not spec.waits_for_team_changes
     assert service.protocol_at("services/api/README.md") is None
 
 
@@ -263,21 +262,18 @@ def contracts(store: GitDocumentStore) -> ContractsProtocol:
     return protocol
 
 
-def test_the_steps_of_a_teams_work_write_nothing_into_its_contracts(
+def test_contracts_must_be_written_before_sub_teams_are_proposed(
     contracts: ContractsProtocol, store: GitDocumentStore
 ):
-    # Contracts are written with their own tool alone: no step of the
-    # team's work puts a text into them.
+    with pytest.raises(Invalid, match="write_contracts"):
+        contracts.before_sub_teams_are_proposed(SubTeamsProposed(TEAM))
+
     store.write("one", CONTRACTS, "Cart owns the cart page.\n")
 
-    contracts.when_sub_teams_are_created(SubTeamsCreated(TEAM))
-    contracts.when_sub_team_work_is_accepted(SubTeamWorkAccepted(TEAM))
-    contracts.when_removed_team_is_handed_over(
-        RemovedTeamHandedOver(TEAM, "Only the cart is left.", writer="ic")
-    )
-
-    assert store.read("one", CONTRACTS) == "Cart owns the cart page.\n"
-    assert store.read("two", CONTRACTS) is None
+    contracts.before_sub_teams_are_proposed(SubTeamsProposed(TEAM))
+    # A plain document refuses nothing.
+    plain = DocumentProtocolBase(contracts.document, store, TREE)
+    plain.before_sub_teams_are_proposed(SubTeamsProposed(TEAM))
 
 
 def test_a_removed_teams_contracts_go_into_its_record_and_out_of_its_folder(

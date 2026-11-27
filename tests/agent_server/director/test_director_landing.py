@@ -516,14 +516,14 @@ async def test_a_team_both_made_something_else_of_waits_for_the_manager_above(
         service,
         asked,
         SettleTeamsTool,
-        SettleTeamsAction(teams=[TeamChoice(team="apps.web", take="org")]),
+        SettleTeamsAction(teams=[TeamChoice(team="apps.web", use="org")]),
     )
     settled = await use(
         service,
         asked,
         SettleTeamsTool,
         SettleTeamsAction(
-            teams=[TeamChoice(team=JOBS, take="org")] if org_holds else [],
+            teams=[TeamChoice(team=JOBS, use="org")] if org_holds else [],
             note="One queue.",
         ),
     )
@@ -627,15 +627,15 @@ async def test_contracts_and_reports_a_session_writes_are_the_orgs_on_accept(
 
 
 @pytest.mark.parametrize(
-    ("take", "holds"),
+    ("which", "holds"),
     [
         ("org", "Orders and carts go through Jobs.\n"),
         ("session", "Refunds go through Jobs.\n"),
-        ("text", "Orders, carts and refunds go through Jobs.\n"),
+        ("replacement", "Orders, carts and refunds go through Jobs.\n"),
     ],
 )
 async def test_contracts_both_changed_wait_for_the_manager_above(
-    service: DirectorService, launcher: FakeLauncher, take: str, holds: str
+    service: DirectorService, launcher: FakeLauncher, which: str, holds: str
 ):
     top, conversation = await at_api(service)
     session_contracts(service, api_place(service, top), "Refunds go through Jobs.")
@@ -682,8 +682,8 @@ async def test_contracts_both_changed_wait_for_the_manager_above(
         {
             "document": "contracts",
             "folder": "services/api",
-            "take": take,
-            "text": "Orders, carts and refunds go through Jobs.",
+            "use": which,
+            "replacement": "Orders, carts and refunds go through Jobs.",
         }
     )
     unknown = await use(
@@ -692,7 +692,7 @@ async def test_contracts_both_changed_wait_for_the_manager_above(
         SettleTeamsTool,
         SettleTeamsAction(
             merge_choices=[
-                DocumentChoice(document="contracts", folder="apps/web", take="org")
+                DocumentChoice(document="contracts", folder="apps/web", use="org")
             ]
         ),
     )
@@ -727,7 +727,7 @@ async def test_contracts_both_changed_wait_for_the_manager_above(
         for event in service.org_history(50).events
         if event.kind == "not_taken" and "the contracts it wrote" in event.detail
     ]
-    if take == "session":
+    if which == "session":
         assert "are not the ones you wrote" not in last and not on_record
     else:
         assert "are not the ones you wrote" in last and holds.strip() in last
@@ -1113,7 +1113,7 @@ async def test_work_that_is_sent_back_joins_the_end_and_keeps_what_was_decided(
         service,
         asked,
         SettleTeamsTool,
-        SettleTeamsAction(teams=[TeamChoice(team=JOBS, take="org")]),
+        SettleTeamsAction(teams=[TeamChoice(team=JOBS, use="org")]),
     )
 
     await use(
@@ -1131,7 +1131,7 @@ async def test_work_that_is_sent_back_joins_the_end_and_keeps_what_was_decided(
     again = merge_of(service, top)
     assert again is not None and again.seq > first.seq
     # The Manager decided this already and nothing of it changed.
-    assert [(item.key, item.take) for item in again.items if item.kind == "team"] == [
+    assert [(item.key, item.use) for item in again.items if item.kind == "team"] == [
         (JOBS, "org")
     ]
     assert len(launcher.messages_to(asked)) == heard
@@ -1173,14 +1173,19 @@ async def test_a_reviewer_writes_the_spec_that_holds(service: DirectorService):
     )
     assert shown.is_error and "say in `merge_choices`" in shown.text
 
-    def decided(path: str, take: str, text: str = "", document: str = "spec") -> Any:
+    def decided(path: str, use: str, text: str = "", document: str = "spec") -> Any:
         return ReviewTeamAction(
             team=top,
             decision="accept",
             reconciled="Both.",
             merge_choices=[
                 DocumentChoice.model_validate(
-                    {"document": document, "folder": path, "take": take, "text": text}
+                    {
+                        "document": document,
+                        "folder": path,
+                        "use": use,
+                        "replacement": text,
+                    }
                 )
             ],
         )
@@ -1211,16 +1216,16 @@ async def test_a_reviewer_writes_the_spec_that_holds(service: DirectorService):
         service,
         division_lead_ic(service, top),
         ReviewTeamTool,
-        decided("services/api", "text"),
+        decided("services/api", "replacement"),
     )
     assert elsewhere.is_error and "not a folder of this work" in elsewhere.text
-    assert empty.is_error and "in `text`" in empty.text
+    assert empty.is_error and "in `replacement`" in empty.text
 
     written = await use(
         service,
         division_lead_ic(service, top),
         ReviewTeamTool,
-        decided("services/api", "text", "# Orders and refunds"),
+        decided("services/api", "replacement", "# Orders and refunds"),
     )
     await service.settled()
 
@@ -1247,7 +1252,7 @@ async def test_a_reviewer_keeps_the_orgs_spec(service: DirectorService):
             decision="accept",
             reconciled="Theirs.",
             merge_choices=[
-                DocumentChoice(document="spec", folder="services/api", take="org")
+                DocumentChoice(document="spec", folder="services/api", use="org")
             ],
         ),
     )
@@ -1275,18 +1280,18 @@ async def test_a_manager_puts_a_team_it_takes_where_it_fits_the_org(
     # A team goes only under one that holds its directory, and only a team
     # taken from the session is put or called otherwise.
     outside = await use(
-        service, asked, SettleTeamsTool, placed(take="session", under="apps.web")
+        service, asked, SettleTeamsTool, placed(use="session", under="apps.web")
     )
     beside = await use(
         service,
         asked,
         SettleTeamsTool,
-        placed(take="session", under="services.api.queue"),
+        placed(use="session", under="services.api.queue"),
     )
-    kept = await use(service, asked, SettleTeamsTool, placed(take="org", title="Jobs"))
+    kept = await use(service, asked, SettleTeamsTool, placed(use="org", title="Jobs"))
     # Beside the team that holds its folder, both would own it.
     above = await use(
-        service, asked, SettleTeamsTool, placed(take="session", under="root")
+        service, asked, SettleTeamsTool, placed(use="session", under="root")
     )
     assert outside.is_error and "is not inside" in outside.text
     assert beside.is_error and "is not inside" in beside.text
@@ -1297,7 +1302,7 @@ async def test_a_manager_puts_a_team_it_takes_where_it_fits_the_org(
         service,
         asked,
         SettleTeamsTool,
-        placed(take="session", under="services.api", title="Refund jobs"),
+        placed(use="session", under="services.api", title="Refund jobs"),
     )
     assert not settled.is_error
     # Nothing of it is the org's before the code is accepted.
@@ -1345,8 +1350,8 @@ async def test_a_spec_written_for_a_team_the_org_lost_is_left_to_the_team_that_h
                 DocumentChoice(
                     document="spec",
                     folder="",
-                    take="text",
-                    text="# Checkout, with refunds",
+                    use="replacement",
+                    replacement="# Checkout, with refunds",
                 )
             ]
             if rewritten
@@ -1535,7 +1540,12 @@ async def test_work_that_waited_for_the_human_is_merged_as_its_reviewer_decided(
     await use(service, ic(service), SubmitReviewTool, DONE)
     top = node(service, "root")
     decided = DocumentChoice.model_validate(
-        {"document": "spec", "folder": "", "take": "text", "text": "# Reviewer"}
+        {
+            "document": "spec",
+            "folder": "",
+            "use": "replacement",
+            "replacement": "# Reviewer",
+        }
     )
     await use(
         service,

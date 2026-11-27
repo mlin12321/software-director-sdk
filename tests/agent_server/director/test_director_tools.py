@@ -43,6 +43,7 @@ from openhands.agent_server.director.tools.definition import (
     ResolveEscalationAction,
     SubmitReviewAction,
 )
+from openhands.agent_server.director.tools.remote import call_tool
 from openhands.sdk.conversation.state import (
     ConversationExecutionStatus,
 )
@@ -188,6 +189,27 @@ async def test_proposed_sub_teams_wait_for_the_manager(
         "POST /checkout returns {order_id}" in told
     )
     assert "approve_teams sets them up exactly as written" in told
+
+
+async def test_sub_teams_are_not_proposed_before_their_contracts_are_written(
+    service: DirectorService,
+):
+    conversation = ic(service)
+    assert conversation is not None
+    teams = {"teams": [team.model_dump() for team in SPLIT.teams]}
+
+    refused = call_tool(service, UUID(conversation), "propose_teams", teams)
+
+    # The contracts say so themselves: the tool asks for no document.
+    assert refused.is_error and "no contracts yet" in refused.text
+    assert "`write_contracts`, then propose again" in refused.text
+    assert node(service, "root").pending_split is None
+
+    await write_contracts(service, SPLIT_CONTRACTS)
+    proposed = call_tool(service, UUID(conversation), "propose_teams", teams)
+
+    assert not proposed.is_error
+    assert node(service, "root").pending_split is not None
 
 
 async def test_only_the_ic_proposes_and_only_the_manager_approves(

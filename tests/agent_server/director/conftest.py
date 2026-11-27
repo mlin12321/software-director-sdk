@@ -16,6 +16,7 @@ from openhands.agent_server.conversation_service import (
     ExecutionStatusListener,
     ToolParams,
 )
+from openhands.agent_server.director import agent_actions
 from openhands.agent_server.director.agent_types import (
     DEFAULT_TYPE,
     TeamTemplate,
@@ -742,14 +743,33 @@ async def started_with_server(
     return service
 
 
+def _contracts_before_proposing(service: DirectorService, conversation_id: str) -> None:
+    try:
+        place = agent_actions.caller_of(service, UUID(conversation_id)).node
+    except Exception:  # noqa: BLE001  the call itself is refused for this
+        return
+    if "contracts" not in service.type_of(place).documents:
+        return
+    ref = team_ref(place).keeps("contracts")
+    if not (service.documents.read(place.session, ref) or "").strip():
+        service.documents.write(place.session, ref, "Nothing to keep yet.\n")
+
+
 async def use(
     service: DirectorService,
     conversation_id: str | None,
     tool: type[ToolDefinition[Any, Any]],
     action: Action,
 ) -> DirectorObservation:
-    """Call ``tool`` as the agent of ``conversation_id`` does: off the loop."""
+    """Call ``tool`` as the agent of ``conversation_id`` does: off the loop.
+
+    A team that proposes sub-teams is given contracts first where it has
+    none, as its IC writes them before it proposes; a test of what happens
+    without them calls the tool with ``call_tool``.
+    """
     assert conversation_id is not None
+    if tool.name == "propose_teams":
+        _contracts_before_proposing(service, conversation_id)
     state = cast(ConversationState, SimpleNamespace(id=UUID(conversation_id)))
     executor = tool.create(state)[0].executor
     assert executor is not None

@@ -300,6 +300,7 @@ def propose_teams(
         raise Conflict(
             f"The sub-teams your {names.manager} approved are still being set up"
         )
+    service.before_sub_teams_are_proposed(node)
     proposed = proposed_teams(teams, keep, text, service.default_type())
     proposal = _checked(service, node, proposed)
     store = service.org
@@ -688,7 +689,6 @@ def review_team(
     chosen = service.document_choices(place_id, choices)
     service.check_accept(place_id, reconciled.strip())
     service.accept_review(place_id, needed_above.strip(), reconciled.strip(), chosen)
-    service.sub_team_work_accepted(caller.node)
     return (
         f"Accepting the work of {team.title!r}. You are told if it cannot be "
         "brought into your checkout."

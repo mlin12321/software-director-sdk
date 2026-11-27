@@ -286,7 +286,6 @@ class Splits(Watch):
                 await self._archive(team, "replaced", plan.stamp)
                 self.record_event(place_id, "replaced", team)
                 store.remove(team.id)
-        await asyncio.to_thread(self.sub_teams_created, place)
 
         teams = plan.teams
         for team in teams:

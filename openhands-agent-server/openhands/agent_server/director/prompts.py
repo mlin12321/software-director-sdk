@@ -1017,9 +1017,9 @@ def merge_request(
                 "  the org's now:",
                 *(f"    {line}" for line in (item.org or "(none)").splitlines()),
             ]
-        if item.take is not None:
+        if item.use is not None:
             lines.append(
-                f"  you decided: {item.take}"
+                f"  you decided: {item.use}"
                 + (f", under {item.under}" if item.under else "")
                 + (f", called {item.named!r}" if item.named else "")
             )
@@ -1035,7 +1035,7 @@ def merge_request(
         "it is now."
         + (
             " For each contracts above say in `merge_choices` which holds: "
-            "'org', 'session', or 'text' with the contracts you write from "
+            "'org', 'session', or 'replacement' with the contracts you write from "
             "both. Unnamed, the session's hold."
             if contracts
             else ""

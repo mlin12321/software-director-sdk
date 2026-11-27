@@ -472,12 +472,12 @@ export interface DirectorMergeItem {
   /** What the org has there now. */
   org?: string;
   /**
-   * What was decided: the org's stays, the session's holds, or `text` does.
-   * `null` while nobody has decided.
+   * What was decided: the org's stays, the session's holds, or `replacement`
+   * does. `null` while nobody has decided.
    */
-  take?: 'org' | 'session' | 'text' | null;
-  /** What holds when `take` is `text`. */
-  text?: string;
+  use?: 'org' | 'session' | 'replacement' | null;
+  /** What holds when `use` is `replacement`. */
+  replacement?: string;
   /**
    * The team of the org a team would be put under, when the team the
    * session has above it is not in the org any more.

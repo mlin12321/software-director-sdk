@@ -3,7 +3,11 @@
 from collections.abc import Sequence
 from typing import Any, ClassVar
 
-from openhands.agent_server.director.documents.events import TeamRef, TeamRemoved
+from openhands.agent_server.director.documents.events import (
+    SubTeamsProposed,
+    TeamRef,
+    TeamRemoved,
+)
 from openhands.agent_server.director.documents.protocol import (
     BriefedPart,
     DocumentProtocolBase,
@@ -27,6 +31,7 @@ class ContractsProtocol(DocumentProtocolBase):
     # Contracts that name teams which are gone are restated where what
     # those left is passed on.
     usable_in_hand_over: ClassVar[bool] = True
+    waits_for_team_changes: ClassVar[bool] = True
 
     def write(self, call: DocumentToolCall) -> DocumentToolResult:
         words = call.words
@@ -74,8 +79,17 @@ class ContractsProtocol(DocumentProtocolBase):
             for found in briefed.shown
         ]
 
-    def waits_for_team_changes(self) -> bool:
-        return True
+    def before_sub_teams_are_proposed(self, proposed: SubTeamsProposed) -> None:
+        # Sub-teams cannot see each other's work: what they must keep
+        # between them has to be there before they are.
+        ref = proposed.team.keeps(self.document.name)
+        written = self.store.read(proposed.team.session, ref)
+        if not (written or "").strip():
+            raise Invalid(
+                "Your team has no contracts yet. Write what the sub-teams must "
+                f"keep between them with `{self.document.written_with}`, then "
+                "propose again."
+            )
 
     def when_team_is_removed(self, removed: TeamRemoved) -> str | None:
         # The folder is left without the contracts of a team that is gone.

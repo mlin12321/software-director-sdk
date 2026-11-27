@@ -51,8 +51,8 @@ from openhands.agent_server.director.models import (
     ReviewFinding,
     SessionInput,
     SessionTeam,
-    Take,
     TeamChoice,
+    Use,
 )
 from openhands.agent_server.director.org_store import (
     OrgStoreError,
@@ -404,7 +404,7 @@ class Reviews(Requests):
             protocol = self.protocols.get(document)
             if protocol is None:
                 raise Invalid(f"The org keeps no document named {document!r}")
-            if protocol.waits_for_team_changes():
+            if protocol.waits_for_team_changes:
                 raise Invalid(
                     f"What holds of {document} is not decided with the work: it "
                     "waits with the teams, for the member that settles those."
@@ -416,14 +416,16 @@ class Reviews(Requests):
                     f"({own or 'the repository'}), so its {document} is not yours "
                     "to decide here."
                 )
-            if choice.take == "text" and not choice.text.strip():
-                raise Invalid(f"Write the {document} of {choice.folder!r} in `text`.")
+            if choice.use == "replacement" and not choice.replacement.strip():
+                raise Invalid(
+                    f"Write the {document} of {choice.folder!r} in `replacement`."
+                )
             chosen.append(
                 {
                     "document": document,
                     "path": path,
-                    "take": choice.take,
-                    "text": choice.text,
+                    "use": choice.use,
+                    "replacement": choice.replacement,
                 }
             )
         return chosen
@@ -435,10 +437,10 @@ class Reviews(Requests):
         decided, before they land."""
         for choice in chosen:
             file = DocumentRef(choice["path"], choice["document"]).path
-            if choice["take"] == "org":
+            if choice["use"] == "org":
                 self._undraft(top.session, file)
-            elif choice["take"] == "text":
-                self._draft(top.session, file, choice["text"])
+            elif choice["use"] == "replacement":
+                self._draft(top.session, file, choice["replacement"])
 
     def accept_review(
         self,
@@ -739,12 +741,12 @@ class Reviews(Requests):
                     )
                 )
         items += coming.values()
-        decided = {_same(item): item for item in before if item.take}
+        decided = {_same(item): item for item in before if item.use}
         return take, [
             item.model_copy(
                 update={
-                    "take": known.take,
-                    "text": known.text,
+                    "use": known.use,
+                    "replacement": known.replacement,
                     "under": known.under,
                     "named": known.named,
                 }
@@ -781,7 +783,7 @@ class Reviews(Requests):
                     }
                 )
                 self._keep_merge(top, merge)
-                if any(item.take is None for item in items):
+                if any(item.use is None for item in items):
                     self._ask_manager(top, merge)
                 elif merge.code_landed and all(
                     intent.kind != "land_org" or intent.node_id != top.id
@@ -795,7 +797,7 @@ class Reviews(Requests):
         review = self._review_of(top)
         waiting = [item for item in merge.items if item.gate == "manager"]
         mark = hashlib.sha256(
-            json.dumps([_same(item) for item in waiting if item.take is None]).encode()
+            json.dumps([_same(item) for item in waiting if item.use is None]).encode()
         ).hexdigest()
         if review is None or merge.asked == mark:
             return
@@ -838,7 +840,7 @@ class Reviews(Requests):
             if top is None or merge is None or review is None or not merge.asked_at:
                 return
             waiting = [item for item in merge.items if item.gate == "manager"]
-            if all(item.take for item in waiting):
+            if all(item.use for item in waiting):
                 return
             now = self._clock()
             if now - datetime.fromisoformat(merge.asked_at) < timedelta(minutes=limit):
@@ -978,16 +980,18 @@ class Reviews(Requests):
                     else None
                 )
                 place = placed.get(item.key) if item.kind == "team" else None
-                take: Take = "session"
+                use: Use = "session"
                 if place is not None:
-                    take = place.take
+                    use = place.use
                 elif choice is not None:
-                    take = choice.take
+                    use = choice.use
                 settled.append(
                     item.model_copy(
                         update={
-                            "take": take,
-                            "text": choice.text if choice and take == "text" else "",
+                            "use": use,
+                            "replacement": choice.replacement
+                            if choice and use == "replacement"
+                            else "",
                             "under": place.under if place else None,
                             "named": place.title if place else None,
                         }
@@ -1018,7 +1022,7 @@ class Reviews(Requests):
         store = self.org
         if choice.under is None and choice.title is None:
             return
-        if choice.take == "org":
+        if choice.use == "org":
             raise Invalid(
                 f"Team {choice.team} stays as the org has it, so it cannot be "
                 "put or called otherwise. Take it from the session for that."
@@ -1143,10 +1147,10 @@ class Reviews(Requests):
             places = {place.team_id: place for place in session_places}
             decided = {item.key: item for item in items if item.kind == "team"}
             taken: list[str] = []
-            kept = [team for team, item in decided.items() if item.take != "session"]
+            kept = [team for team, item in decided.items() if item.use != "session"]
             # Those above before those below, and what goes after what moved.
             for team in places:
-                settled = team in decided and decided[team].take == "session"
+                settled = team in decided and decided[team].use == "session"
                 if take.get(team) is not None or settled:
                     item = decided.get(team)
                     done = self._put_team(
@@ -1163,7 +1167,7 @@ class Reviews(Requests):
                 *(
                     team
                     for team, item in decided.items()
-                    if item.take == "session" and team not in places
+                    if item.use == "session" and team not in places
                 ),
             ]:
                 store.remove(team)
@@ -1181,17 +1185,17 @@ class Reviews(Requests):
                 if not item.waits_with_teams:
                     continue
                 file = _contracts_file(item.key)
-                if item.take == "org" or (
+                if item.use == "org" or (
                     item.with_team is not None and item.with_team not in taken
                 ):
                     self._undraft(top.session, file)
                     held.append(item.key or "the repository")
                     others.append((item.key, item.org))
                     continue
-                text = item.text if item.take == "text" else item.session
+                text = item.replacement if item.use == "replacement" else item.session
                 texts[file] = f"{text.strip()}\n" if text.strip() else None
                 agreed.append(item.key or "the repository")
-                if item.take == "text":
+                if item.use == "replacement":
                     others.append((item.key, text))
             self._keep_merge(top, None)
             records = self._land_records(top, seen, chosen=texts, tree=True)
@@ -1214,7 +1218,7 @@ class Reviews(Requests):
             org = None
             if merge is not None and order and order[0].id == top.id:
                 take, items = self._manager_items(top, merge.items)
-                if all(item.take for item in items):
+                if all(item.use for item in items):
                     org = (take, items)
             landed = self._land(top, seen, org)
         self._after_landing(top, landed, merge.note if merge and org else "")
@@ -1303,10 +1307,10 @@ class Reviews(Requests):
             take, items = self._manager_items(top, merge.items)
             if org_holds:
                 items = [
-                    item if item.take else item.model_copy(update={"take": "org"})
+                    item if item.use else item.model_copy(update={"use": "org"})
                     for item in items
                 ]
-            if any(item.take is None for item in items):
+            if any(item.use is None for item in items):
                 return None
             return self._land(top, None, (take, items)), merge.note
 
@@ -1330,7 +1334,7 @@ class Reviews(Requests):
                 (
                     take,
                     [
-                        item if item.take else item.model_copy(update={"take": "org"})
+                        item if item.use else item.model_copy(update={"use": "org"})
                         for item in items
                     ],
                 ),
@@ -1350,13 +1354,13 @@ class Reviews(Requests):
                 return
             self._keep_merge(top, None)
             decided = [
-                item for item in merge.items if item.gate == "manager" and item.take
+                item for item in merge.items if item.gate == "manager" and item.use
             ]
             if decided:
                 # They hold again for whatever is unchanged when it comes back.
                 self._runs().mark(DECIDED, top.id, _ITEMS.dump_json(decided).decode())
             if merge.asked and any(
-                item.gate == "manager" and item.take is None for item in merge.items
+                item.gate == "manager" and item.use is None for item in merge.items
             ):
                 self.tell_manager(
                     review.id,
@@ -1372,7 +1376,7 @@ class Reviews(Requests):
         """Whether what a session wrote in a file of team memory becomes
         the org's only with its changes to the teams: its document says."""
         protocol = self.protocol_at(file)
-        return protocol is not None and protocol.waits_for_team_changes()
+        return protocol is not None and protocol.waits_for_team_changes
 
     def _contracts_written(self, top: SessionTeam) -> list[tuple[str, str]]:
         """The contracts a session wrote that are not the org's: each

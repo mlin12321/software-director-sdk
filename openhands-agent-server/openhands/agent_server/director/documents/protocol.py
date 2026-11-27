@@ -15,9 +15,7 @@ from pydantic import BaseModel, Field, create_model
 
 from openhands.agent_server.director.documents.declared import Document
 from openhands.agent_server.director.documents.events import (
-    RemovedTeamHandedOver,
-    SubTeamsCreated,
-    SubTeamWorkAccepted,
+    SubTeamsProposed,
     TeamRef,
     TeamRemoved,
 )
@@ -167,6 +165,9 @@ class DocumentProtocolBase(ABC):
     """Whether its tool also works in a hand-over conversation."""
     read_by_sub_teams: ClassVar[bool] = False
     """Whether a team also reads the one the team above it keeps."""
+    waits_for_team_changes: ClassVar[bool] = False
+    """Whether what a session wrote of it becomes the org's only once the
+    session's changes to the teams are settled, and not with its code."""
 
     @classmethod
     def arguments_for(cls, document: Document) -> type[BaseModel]:
@@ -286,21 +287,14 @@ class DocumentProtocolBase(ABC):
         above = self.tree.above(reader) if self.read_by_sub_teams else None
         return [reader] if above is None else [above, reader]
 
-    def waits_for_team_changes(self) -> bool:
-        """Whether what a session wrote of this document becomes the
-        org's only once the session's changes to the teams are settled,
-        and not with its code."""
-        return False
+    def before_sub_teams_are_proposed(self, proposed: SubTeamsProposed) -> None:
+        """The team's writer is about to propose sub-teams. The one step a
+        document may refuse; the plain document refuses nothing.
 
-    def when_sub_teams_are_created(self, created: SubTeamsCreated) -> None:
-        """A proposal was approved and the team now has sub-teams."""
-
-    def when_sub_team_work_is_accepted(self, accepted: SubTeamWorkAccepted) -> None:
-        """The team's reviewer accepted what a sub-team submitted."""
-
-    def when_removed_team_is_handed_over(self, handed: RemovedTeamHandedOver) -> None:
-        """The team above passed on to the team what the teams before it
-        left."""
+        Raises:
+            Invalid: The document is not ready for the team to have
+                sub-teams, with what the writer is to do first.
+        """
 
     def when_team_is_removed(
         self,

@@ -50,6 +50,7 @@ from tests.agent_server.director.conftest import (
     node,
     root_conversation,
     run_git,
+    session_contracts,
     shipped,
     shipped_tools,
     tasked,
@@ -477,6 +478,7 @@ async def split_root(service: DirectorService, *children: SplitChild) -> None:
         assert conversation_id is not None
         return agent_actions.caller_of(service, UUID(conversation_id))
 
+    session_contracts(service, node(service, "root"), "Nothing to keep yet.")
     agent_actions.propose_teams(
         service, caller("ic"), as_proposed(list(children)), [], ""
     )

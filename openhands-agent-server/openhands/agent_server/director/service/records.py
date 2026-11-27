@@ -13,9 +13,7 @@ from openhands.agent_server.director.boundary import (
     owns,
 )
 from openhands.agent_server.director.documents.events import (
-    RemovedTeamHandedOver,
-    SubTeamsCreated,
-    SubTeamWorkAccepted,
+    SubTeamsProposed,
     TeamRemoved,
 )
 from openhands.agent_server.director.documents.protocol import (
@@ -1580,28 +1578,24 @@ class Records(ServiceState):
                 found.append((name, text.strip()))
         return found
 
-    def sub_teams_created(self, place: SessionTeam) -> None:
-        """Tell the documents of ``place`` that it now has the sub-teams
-        a proposal named."""
-        _ = self.team_memory  # refuses where the org has no team memory
-        created = SubTeamsCreated(team_ref(place))
-        for protocol in self.protocols_of(place):
-            protocol.when_sub_teams_are_created(created)
+    def before_sub_teams_are_proposed(self, place: SessionTeam) -> None:
+        """Ask the documents of ``place`` whether its writer may propose
+        sub-teams now.
 
-    def sub_team_work_accepted(self, place: SessionTeam) -> None:
-        """Tell the documents of ``place`` that its reviewer accepted the
-        work of a sub-team."""
-        accepted = SubTeamWorkAccepted(team_ref(place))
+        Raises:
+            Invalid: One of them is not ready, with what to do first.
+        """
+        proposed = SubTeamsProposed(team_ref(place))
         for protocol in self.protocols_of(place):
-            protocol.when_sub_team_work_is_accepted(accepted)
+            protocol.before_sub_teams_are_proposed(proposed)
 
     def removed_team_handed_over(
         self, place: SessionTeam, above: SessionTeam, member: str, text: str
     ) -> None:
         """Keep what a member of the team above says to ``place`` of the
         teams that were there before it. The team is told with its next
-        message, or in its briefing; its documents are told too, and none
-        is written by this. Safe from any thread."""
+        message, or in its briefing, and no document is written by this.
+        Safe from any thread."""
         with self._keeping:
             run = self._runs()
             kept = run.marked(HANDED).get(place.id)
@@ -1612,11 +1606,6 @@ class Records(ServiceState):
                 "text": text,
             }
             run.mark(HANDED, place.id, json.dumps([*said, entry]))
-        handed = RemovedTeamHandedOver(
-            team_ref(place), text, writer=self.team(place).writer
-        )
-        for protocol in self.protocols_of(place):
-            protocol.when_removed_team_is_handed_over(handed)
 
     def team_removed(self, place: SessionTeam) -> dict[str, str]:
         """Tell the documents of ``place`` that it is gone.
