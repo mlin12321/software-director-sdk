@@ -134,6 +134,10 @@ from openhands.agent_server.director.sandbox import (
     find_bwrap,
 )
 from openhands.agent_server.director.scope import MergeArea, Scope
+from openhands.agent_server.director.service.model_call_service import (
+    ModelCallService,
+)
+from openhands.agent_server.director.service.stall_watch_service import progress_of
 from openhands.agent_server.director.session_state import (
     kept_sessions,
     restore_sessions,
@@ -289,11 +293,6 @@ ORG_WAITS = "org-waits"
 LIMIT_WAITS = "limit-reached"
 # How much of an error is kept as the reason an agent failed.
 _REASON_KEPT = 600
-# The escalation that tells the human a team shows no progress where no IC
-# works above it.
-STALL_WAITS = "stalled"
-# How many of the director's own model calls run at once.
-MODEL_CALLS_AT_ONCE = 2
 
 
 def failure_waits(role: str) -> str:
@@ -453,7 +452,6 @@ class ServiceState:
         self._repo_dir = repo_dir
         self._worktree_root = worktree_root
         self._find_sandbox = find_sandbox
-        self._summary_timeout = summary_timeout
         self._remembered = remembered
         self._find_review_instructions = find_review_instructions
         # The public skills that were looked for, by name; '' for one that
@@ -461,7 +459,6 @@ class ServiceState:
         self._review_instructions: dict[str, str] = {}
         self._review_instructions_ready: asyncio.Task[None] | None = None
         self._loading_review_instructions = threading.Lock()
-        self._model_call_timeout = model_call_timeout
         self._run: RunState | None = None
         self._run_of: Path | None = None
         self._paused: PauseReason | None = None
@@ -517,7 +514,7 @@ class ServiceState:
         self._counting = threading.Lock()
         self._clock = clock
         self._stall_poll = stall_poll
-        self._stall_watch: asyncio.Task[None] | None = None
+        self._stall_timer: asyncio.Task[None] | None = None
         # Held to read it too: it is written in place.
         self._remember_lock = threading.RLock()
         self._store: OrgStore | None = None
@@ -545,7 +542,12 @@ class ServiceState:
         self._unsettled = 0
         self._quiet = asyncio.Event()
         self._quiet.set()
-        self._model_calls = asyncio.Semaphore(MODEL_CALLS_AT_ONCE)
+        self.model_calls = ModelCallService(
+            launcher=self._require_launcher,
+            sessions=lambda: self._store.sessions() if self._store else [],
+            call_timeout=model_call_timeout,
+            summary_timeout=summary_timeout,
+        )
         # Set when a conversation stopped running, so a start may fit now.
         self._room = asyncio.Event()
         # Held by the start that waits for room, so that starts are served
@@ -1279,7 +1281,7 @@ class ServiceState:
         was paused, or its server was not running, is nobody's."""
         now = self._clock().isoformat()
         for place_id, kept in run.marked(PROGRESS).items():
-            seen = _progress_of(kept)
+            seen = progress_of(kept)
             # A team without a task was told of once, and stays told.
             told = {"told": now} if "told" in seen else {}
             again = {"at": now, "head": seen.get("head"), "checked": now}
@@ -1857,18 +1859,6 @@ def _new_agents(ic_id: UUID, member: str) -> list[AgentRef]:
     Any other joins when something is first sent to it (see
     :meth:`DirectorService.tell`)."""
     return [AgentRef(role=member, conversation_id=str(ic_id), status="idle")]
-
-
-def _progress_of(kept: str | None) -> dict[str, Any]:
-    """What is known of a team's progress: when it last got anywhere
-    (``at``), the last commit in its directory then (``head``), when the IC
-    above was last told that it shows none (``told``), and when that IC last
-    turned to the team or was told of it (``checked``)."""
-    try:
-        seen = json.loads(kept) if kept else {}
-    except ValueError:
-        return {}
-    return seen if isinstance(seen, dict) else {}
 
 
 def _base_of(workspace: str) -> str:

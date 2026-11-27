@@ -428,46 +428,17 @@ class Delivery(Records):
         seq = self._runs().hold(conversation_id, found[0].id if found else "", text)
         await self._deliver(seq, conversation_id, text)
 
-    async def _ask_agent(self, conversation_id: str, question: str) -> str | None:
-        try:
-            return await asyncio.wait_for(
-                self._require_launcher().ask_agent(UUID(conversation_id), question),
-                timeout=self._model_call_timeout,
-            )
-        except (NotFound, TimeoutError):
-            return None
-
-    async def _ask(
-        self, conversation_id: str, system: str, user: str, usage_id: str
-    ) -> str | None:
-        try:
-            return await asyncio.wait_for(
-                self._require_launcher().ask(
-                    UUID(conversation_id), system, user, usage_id=usage_id
-                ),
-                timeout=self._model_call_timeout,
-            )
-        except (NotFound, TimeoutError):
-            return None
-
-    def _asker(self) -> str | None:
-        """The conversation the director's own model calls are made from."""
-        # Nobody works at the top team itself: the IC a session started
-        # with, oldest first.
-        sessions = self._store.sessions() if self._store else []
-        return next((s.conversation_id for s in sessions if s.conversation_id), None)
-
     async def _compact(self, folder: str, role: str) -> None:
         """Have a model rewrite one agent's reports shorter, if they are
         still too long."""
-        asker = self._asker()
+        asker = self.model_calls.asker()
         if asker is None or self._paused is not None:
             return
         team_memory = self._memory()
         reports = await asyncio.to_thread(team_memory.reports, folder, role)
         if not compaction.due(reports, self.settings.report_compaction_chars):
             return
-        answer = await self._ask(
+        answer = await self.model_calls.ask(
             asker, *compaction.prompt(reports), compaction.USAGE_ID
         )
         shorter = compaction.compacted(answer or "", reports, _instant())
@@ -485,10 +456,10 @@ class Delivery(Records):
         """``reports`` as one report: rewritten shorter by a model when
         there are several, and in full when it gives no usable answer."""
         full = "\n\n".join(report.text for report in reports)
-        asker = self._asker()
+        asker = self.model_calls.asker()
         if len(reports) < 2 or asker is None:
             return full
-        answer = await self._ask(
+        answer = await self.model_calls.ask(
             asker, *compaction.prompt(reports), compaction.USAGE_ID
         )
         shorter = compaction.compacted(answer or "", reports, _instant())
@@ -538,14 +509,7 @@ class Delivery(Records):
         if self._paused is not None:
             return
         launcher = self._require_launcher()
-        try:
-            async with self._model_calls:
-                summary = await asyncio.wait_for(
-                    launcher.summarize(UUID(conversation_id), task),
-                    timeout=self._summary_timeout,
-                )
-        except (NotFound, TimeoutError):
-            return
+        summary = await self.model_calls.summarize(conversation_id, task)
         if summary is None or reported():
             return
         changes: dict[str, object] = {"headline": summary.headline}
@@ -571,14 +535,7 @@ class Delivery(Records):
         if place is None or conversation_id is None or self._paused is not None:
             return
         launcher = self._require_launcher()
-        try:
-            async with self._model_calls:
-                summary = await asyncio.wait_for(
-                    launcher.summarize(UUID(conversation_id), request),
-                    timeout=self._summary_timeout,
-                )
-        except (NotFound, TimeoutError):
-            return
+        summary = await self.model_calls.summarize(conversation_id, request)
         place = store.place(place_id)
         if summary is None or place is None:
             return

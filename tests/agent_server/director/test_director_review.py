@@ -823,7 +823,7 @@ async def test_a_team_given_more_work_after_an_accept_owes_it_a_review(
     # API commits what it has so far and does not submit.
     commit(checkout, "services/api/refunds.py", "WIP = True\n")
     api = node(service, "services.api")
-    assert api.review is None and service._may_stall(api)
+    assert api.review is None and service.stall_watch.may_stall(api)
     commit(checkout, "apps/web/refunds.tsx", "export {}\n")
     await use(service, ic(service, "apps.web"), SubmitReviewTool, DONE)
     await use(service, ic(service), ReviewTeamTool, accept("apps.web"))

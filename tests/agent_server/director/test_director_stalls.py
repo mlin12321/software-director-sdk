@@ -89,7 +89,7 @@ async def service(repo: Path, launcher: FakeLauncher, clock: Clock):
 
 async def looked(service: DirectorService) -> None:
     """The director looks for teams that show no progress, as its timer does."""
-    await service._check_stalls()
+    await service.stall_watch.check_stalls()
     await service.settled()
 
 

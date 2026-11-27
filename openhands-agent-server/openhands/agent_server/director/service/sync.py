@@ -63,6 +63,9 @@ from openhands.agent_server.director.run_state import (
     WAITING,
 )
 from openhands.agent_server.director.service.sessions import Sessions
+from openhands.agent_server.director.service.stall_watch_service import (
+    STALL_WAITS,
+)
 from openhands.agent_server.director.service.state import (
     _MERGE_ATTEMPTS,
     _STARTED_WITH,
@@ -70,7 +73,6 @@ from openhands.agent_server.director.service.state import (
     ORG_LANE,
     PAUSE_LANE,
     RESTART_NOTE,
-    STALL_WAITS,
     _agent_title,
     _lane_for,
     _new_agents,

@@ -40,6 +40,9 @@ from openhands.agent_server.director.run_state import (
 )
 from openhands.agent_server.director.runtime import bind_director
 from openhands.agent_server.director.scope import Scope, named_paths, searched_folder
+from openhands.agent_server.director.service.stall_watch_service import (
+    STALL_WAITS,
+)
 from openhands.agent_server.director.service.state import (
     AGENT_PAUSED,
     DIRECTOR_TOOL_NAMES,
@@ -48,7 +51,6 @@ from openhands.agent_server.director.service.state import (
     ORG_WAITS,
     RESTART_NOTE,
     ROOT_ID,
-    STALL_WAITS,
     _instant,
     _summary_of,
     checkout_root,
@@ -122,7 +124,7 @@ class DirectorService(Sync):
             asyncio.to_thread(self._load_review_instructions),
             name="director-review-instructions",
         )
-        self._stall_watch = asyncio.create_task(
+        self._stall_timer = asyncio.create_task(
             self._watch_for_stalls(), name="director-stall-watch"
         )
         if self._store is not None:
@@ -155,9 +157,9 @@ class DirectorService(Sync):
             self._stop_resume()
             self._stop_resume = None
         workers = list(self._workers)
-        if self._stall_watch is not None:
-            workers.append(self._stall_watch)
-            self._stall_watch = None
+        if self._stall_timer is not None:
+            workers.append(self._stall_timer)
+            self._stall_timer = None
         if self._review_instructions_ready is not None:
             workers.append(self._review_instructions_ready)
             self._review_instructions_ready = None
@@ -288,7 +290,9 @@ class DirectorService(Sync):
         chosen_by: ChosenBy = "path"
         reason = ""
         if self.settings.route_requests and len(places) > 1:
-            choice = await self.choose_team(text, top, within=session_id)
+            choice = await self.request_routing.choose_team(
+                text, top, within=session_id
+            )
             chosen_by, reason = choice.by, choice.reason
             place = store.instance(choice.node_id, session_id) or top
         conversation_id = await asyncio.to_thread(
@@ -376,7 +380,7 @@ class DirectorService(Sync):
         chosen_by: ChosenBy = "path"
         reason = ""
         if request.auto and self.settings.route_requests:
-            choice = await self.choose_team(text, node)
+            choice = await self.request_routing.choose_team(text, node)
             chosen_by, reason = choice.by, choice.reason
             node = store.team(choice.node_id) or node
         elif path != node.boundary.path:

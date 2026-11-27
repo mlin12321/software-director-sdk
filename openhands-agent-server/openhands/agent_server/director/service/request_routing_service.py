@@ -1,6 +1,8 @@
 """Sending a request straight to the team it concerns."""
 
 import asyncio
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 from openhands.agent_server.director import routing
@@ -10,11 +12,14 @@ from openhands.agent_server.director.git_store import team_key
 from openhands.agent_server.director.models import OrgNode, RoutedRequest, SessionTeam
 from openhands.agent_server.director.org_store import (
     AGENT_LOST,
+    OrgStore,
     is_division_lead,
 )
-from openhands.agent_server.director.prompts import misrouted_notice
 from openhands.agent_server.director.routing import Card, Choice
-from openhands.agent_server.director.service.teams import Teams
+from openhands.agent_server.director.service.model_call_service import (
+    ModelCallService,
+)
+from openhands.agent_server.director.team import Team
 from openhands.sdk.errors import Invalid
 from openhands.sdk.logger import get_logger
 
@@ -50,8 +55,34 @@ def takes_requests(place: SessionTeam, writer: str) -> bool:
     return place.review is None or place.review.state != "pending"
 
 
-class Requests(Teams):
-    """Chooses the team a request goes straight to."""
+@dataclass
+class RequestRoutingService:
+    """Chooses the team a request goes straight to, and takes back one a
+    team says is not its own.
+
+    It reads the org and asks a model; where a request that is handed back
+    goes next is decided by whoever holds it (``hand_on``).
+    """
+
+    org: Callable[[], OrgStore]
+    """The org's tree, as it is when asked."""
+    model_calls: ModelCallService
+    """Asks the model which teams a request concerns."""
+    checkout: Callable[[], Path]
+    """Where the org's repository is checked out."""
+    purpose: Callable[[OrgNode], str]
+    """What a team is for, in words."""
+    routed_requests: Callable[[], Sequence[RoutedRequest]]
+    """What went straight to a team before, oldest first."""
+    keep_routed: Callable[[str, SessionTeam, str, str, str], None]
+    """Keeps a request as sent to a team, or as handed back by it: the
+    kind, the team, the text, what chose the team, and why."""
+    hand_on: Callable[[SessionTeam, SessionTeam, RoutedRequest, str], str]
+    """Gives a request a team handed back to whoever has it next: the
+    team, the one above it, the request and why. Returns what the team
+    is told."""
+    paused: Callable[[], bool]
+    """Whether the org is paused, when no model is asked."""
 
     async def choose_team(
         self,
@@ -67,10 +98,10 @@ class Requests(Teams):
             within: The session the human says it in, when it does not
                 begin a new one.
         """
-        store = self.org
+        store = self.org()
         started: set[str] = set()
         able: set[str] | None = None
-        checkout = self._repo_dir
+        checkout = self.checkout()
         if not within:
             # What the human asks anew opens a session of its own, which
             # any team of the org can have.
@@ -108,7 +139,7 @@ class Requests(Teams):
             able = {
                 place.id
                 for place in rebased
-                if takes_requests(place, self.team(place).writer) and at_work(place)
+                if takes_requests(place, Team(store, place).writer) and at_work(place)
             }
             # A session's own checkout has the directories of the teams it
             # set up.
@@ -164,7 +195,7 @@ class Requests(Teams):
         return choice
 
     def _cards(self, teams: list[OrgNode], tracked: list[str]) -> list[Card]:
-        directories = {node.boundary.path for node in self.org.teams()} | {
+        directories = {node.boundary.path for node in self.org().teams()} | {
             node.boundary.path for node in teams
         }
         took: dict[str, list[str]] = {}
@@ -177,7 +208,7 @@ class Requests(Teams):
                 parent_id=node.parent_id,
                 title=node.title,
                 directory=node.boundary.path,
-                purpose=self._purpose(node),
+                purpose=self.purpose(node),
                 names=routing.names_at_top(
                     node.boundary.path, tracked, directories - {node.boundary.path}
                 ),
@@ -196,8 +227,8 @@ class Requests(Teams):
             Each answer as ``routing.parse_answer`` reads it, and the reason
             the model gave first; no answers when no model can be asked.
         """
-        asker = self._asker()
-        if asker is None or self._paused is not None:
+        asker = self.model_calls.asker()
+        if asker is None or self.paused():
             return [], ""
         not_theirs = [
             f"- {' '.join(request.text.split())[:200]} (not for {request.team!r})"
@@ -208,8 +239,9 @@ class Requests(Teams):
 
         async def ask(turned: bool) -> str | None:
             system, user = routing.question(text, cards, not_theirs, turned=turned)
-            async with self._model_calls:
-                return await self._ask(asker, system, user, routing.USAGE_ID)
+            return await self.model_calls.ask(
+                asker, system, user, routing.USAGE_ID, in_turn=True
+            )
 
         raw = await asyncio.gather(ask(False), ask(True))
         reason = next((r for r in map(routing.reason_of, raw) if r), "")
@@ -227,7 +259,7 @@ class Requests(Teams):
         mine = [
             request for request in self.routed_requests() if request.team_id == place.id
         ]
-        above = self.org.place(place.parent_id) if place.parent_id else None
+        above = self.org().place(place.parent_id) if place.parent_id else None
         if above is None or not mine or mine[-1].kind != "asked":
             raise Invalid(
                 "Nothing was sent to your team directly that is still with "
@@ -236,17 +268,4 @@ class Requests(Teams):
             )
         request = mine[-1]
         self.keep_routed("misrouted", place, request.text, request.chosen_by, why)
-        return self._hand_on(place, above, request, why)
-
-    def _hand_on(
-        self, place: SessionTeam, above: SessionTeam, request: RoutedRequest, why: str
-    ) -> str:
-        """Give a request a team said is not its own to the IC above it."""
-        names = self.team(place).names
-        self.tell_writer(
-            above.id, misrouted_notice(place, request.text, why, names=names)
-        )
-        return (
-            f"Handed to the {names.writer} of the team above ({above.title}). It is no "
-            "longer yours; go on with your own work."
-        )
+        return self.hand_on(place, above, request, why)
