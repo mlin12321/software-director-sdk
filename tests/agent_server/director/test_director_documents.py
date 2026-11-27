@@ -11,14 +11,14 @@ from openhands.agent_server.director.documents.declared import (
     read_document,
 )
 from openhands.agent_server.director.documents.events import (
-    RemovedTeamHandedOver,
-    SubTeamsCreated,
-    SubTeamWorkAccepted,
+    SubTeamsProposed,
     TeamRef,
     TeamRemoved,
 )
 from openhands.agent_server.director.documents.protocol import (
     DocumentProtocolBase,
+    DocumentsBriefed,
+    ShownDocument,
     UnknownProtocol,
     protocol_of,
 )
@@ -36,9 +36,12 @@ from openhands.agent_server.director.orgs import (
     SoftwareOrg,
 )
 from openhands.agent_server.director.orgs.documents import ContractsProtocol
+from openhands.agent_server.director.prompts import org_protocol
 from openhands.agent_server.director.run_state import RunState
 from openhands.agent_server.director.service import DirectorService
 from openhands.agent_server.director.service.state import DIRECTOR_TOOL_NAMES
+from openhands.sdk.errors import Invalid
+from tests.agent_server.director.conftest import DEFAULT_TYPE, SHIPPED
 
 
 NOTES = DocumentRef("services/api", "notes")
@@ -131,7 +134,7 @@ def test_the_shipped_documents_are_the_ones_the_shipped_types_keep():
 
     assert set(documents) == {"spec", "contracts", "report"}
     assert documents["spec"].written_with == "write_spec"
-    assert documents["contracts"].written_with == "edit_contracts"
+    assert documents["contracts"].written_with == "write_contracts"
     for folder in SHIPPED_TYPES:
         for path in folder.glob("*.yaml"):
             kind = read_type(path, DIRECTOR_TOOL_NAMES, documents)
@@ -215,7 +218,7 @@ def test_a_document_without_a_protocol_is_a_plain_text(
     protocol = protocol_of(read_document(tmp_path / "notes.yaml"), store, TREE)
 
     assert type(protocol) is DocumentProtocolBase
-    assert not protocol.waits_for_team_changes()
+    assert not protocol.waits_for_team_changes
 
 
 def test_a_document_does_what_the_protocol_it_names_does(
@@ -231,7 +234,7 @@ def test_a_document_does_what_the_protocol_it_names_does(
     protocol = protocol_of(read_document(tmp_path / "glossary.yaml"), store, TREE)
 
     assert isinstance(protocol, ContractsProtocol)
-    assert protocol.waits_for_team_changes()
+    assert protocol.waits_for_team_changes
     with pytest.raises(UnknownProtocol, match="nobodys"):
         protocol_of(read_document(tmp_path / "plan.yaml"), store, TREE)
 
@@ -241,9 +244,9 @@ def test_the_director_asks_a_files_document_what_it_does(repo: Path):
 
     assert set(service.protocols) == {"spec", "contracts", "report"}
     contracts = service.protocol_at("services/api/contracts.md")
-    assert contracts is not None and contracts.waits_for_team_changes()
+    assert contracts is not None and contracts.waits_for_team_changes
     spec = service.protocol_at("spec.md")
-    assert spec is not None and not spec.waits_for_team_changes()
+    assert spec is not None and not spec.waits_for_team_changes
     assert service.protocol_at("services/api/README.md") is None
 
 
@@ -259,65 +262,18 @@ def contracts(store: GitDocumentStore) -> ContractsProtocol:
     return protocol
 
 
-def test_contracts_are_seeded_by_the_proposal_that_made_the_sub_teams(
+def test_contracts_must_be_written_before_sub_teams_are_proposed(
     contracts: ContractsProtocol, store: GitDocumentStore
 ):
-    contracts.when_sub_teams_are_created(
-        SubTeamsCreated(TEAM, {"contracts": "Cart owns the cart page."})
-    )
-    # A later proposal that replaces no team adds to them, once.
-    for _ in range(2):
-        contracts.when_sub_teams_are_created(
-            SubTeamsCreated(TEAM, {"contracts": "Checkout owns the order."})
-        )
+    with pytest.raises(Invalid, match="write_contracts"):
+        contracts.before_sub_teams_are_proposed(SubTeamsProposed(TEAM))
 
-    assert store.read("one", CONTRACTS) == (
-        "Cart owns the cart page.\n\nCheckout owns the order.\n"
-    )
-    assert store.read("two", CONTRACTS) is None
-
-
-def test_contracts_of_a_proposal_that_replaced_teams_take_the_place_of_the_old(
-    contracts: ContractsProtocol, store: GitDocumentStore
-):
     store.write("one", CONTRACTS, "Cart owns the cart page.\n")
 
-    contracts.when_sub_teams_are_created(
-        SubTeamsCreated(TEAM, {"contracts": "Shop owns it all."}, replaced=True)
-    )
-
-    assert store.read("one", CONTRACTS) == "Shop owns it all.\n"
-
-
-def test_contracts_grow_by_what_a_reviewer_establishes_and_a_hand_over_replaces(
-    contracts: ContractsProtocol, store: GitDocumentStore
-):
-    store.write("one", CONTRACTS, "Cart owns the cart page.\n")
-
-    contracts.when_sub_team_work_is_accepted(
-        SubTeamWorkAccepted(TEAM, {"contracts": "Prices are in cents."})
-    )
-
-    assert store.read("one", CONTRACTS) == (
-        "Cart owns the cart page.\n\nPrices are in cents.\n"
-    )
-
-    contracts.when_removed_team_is_handed_over(
-        RemovedTeamHandedOver(TEAM, {"contracts": "Only the cart is left."})
-    )
-
-    assert store.read("one", CONTRACTS) == "Only the cart is left.\n"
-
-
-def test_contracts_are_told_only_of_what_is_given_for_them(
-    contracts: ContractsProtocol, store: GitDocumentStore
-):
-    contracts.when_sub_teams_are_created(SubTeamsCreated(TEAM, {"notes": "Other."}))
-    contracts.when_sub_team_work_is_accepted(
-        SubTeamWorkAccepted(TEAM, {"contracts": "  "})
-    )
-
-    assert store.drafts("one") == {}
+    contracts.before_sub_teams_are_proposed(SubTeamsProposed(TEAM))
+    # A plain document refuses nothing.
+    plain = DocumentProtocolBase(contracts.document, store, TREE)
+    plain.before_sub_teams_are_proposed(SubTeamsProposed(TEAM))
 
 
 def test_a_removed_teams_contracts_go_into_its_record_and_out_of_its_folder(
@@ -393,3 +349,51 @@ def test_in_the_shipped_orgs_what_is_written_is_read_down_the_tree_only(
     assert org.allows_read(auth, TREE.ref("services"), "contracts")
     assert not org.allows_read(api, auth, "contracts")
     assert not org.allows_read(api, TREE.ref("services.web"), "contracts")
+
+
+def test_a_document_says_what_the_members_of_its_team_are_told_of_it(tmp_path: Path):
+    folder = tmp_path / "documents"
+    folder.mkdir()
+    (folder / "glossary.yaml").write_text(
+        "description: What the words mean.\n"
+        "rules:\n"
+        "    everyone: Use the words of the glossary; your {count} agents share it.\n"
+        "    writer: Add a word to the glossary before you use it.\n"
+    )
+    [glossary] = load_documents([folder]).values()
+    names = SHIPPED[DEFAULT_TYPE].names
+
+    told = org_protocol(names, [glossary.rules_by_member])
+    without = org_protocol(names)
+
+    assert "- Use the words of the glossary; your two agents share it." in told
+    assert "- Add a word to the glossary before you use it." in told
+    assert "glossary" not in without
+    assert "spec" not in without.lower() and "contracts" not in without
+    assert "`report`" not in without
+
+
+def test_a_document_says_its_own_part_of_a_briefing(
+    store: GitDocumentStore, tmp_path: Path
+):
+    (tmp_path / "notes.yaml").write_text("description: Notes.\n")
+    plain = protocol_of(read_document(tmp_path / "notes.yaml"), store, TREE)
+    contracts = protocol_of(
+        load_documents([SHIPPED_DOCUMENTS])["contracts"], store, TREE
+    )
+
+    api = TREE.ref("services.api")
+
+    def briefed(*shown: ShownDocument) -> DocumentsBriefed:
+        return DocumentsBriefed(api, shown, {"ic": "IC"})
+
+    own = ShownDocument(api.folder, "notes", "# Notes", own=True)
+    above = ShownDocument("services", "contracts", "# Agreed", own=False)
+
+    assert list(plain.told_in_briefing(briefed(own))) == [
+        ("Your team's notes:", "# Notes")
+    ]
+    assert list(plain.told_in_briefing(briefed())) == []
+    [(heading, text)] = contracts.told_in_briefing(briefed(above))
+    assert heading.startswith("Contracts your team must keep")
+    assert text == "# Agreed"

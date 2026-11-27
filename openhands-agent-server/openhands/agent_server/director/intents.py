@@ -135,7 +135,6 @@ class HandOver(_Payload):
     ended: Literal["replaced", "pruned"]
     former: list[tuple[str, str]]
     children: list[SplitChild] = Field(default_factory=list)
-    contracts_replaced: bool = False
     title: str = ""
     where: str = ""
     reason: str = ""

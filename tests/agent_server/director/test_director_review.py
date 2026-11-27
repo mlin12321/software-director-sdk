@@ -22,7 +22,6 @@ from openhands.agent_server.director.tools import (
 from openhands.agent_server.director.tools.definition import (
     MsgTeamAction,
     RaiseEscalationAction,
-    ReviewTeamAction,
     SubmitReviewAction,
 )
 from openhands.sdk.conversation.state import (
@@ -55,6 +54,9 @@ from tests.agent_server.director.conftest import (
     split_root,
     use,
     woken,
+)
+from tests.agent_server.director.document_tools import (
+    ReviewTeamAction,
 )
 
 

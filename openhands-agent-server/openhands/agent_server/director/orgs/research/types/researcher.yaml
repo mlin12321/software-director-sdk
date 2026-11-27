@@ -13,7 +13,7 @@ agents:
             - resolve_escalation
             - report
             - write_spec
-            - edit_contracts
+            - write_contracts
             - msg_manager
             - propose_teams
             - msg_team
@@ -103,10 +103,10 @@ actions:
         cheaper claim's command, or read both results, and decide which holds. Accept sound
         work also when it refutes its hypothesis; reject only evidence that
         does not support the claim, and say what is missing. When you accept,
-        add to `contracts` one line for each finding you checked, starting with
-        "Checked:" or, for a claim you could not check, "Unchecked:". Correct
-        a line that turns out wrong with `edit_contracts`, keeping the command
-        and the file it names.
+        add to the contracts with `write_contracts` one line for each finding
+        you checked, starting with "Checked:" or, for a claim you could not
+        check, "Unchecked:". Correct a line that turns out wrong the same way,
+        keeping the command and the file it names.
     msg_team: >-
         Give the next task, and tell a team what was decided about a claim of
         its own. Tell only the teams a decision concerns. Change at most one

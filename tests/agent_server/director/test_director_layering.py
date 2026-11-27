@@ -117,6 +117,6 @@ def test_the_director_has_no_tool_for_any_one_document(module: str):
     # A document's tool is made of its YAML and its protocol.
     text = (DIRECTOR / module).read_text(encoding="utf-8")
 
-    assert "def write_spec" not in text and "def edit_contracts" not in text
+    assert "def write_spec" not in text and "def write_contracts" not in text
     assert "WRITE_SPEC" not in text and "EDIT_CONTRACTS" not in text
     assert "def report(" not in text and "REPORT = ToolSpec" not in text

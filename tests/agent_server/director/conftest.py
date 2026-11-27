@@ -16,6 +16,7 @@ from openhands.agent_server.conversation_service import (
     ExecutionStatusListener,
     ToolParams,
 )
+from openhands.agent_server.director import agent_actions
 from openhands.agent_server.director.agent_types import (
     DEFAULT_TYPE,
     TeamTemplate,
@@ -54,11 +55,17 @@ from openhands.agent_server.director.org_store import (
     team_id_of,
 )
 from openhands.agent_server.director.orgs import SHIPPED_DOCUMENTS, SHIPPED_TYPES
-from openhands.agent_server.director.prompts import in_words, org_protocol
+from openhands.agent_server.director.prompts import (
+    ROLE_TEXTS,
+    in_words,
+    org_protocol,
+    role_block,
+)
 from openhands.agent_server.director.service import (
     DIRECTOR_TOOL_NAMES,
     DirectorService,
 )
+from openhands.agent_server.director.service.state import team_ref
 from openhands.agent_server.director.split import ProposedTeam
 from openhands.agent_server.director.tools import (
     ApproveTeamsTool,
@@ -69,10 +76,8 @@ from openhands.agent_server.director.tools import (
 )
 from openhands.agent_server.director.tools.definition import (
     ApproveTeamsAction,
-    ProposeTeamsAction,
     PruneTeamAction,
     RaiseEscalationAction,
-    ReviewTeamAction,
     SubmitReviewAction,
 )
 from openhands.agent_server.director.tools.impl import DirectorObservation
@@ -93,6 +98,12 @@ from openhands.sdk.tool.spec import Tool
 from openhands.sdk.tool.tool import Action, ToolDefinition
 from openhands.sdk.workspace import LocalWorkspace
 from openhands.tools.file_editor.definition import FileEditorAction
+from tests.agent_server.director.document_tools import (
+    ProposeTeamsAction,
+    ReviewTeamAction,
+    WriteContractsAction,
+    WriteContractsTool,
+)
 
 
 def run_git(repo: Path, *args: str) -> str:
@@ -732,14 +743,33 @@ async def started_with_server(
     return service
 
 
+def _contracts_before_proposing(service: DirectorService, conversation_id: str) -> None:
+    try:
+        place = agent_actions.caller_of(service, UUID(conversation_id)).node
+    except Exception:  # noqa: BLE001  the call itself is refused for this
+        return
+    if "contracts" not in service.type_of(place).documents:
+        return
+    ref = team_ref(place).keeps("contracts")
+    if not (service.documents.read(place.session, ref) or "").strip():
+        service.documents.write(place.session, ref, "Nothing to keep yet.\n")
+
+
 async def use(
     service: DirectorService,
     conversation_id: str | None,
     tool: type[ToolDefinition[Any, Any]],
     action: Action,
 ) -> DirectorObservation:
-    """Call ``tool`` as the agent of ``conversation_id`` does: off the loop."""
+    """Call ``tool`` as the agent of ``conversation_id`` does: off the loop.
+
+    A team that proposes sub-teams is given contracts first where it has
+    none, as its IC writes them before it proposes; a test of what happens
+    without them calls the tool with ``call_tool``.
+    """
     assert conversation_id is not None
+    if tool.name == "propose_teams":
+        _contracts_before_proposing(service, conversation_id)
     state = cast(ConversationState, SimpleNamespace(id=UUID(conversation_id)))
     executor = tool.create(state)[0].executor
     assert executor is not None
@@ -790,7 +820,7 @@ def manager(service: DirectorService, node_id: str = "root") -> str | None:
 async def woken(service: DirectorService, node_id: str = "root") -> str:
     """The Manager of a team, started as the first message to it does."""
     if manager(service, node_id) is None:
-        service.tell_overseer(node(service, node_id).id, "Look in on your team.")
+        service.tell_manager(node(service, node_id).id, "Look in on your team.")
         await service.settled()
     found = manager(service, node_id)
     assert found is not None
@@ -799,12 +829,36 @@ async def woken(service: DirectorService, node_id: str = "root") -> str:
 
 def proposing(
     children: list[SplitChild],
-    contracts: str = "",
     keep: list[str] | None = None,
     text: str = "",
-) -> ProposeTeamsAction:
-    return ProposeTeamsAction(
-        teams=as_proposed(children), contracts=contracts, keep=keep or [], text=text
+) -> Any:
+    return ProposeTeamsAction(teams=as_proposed(children), keep=keep or [], text=text)
+
+
+def own_contracts(service: DirectorService, place: SessionTeam) -> str:
+    """The contracts between the sub-teams of a place, as its session has
+    them."""
+    ref = team_ref(place).keeps("contracts")
+    return service.documents.read(place.session, ref) or ""
+
+
+def session_contracts(service: DirectorService, place: SessionTeam, text: str) -> None:
+    """Have the session of ``place`` hold contracts for it, as written
+    there with the contracts' tool."""
+    ref = team_ref(place).keeps("contracts")
+    service.documents.write(place.session, ref, f"{text.strip()}\n")
+
+
+async def write_contracts(
+    service: DirectorService, text: str, node_id: str = "root"
+) -> DirectorObservation:
+    """Write the contracts between a team's sub-teams as its IC does,
+    which it does before it proposes them."""
+    return await use(
+        service,
+        ic(service, node_id),
+        WriteContractsTool,
+        WriteContractsAction(command="create", file_text=f"{text}\n"),
     )
 
 
@@ -818,14 +872,15 @@ SPLIT = proposing(
             isolation="worktree",
         ),
     ],
-    "POST /checkout returns {order_id}",
 )
+SPLIT_CONTRACTS = "POST /checkout returns {order_id}"
 
 
 APPROVE = ApproveTeamsAction()
 
 
 async def split_root(service: DirectorService) -> None:
+    await write_contracts(service, SPLIT_CONTRACTS)
     await use(service, ic(service), ProposeTeamsTool, SPLIT)
     await use(service, manager(service), ApproveTeamsTool, APPROVE)
     await tasked(service)
@@ -884,7 +939,6 @@ TEAMS = proposing(
         ),
         SplitChild(title="Harness", path="harness", task="Build the harness"),
     ],
-    contracts="Tables reads what Harness writes to `out/`.",
 )
 
 
@@ -925,6 +979,7 @@ async def an_org(
 
 
 async def split_into_typed_teams(service: DirectorService) -> None:
+    await write_contracts(service, "Tables reads what Harness writes to `out/`.")
     await use(service, ic(service), ProposeTeamsTool, TEAMS)
     await use(service, manager(service), ApproveTeamsTool, APPROVE)
     await tasked(service)
@@ -961,15 +1016,16 @@ def requests(service: DirectorService, launcher: FakeLauncher) -> list[str]:
     ]
 
 
-def reject(node_id: str = "services.api") -> ReviewTeamAction:
+def reject(node_id: str = "services.api") -> Any:
     return ReviewTeamAction(team=node_id, decision="reject", findings=[FINDING])
 
 
-def accept(node_id: str = "services.api", needed_above: str = "") -> ReviewTeamAction:
+def accept(node_id: str = "services.api", needed_above: str = "") -> Any:
     return ReviewTeamAction(team=node_id, decision="accept", needed_above=needed_above)
 
 
 async def split_api(service: DirectorService) -> None:
+    await write_contracts(service, "Order has an id.", "services.api")
     await use(
         service,
         ic(service, "services.api"),
@@ -980,7 +1036,6 @@ async def split_api(service: DirectorService) -> None:
                     title="Schema", path="services/api/schema", task="Define orders"
                 )
             ],
-            "Order has an id.",
         ),
     )
     await use(service, manager(service, "services.api"), ApproveTeamsTool, APPROVE)
@@ -1130,7 +1185,7 @@ async def started(repo: Path, launcher: FakeLauncher, **options) -> DirectorServ
     return service
 
 
-def split(below: str, count: int) -> ProposeTeamsAction:
+def split(below: str, count: int) -> Any:
     return proposing(
         [
             SplitChild(title=f"{below} {n}", path=f"{below}/t{n}", task="Work")
@@ -1323,8 +1378,24 @@ agents:
 
 
 def shipped(text: str) -> str:
-    """A text of the director's own as a team of the default type reads it."""
-    return in_words(text.strip(), SHIPPED[DEFAULT_TYPE].names)
+    """A text of the director's own as a team of the default type reads it:
+    a role text with what the documents the type keeps say to that role."""
+    names = SHIPPED[DEFAULT_TYPE].names
+    for whom, role in ROLE_TEXTS.items():
+        if text is role:
+            return role_block(
+                whom,
+                names,
+                [
+                    DOCUMENTS[name].rules_by_member
+                    for name in SHIPPED[DEFAULT_TYPE].documents
+                ],
+            )
+    return in_words(text.strip(), names)
 
 
-ORG_PROTOCOL = org_protocol(SHIPPED[DEFAULT_TYPE].names)
+# With what the documents the default type keeps say of themselves.
+ORG_PROTOCOL = org_protocol(
+    SHIPPED[DEFAULT_TYPE].names,
+    [DOCUMENTS[name].rules_by_member for name in SHIPPED[DEFAULT_TYPE].documents],
+)

@@ -104,9 +104,9 @@ class Splits(Watch):
         )
         self.notify(
             self.writer_conversation(place),
-            f"The sub-teams your {names.overseer} approved could not be set up: "
+            f"The sub-teams your {names.manager} approved could not be set up: "
             f"{reason} "
-            f"{left} Tell your {names.overseer} with msg_manager, with a new "
+            f"{left} Tell your {names.manager} with msg_manager, with a new "
             "proposal if "
             "you have one.",
         )
@@ -286,12 +286,6 @@ class Splits(Watch):
                 await self._archive(team, "replaced", plan.stamp)
                 self.record_event(place_id, "replaced", team)
                 store.remove(team.id)
-        await asyncio.to_thread(
-            self.sub_teams_created,
-            place,
-            {"contracts": proposal.contracts},
-            bool(plan.replaces),
-        )
 
         teams = plan.teams
         for team in teams:
@@ -360,7 +354,6 @@ class Splits(Watch):
             for team_id in proposal.replaces
             if (records := [r for r in kept if r.id == team_key(team_id)])
         ]
-        replaced = bool(proposal.contracts.strip())
         unfinished: dict[str, list[str]] = {}
         for child in proposal.children:
             with suppress(GitError, OSError):
@@ -373,7 +366,7 @@ class Splits(Watch):
                 proposal.children,
                 former,
                 names=self.team(place).names,
-                contracts_replaced=replaced,
+                rules=self.document_rules(place),
                 unfinished=unfinished,
             ),
         )
@@ -393,7 +386,6 @@ class Splits(Watch):
                     ended="replaced",
                     former=named,
                     children=proposal.children,
-                    contracts_replaced=replaced,
                 ),
             )
         # Last: until the IC is told, a server that ends has this to do again.
@@ -539,8 +531,8 @@ class Splits(Watch):
                 children,
                 former,
                 specs,
-                contracts_replaced=payload.contracts_replaced,
                 names=self.names_at(intent.node_id),
+                rules=self.document_rules(place),
             )
         else:
             job = pruned_job(

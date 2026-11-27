@@ -119,7 +119,6 @@ class Proposed(NamedTuple):
     """The sub-teams an IC proposes, as written."""
 
     children: list[SplitChild]
-    contracts: str
     keep: list[str]
     """The sub-teams the proposer has now that it says are to stay, by name
     or team id."""
@@ -129,7 +128,6 @@ class Proposed(NamedTuple):
 
 def proposed_teams(
     teams: Sequence[ProposedTeam],
-    contracts: str,
     keep: Sequence[str],
     reason: str,
     default_type: str = "software-engineer",
@@ -154,7 +152,6 @@ def proposed_teams(
             )
             for team in teams
         ],
-        contracts,
         list(keep),
         reason.strip(),
     )
@@ -194,8 +191,6 @@ def as_written(proposed: Proposed) -> str:
             team["isolation"] = child.isolation
         teams.append(team)
     written: dict[str, object] = {}
-    if proposed.contracts.strip():
-        written["contracts"] = proposed.contracts
     if proposed.keep:
         written["keep"] = proposed.keep
     written["teams"] = teams

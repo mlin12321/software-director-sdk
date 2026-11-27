@@ -38,13 +38,12 @@ from openhands.agent_server.director.tools.definition import (
     DeclineTeamsAction,
     MsgIcAction,
     MsgManagerAction,
-    ProposeTeamsAction,
     PruneTeamAction,
     ReadTeamContextAction,
     ResolveEscalationAction,
-    ReviewTeamAction,
     SubmitReviewAction,
 )
+from openhands.agent_server.director.tools.remote import call_tool
 from openhands.sdk.conversation.state import (
     ConversationExecutionStatus,
 )
@@ -55,6 +54,7 @@ from tests.agent_server.director.conftest import (
     ORG_PROTOCOL,
     PRUNE_API,
     SPLIT,
+    SPLIT_CONTRACTS,
     FakeLauncher,
     agent_conversation,
     division_lead_ic,
@@ -72,10 +72,13 @@ from tests.agent_server.director.conftest import (
     tasked,
     use,
     woken,
+    write_contracts,
 )
 from tests.agent_server.director.document_tools import (
+    ProposeTeamsAction,
     ReportAction,
     ReportTool,
+    ReviewTeamAction,
     WriteSpecAction,
     WriteSpecTool,
 )
@@ -166,6 +169,7 @@ async def test_the_ic_writes_the_spec_its_sub_teams_inherit(service: DirectorSer
 async def test_proposed_sub_teams_wait_for_the_manager(
     service: DirectorService, launcher: FakeLauncher
 ):
+    await write_contracts(service, SPLIT_CONTRACTS)
     observation = await use(service, ic(service), ProposeTeamsTool, SPLIT)
 
     assert not observation.is_error
@@ -178,8 +182,34 @@ async def test_proposed_sub_teams_wait_for_the_manager(
     assert sub_teams(service) == []
     told = launcher.messages_to(manager(service))[-1]
     assert told.startswith("[director] Your IC writes:\nI propose these sub-teams.")
-    assert "services/api" in told and "POST /checkout" in told
+    assert "services/api" in told
+    # The Manager reads what the sub-teams will have to keep between them.
+    assert (
+        "Your team's contracts, which each sub-team reads:\n"
+        "POST /checkout returns {order_id}" in told
+    )
     assert "approve_teams sets them up exactly as written" in told
+
+
+async def test_sub_teams_are_not_proposed_before_their_contracts_are_written(
+    service: DirectorService,
+):
+    conversation = ic(service)
+    assert conversation is not None
+    teams = {"teams": [team.model_dump() for team in SPLIT.teams]}
+
+    refused = call_tool(service, UUID(conversation), "propose_teams", teams)
+
+    # The contracts say so themselves: the tool asks for no document.
+    assert refused.is_error and "no contracts yet" in refused.text
+    assert "`write_contracts`, then propose again" in refused.text
+    assert node(service, "root").pending_split is None
+
+    await write_contracts(service, SPLIT_CONTRACTS)
+    proposed = call_tool(service, UUID(conversation), "propose_teams", teams)
+
+    assert not proposed.is_error
+    assert node(service, "root").pending_split is not None
 
 
 async def test_only_the_ic_proposes_and_only_the_manager_approves(

@@ -5,3 +5,12 @@ name: report
 description: A decision and why, a setback, what failed.
 tool: report
 protocol: report
+rules:
+    everyone: >-
+        `report` what the team must remember. Only your team's {count} agents
+        read reports.
+    lead_reviewer: '`report` what the team must remember.'
+    lead_manager: '`report` what the team must remember.'
+    handed_over: >-
+        `report` what of it your team must remember: what was handed over is
+        kept only for this session.

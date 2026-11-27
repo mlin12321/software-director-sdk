@@ -12,3 +12,12 @@ tool_description: >-
     own; sub-teams see only the contracts of the split that made them. What
     teams promise each other goes in contracts, not here.
 protocol: spec
+rules:
+    everyone: 'Spec: how your team works inside its folder.'
+    writer: Write the spec with `write_spec`.
+    manager: After you approve or prune, your {writer} rewrites its spec.
+    lead_reviewer: >-
+        With `merge_choices` of `review_team` you may choose, per folder,
+        the org's spec, the session's, or a text you write. Keep promises
+        between teams out of a spec.
+    hand_over: "`write_spec` works here: rewrite your team's spec."

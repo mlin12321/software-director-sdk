@@ -17,7 +17,6 @@ from openhands.agent_server.director.tools import (
     SubmitReviewTool,
 )
 from openhands.agent_server.director.tools.definition import (
-    ReviewTeamAction,
     SubmitReviewAction,
 )
 from openhands.sdk.conversation.state import ConversationExecutionStatus
@@ -37,6 +36,9 @@ from tests.agent_server.director.conftest import (
     tasked,
     use,
     woken,
+)
+from tests.agent_server.director.document_tools import (
+    ReviewTeamAction,
 )
 
 

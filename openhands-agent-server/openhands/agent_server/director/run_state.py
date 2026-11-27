@@ -41,6 +41,9 @@ JOINED = "joined"  # conversation id, the human has written in it
 REPORTS = "reports"  # team id of a session's team -> what its agents recorded
 # team id of a session's team -> the documents passed to it to read
 SENT = "sent"
+# team id of a session's team -> what the team above said to it of the teams
+# that were there before
+HANDED = "handed"
 # session id and a file of team memory -> the text the session wrote there
 # and the text it was written over
 FILES = "files"

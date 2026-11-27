@@ -58,7 +58,7 @@ class Team:
         )
 
     @property
-    def overseer(self) -> str:
+    def manager(self) -> str:
         """The member that settles what the team's sub-teams are: the one
         that approves them, and where the team only reviews the work of a
         session, the one that settles that session's."""

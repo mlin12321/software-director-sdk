@@ -7,11 +7,8 @@ from typing import Any, Literal
 from openhands.agent_server.director.agent_types import Names
 from openhands.agent_server.director.git_store import team_key
 from openhands.agent_server.director.models import (
-    BoundaryContracts,
     FormerTeam,
-    InheritedSpec,
     MergeItem,
-    Report,
     Review,
     ReviewFinding,
     SessionTeam,
@@ -23,7 +20,7 @@ from openhands.agent_server.director.split import is_inside
 
 
 # The director's own texts name a member as `{writer}`, `{reviewer}` or
-# `{overseer}`, and :func:`in_words` puts in what the reader's team calls it.
+# `{manager}`, and :func:`in_words` puts in what the reader's team calls it.
 _BASICS = (
     "- A team owns one folder. It has {count} agents: {members}.",
     """\
@@ -31,16 +28,12 @@ _BASICS = (
   team's context. Later changes arrive under `[director] context update` on
   the next message you get. `read_team_context` returns all of it again.
 - Your team has a type. Your first message says under <TEAM_TYPE> what a
-  team of that type is for, what its spec, contracts and reports hold, and
-  what the tools named here mean for it. Follow it; where it and this
+  team of that type is for, what the documents it keeps hold, and what the
+  tools named here mean for it. Follow it; where it and this
   protocol differ, this protocol holds.
 - Messages that start with [director] come from the runtime, not a person.
   A rare event (a review, a stalled team, replaced teams) is explained in
-  the message that brings it.
-- Spec: how your team works inside its folder. Contracts: what teams promise
-  each other. Promises go only in contracts; do not repeat them in a spec.""",
-    "- `report` what the team must remember. Only your team's {count} agents "
-    "read reports.",
+  the message that brings it.""",
     """\
 - What you cannot settle, raise with `raise_escalation`. It goes to the same
   role one team up, and from the team your session started at, to the human.
@@ -54,7 +47,7 @@ _PARTS: tuple[tuple[Literal["writer", "reviewer"], str], ...] = (
     (
         "writer",
         """\
-- Write the spec with `write_spec`. Do your team's work yourself.
+- Do your team's work yourself.
 - Write only inside your folder; the runtime refuses anything else. To get
   another team's files changed, raise an escalation: the {above_writer} above both
   teams decides.
@@ -63,19 +56,17 @@ _PARTS: tuple[tuple[Literal["writer", "reviewer"], str], ...] = (
   The {above_reviewer} one team up reviews it (for the team your session started at, that
   is the Division Lead {above_reviewer}) and you are woken with the result.
 - If you cannot go on, raise an escalation. That shows your team as blocked.
-- Propose sub-teams to your {overseer} with `propose_teams`. Each gets a
-  folder inside yours, a type, an instruction, and the contracts it must
-  keep; a `reason` is optional. A sub-team is told nothing else of your
-  team. You keep whatever no sub-team takes.
+- Propose sub-teams to your {manager} with `propose_teams`. Each gets a
+  folder inside yours, a type and an instruction; a `reason` is optional. A
+  sub-team is told nothing else of your team. You keep whatever no sub-team
+  takes.
 - An approved sub-team starts only when you give it a task with `msg_team`.
   It answers through its work or an escalation, not a message.""",  # noqa: E501
     ),
     (
         "reviewer",
         """\
-- Review what sub-teams submit with `review_team`. When you accept, its
-  `contracts` adds to the contracts between your sub-teams what all of them
-  may rely on from now; they are told with their next message.
+- Review what sub-teams submit with `review_team`.
 - You are asked to review a sub-team's work as soon as it submits, while
   the teams beside it may still work. You may end your turn without
   deciding, to compare it with what another sub-team will submit: the next
@@ -101,14 +92,40 @@ def _bullet(line: str) -> str:
     return textwrap.fill(line, width=76, subsequent_indent="  ")
 
 
-def org_protocol(names: Names) -> str:
+def rules_said(
+    rules: Sequence[Mapping[str, str]], whom: str, words: Mapping[str, str]
+) -> list[str]:
+    """What the documents a team keeps say to ``whom``: a line for each
+    that says something, in the words of the team."""
+    return [
+        " ".join(said[whom].format_map(words).split())
+        for said in rules
+        if said.get(whom, "").strip()
+    ]
+
+
+def _rules_for(
+    rules: Sequence[Mapping[str, str]], whom: str, words: Mapping[str, str]
+) -> list[str]:
+    """What the documents a team keeps say to ``whom`` of its members, as
+    the points of a list."""
+    return [_bullet(f"- {line}") for line in rules_said(rules, whom, words)]
+
+
+def org_protocol(names: Names, rules: Sequence[Mapping[str, str]] = ()) -> str:
     """How the org works, for every agent of a team whose members are
-    called by ``names``: one part for each member that has one."""
+    called by ``names``: one part for each member that has one.
+
+    Args:
+        rules: What each document the team keeps says of itself, by whom
+            it says it to (``Document.rules``).
+    """
     words = names.words()
     basics = [
         _bullet(text.format_map(words)) if "\n" not in text else text
         for text in _BASICS
     ]
+    basics += _rules_for(rules, "everyone", words)
     parts = (
         [(names.writer, ("writer", "reviewer"))]
         if names.reviews_own
@@ -124,6 +141,8 @@ def org_protocol(names: Names) -> str:
     for called, theirs in parts:
         lines += ["", f"If you are the {called}"]
         lines += [text.format_map(words) for part, text in _PARTS if part in theirs]
+        for part in theirs:
+            lines += _rules_for(rules, part, words)
     return "\n".join([*lines, "</ORG_PROTOCOL>"])
 
 
@@ -134,7 +153,7 @@ WITH_SUB_TEAMS = (
     "made it. If you change nothing yourself, your sub-teams' accepted work "
     "goes on up without another review. If you do, call `submit_review` "
     "when your own part is complete, and the accepted work goes up with it.",
-    "- Tell your {overseer} with `msg_manager`, at your own discretion, how "
+    "- Tell your {manager} with `msg_manager`, at your own discretion, how "
     "your teams are doing: when one struggles and you cannot fix it, when "
     "two are at odds, when the make-up of the teams no longer fits the work.",
     "- To change the teams, propose again. The block must say what becomes "
@@ -156,8 +175,8 @@ DIVISION_LEAD_IC_ROLE = """\
 You are the Division Lead {reviewer}: the {reviewer} of the team above the one a session
 worked at. You only review that session's work. You give no tasks and
 change no teams.
-- Judge the work by the human's request and by your team's spec, contracts
-  and records. Read it in the session's checkout; run its checks there.
+- Judge the work by the human's request and by what your team keeps and its
+  records. Read it in the session's checkout; run its checks there.
 - Decide with `review_team`: accept, or reject with what must change.
 - Work is accepted in the order it was submitted. If earlier work is still
   undecided you are told to wait, and told when it is your turn.
@@ -166,37 +185,30 @@ change no teams.
 - If it does not merge, the runtime lays the merge out and names the files.
   Edit only those files there, then accept again. This is the only time you
   write files. The session's team is not sent back for a merge.
-- With `specs` you may choose, per folder, the org's spec, the session's, or
-  a text you write. Keep promises between teams out of a spec.
-- Teams and contracts are not yours: the Division Lead {overseer} settles them.
-- `report` what the team must remember.
+- Teams are not yours: the Division Lead {manager} settles them.
 </ORG_ROLE>"""
 
 DIVISION_LEAD_MANAGER_ROLE = """\
 <ORG_ROLE>
-You are the Division Lead {overseer}: the {overseer} of the team above the one a
+You are the Division Lead {manager}: the {manager} of the team above the one a
 session worked at. Ignore {other_parts} above. You write no files and review
 no code; the Division Lead {reviewer} does that, and neither of you waits for the
 other.
 - You are asked only when the session and other accepted work both changed
-  the same team or the same contracts. The message lists each one with the
-  session's version and the org's.
+  the same team, or what is settled with the teams. The message lists each
+  one with the session's version and the org's.
 - Settle all of it in one `settle_teams` call. Per team: the org's or the
   session's; a team taken from the session may go under another team or get
-  another name. Per contracts: the org's, the session's, or a text you write
-  that keeps what both sides need.
-- Taking one side's contracts whole often breaks the other side's code. If
-  you do not take the session's, its {writer} is told to follow up.
-- Decide by your team's spec, contracts and records; `read_team_context`
+  another name.
+- Decide by what your team keeps and its records; `read_team_context`
   returns them.
-- Decide soon: later sessions' teams and contracts wait for you. Their code
-  does not.
-- `report` what the team must remember.
+- Decide soon: later sessions' teams, and what is settled with them, wait
+  for you. Their code does not.
 </ORG_ROLE>"""
 
 MANAGER_ROLE = """\
 <ORG_ROLE>
-You are your team's {overseer}, not its {writer}. Ignore {other_parts} above.
+You are your team's {manager}, not its {writer}. Ignore {other_parts} above.
 You never edit files or run commands that change the repository; the runtime
 refuses it.
 
@@ -211,13 +223,13 @@ org as a whole works well, not that every team is busy.
 - `msg_ic` writes to your {writer}, or to the {writer} of a team directly below.
 - `read_team_context` shows how every team below has done, also removed
   ones, and what your {writer} proposed before. Weigh a proposal by it.
-- After you approve or prune, your {writer} passes on what removed teams left and
-  rewrites the spec. Write to it if the change needs explaining.
-- Settle what {overseers} directly below escalate with `resolve_escalation`,
+- After you approve or prune, your {writer} passes on what removed teams left.
+  Write to it if the change needs explaining.
+- Settle what {managers} directly below escalate with `resolve_escalation`,
   or pass it up with the reason.
 - `prune_team` removes a team directly below; your team's type says when.
   Write to a slow team first. Its folder goes back to your {writer}.
-- You are woken when your {writer} writes, {a_overseer} below escalates, or the
+- You are woken when your {writer} writes, {a_manager} below escalates, or the
   runtime asks you to look at your teams and says what it counted.
 </ORG_ROLE>"""
 
@@ -225,27 +237,31 @@ HAND_OVER_ROLE = """\
 <ORG_ROLE>
 You are your team's {writer} in hand-over mode: a side conversation started for
 one hand-over. It does not carry on the team's work. Do not edit files or
-run commands that change the repository. Only `read_team_context`,
-`hand_over` and `write_spec` work here.
+run commands that change the repository. Only `read_team_context` and
+`hand_over` work here, and what is named below.
 </ORG_ROLE>"""
 
+# The role texts, by whom a document's `rules` say something to.
+ROLE_TEXTS: dict[str, str] = {
+    "manager": MANAGER_ROLE,
+    "lead_reviewer": DIVISION_LEAD_IC_ROLE,
+    "lead_manager": DIVISION_LEAD_MANAGER_ROLE,
+    "hand_over": HAND_OVER_ROLE,
+}
+
+
+def role_block(whom: str, names: Names, rules: Sequence[Mapping[str, str]] = ()) -> str:
+    """One of the role texts, in the words of a team, with what the
+    documents the team keeps say to that role."""
+    text = ROLE_TEXTS[whom].strip().format_map(names.words())
+    said = _rules_for(rules, whom, names.words())
+    if not said:
+        return text
+    body, closing = text.rsplit("\n", 1)
+    return "\n".join([body, *said, closing])
+
+
 DIRECTOR_PREFIX = "[director]"
-
-
-def report_line(report: Report, titles: Mapping[str, str], *, names: Names) -> str:
-    """One report, with which agent of the team wrote it.
-
-    Args:
-        titles: What each member of the team is called.
-    """
-    if report.handed_over:
-        return (
-            f"Handed over by the {names.above_writer} of the team above, from the "
-            "teams that "
-            f"were here before yours, {report.at}: {report.text}"
-        )
-    writer = titles.get(report.role, report.role)
-    return f"{writer}, {report.at}: {report.text}"
 
 
 def _now_with(team: FormerTeam, children: list[SplitChild]) -> str:
@@ -304,7 +320,7 @@ def left_behind(
 def _approved(children: list[SplitChild], *, names: Names) -> str:
     teams = ", ".join(f"{child.title} ({child.path})" for child in children)
     return (
-        f"Your team was split: your {names.overseer} approved your sub-teams and they "
+        f"Your team was split: your {names.manager} approved your sub-teams and they "
         f"now own their folders: {teams}. None of them has started: a "
         "team starts when you give it its task with msg_team."
     )
@@ -381,19 +397,6 @@ def left_for_team(files: list[str], *, names: Names) -> str:
     )
 
 
-def _contracts_now(contracts_replaced: bool) -> str:
-    if contracts_replaced:
-        return (
-            "- The contracts between your sub-teams are now the ones of this "
-            "proposal alone."
-        )
-    return (
-        "- The contracts between your sub-teams read as before. If they name "
-        "teams that are gone, restate them: the `contracts` of a proposal "
-        "that replaces teams take the place of the old text."
-    )
-
-
 _ASIDE = (
     "What they left (reports, contracts, specs) is being passed on in "
     "hand-over mode: a side conversation of yours, which the director has "
@@ -404,11 +407,11 @@ _ASIDE = (
 )
 
 _HAND_OVER = (
-    "- Give each new team what it should know of this with `hand_over`: "
-    "notes in your own words or quoted, and, for a team that took over "
-    "sub-teams, the contracts those must keep. Where one team's folder "
-    "is now divided among several, give each the part that concerns its "
-    "folder. It starts nothing and can be done again later; "
+    "- Give each new team what it should know of this with `hand_over`, "
+    "in your own words or quoted. Where one team's folder is now divided "
+    "among several, give each the part that concerns its folder. The "
+    "team is told with its next message and writes what should last into "
+    "its own documents. It starts nothing and can be done again later; "
     "`read_team_context` returns what the removed teams left "
     "(`former_teams`)."
 )
@@ -427,9 +430,9 @@ def approved_notice(
     children: list[SplitChild],
     former: list[FormerTeam],
     *,
-    contracts_replaced: bool,
     unfinished: dict[str, list[str]],
     names: Names,
+    rules: Sequence[Mapping[str, str]] = (),
 ) -> str:
     """What an IC is told once the sub-teams it proposed are set up.
 
@@ -438,8 +441,8 @@ def approved_notice(
             changed there and not committed.
         former: The teams they replaced. What those left is passed on in
             hand-over mode and is not given here.
-        contracts_replaced: Whether the proposal's contracts took the place
-            of the ones the team had.
+        rules: What each document the team keeps says of itself; the
+            `teams_replaced` of each is told where teams were replaced.
     """
     lines = [_approved(children, names=names), "", _split_effects(children, unfinished)]
     todo = []
@@ -452,7 +455,7 @@ def approved_notice(
             f"The teams they replaced are gone: {gone}. What those had "
             f"committed is in your checkout. {_ASIDE}",
         ]
-        todo += [_contracts_now(contracts_replaced)]
+        todo += _rules_for(rules, "teams_replaced", names.words())
     else:
         todo += [_REWRITE_SPEC]
     todo += ["- Give a team its task with `msg_team` when there is one."]
@@ -475,17 +478,19 @@ def replaced_job(
     former: list[FormerTeam],
     specs: dict[str, str],
     *,
-    contracts_replaced: bool,
     names: Names,
+    rules: Sequence[Mapping[str, str]] = (),
 ) -> str:
     """What a hand-over conversation is to do after teams were replaced.
 
     Args:
         teams: The sub-teams that were set up.
         specs: The spec each replaced team wrote, by its directory.
+        rules: What each document the team keeps says of itself; the
+            `teams_replaced` of each is told.
     """
     lines = [
-        f"What changed: your {names.overseer} approved the sub-teams you proposed, and "
+        f"What changed: your {names.manager} approved the sub-teams you proposed, and "
         "they now own their folders. None of them has started; each "
         "starts when your main conversation gives it its task.",
         *(
@@ -502,7 +507,7 @@ def replaced_job(
         "What is yours to do here:",
         _HAND_OVER,
         _SPEC_STAYS,
-        _contracts_now(contracts_replaced),
+        *_rules_for(rules, "teams_replaced", names.words()),
         _REWRITE_SPEC,
     ]
     return "\n".join(lines)
@@ -519,7 +524,7 @@ def pruned_job(
 ) -> str:
     """What a hand-over conversation is to do after a team was pruned."""
     lines = [
-        f"What changed: your {names.overseer} pruned the team {title!r} ({where}): "
+        f"What changed: your {names.manager} pruned the team {title!r} ({where}): "
         f"{reason} {where} is your team's again.",
         "",
         "What it left is below. It is yours to use or to pass on.",
@@ -552,7 +557,7 @@ def handed_over_notice(given: list[str], spec: bool) -> str:
     """What an IC is told in its main conversation once its hand-over
     conversation has ended."""
     to = (
-        f"It gave notes or contracts to: {', '.join(given)}."
+        f"It handed over to: {', '.join(given)}."
         if given
         else "It gave nothing to any team."
     )
@@ -584,7 +589,7 @@ def pruned_notice(
             passed on in hand-over mode and is not given here.
     """
     pruned = (
-        f"Your {names.overseer} pruned the team {title!r} ({where}): {reason} Its "
+        f"Your {names.manager} pruned the team {title!r} ({where}): {reason} Its "
         "uncommitted changes were discarded"
         + (f" (kept in git as {saved})" if saved else "")
         + f"; {where} is yours again."
@@ -594,41 +599,32 @@ def pruned_notice(
     return "\n".join([pruned, "", "What is now yours to do:", _REWRITE_SPEC])
 
 
-def _of_the_team(
-    specs: list[InheritedSpec],
-    contracts: list[BoundaryContracts],
-    reports: list[Report],
-    context: str,
-    titles: Mapping[str, str],
-    *,
-    names: Names,
-) -> list[str]:
-    """The specs, contracts, reports and context a briefing gives."""
+def left_document(name: str, path: str, left_by: str | None, tool: str) -> str:
+    """What is said over a document a team before the reader's left in its
+    folder.
+
+    Args:
+        tool: The tool the reader's team writes its own with.
+    """
+    by = f" ({left_by})" if left_by else ""
+    return (
+        f"A {name} left by a team before you{by}, in "
+        f"{path or 'the repository'}. It is old: it says how that "
+        "team worked. Take from it what still holds and write your "
+        f"team's own with `{tool}`."
+    )
+
+
+def _of_the_team(documents: Sequence[tuple[str, str]], context: str) -> list[str]:
+    """The documents and context a briefing gives.
+
+    Args:
+        documents: Each part its documents add: a line that says what it
+            is, and the text.
+    """
     lines: list[str] = []
-    for spec in specs:
-        if spec.old:
-            by = f" ({spec.left_by})" if spec.left_by else ""
-            lines += [
-                "",
-                f"A spec left by a team before you{by}, in "
-                f"{spec.path or 'the repository'}. It is old: it says how that "
-                "team worked. Take from it what still holds and write your "
-                "team's own with `write_spec`.",
-                spec.spec,
-            ]
-        else:
-            lines += ["", "Your team's spec:", spec.spec]
-    for agreed in contracts:
-        heading = (
-            "Contracts between your sub-teams:"
-            if agreed.own
-            else "Contracts your team must keep with the teams beside it "
-            "(set by the team above; read-only):"
-        )
-        lines += ["", heading, agreed.contracts]
-    if reports:
-        lines += ["", "What your team has reported so far:"]
-        lines += [f"- {report_line(report, titles, names=names)}" for report in reports]
+    for heading, text in documents:
+        lines += ["", heading, text]
     if context:
         lines += ["", context]
     return lines
@@ -650,6 +646,7 @@ def role_text(
     lead: bool = False,
     hand_over: bool = False,
     own: str = "",
+    rules: Sequence[Mapping[str, str]] = (),
 ) -> str:
     """How the org works and what an agent's part in it is: what every
     agent of an org is told in its first message, and again when it reads
@@ -666,18 +663,19 @@ def role_text(
         lead: Whether its team only reviews the work of a session.
         hand_over: Whether it is a hand-over conversation.
         own: What its type says of its part, in the type's own words.
+        rules: What each document its team keeps says of itself.
     """
     texts = []
     if hand_over:
-        texts.append(HAND_OVER_ROLE)
+        texts.append("hand_over")
     elif lead and "review_team" in tools:
-        texts.append(DIVISION_LEAD_IC_ROLE)
+        texts.append("lead_reviewer")
     elif lead and "settle_teams" in tools:
-        texts.append(DIVISION_LEAD_MANAGER_ROLE)
+        texts.append("lead_manager")
     elif not lead and "approve_teams" in tools:
-        texts.append(MANAGER_ROLE)
-    said = [org_protocol(names)]
-    said += [in_words(text.strip(), names) for text in texts]
+        texts.append("manager")
+    said = [org_protocol(names, rules)]
+    said += [role_block(whom, names, rules) for whom in texts]
     if not works and not hand_over and not texts:
         said.append(
             f"You are the {title} of your team. You write no files. What you "
@@ -692,12 +690,9 @@ def role_text(
 def hand_over_brief(
     place: SessionTeam,
     job: str,
-    specs: list[InheritedSpec],
-    contracts: list[BoundaryContracts],
-    reports: list[Report],
+    documents: Sequence[tuple[str, str]],
     context: str = "",
     *,
-    titles: Mapping[str, str],
     role: str = "",
     names: Names,
 ) -> str:
@@ -705,9 +700,9 @@ def hand_over_brief(
     of a team's IC that knows nothing but what this gives it.
 
     Args:
-        titles: What each member of the team is called.
         role: How the org works and what this conversation is for.
         job: What changed, what the removed teams left and what to do.
+        documents: What its team's documents say, as each has it said.
         context: The rest of the team's context, as the agent is to read it.
     """
     lines = [
@@ -724,7 +719,7 @@ def hand_over_brief(
         job,
         "",
         "What your team works to, so that you can judge what to pass on:",
-        *_of_the_team(specs, contracts, reports, context, titles, names=names),
+        *_of_the_team(documents, context),
         "",
         "Do the hand-over now. You may read files; change none. When it is "
         "done, end with a line or two on what you gave to whom.",
@@ -736,9 +731,7 @@ def brief(
     place: SessionTeam,
     role: str,
     task: str,
-    specs: list[InheritedSpec],
-    contracts: list[BoundaryContracts],
-    reports: list[Report],
+    documents: Sequence[tuple[str, str]],
     context: str = "",
     kind: str = "",
     *,
@@ -751,6 +744,7 @@ def brief(
 
     Args:
         role_said: How the org works and what its part in it is.
+        documents: What its team's documents say, as each has it said.
         works: Whether it is the member that works in the team's folder;
             None for an IC.
         context: The rest of the team's context, as the agent is to read it.
@@ -772,11 +766,11 @@ def brief(
     if kind:
         lines += ["", kind]
     lines += ["", "Task of the team:", task]
-    lines += _of_the_team(specs, contracts, reports, context, titles, names=names)
+    lines += _of_the_team(documents, context)
     lines.append("")
     if works:
         lines.append("Start on the task now.")
-    elif titles.get(role) == names.overseer:
+    elif titles.get(role) == names.manager:
         lines.append(f"Wait until your {names.writer} writes to you.")
     else:
         lines.append("Wait until something is sent to you.")
@@ -811,7 +805,7 @@ def session_work(
     written = "".join(
         f"Contracts it wrote for {directory or 'the repository'}, which its "
         "code is written to. They are not the org's yet: the Division Lead "
-        f"{names.overseer} settles them if other accepted work changed them too. "
+        f"{names.manager} settles them if other accepted work changed them too. "
         f"Judge the code by these:\n{text or '(none)'}\n\n"
         for directory, text in contracts
     )
@@ -918,7 +912,7 @@ def reconcile_request(
             f"The team that holds its folder now is the one in "
             f"{home or 'the repository'}, which is left that spec as an old "
             "one. If something in it has to hold on, write the spec of "
-            f"{home or 'the repository'} from both in `specs`; otherwise "
+            f"{home or 'the repository'} from both in `merge_choices`; otherwise "
             "the next session there is told to.",
             f"The spec of {home or 'the repository'} now:",
             theirs or "(none)",
@@ -935,7 +929,7 @@ def reconcile_request(
         "`review_team` and say in `reconciled` what you decided; without "
         "that it is not merged."
         + (
-            " For each spec above you may say in `specs` whether the org's "
+            " For each spec above you may say in `merge_choices` whether the org's "
             "stays, the session's holds, or a text you write from both does; "
             "unnamed, the session's holds."
             if specs or inherited
@@ -1023,9 +1017,9 @@ def merge_request(
                 "  the org's now:",
                 *(f"    {line}" for line in (item.org or "(none)").splitlines()),
             ]
-        if item.take is not None:
+        if item.use is not None:
             lines.append(
-                f"  you decided: {item.take}"
+                f"  you decided: {item.use}"
                 + (f", under {item.under}" if item.under else "")
                 + (f", called {item.named!r}" if item.named else "")
             )
@@ -1040,8 +1034,8 @@ def merge_request(
         "(`under`) or call otherwise (`title`), so that it fits the org as "
         "it is now."
         + (
-            " For each contracts above say in `contracts` which holds: "
-            "'org', 'session', or 'text' with the contracts you write from "
+            " For each contracts above say in `merge_choices` which holds: "
+            "'org', 'session', or 'replacement' with the contracts you write from "
             "both. Unnamed, the session's hold."
             if contracts
             else ""
@@ -1098,7 +1092,7 @@ def teams_settled(
         for directory, text in others
     )
     return (
-        f"The {names.overseer} of {above!r} settled what the org had made something "
+        f"The {names.manager} of {above!r} settled what the org had made something "
         "else of than your session. "
         + (f"The org has your teams now: {', '.join(taken)}. " if taken else "")
         + (
@@ -1149,7 +1143,7 @@ def session_brief(
         "- You start from the team's spec, contracts and records. The "
         "team's reports are shared with other sessions: `report` what they "
         "must know.\n"
-        f"- A spec you write and sub-teams your {names.overseer} approves are this "
+        f"- A spec you write and sub-teams your {names.manager} approves are this "
         "session's alone until your work is accepted.\n"
         "- The sub-teams you see are not started. One starts when you give "
         "it a task with `msg_team`.\n"
@@ -1165,7 +1159,7 @@ def session_brief(
         "Work comes back to you only if it must change or touches files "
         "outside your folder.\n"
         "- Teams and contracts you changed may become the org's a little "
-        f"after your code: the Division Lead {names.overseer} settles those that "
+        f"after your code: the Division Lead {names.manager} settles those that "
         "other accepted work changed too."
     )
 
@@ -1281,7 +1275,7 @@ def unstarted_notice(team: SessionTeam, minutes: int, *, names: Names) -> str:
         f"{team.boundary.path or 'the repository'}) "
         f"was set up {_span(minutes)} ago and has been given no task. Nobody "
         "works in its folder, and nothing there is committed. Give it its "
-        f"task with `msg_team`. If it is not needed, write to your {names.overseer} to "
+        f"task with `msg_team`. If it is not needed, write to your {names.manager} to "
         "have it pruned, or propose your teams again without it. If it waits "
         "on purpose, do nothing: you are not told of it again."
     )
@@ -1386,11 +1380,11 @@ def stall_notice(
         f"  git status --short -- {directory}",
         "",
         f"Then decide. You can wait; write to its {names.writer} with `msg_team`; or "
-        f"write to your {names.overseer} with `msg_manager` if the teams should be "
+        f"write to your {names.manager} with `msg_manager` if the teams should be "
         "made up differently. If it has gone on too long without progress "
         f"and a message did not help, `stop_team` for team {team.id} stops "
         "it. Use that very sparingly: a stopped team does nothing until "
-        f"you write to it again or your {names.overseer} removes it.",
+        f"you write to it again or your {names.manager} removes it.",
     ]
     return "\n".join(lines)
 
@@ -1419,7 +1413,7 @@ def failure_notice(
     else:
         lines.append(
             "It runs again the next time something is sent to it. Nothing is "
-            f"asked of you unless that team waits on its {names.overseer}; then raise "
+            f"asked of you unless that team waits on its {names.manager}; then raise "
             "it with `raise_escalation`."
         )
     return "\n".join(lines)

@@ -9,22 +9,18 @@ Basics
   team's context. Later changes arrive under `[director] context update` on
   the next message you get. `read_team_context` returns all of it again.
 - Your team has a type. Your first message says under <TEAM_TYPE> what a
-  team of that type is for, what its spec, contracts and reports hold, and
-  what the tools named here mean for it. Follow it; where it and this
+  team of that type is for, what the documents it keeps hold, and what the
+  tools named here mean for it. Follow it; where it and this
   protocol differ, this protocol holds.
 - Messages that start with [director] come from the runtime, not a person.
   A rare event (a review, a stalled team, replaced teams) is explained in
   the message that brings it.
-- Spec: how your team works inside its folder. Contracts: what teams promise
-  each other. Promises go only in contracts; do not repeat them in a spec.
-- `report` what the team must remember. Only your team's three agents read
-  reports.
 - What you cannot settle, raise with `raise_escalation`. It goes to the same
   role one team up, and from the team your session started at, to the human.
   Settle what you can; pass up the rest with the reason.
 
 If you are the bench
-- Write the spec with `write_spec`. Do your team's work yourself.
+- Do your team's work yourself.
 - Write only inside your folder; the runtime refuses anything else. To get
   another team's files changed, raise an escalation: the bench above both
   teams decides.
@@ -34,18 +30,16 @@ If you are the bench
   is the Division Lead referee) and you are woken with the result.
 - If you cannot go on, raise an escalation. That shows your team as blocked.
 - Propose sub-teams to your chair with `propose_teams`. Each gets a
-  folder inside yours, a type, an instruction, and the contracts it must
-  keep; a `reason` is optional. A sub-team is told nothing else of your
-  team. You keep whatever no sub-team takes.
+  folder inside yours, a type and an instruction; a `reason` is optional. A
+  sub-team is told nothing else of your team. You keep whatever no sub-team
+  takes.
 - An approved sub-team starts only when you give it a task with `msg_team`.
   It answers through its work or an escalation, not a message.
 - Your own `submit_review` is refused while a sub-team of yours works,
   waits for the review of your referee, or was sent back and has not submitted again.
 
 If you are the referee
-- Review what sub-teams submit with `review_team`. When you accept, its
-  `contracts` adds to the contracts between your sub-teams what all of them
-  may rely on from now; they are told with their next message.
+- Review what sub-teams submit with `review_team`.
 - You are asked to review a sub-team's work as soon as it submits, while
   the teams beside it may still work. You may end your turn without
   deciding, to compare it with what another sub-team will submit: the next
@@ -70,8 +64,8 @@ org as a whole works well, not that every team is busy.
 - `msg_ic` writes to your bench, or to the bench of a team directly below.
 - `read_team_context` shows how every team below has done, also removed
   ones, and what your bench proposed before. Weigh a proposal by it.
-- After you approve or prune, your bench passes on what removed teams left and
-  rewrites the spec. Write to it if the change needs explaining.
+- After you approve or prune, your bench passes on what removed teams left.
+  Write to it if the change needs explaining.
 - Settle what chairs directly below escalate with `resolve_escalation`,
   or pass it up with the reason.
 - `prune_team` removes a team directly below; your team's type says when.

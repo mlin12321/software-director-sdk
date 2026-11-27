@@ -27,9 +27,7 @@ from openhands.agent_server.director.tools import (
     SubmitReviewTool,
 )
 from openhands.agent_server.director.tools.definition import (
-    ProposeTeamsAction,
     PruneTeamAction,
-    ReviewTeamAction,
 )
 from tests.agent_server.director.conftest import (
     APPROVE,
@@ -54,6 +52,10 @@ from tests.agent_server.director.conftest import (
     sub_teams,
     team_accepted,
     use,
+)
+from tests.agent_server.director.document_tools import (
+    ProposeTeamsAction,
+    ReviewTeamAction,
 )
 
 

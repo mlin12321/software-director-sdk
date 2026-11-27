@@ -41,7 +41,6 @@ from openhands.agent_server.director.tools.definition import (
     MsgTeamAction,
     PruneTeamAction,
     ReadTeamContextAction,
-    ReviewTeamAction,
 )
 from openhands.sdk.conversation.state import ConversationExecutionStatus
 from openhands.sdk.errors import Conflict, NotFound, Unprocessable
@@ -75,6 +74,7 @@ from tests.agent_server.director.conftest import (
 from tests.agent_server.director.document_tools import (
     ReportAction,
     ReportTool,
+    ReviewTeamAction,
     WriteSpecAction,
     WriteSpecTool,
 )

@@ -145,8 +145,6 @@ export interface DirectorSplitChild {
  */
 export interface DirectorSplitProposal {
   children: DirectorSplitChild[];
-  /** The interfaces the sub-teams must keep between them. */
-  contracts: string;
   /** Why the proposer wants this make-up of teams, when it said. */
   reason?: string;
   status: DirectorSplitStatus;
@@ -474,12 +472,12 @@ export interface DirectorMergeItem {
   /** What the org has there now. */
   org?: string;
   /**
-   * What was decided: the org's stays, the session's holds, or `text` does.
-   * `null` while nobody has decided.
+   * What was decided: the org's stays, the session's holds, or `replacement`
+   * does. `null` while nobody has decided.
    */
-  take?: 'org' | 'session' | 'text' | null;
-  /** What holds when `take` is `text`. */
-  text?: string;
+  use?: 'org' | 'session' | 'replacement' | null;
+  /** What holds when `use` is `replacement`. */
+  replacement?: string;
   /**
    * The team of the org a team would be put under, when the team the
    * session has above it is not in the org any more.
@@ -674,18 +672,13 @@ export interface DirectorReport {
   text: string;
   /**
    * The title of the session the agent that wrote it works in; `''` for a
-   * report a model rewrote or the IC above handed over.
+   * report a model rewrote.
    */
   session?: string;
   /** That session's id: two sessions may have one title. */
   session_id?: string;
   /** True for the one report a model wrote in place of earlier ones. */
   compacted?: boolean;
-  /**
-   * True for what the IC of the team above passed on of the teams that were
-   * there before this one. The team's own agents did not write it.
-   */
-  handed_over?: boolean;
   /**
    * Names the report, so that it is added to a team's record once however
    * often that is tried. `''` for one a model rewrote.

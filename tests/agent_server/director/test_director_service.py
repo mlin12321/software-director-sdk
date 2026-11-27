@@ -50,6 +50,7 @@ from tests.agent_server.director.conftest import (
     node,
     root_conversation,
     run_git,
+    session_contracts,
     shipped,
     shipped_tools,
     tasked,
@@ -462,7 +463,7 @@ async def test_an_escalation_a_team_still_holds_cannot_be_answered_by_the_human(
 
 async def woken_manager(service: DirectorService, node_id: str = "root") -> str:
     """The Manager of a team, started as the first message to it does."""
-    service.tell_overseer(node(service, node_id).id, "Look in on your team.")
+    service.tell_manager(node(service, node_id).id, "Look in on your team.")
     await service.settled()
     manager = agent_conversation(node(service, node_id), "manager")
     assert manager is not None
@@ -477,8 +478,9 @@ async def split_root(service: DirectorService, *children: SplitChild) -> None:
         assert conversation_id is not None
         return agent_actions.caller_of(service, UUID(conversation_id))
 
+    session_contracts(service, node(service, "root"), "Nothing to keep yet.")
     agent_actions.propose_teams(
-        service, caller("ic"), as_proposed(list(children)), "", [], ""
+        service, caller("ic"), as_proposed(list(children)), [], ""
     )
     agent_actions.approve_teams(service, caller("manager"))
     await service.settled()

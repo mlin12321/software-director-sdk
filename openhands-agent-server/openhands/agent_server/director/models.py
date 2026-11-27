@@ -199,10 +199,6 @@ class SplitProposal(BaseModel):
     were read from the message and checked."""
 
     children: list[SplitChild] = Field(min_length=1)
-    contracts: str = Field(
-        default="",
-        description="The interfaces the sub-teams must keep between them.",
-    )
     reason: str = Field(
         default="",
         description="Why the proposer wants this make-up of teams. Optional.",
@@ -513,7 +509,7 @@ class Report(BaseModel):
         default="",
         description=(
             "The title of the session the agent that wrote it works in; '' "
-            "for a report a model rewrote or the IC above handed over."
+            "for a report a model rewrote."
         ),
     )
     session_id: str = Field(
@@ -525,14 +521,6 @@ class Report(BaseModel):
         description=(
             "True for the one report a model wrote in place of the earlier "
             "ones, once they had grown long."
-        ),
-    )
-    handed_over: bool = Field(
-        default=False,
-        description=(
-            "True for what the IC of the team above passed on of the teams "
-            "that were there before this one. The team's own agents did not "
-            "write it."
         ),
     )
     id: str = Field(
@@ -1406,37 +1394,31 @@ class OpenSessionRequest(BaseModel):
     )
 
 
-class ContractsChoice(BaseModel):
-    """What a Manager decides about contracts that wait for it."""
+class DocumentChoice(BaseModel):
+    """What is decided about a document of a directory that the session
+    and the org each made something else of."""
 
-    path: str = Field(description="The directory whose contracts wait.")
-    take: Literal["org", "session", "text"] = Field(
+    document: str = Field(
+        description="The name of the document, as what waits is listed to you."
+    )
+    folder: str = Field(description="The directory whose document it is.")
+    use: Literal["org", "session", "replacement"] = Field(
         description=(
-            "'org': the org's stay. 'session': the session's hold. 'text': "
-            "what is written in `text` holds."
+            "'org': the org's stays. 'session': the session's holds. "
+            "'replacement': what is written in `replacement` holds."
         )
     )
-    text: str = Field(default="", description="The contracts, for 'text'.")
-
-
-class SpecChoice(BaseModel):
-    """What a reviewing IC decides about the spec of a directory."""
-
-    path: str = Field(description="The directory whose spec it is.")
-    take: Literal["org", "session", "text"] = Field(
-        description=(
-            "'org': the org's stays. 'session': the session's holds. 'text': "
-            "what is written in `text` holds."
-        )
+    replacement: str = Field(
+        default="",
+        description="Only with 'replacement': the whole document that holds.",
     )
-    text: str = Field(default="", description="The spec, for 'text'.")
 
 
 class TeamChoice(BaseModel):
     """What a Manager decides about a team that waits for it."""
 
     team: str = Field(description="The id of the waiting team.")
-    take: Literal["org", "session"] = Field(
+    use: Literal["org", "session"] = Field(
         description=(
             "'org': it stays as the org has it. 'session': it becomes what "
             "the session made of it."
@@ -1463,7 +1445,7 @@ MergeKind = Literal["code", "document", "team"]
 # Who settles it: the IC that reviews the session's work, before its code
 # is merged, or the Manager of its Division Lead place.
 Gate = Literal["ic", "manager"]
-Take = Literal["org", "session", "text"]
+Use = Literal["org", "session", "replacement"]
 
 
 class MergeItem(BaseModel):
@@ -1493,14 +1475,16 @@ class MergeItem(BaseModel):
         default="", description="What the session has: a text, or a team in words."
     )
     org: str = Field(default="", description="What the org has there now.")
-    take: Take | None = Field(
+    use: Use | None = Field(
         default=None,
         description=(
             "What was decided: the org's stays, the session's holds, or "
-            "`text` does. None while nobody has decided."
+            "`replacement` does. None while nobody has decided."
         ),
     )
-    text: str = Field(default="", description="What holds when `take` is 'text'.")
+    replacement: str = Field(
+        default="", description="What holds when `use` is 'replacement'."
+    )
     moved_to: str | None = Field(
         default=None,
         description=(

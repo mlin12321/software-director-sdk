@@ -9,15 +9,13 @@ from abc import ABC
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from functools import cache
-from typing import Any, ClassVar, Literal
+from typing import Any, ClassVar, Literal, NamedTuple
 
 from pydantic import BaseModel, Field, create_model
 
 from openhands.agent_server.director.documents.declared import Document
 from openhands.agent_server.director.documents.events import (
-    RemovedTeamHandedOver,
-    SubTeamsCreated,
-    SubTeamWorkAccepted,
+    SubTeamsProposed,
     TeamRef,
     TeamRemoved,
 )
@@ -67,6 +65,31 @@ class ShownDocument:
     name: str
     text: str
     own: bool
+
+
+@dataclass(frozen=True)
+class DocumentsBriefed:
+    """An agent is given its first message, which tells it what its team
+    works to.
+
+    Attributes:
+        reader: The team whose agent is told.
+        shown: The documents of this kind the team reads, as ``read_from``
+            names them; none that is empty.
+        titles: What each member of the team is called.
+    """
+
+    reader: TeamRef
+    shown: Sequence[ShownDocument]
+    titles: Mapping[str, str]
+
+
+class BriefedPart(NamedTuple):
+    """One part of an agent's first message: a line that says what it is,
+    and the text."""
+
+    heading: str
+    text: str
 
 
 @dataclass(frozen=True)
@@ -140,6 +163,11 @@ class DocumentProtocolBase(ABC):
 
     usable_in_hand_over: ClassVar[bool] = False
     """Whether its tool also works in a hand-over conversation."""
+    read_by_sub_teams: ClassVar[bool] = False
+    """Whether a team also reads the one the team above it keeps."""
+    waits_for_team_changes: ClassVar[bool] = False
+    """Whether what a session wrote of it becomes the org's only once the
+    session's changes to the teams are settled, and not with its code."""
 
     @classmethod
     def arguments_for(cls, document: Document) -> type[BaseModel]:
@@ -220,6 +248,17 @@ class DocumentProtocolBase(ABC):
         own = next((found.text for found in shown if found.own), None)
         return {self.document.name: own}
 
+    def told_in_briefing(self, briefed: DocumentsBriefed) -> Sequence[BriefedPart]:
+        """What an agent's first message says of this document.
+
+        The plain answer: its team's own, when it has one.
+        """
+        return [
+            BriefedPart(f"Your team's {self.document.name}:", found.text)
+            for found in briefed.shown
+            if found.own
+        ]
+
     def edited(self, text: str, arguments: BaseModel) -> str:
         """``text`` after the command of the file editor that ``arguments``
         holds: `str_replace` or `insert`.
@@ -243,24 +282,19 @@ class DocumentProtocolBase(ABC):
         worked out from the tree whenever it is asked and never kept, so
         it holds for a team wherever it has been moved.
 
-        The plain answer: its own and no other team's."""
-        return [reader]
+        The plain answer: its own, and before it the one of the team
+        above where the document is ``read_by_sub_teams``."""
+        above = self.tree.above(reader) if self.read_by_sub_teams else None
+        return [reader] if above is None else [above, reader]
 
-    def waits_for_team_changes(self) -> bool:
-        """Whether what a session wrote of this document becomes the
-        org's only once the session's changes to the teams are settled,
-        and not with its code."""
-        return False
+    def before_sub_teams_are_proposed(self, proposed: SubTeamsProposed) -> None:
+        """The team's writer is about to propose sub-teams. The one step a
+        document may refuse; the plain document refuses nothing.
 
-    def when_sub_teams_are_created(self, created: SubTeamsCreated) -> None:
-        """A proposal was approved and the team now has sub-teams."""
-
-    def when_sub_team_work_is_accepted(self, accepted: SubTeamWorkAccepted) -> None:
-        """The team's reviewer accepted what a sub-team submitted."""
-
-    def when_removed_team_is_handed_over(self, handed: RemovedTeamHandedOver) -> None:
-        """The team above passed on to the team what the teams before it
-        left."""
+        Raises:
+            Invalid: The document is not ready for the team to have
+                sub-teams, with what the writer is to do first.
+        """
 
     def when_team_is_removed(
         self,

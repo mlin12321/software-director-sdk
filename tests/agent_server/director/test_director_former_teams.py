@@ -35,10 +35,8 @@ from openhands.agent_server.director.tools import (
     StopTeamTool,
 )
 from openhands.agent_server.director.tools.definition import (
-    HandOverAction,
     MsgManagerAction,
     MsgTeamAction,
-    ProposeTeamsAction,
     PruneTeamAction,
     ReadTeamContextAction,
     StopTeamAction,
@@ -49,6 +47,7 @@ from tests.agent_server.director.conftest import (
     APPROVE,
     ORG_PROTOCOL,
     PRUNE_API,
+    SPLIT_CONTRACTS,
     FakeLauncher,
     ServerEnded,
     again,
@@ -62,6 +61,7 @@ from tests.agent_server.director.conftest import (
     manager,
     memory_of,
     node,
+    own_contracts,
     proposing,
     shipped,
     split_api,
@@ -69,8 +69,11 @@ from tests.agent_server.director.conftest import (
     sub_teams,
     tasked,
     use,
+    write_contracts,
 )
 from tests.agent_server.director.document_tools import (
+    HandOverAction,
+    ProposeTeamsAction,
     ReportAction,
     ReportTool,
     WriteSpecAction,
@@ -85,7 +88,6 @@ TWO = proposing(
         SplitChild(title="API", path="services/api", task="Serve the checkout API"),
         SplitChild(title="Web", path="services/web", task="Build the pages"),
     ],
-    "POST /checkout returns {order_id}",
 )
 
 
@@ -94,6 +96,7 @@ async def service(repo: Path, launcher: FakeLauncher):
     """An org of API and Web. API has a spec, two reports and messages with
     its Manager and with the IC above."""
     service = await started(repo, launcher)
+    await write_contracts(service, SPLIT_CONTRACTS)
     await use(service, ic(service), ProposeTeamsTool, TWO)
     await use(service, manager(service), ApproveTeamsTool, APPROVE)
     await tasked(service)
@@ -113,7 +116,9 @@ async def service(repo: Path, launcher: FakeLauncher):
 async def replace(
     service: DirectorService, *teams: SplitChild, keep: list[str], contracts: str = ""
 ):
-    proposal = proposing(list(teams), contracts, keep)
+    if contracts:
+        await write_contracts(service, contracts)
+    proposal = proposing(list(teams), keep)
     await use(service, ic(service), ProposeTeamsTool, proposal)
     return await use(service, manager(service), ApproveTeamsTool, APPROVE)
 
@@ -405,21 +410,30 @@ async def test_what_the_ic_hands_over_is_in_the_new_teams_briefing(
         service,
         ic(service),
         HandOverTool,
-        HandOverAction(team=API, notes="API chose SQLite; keep it."),
+        HandOverAction(team=API, text="API chose SQLite; keep it."),
     )
 
     assert "It has not started" in handed.text and node(service, API).agents == []
-    [report] = service.reports_of(node(service, API))
-    assert (report.text, report.handed_over) == ("API chose SQLite; keep it.", True)
+    # It is kept for the team and written into none of its documents.
+    assert service.reports_of(node(service, API)) == []
 
     await tasked(service)
 
     briefing = launcher.derived[-1].task
-    assert "Handed over by the IC of the team above" in briefing
     assert "API chose SQLite; keep it." in briefing
     context = service.context_of(node(service, API), "ic")
-    [told] = context["reports_of_your_team"]
-    assert told["by"] == "ic_of_the_team_above"
+    [told] = context["handed_over_to_your_team"]
+    assert (told["by"], told["text"]) == (
+        "the IC of Checkout",
+        "API chose SQLite; keep it.",
+    )
+    # What should last is the team's own to write, as its documents say.
+    todo = context["what_to_do_with_what_was_handed_over"]
+    assert "`report` what of it your team must remember" in todo
+    assert "`write_contracts`" in todo
+    assert "handed_over_to_your_team" not in service.context_of(
+        node(service, API), "manager"
+    )
 
 
 async def test_what_is_handed_to_a_team_at_work_reaches_it_with_its_next_message(
@@ -431,7 +445,7 @@ async def test_what_is_handed_to_a_team_at_work_reaches_it_with_its_next_message
         service,
         ic(service),
         HandOverTool,
-        HandOverAction(team=WEB, notes="API dropped its cache."),
+        HandOverAction(team=WEB, text="API dropped its cache."),
     )
     await use(service, ic(service), MsgTeamTool, MsgTeamAction(team=WEB, text="Go on."))
 
@@ -443,27 +457,33 @@ async def test_what_is_handed_to_a_team_at_work_reaches_it_with_its_next_message
 async def test_only_an_ic_hands_over_and_only_to_a_team_directly_below(
     service: DirectorService,
 ):
-    notes = HandOverAction(team=API, notes="Keep SQLite.")
+    notes = HandOverAction(team=API, text="Keep SQLite.")
 
     by_manager = await use(service, manager(service), HandOverTool, notes)
     sideways = await use(service, ic(service, WEB), HandOverTool, notes)
-    nothing = await use(service, ic(service), HandOverTool, HandOverAction(team=API))
+    nothing = await use(
+        service, ic(service), HandOverTool, HandOverAction(team=API, text=" ")
+    )
 
     assert by_manager.is_error and "Only the IC" in by_manager.text
     assert sideways.is_error and "not a team directly below yours" in sideways.text
     assert nothing.is_error and "nothing to hand over" in nothing.text
 
 
-async def test_contracts_are_handed_to_a_team_for_its_own_sub_teams(
+async def test_a_team_that_is_handed_contracts_writes_them_itself(
     service: DirectorService,
 ):
-    for text in ("DB serves HTTP.", "DB serves HTTP over a socket."):
-        await use(
-            service, ic(service), HandOverTool, HandOverAction(team=WEB, contracts=text)
-        )
+    text = "DB serves HTTP over a socket."
+    await use(service, ic(service), HandOverTool, HandOverAction(team=WEB, text=text))
 
-    kept = memory_of(service, "services/web/contracts.md")
-    assert kept == "DB serves HTTP over a socket.\n"
+    # Nothing is written for the team: it is told, and writes its own.
+    assert own_contracts(service, node(service, WEB)) == ""
+    [told] = service.context_of(node(service, WEB), "ic")["handed_over_to_your_team"]
+    assert told["text"] == text
+
+    await write_contracts(service, text, WEB)
+
+    assert own_contracts(service, node(service, WEB)) == f"{text}\n"
 
 
 async def test_the_contracts_of_a_block_that_replaces_teams_take_the_place_of_the_old(
@@ -472,8 +492,6 @@ async def test_the_contracts_of_a_block_that_replaces_teams_take_the_place_of_th
     await replace(service, ORDERS, keep=["Web"], contracts="Orders serves Web.")
 
     assert memory_of(service, "contracts.md") == "Orders serves Web.\n"
-    told = launcher.messages_to(ic(service))[-1]
-    assert "are now the ones of this proposal alone" in told
 
     await replace(
         service,
@@ -482,7 +500,7 @@ async def test_the_contracts_of_a_block_that_replaces_teams_take_the_place_of_th
     )
 
     assert memory_of(service, "contracts.md") == "Orders serves Web.\n"
-    told = launcher.messages_to(ic(service))[-1]
+    told = " ".join(launcher.messages_to(ic(service))[-1].split())
     assert "If they name teams that are gone, restate them" in told
 
 
@@ -582,7 +600,7 @@ async def test_a_hand_over_conversation_hands_over_and_writes_the_spec_and_no_mo
     side = aside(service)
 
     handed = await use(
-        service, side, HandOverTool, HandOverAction(team=API, notes="Keep SQLite.")
+        service, side, HandOverTool, HandOverAction(team=API, text="Keep SQLite.")
     )
     spec = await use(service, side, WriteSpecTool, WriteSpecAction(file_text="# Shop"))
     read = await use(service, side, ReadTeamContextTool, ReadTeamContextAction())
@@ -593,8 +611,9 @@ async def test_a_hand_over_conversation_hands_over_and_writes_the_spec_and_no_mo
     ]
 
     assert not handed.is_error and not spec.is_error
-    [report] = service.reports_of(node(service, API))
-    assert (report.text, report.handed_over) == ("Keep SQLite.", True)
+    assert service.reports_of(node(service, API)) == []
+    [told] = service.handed_over_to(node(service, API))
+    assert told["text"] == "Keep SQLite."
     assert node(service, "root").summary == "Shop"
     assert json.loads(read.text)["former_teams"][0]["reports_as_one"]
     for answer in refused:
@@ -615,14 +634,14 @@ async def test_the_ic_is_told_what_its_hand_over_conversation_did_when_it_ends(
     launcher.report(side, ConversationExecutionStatus.RUNNING)
     # A hand-over beside the team's work does not change how the team stands.
     assert node(service, "root").status == was
-    await use(service, side, HandOverTool, HandOverAction(team=API, notes="Keep it."))
+    await use(service, side, HandOverTool, HandOverAction(team=API, text="Keep it."))
     await use(service, side, WriteSpecTool, WriteSpecAction(file_text="# Shop"))
     launcher.report(side, ConversationExecutionStatus.FINISHED)
     await service.settled()
 
     told = launcher.messages_to(ic(service))[-1]
     assert "Your hand-over mode has ended." in told
-    assert "It gave notes or contracts to: Orders." in told
+    assert "It handed over to: Orders." in told
     assert "It rewrote your team's spec." in told
     # Told once.
     launcher.report(side, ConversationExecutionStatus.RUNNING)
@@ -667,7 +686,7 @@ async def test_each_hand_over_gets_a_conversation_of_its_own(
     assert mode is not None and mode.status == "idle"
     # The first is no agent of the org any more.
     late = await use(
-        service, first, HandOverTool, HandOverAction(team=WEB, notes="Too late.")
+        service, first, HandOverTool, HandOverAction(team=WEB, text="Too late.")
     )
     assert late.is_error and "not an agent of the org" in late.text
     assert "your Manager pruned the team 'Orders'" in given_aside(service, launcher)
@@ -733,7 +752,7 @@ async def test_a_hand_over_that_ended_while_the_server_was_down_is_told_at_its_s
     side = aside(service)
     assert side is not None
     launcher.report(side, ConversationExecutionStatus.RUNNING)
-    await use(service, side, HandOverTool, HandOverAction(team=API, notes="Keep it."))
+    await use(service, side, HandOverTool, HandOverAction(team=API, text="Keep it."))
     await service.aclose()
     launcher.known[UUID(side)] = ConversationExecutionStatus.FINISHED
 
@@ -745,7 +764,7 @@ async def test_a_hand_over_that_ended_while_the_server_was_down_is_told_at_its_s
     assert mode is not None and mode.conversation_id == side
     assert mode.status != "working"
     [told] = ended_notices(second, launcher)
-    assert "It gave notes or contracts to: Orders." in told
+    assert "It handed over to: Orders." in told
     await second.aclose()
 
 
@@ -774,7 +793,7 @@ async def test_a_server_that_ends_as_a_hand_over_starts_starts_it_at_its_next_st
     repo: Path, service: DirectorService, launcher: FakeLauncher
 ):
     ended = end_server_at(launcher, "derived")
-    await use(service, ic(service), ProposeTeamsTool, proposing([ORDERS], "", ["Web"]))
+    await use(service, ic(service), ProposeTeamsTool, proposing([ORDERS], ["Web"]))
     with suppress(ServerEnded):
         await use(service, manager(service), ApproveTeamsTool, APPROVE)
     await ended.wait()
@@ -865,7 +884,7 @@ async def test_a_pruned_teams_hand_over_goes_with_it(
     assert [team_id_of(team) for team in sub_teams(service)] == [WEB]
     assert service.org.find_hand_over(side) is None
     late = await use(
-        service, side, HandOverTool, HandOverAction(team="services.api.http", notes="x")
+        service, side, HandOverTool, HandOverAction(team="services.api.http", text="x")
     )
     assert late.is_error and "not an agent of the org" in late.text
     # The team above hands over what API left, in a conversation of its own.
@@ -917,7 +936,7 @@ async def test_a_split_finished_again_after_a_restart_hands_over_once(
         save_tree(store)
 
     monkeypatch.setattr(service, "_save_tree", save)
-    await use(service, ic(service), ProposeTeamsTool, proposing([ORDERS], "", ["Web"]))
+    await use(service, ic(service), ProposeTeamsTool, proposing([ORDERS], ["Web"]))
     await cut_off(
         launcher, ended, use(service, manager(service), ApproveTeamsTool, APPROVE)
     )

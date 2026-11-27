@@ -74,12 +74,10 @@ def test_a_proposal_is_read_as_the_teams_it_names():
             ),
             ProposedTeam(name="Web", path="apps/web", instruction="Build the pages"),
         ],
-        "API serves /orders.\n",
         ["Billing"],
         " The service has two concerns. ",
     )
 
-    assert proposed.contracts == "API serves /orders.\n"
     assert proposed.keep == ["Billing"]
     assert proposed.reason == "The service has two concerns."
     assert proposed.children == [
@@ -94,7 +92,7 @@ def test_a_proposal_is_read_as_the_teams_it_names():
         ),
         SplitChild(title="Web", path="apps/web", task="Build the pages"),
     ]
-    assert as_written(proposed).startswith("contracts: |\n  API serves /orders.\n")
+    assert as_written(proposed).startswith("keep:\n- Billing\nteams:\n- name: API\n")
 
 
 def test_sub_teams_get_clean_paths_and_write_their_whole_directory(store: OrgStore):

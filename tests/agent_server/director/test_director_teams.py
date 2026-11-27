@@ -653,14 +653,13 @@ async def test_sub_teams_that_fail_to_be_set_up_are_put_aside_and_told(
     def fails(*_: object) -> None:
         raise OSError("disk full")
 
-    monkeypatch.setattr(service, "sub_teams_created", fails)
+    monkeypatch.setattr(service, "_let_go", fails)
     await use(
         service,
         ic(service, "apps.web"),
         ProposeTeamsTool,
         proposing(
             [SplitChild(title="Cart", path="apps/web/cart", task="The cart")],
-            contracts="Cart owns the cart page.",
         ),
     )
     await use(service, manager(service, "apps.web"), ApproveTeamsTool, APPROVE)
@@ -677,7 +676,7 @@ async def test_a_manager_that_could_not_be_started_is_started_again_by_the_answe
     service = await started(repo, launcher)
     top = node(service, "root")
     launcher.derive_error = RuntimeError("npx is not installed")
-    service.tell_overseer(top.id, "Look in on your team.")
+    service.tell_manager(top.id, "Look in on your team.")
     await service.settled()
     [asked] = node(service, "root").escalations
     assert asked.id == failure_waits("manager")

@@ -1,14 +1,15 @@
 """What the members of a team record for themselves as they work."""
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from pydantic import BaseModel, Field
 
 from openhands.agent_server.director.documents.declared import Document
-from openhands.agent_server.director.documents.events import RemovedTeamHandedOver
 from openhands.agent_server.director.documents.protocol import (
+    BriefedPart,
     DocumentProtocolBase,
+    DocumentsBriefed,
     DocumentToolCall,
     DocumentToolResult,
     ShownDocument,
@@ -55,21 +56,32 @@ class ReportProtocol(DocumentProtocolBase):
             ]
         }
 
-    def when_removed_team_is_handed_over(self, handed: RemovedTeamHandedOver) -> None:
-        # The notes of the team above on what the teams before left.
-        notes = handed.given.get(self.document.name, "").strip()
-        if notes:
-            self.store.append(
-                handed.team,
-                self.document.name,
-                LogEntry(at="", role=handed.writer, text=notes, handed_over=True),
+    def told_in_briefing(self, briefed: DocumentsBriefed) -> Sequence[BriefedPart]:
+        entries = self.store.entries(briefed.reader, self.document.name)
+        if not entries:
+            return []
+        return [
+            BriefedPart(
+                "What your team has reported so far:",
+                "\n".join(
+                    f"- {entry_line(entry, briefed.titles)}" for entry in entries
+                ),
             )
+        ]
+
+
+def entry_line(entry: LogEntry, titles: Mapping[str, str]) -> str:
+    """One report, with which agent of the team wrote it.
+
+    Args:
+        titles: What each member of the team is called.
+    """
+    writer = titles.get(entry.role, entry.role)
+    return f"{writer}, {entry.at}: {entry.text}"
 
 
 def _written_by(entry: LogEntry, reader: TeamRef) -> str:
     """Who wrote an entry, as the members of a team are told."""
-    if entry.handed_over:
-        return "ic_of_the_team_above"
     if entry.session_id == reader.session:
         return entry.role
     return f"{entry.role} in {entry.session!r}"

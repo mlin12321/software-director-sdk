@@ -862,7 +862,15 @@ class ServiceState:
             title=team.title(member),
             lead=team.is_lead,
             own=found.protocol if found else "",
+            rules=self.document_rules(place),
         )
+
+    def document_rules(self, place: SessionTeam) -> list[dict[str, str]]:
+        """What each document a team keeps says of itself to its members,
+        with how the org works."""
+        return [
+            protocol.document.rules_by_member for protocol in self.protocols_of(place)
+        ]
 
     def writer_conversation(self, place: SessionTeam) -> str | None:
         """The conversation of the member that works in a team's folder."""
@@ -958,7 +966,7 @@ class ServiceState:
                             title=kind.title_of(member),
                             writes=member == kind.writer,
                             reviews=member == kind.reviewer,
-                            oversees=member == kind.overseer,
+                            oversees=member == kind.manager,
                         )
                         for member in kind.agents
                     ],

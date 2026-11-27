@@ -6,6 +6,12 @@ from uuid import UUID
 
 import pytest
 
+from openhands.agent_server.director.documents.declared import Document
+from openhands.agent_server.director.documents.protocol import (
+    DocumentProtocolBase,
+    declare,
+    register_protocol,
+)
 from openhands.agent_server.director.service import DirectorService
 from openhands.agent_server.director.service.state import team_ref
 from openhands.agent_server.director.tools.definition import tool_named
@@ -100,9 +106,14 @@ async def test_a_plain_document_is_changed_in_one_place_as_a_file_is(
 async def test_only_what_a_document_allows_is_offered_in_a_hand_over(
     service: DirectorService,
 ):
-    # The spec may be written by the member that takes over what a removed
-    # team left; a plain document may not.
-    assert service.hand_over_tools == ("read_team_context", "hand_over", "write_spec")
+    # The spec and the contracts may be written by the member that takes
+    # over what a removed team left; a plain document may not.
+    assert service.hand_over_tools == (
+        "read_team_context",
+        "hand_over",
+        "write_contracts",
+        "write_spec",
+    )
 
 
 async def test_a_team_is_told_the_documents_its_type_keeps_under_their_names(
@@ -168,3 +179,59 @@ async def test_a_report_is_an_entry_its_teams_members_are_told(
     [kept] = service.own_reports(root)
     assert kept.session_id == root.session and kept.at and kept.id
     await service.aclose()
+
+
+_OWN_TOOLS = ("propose_teams", "review_team", "hand_over", "settle_teams")
+
+
+def _taken(tool: str) -> dict[str, str]:
+    """What a tool of the director's own takes: each argument and what
+    its caller is told of it."""
+    made = tool_named(tool)
+    assert made is not None
+    return {
+        name: field.description or ""
+        for name, field in made.action().model_fields.items()
+    }
+
+
+class _Minutes(DocumentProtocolBase):
+    """A document with a protocol of an org's own."""
+
+
+def test_a_document_adds_nothing_to_the_tools_of_the_directors_own():
+    before = {tool: _taken(tool) for tool in _OWN_TOOLS}
+    register_protocol("minutes-of-meetings", _Minutes)
+
+    declare(
+        Document(
+            name="minutes",
+            description="What was agreed.",
+            protocol="minutes-of-meetings",
+        )
+    )
+
+    # Every org is offered the same tools, whatever documents it keeps.
+    assert {tool: _taken(tool) for tool in _OWN_TOOLS} == before
+    assert tool_named("write_minutes") is not None
+    assert set(before["propose_teams"]) == {"teams", "keep", "text"}
+    assert set(before["hand_over"]) == {"team", "text"}
+    # Which of two versions of a document holds is asked by the tools that
+    # merge a session's work, of whatever documents the org keeps.
+    for tool in ("review_team", "settle_teams"):
+        said = before[tool]["merge_choices"]
+        assert "spec" not in said and "contracts" not in said
+
+
+async def test_a_team_is_not_given_a_document_its_type_does_not_keep(
+    service: DirectorService,
+):
+    # The lab's type keeps a glossary and no contracts.
+    refused = call_tool(
+        service,
+        UUID(bench(service)),
+        "write_contracts",
+        {"command": "create", "file_text": "Rig serves Assay."},
+    )
+
+    assert refused.is_error

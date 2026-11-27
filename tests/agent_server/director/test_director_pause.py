@@ -43,7 +43,6 @@ from openhands.agent_server.director.tools import (
     SettleTeamsTool,
     SubmitReviewTool,
 )
-from openhands.agent_server.director.tools.definition import SettleTeamsAction
 from openhands.sdk.conversation.state import ConversationExecutionStatus
 from tests.agent_server.director.conftest import (
     APPROVE,
@@ -52,6 +51,7 @@ from tests.agent_server.director.conftest import (
     PRUNE_API,
     SCHEMA,
     SPLIT,
+    SPLIT_CONTRACTS,
     FakeLauncher,
     ServerEnded,
     accept,
@@ -86,7 +86,9 @@ from tests.agent_server.director.conftest import (
     use,
     waiting,
     woken,
+    write_contracts,
 )
+from tests.agent_server.director.document_tools import SettleTeamsAction
 
 
 def kinds(recovery) -> list[tuple[str, str]]:
@@ -224,6 +226,7 @@ async def test_a_team_start_cut_off_by_a_crash_is_finished_without_a_second_of_a
     repo: Path, launcher: FakeLauncher
 ):
     first = await started(repo, launcher)
+    await write_contracts(first, SPLIT_CONTRACTS)
     await use(first, ic(first), ProposeTeamsTool, SPLIT)
     await use(first, manager(first), ApproveTeamsTool, APPROVE)
     # The server ends as the first sub-team's IC has just been started.

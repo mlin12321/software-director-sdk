@@ -54,7 +54,6 @@ from openhands.agent_server.director.run_state import (
     Intent,
 )
 from openhands.agent_server.director.service.delivery import Delivery
-from openhands.agent_server.director.service.records import REPORT
 from openhands.agent_server.director.service.state import (
     _REASON_KEPT,
     _STARTED_WITH,
@@ -258,7 +257,7 @@ class Teams(Delivery):
             )
         return self._tell_other(place_id, member, text, division_lead=division_lead)
 
-    def tell_overseer(
+    def tell_manager(
         self, place_id: str, text: str, *, division_lead: bool = False
     ) -> None:
         """Send a message from the director to the member of a team that
@@ -266,7 +265,7 @@ class Teams(Delivery):
         place = self.org.place(place_id)
         if place is not None:
             self.tell(
-                place_id, self.team(place).overseer, text, division_lead=division_lead
+                place_id, self.team(place).manager, text, division_lead=division_lead
             )
 
     def _tell_other(
@@ -570,7 +569,7 @@ class Teams(Delivery):
                 since = now - datetime.fromisoformat(min(raised))
                 waiting[below.id] = int(since.total_seconds() // 60)
         self.record_event(place_id, "woken", team, reason)
-        self.tell_overseer(
+        self.tell_manager(
             place_id,
             manager_check(
                 reason,
@@ -654,13 +653,6 @@ class Teams(Delivery):
             json.dumps({"at": now, "head": seen.get("head"), "checked": checked}),
         )
 
-    def hand_over(self, team: SessionTeam, notes: str, contracts: str) -> None:
-        """Give a team what its IC above passes on of the teams that were
-        there before it: notes, kept with the team's reports, and the
-        contracts its own sub-teams must keep. Both are the session's alone
-        until its work is accepted. Starts nothing. Safe from any thread."""
-        self.removed_team_handed_over(team, {REPORT: notes, "contracts": contracts})
-
     def _task_of(self, place: SessionTeam) -> str:
         """What a team that is started again is to do, from what the org
         kept of it."""
@@ -698,15 +690,12 @@ class Teams(Delivery):
     def _briefing(self, place: SessionTeam, role: str, task: str) -> tuple[str, str]:
         """An agent's first message, and the context it tells, as kept to
         find later what changed."""
-        contracts = self.contracts_of(place)
         context = self.context_of(place, role)
         text = brief(
             place,
             role,
             task,
-            self.specs_of(place),
-            contracts,
-            self.reports_of(place),
+            self.documents_briefed(place),
             briefing_block(context),
             self.type_of(place).text_for(role),
             works=role == self.team(place).writer,
@@ -718,16 +707,17 @@ class Teams(Delivery):
 
     def _hand_over_briefing(self, place: SessionTeam, job: str) -> str:
         """The first message of an IC's hand-over conversation."""
-        contracts = self.contracts_of(place)
         return hand_over_brief(
             place,
             job,
-            self.specs_of(place),
-            contracts,
-            self.reports_of(place),
+            self.documents_briefed(place),
             briefing_block(self.context_of(place, self.team(place).writer)),
-            titles=self.type_of(place).titles,
-            role=role_text(self.team(place).names, works=True, hand_over=True),
+            role=role_text(
+                self.team(place).names,
+                works=True,
+                hand_over=True,
+                rules=self.document_rules(place),
+            ),
             names=self.team(place).names,
         )
 
