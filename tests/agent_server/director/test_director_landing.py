@@ -1528,7 +1528,7 @@ async def test_an_acceptance_cut_off_before_its_landing_lands_when_it_is_run_aga
     monkeypatch.setattr(service, "_land_accepted", land)
 
     # What a restart does with the step that was still open.
-    service._begin(top.id, Accept(needed_above="", base=True))
+    service.resumable_work.begin(top.id, Accept(needed_above="", base=True))
     await service.settled()
 
     assert service.team_memory.read("spec.md") == "# Spec"

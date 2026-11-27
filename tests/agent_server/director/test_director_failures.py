@@ -211,7 +211,7 @@ async def test_a_step_of_the_director_that_fails_is_kept_in_the_record(
     async def breaks(_: object) -> None:
         raise RuntimeError("the disk is full")
 
-    monkeypatch.setattr(service, "_do_launch_member", breaks)
+    monkeypatch.setitem(service.resumable_work.steps, "launch_member", breaks)
     service.tell_manager(node(service, API).id, "Look in on your team.")
     await service.settled()
 

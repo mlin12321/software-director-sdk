@@ -5,6 +5,7 @@ import asyncio
 import json
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
+from functools import cached_property
 from uuid import UUID
 
 from openhands.agent_server.director import compaction
@@ -39,13 +40,17 @@ from openhands.agent_server.director.run_state import (
     Intent,
 )
 from openhands.agent_server.director.service.records import Records
+from openhands.agent_server.director.service.resumable_work_service import (
+    Held,
+    ResumableWorkService,
+)
 from openhands.agent_server.director.service.state import (
     MODELS_LANE,
     ORG_LANE,
+    SAVED_BEFORE_FORGOTTEN,
     _agent_title,
-    _Held,
     _instant,
-    _lane_for,
+    lane_for,
 )
 from openhands.agent_server.event_service import ConversationRunLimitExceeded
 from openhands.sdk.errors import (
@@ -65,12 +70,29 @@ _SEND_ATTEMPTS = 3
 class Delivery(Records):
     """Sends agents what the director has for them."""
 
+    @cached_property
+    def resumable_work(self) -> ResumableWorkService:
+        """What the director begins for a team and finishes after a pause
+        or a restart. The service registers the step of each kind."""
+        return ResumableWorkService(
+            run_state=self._runs,
+            work_queue=self.work_queue,
+            lane_of=lane_for,
+            is_paused=lambda: self._paused is not None,
+            save=self._save,
+            save_soon=self._save_soon,
+            let_go=self._let_go,
+            keep_failure=self._keep_failure,
+            left=self._leave_line,
+            saved_before_forgotten=SAVED_BEFORE_FORGOTTEN,
+        )
+
     def refresh_headline(self, place_id: str, report: str) -> None:
         """Have a team's headline rewritten after it reported. Any thread."""
         place = self.org.place(place_id)
         if place is not None:
             task = f"{place.summary}\n\nLatest report of the team: {report}"
-            self._enqueue(
+            self.work_queue.enqueue(
                 lambda: self._summarize(place_id, task), f"headline:{place_id}"
             )
 
@@ -91,7 +113,7 @@ class Delivery(Records):
         it has grown past what the org set. Safe from any thread."""
         reports = self._memory().reports(folder, role)
         if compaction.due(reports, self.settings.report_compaction_chars):
-            self._enqueue(lambda: self._compact(folder, role), MODELS_LANE)
+            self.work_queue.enqueue(lambda: self._compact(folder, role), MODELS_LANE)
 
     def joined(self, conversation_id: str) -> None:
         """Note that the human has written in an agent's conversation, so
@@ -109,7 +131,7 @@ class Delivery(Records):
             return
         run.mark(JOINED, conversation_id)
         # After what starts the conversation, when it is not there yet.
-        self._enqueue(lambda: self._mark_joined(conversation_id), found[0].id)
+        self.work_queue.enqueue(lambda: self._mark_joined(conversation_id), found[0].id)
 
     async def _mark_joined(self, conversation_id: str) -> None:
         try:
@@ -136,7 +158,7 @@ class Delivery(Records):
         if at_once:
             self._at_once.add(seq)
         self._save_soon()
-        self._enqueue(
+        self.work_queue.enqueue(
             lambda: self._deliver(seq, conversation_id, text), place_id or ORG_LANE
         )
 
@@ -305,15 +327,15 @@ class Delivery(Records):
         them wait meanwhile, so that no new turn begins.
 
         Raises:
-            _Held: An agent of theirs is still running; the step is taken
+            Held: An agent of theirs is still running; the step is taken
                 up again when it stops.
         """
-        self._settling[intent.id] = (set(node_ids), _lane_for(intent))
+        self._settling[intent.id] = (set(node_ids), lane_for(intent))
         store = self.org
         for team in map(store.place, node_ids):
             for agent in team.agents if team else []:
                 if agent.conversation_id in self._running:
-                    raise _Held
+                    raise Held
 
     def _let_go(self, intent: Intent) -> None:
         """Deliver what waited for the teams a step has now changed."""
@@ -348,7 +370,7 @@ class Delivery(Records):
             for held in waiting:
                 run.delivered(held.seq)
         self._at_once.add(seq)
-        self._enqueue(
+        self.work_queue.enqueue(
             lambda: self._deliver(seq, conversation_id, text), place_id or ORG_LANE
         )
 
@@ -362,7 +384,7 @@ class Delivery(Records):
                 # The one ahead of it may never start now: it is in line
                 # again when the org resumes.
                 self._runs().mark(WAITING, place_id)
-                raise _Held
+                raise Held
             await self._line_moved.wait()
         try:
             return await start()
@@ -382,7 +404,7 @@ class Delivery(Records):
             async with self._start_gate:
                 while True:
                     if self._paused is not None:
-                        raise _Held
+                        raise Held
                     self._room.clear()
                     try:
                         return await start()
@@ -393,7 +415,7 @@ class Delivery(Records):
                         await asyncio.wait_for(
                             self._room.wait(), timeout=self._run_limit_retry
                         )
-        except (_Held, asyncio.CancelledError):
+        except (Held, asyncio.CancelledError):
             # Stopped while it waited: it is still next when the org resumes.
             keeps_place = True
             raise
@@ -417,10 +439,7 @@ class Delivery(Records):
                 self._deliver_what_waited(conversation_id)
                 for intent_id, (teams, lane) in list(self._settling.items()):
                     if place_id in teams:
-                        self._enqueue(
-                            lambda intent_id=intent_id: self._carry_out(intent_id),
-                            lane,
-                        )
+                        self.resumable_work.take_up(intent_id, lane)
 
     async def _send(self, conversation_id: str, text: str) -> None:
         """Deliver a message as part of a step, in its place among them."""

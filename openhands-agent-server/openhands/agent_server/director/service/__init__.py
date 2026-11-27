@@ -2,9 +2,9 @@
 
 import asyncio
 import json
-from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from pathlib import Path
+from typing import Any
 from uuid import UUID
 
 from openhands.agent_server.director.boundary import nearest_team, worded
@@ -34,10 +34,7 @@ from openhands.agent_server.director.prompts import (
 from openhands.agent_server.director.recovery import (
     has_work,
 )
-from openhands.agent_server.director.run_state import (
-    CLEARING,
-    Intent,
-)
+from openhands.agent_server.director.run_state import CLEARING
 from openhands.agent_server.director.runtime import bind_director
 from openhands.agent_server.director.scope import Scope, named_paths, searched_folder
 from openhands.agent_server.director.service.stall_watch_service import (
@@ -45,6 +42,7 @@ from openhands.agent_server.director.service.stall_watch_service import (
 )
 from openhands.agent_server.director.service.state import (
     AGENT_PAUSED,
+    BASE_LANE,
     DIRECTOR_TOOL_NAMES,
     LIMIT_WAITS,
     MERGE_WAITS,
@@ -101,13 +99,29 @@ class DirectorService(Sync):
     was asked for, and lanes do not wait for each other.
     """
 
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        """Takes what :class:`ServiceState` takes."""
+        super().__init__(*args, **kwargs)
+        for kind, step in {
+            "brief": self._do_brief,
+            "launch_member": self._do_launch_member,
+            "split": self._do_split,
+            "start_team": self._do_start_team,
+            "finish_split": self._do_finish_split,
+            "hand_over": self._do_hand_over,
+            "request_review": self._do_request_review,
+            "accept": self._do_accept,
+            "land_org": self._do_land_org,
+            "prune": self._do_prune,
+            "close_session": self._do_close_session,
+        }.items():
+            self.resumable_work.register(kind, step)
+
     async def start(self, launcher: TeamLauncher) -> None:
         """Begin running agents through ``launcher``, on the running loop."""
         self._loop = asyncio.get_running_loop()
         self._launcher = launcher
-        self._lanes = {}
-        self._unsettled = 0
-        self._quiet.set()
+        await self.work_queue.__aenter__()
         self._stop_status = launcher.on_status(self._on_status)
         self._stop_guard = launcher.on_action(self.guard_action)
         self._stop_resume = launcher.on_resume(self.with_tools_again)
@@ -128,7 +142,7 @@ class DirectorService(Sync):
             self._watch_for_stalls(), name="director-stall-watch"
         )
         if self._store is not None:
-            self._enqueue(self._came_back)
+            self.work_queue.enqueue(self._came_back)
         elif await asyncio.to_thread(self._remembered_repo) is not None:
             # An org that was left in the middle of its work is looked at
             # now, not when somebody first asks for it.
@@ -156,16 +170,16 @@ class DirectorService(Sync):
         if self._stop_resume is not None:
             self._stop_resume()
             self._stop_resume = None
-        workers = list(self._workers)
-        if self._stall_timer is not None:
-            workers.append(self._stall_timer)
-            self._stall_timer = None
-        if self._review_instructions_ready is not None:
-            workers.append(self._review_instructions_ready)
-            self._review_instructions_ready = None
-        for worker in workers:
-            worker.cancel()
-        await asyncio.gather(*workers, return_exceptions=True)
+        await self.work_queue.__aexit__(None, None, None)
+        timers = [
+            task
+            for task in (self._stall_timer, self._review_instructions_ready)
+            if task is not None
+        ]
+        self._stall_timer = self._review_instructions_ready = None
+        for task in timers:
+            task.cancel()
+        await asyncio.gather(*timers, return_exceptions=True)
         # A save that was cut off goes on in its thread: nothing of this
         # director may write the tree after it has closed.
         await asyncio.to_thread(self._wait_for_save)
@@ -269,7 +283,10 @@ class DirectorService(Sync):
             # The org is named after what its first session is for.
             top = opened.session.teams[0].id
             # In the lane of that team, after the model that names it.
-            self._enqueue(lambda: self._in_base(lambda: self._name_org(top)), top)
+            self.work_queue.enqueue(
+                lambda: self.work_queue.run_in(BASE_LANE, lambda: self._name_org(top)),
+                top,
+            )
         return opened
 
     async def _say_in_session(self, session_id: str, text: str) -> RoutedMessage:
@@ -496,7 +513,7 @@ class DirectorService(Sync):
                 with suppress(NotFound):
                     store.settle_escalation(place_id, escalation_id)
 
-            self._enqueue(again, place_id)
+            self.work_queue.enqueue(again, place_id)
             return place
         store.settle_escalation(place_id, escalation_id)
         if escalation_id == MERGE_WAITS:
@@ -507,7 +524,7 @@ class DirectorService(Sync):
             return store.place(place_id) or place
         if escalation_id == ORG_WAITS:
             # The human goes on without the Manager.
-            self._begin(place_id, LandOrg(org_holds=True))
+            self.resumable_work.begin(place_id, LandOrg(org_holds=True))
             return store.place(place_id) or place
         if escalation_id == LIMIT_WAITS:
             self.go_on_past_limit(place_id)
@@ -534,18 +551,3 @@ class DirectorService(Sync):
             self.team(place).conversation(role), f"{told}:\n{answer}", at_once=True
         )
         return store.place(place_id) or place
-
-    def _steps(self) -> dict[str, Callable[[Intent], Awaitable[None]]]:
-        return {
-            "brief": self._do_brief,
-            "launch_member": self._do_launch_member,
-            "split": self._do_split,
-            "start_team": self._do_start_team,
-            "finish_split": self._do_finish_split,
-            "hand_over": self._do_hand_over,
-            "request_review": self._do_request_review,
-            "accept": self._do_accept,
-            "land_org": self._do_land_org,
-            "prune": self._do_prune,
-            "close_session": self._do_close_session,
-        }

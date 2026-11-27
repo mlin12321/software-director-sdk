@@ -16,6 +16,7 @@ from openhands.agent_server.director.service.stall_watch_service import (
     StallWatchService,
     progress_of,
 )
+from openhands.agent_server.director.service.work_queue_service import WorkQueueService
 
 
 def watch(looked: list[str], **given: Any) -> StallWatchService:
@@ -42,7 +43,7 @@ def watch(looked: list[str], **given: Any) -> StallWatchService:
         running=lambda: set(),
         model_calls=cast(ModelCallService, None),
         check_managers=lambda: looked.append("managers"),
-        enqueue=never,
+        work_queue=WorkQueueService(default_lane="org"),
         progressed=never,
         release_reviews=never,
         record_event=never,

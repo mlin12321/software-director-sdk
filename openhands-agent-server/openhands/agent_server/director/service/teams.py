@@ -54,6 +54,7 @@ from openhands.agent_server.director.run_state import (
     Intent,
 )
 from openhands.agent_server.director.service.delivery import Delivery
+from openhands.agent_server.director.service.resumable_work_service import Held
 from openhands.agent_server.director.service.stall_watch_service import (
     progress_of,
 )
@@ -64,7 +65,6 @@ from openhands.agent_server.director.service.state import (
     _agent_title,
     _base_of,
     _branch_of,
-    _Held,
     _instant,
     _new_agents,
     checkout_root,
@@ -222,7 +222,9 @@ class Teams(Delivery):
         stopped = team.stopped
         if stopped is not None:
             store.set_stopped(place_id, None)
-            self._enqueue(lambda: self._go_on(place_id, stopped.running), place_id)
+            self.work_queue.enqueue(
+                lambda: self._go_on(place_id, stopped.running), place_id
+            )
         self.progressed(place_id, by_above=True)
         return stopped
 
@@ -295,7 +297,9 @@ class Teams(Delivery):
                 kept = [agent for agent in place.agents if agent not in lost]
                 place = store.update_place(place_id, agents=[*kept, added])
                 task = self._runs().marked(TASK).get(place_id) or place.summary
-                self._begin(place_id, LaunchMember(task=task, role=member))
+                self.resumable_work.begin(
+                    place_id, LaunchMember(task=task, role=member)
+                )
         conversation_id = self.team(place).conversation(member)
         self.notify(conversation_id, text)
         return conversation_id
@@ -424,7 +428,7 @@ class Teams(Delivery):
                 [ic] = _new_agents(uuid4(), member)
                 store.update_place(place_id, agents=[ic, *place.agents])
                 purpose = self._purpose(place)
-                self._begin(
+                self.resumable_work.begin(
                     place_id,
                     StartTeam(
                         task=f"{purpose}{_STARTED_WITH}{text}",
@@ -765,7 +769,7 @@ class Teams(Delivery):
             if self._paused is not None:
                 self._note_running(conversation_id, place.id, True)
                 await launcher.pause(UUID(conversation_id))
-        except _Held:
+        except Held:
             raise
         except Exception:
             logger.exception("Could not start the hand-over of team %s", place.id)
@@ -814,7 +818,7 @@ class Teams(Delivery):
                 if self._paused is not None:
                     self._note_running(conversation_id, place_id, True)
                     await launcher.pause(UUID(conversation_id))
-        except _Held:
+        except Held:
             raise
         except Exception as error:
             logger.exception("Could not start the %s of team %s", role, place_id)
@@ -856,7 +860,7 @@ class Teams(Delivery):
         Raises:
             NotFound: There is nobody to derive the agent from.
             Conflict: A step of the director is replacing or removing the team.
-            _Held: The org was paused while the team waited for a run.
+            Held: The org was paused while the team waited for a run.
         """
         place_id = place.id
         launcher = self._require_launcher()
@@ -1028,7 +1032,9 @@ class Teams(Delivery):
         if opens and not is_division_lead(started):
             self._checkout_for_session(place_id)
         purpose = start.purpose or task
-        self._enqueue(lambda: self._summarize(place_id, purpose, first=True), place_id)
+        self.work_queue.enqueue(
+            lambda: self._summarize(place_id, purpose, first=True), place_id
+        )
 
     def _checkout_for_session(self, place_id: str) -> None:
         """Give the teams of a session that have not started the checkout

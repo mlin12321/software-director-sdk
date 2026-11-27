@@ -81,6 +81,8 @@ def test_the_directors_own_parts_do_not_know_the_shipped_orgs_or_the_service(
 
 
 SERVICES_THE_DIRECTOR_HOLDS = [
+    "service/resumable_work_service.py",
+    "service/work_queue_service.py",
     "service/model_call_service.py",
     "service/request_routing_service.py",
     "service/stall_watch_service.py",
