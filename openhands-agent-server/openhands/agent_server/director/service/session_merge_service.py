@@ -58,11 +58,8 @@ from openhands.agent_server.director.service.org_state_service import OrgStateSe
 from openhands.agent_server.director.service.resumable_work_service import (
     ResumableWorkService,
 )
-from openhands.agent_server.director.service.session_document_service import (
-    SessionDocumentService,
-)
-from openhands.agent_server.director.service.session_landing_service import (
-    SessionLandingService,
+from openhands.agent_server.director.service.session_record_service import (
+    SessionRecordService,
     Taken,
 )
 from openhands.agent_server.director.service.team_history_service import (
@@ -185,8 +182,7 @@ class SessionMergeService:
     team_messaging: TeamMessagingService
     message_delivery: MessageDeliveryService
     resumable_work: ResumableWorkService
-    session_documents: SessionDocumentService
-    session_landing: SessionLandingService
+    session_records: SessionRecordService
     confinement: AgentConfinementService
     """Keeps the merges that are laid out for reviewers to finish."""
     changed_since_accept: dict[str, bool] = field(default_factory=dict, init=False)
@@ -230,7 +226,7 @@ class SessionMergeService:
             )
         own = normalize_store_path(place.boundary.path)
         homes = {
-            found.home for found in self.session_documents.documents_inherited(place)
+            found.home for found in self.session_records.documents_inherited(place)
         }
         chosen = []
         for choice in choices:
@@ -272,9 +268,9 @@ class SessionMergeService:
         for choice in chosen:
             file = DocumentRef(choice["path"], choice["document"]).path
             if choice["use"] == "org":
-                self.session_documents.undraft(top.session, file)
+                self.session_records.undraft(top.session, file)
             elif choice["use"] == "replacement":
-                self.session_documents.draft(top.session, file, choice["replacement"])
+                self.session_records.draft(top.session, file, choice["replacement"])
 
     def _shapes(
         self, top: SessionTeam
@@ -334,7 +330,7 @@ class SessionMergeService:
         if under is not None:
             above_id = under
         elif moved:
-            above_id = self.session_landing.home_of(places[session.team_id], path)
+            above_id = self.session_records.home_of(places[session.team_id], path)
         home = store.team(above_id)
         if home is None or any(
             other.id != team_id
@@ -466,7 +462,7 @@ class SessionMergeService:
         for name, protocol in self.team_types.protocols.items():
             if not protocol.waits_for_team_changes:
                 continue
-            theirs = self.session_documents.read_file(
+            theirs = self.session_records.read_file(
                 lost, DocumentRef(folder, name).path
             )
             was = before.get(name)
@@ -532,7 +528,7 @@ class SessionMergeService:
                 and not is_division_lead(above)
                 and store.team(above.team_id) is None
             ):
-                moved_to = self.session_landing.home_of(top, place.boundary.path)
+                moved_to = self.session_records.home_of(top, place.boundary.path)
                 for agreed in self._documents_coming_with(
                     above, moved_to, clash.team, came.get(clash.team, {})
                 ):
@@ -550,7 +546,7 @@ class SessionMergeService:
             )
         memory = self.team_memory()
         for file, (text, over) in sorted(
-            self.session_documents.drafts(top.session).items()
+            self.session_records.drafts(top.session).items()
         ):
             path = file.rpartition("/")[0]
             name = DocumentRef.at(file).name
@@ -951,7 +947,7 @@ class SessionMergeService:
             waits = {*take, *(item.key for item in items if item.kind == "team")}
             agreements = {
                 file
-                for file in self.session_documents.drafts(top.session)
+                for file in self.session_records.drafts(top.session)
                 if self._waits_for_team_changes(file)
             }
             self._keep_merge(
@@ -963,7 +959,7 @@ class SessionMergeService:
                     }
                 ),
             )
-            records = self.session_landing.land(top, seen, waits=waits, held=agreements)
+            records = self.session_records.land(top, seen, waits=waits, held=agreements)
             return Landed(records, [], [], [], [], [])
         # What the tree and the merge were, for a landing that fails: the
         # tree never moves without the team memory that goes with it.
@@ -1021,7 +1017,7 @@ class SessionMergeService:
                 if item.use == "org" or (
                     item.with_team is not None and item.with_team not in taken
                 ):
-                    self.session_documents.undraft(top.session, file)
+                    self.session_records.undraft(top.session, file)
                     held.append((item.document, item.key))
                     others.append((item.document, item.key, item.org))
                     continue
@@ -1031,7 +1027,7 @@ class SessionMergeService:
                 if item.use == "replacement":
                     others.append((item.document, item.key, text))
             self._keep_merge(top, None)
-            records = self.session_landing.land(top, seen, chosen=texts, tree=True)
+            records = self.session_records.land(top, seen, chosen=texts, tree=True)
         except BaseException:
             store.replace_all(tree)
             store.set_shape(session.id, shape)
@@ -1097,7 +1093,7 @@ class SessionMergeService:
         did not take, also when the session is closed and nobody is told."""
         for name, directory, _ in landed.others:
             self.team_history.land_event(
-                self.session_landing.home_of(top, directory),
+                self.session_records.home_of(top, directory),
                 self.team_history.event(
                     "not_taken",
                     top,
@@ -1220,7 +1216,7 @@ class SessionMergeService:
         return [
             (DocumentRef.at(file).name, file.rpartition("/")[0], text or "")
             for file, (text, _) in sorted(
-                self.session_documents.drafts(top.session).items()
+                self.session_records.drafts(top.session).items()
             )
             if self._waits_for_team_changes(file) and memory.read(file) != text
         ]

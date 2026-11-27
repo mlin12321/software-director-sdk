@@ -69,14 +69,8 @@ from openhands.agent_server.director.service.resumable_work_service import (
 from openhands.agent_server.director.service.review_service import (
     ReviewService,
 )
-from openhands.agent_server.director.service.session_document_service import (
-    SessionDocumentService,
-)
 from openhands.agent_server.director.service.session_draft_service import (
     SessionDraftService,
-)
-from openhands.agent_server.director.service.session_landing_service import (
-    SessionLandingService,
 )
 from openhands.agent_server.director.service.session_lifecycle_service import (
     SessionLifecycleService,
@@ -86,6 +80,9 @@ from openhands.agent_server.director.service.session_limit_service import (
 )
 from openhands.agent_server.director.service.session_merge_service import (
     SessionMergeService,
+)
+from openhands.agent_server.director.service.session_record_service import (
+    SessionRecordService,
 )
 from openhands.agent_server.director.service.stall_watch_service import (
     StallWatchService,
@@ -102,9 +99,6 @@ from openhands.agent_server.director.service.team_member_start_service import (
 )
 from openhands.agent_server.director.service.team_messaging_service import (
     TeamMessagingService,
-)
-from openhands.agent_server.director.service.team_report_service import (
-    TeamReportService,
 )
 from openhands.agent_server.director.service.team_split_service import TeamSplitService
 from openhands.agent_server.director.service.team_summary_service import (
@@ -270,16 +264,20 @@ class DirectorService:
             org=self._org, org_state=self.org_state, retry=run_limit_retry
         )
         self.session_drafts = SessionDraftService(run_state=self.org_state.run_state)
-        self.team_reports = TeamReportService(
+        # Tells of a change through a function: what a session's accepted
+        # work makes of the org is built further down.
+        self.team_history = TeamHistoryService(
             org=self._org,
             team_memory=self.org_load.memory,
+            require_team_memory=lambda: self.org_load.team_memory,
             session_drafts=self.session_drafts,
+            org_changed=lambda session: self.session_merges.note_change(session),
         )
         self.documents: DocumentStore = RecordDocumentStore(
             self.org_load.memory,
             self.org_state.run_state,
             lambda session: self.session_merges.note_change(session),
-            self.team_reports,
+            self.team_history,
         )
         self.tree: TeamTree = TeamsOfTheOrg(self._org)
         self.team_types = TeamTypeService(
@@ -401,23 +399,6 @@ class DirectorService:
         each other, the one built first is given a function that asks
         for the other when it is called.
         """
-        self.team_history = TeamHistoryService(
-            org=self._org,
-            team_memory=self.org_load.memory,
-            require_team_memory=lambda: self.org_load.team_memory,
-            session_drafts=self.session_drafts,
-            org_changed=lambda session: self.session_merges.note_change(session),
-        )
-        self.session_landing = SessionLandingService(
-            org=self._org,
-            run_state=self.org_state.run_state,
-            team_memory=self.org_load.memory,
-            documents=self.documents,
-            team_types=self.team_types,
-            session_drafts=self.session_drafts,
-            org_save=self.org_save,
-            event=self.team_history.event,
-        )
         self.team_context = TeamContextService(
             checkouts=self.checkouts,
             org=self._org,
@@ -432,7 +413,7 @@ class DirectorService:
         self.check_counts = CheckCountService(
             org=self._org, run_state=self.org_state.run_state
         )
-        self.session_documents = SessionDocumentService(
+        self.session_records = SessionRecordService(
             org=self._org,
             team_memory=self.org_load.memory,
             require_team_memory=lambda: self.org_load.team_memory,
@@ -441,7 +422,8 @@ class DirectorService:
             team_documents=self.org_settings.team_documents,
             team_types=self.team_types,
             session_drafts=self.session_drafts,
-            home_of=self.session_landing.home_of,
+            org_save=self.org_save,
+            event=self.team_history.event,
             confinement=self.confinement,
         )
         # Takes work up through a function: what is begun is built next and
@@ -547,8 +529,7 @@ class DirectorService:
             team_messaging=self.team_messaging,
             message_delivery=self.message_delivery,
             resumable_work=self.resumable_work,
-            session_documents=self.session_documents,
-            session_landing=self.session_landing,
+            session_records=self.session_records,
         )
         self.reviews = ReviewService(
             org=self._org,
@@ -570,7 +551,7 @@ class DirectorService:
             check_counts=self.check_counts,
             confinement=self.confinement,
             model_calls=self.model_calls,
-            session_documents=self.session_documents,
+            session_records=self.session_records,
             session_merges=self.session_merges,
         )
         self.session_limits = SessionLimitService(
@@ -613,14 +594,13 @@ class DirectorService:
             team_types=self.team_types,
             team_history=self.team_history,
             team_context=self.team_context,
-            team_reports=self.team_reports,
             team_summaries=self.team_summaries,
             team_messaging=self.team_messaging,
             message_delivery=self.message_delivery,
             member_start=self.member_start,
             check_counts=self.check_counts,
             confinement=self.confinement,
-            session_documents=self.session_documents,
+            session_records=self.session_records,
             session_drafts=self.session_drafts,
             resumable_work=self.resumable_work,
             work_queue=self.work_queue,
@@ -675,7 +655,7 @@ class DirectorService:
             member_start=self.member_start,
             check_counts=self.check_counts,
             confinement=self.confinement,
-            session_documents=self.session_documents,
+            session_records=self.session_records,
             session_drafts=self.session_drafts,
             team_splits=self.team_splits,
             model_calls=self.model_calls,

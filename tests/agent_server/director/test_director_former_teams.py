@@ -152,7 +152,7 @@ async def test_a_team_put_in_another_teams_directory_gets_none_of_its_memory(
 
     orders = node(service, API)
     assert orders.title == "Orders" and orders.agents == []
-    assert service.team_reports.reports_of(orders) == []
+    assert service.team_history.reports_of(orders) == []
     assert service.team_context.threads_of(orders) == []
     assert service.org_state.run_state().marked(TASK)[orders.id] == "Keep the orders"
     [former] = former_of(service, API)
@@ -286,7 +286,7 @@ async def test_the_ic_is_told_who_has_each_replaced_teams_directory_now(
     # spec of the team it was cut from as old.
     for team_id in ("services.api.http", "services.api.db"):
         team = node(service, team_id)
-        assert team.agents == [] and service.team_reports.reports_of(team) == []
+        assert team.agents == [] and service.team_history.reports_of(team) == []
         assert team.leftover_documents == [
             LeftoverDocument(name="spec", path="services/api", team="API")
         ]
@@ -433,7 +433,7 @@ async def test_what_the_ic_hands_over_is_in_the_new_teams_briefing(
 
     assert "It has not started" in handed.text and node(service, API).agents == []
     # It is kept for the team and written into none of its documents.
-    assert service.team_reports.reports_of(node(service, API)) == []
+    assert service.team_history.reports_of(node(service, API)) == []
 
     await tasked(service)
 
@@ -635,7 +635,7 @@ async def test_a_hand_over_conversation_hands_over_and_writes_the_spec_and_no_mo
     ]
 
     assert not handed.is_error and not spec.is_error
-    assert service.team_reports.reports_of(node(service, API)) == []
+    assert service.team_history.reports_of(node(service, API)) == []
     [told] = service.session_drafts.handed_over_to(node(service, API).id)
     assert told["text"] == "Keep SQLite."
     assert node(service, "root").summary == "Shop"

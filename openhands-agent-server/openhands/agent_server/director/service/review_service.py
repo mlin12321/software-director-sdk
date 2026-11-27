@@ -70,12 +70,12 @@ from openhands.agent_server.director.service.org_state_service import OrgStateSe
 from openhands.agent_server.director.service.resumable_work_service import (
     ResumableWorkService,
 )
-from openhands.agent_server.director.service.session_document_service import (
-    SessionDocumentService,
-)
 from openhands.agent_server.director.service.session_merge_service import (
     Meets,
     SessionMergeService,
+)
+from openhands.agent_server.director.service.session_record_service import (
+    SessionRecordService,
 )
 from openhands.agent_server.director.service.team_context_service import (
     TeamContextService,
@@ -152,7 +152,7 @@ class ReviewService:
     check_counts: CheckCountService
     confinement: AgentConfinementService
     model_calls: ModelCallService
-    session_documents: SessionDocumentService
+    session_records: SessionRecordService
     session_merges: SessionMergeService
     """What a session's accepted work makes of the org."""
     _review_instructions: dict[str, str] = field(default_factory=dict, init=False)
@@ -406,7 +406,7 @@ class ReviewService:
         changed = (
             self.team_documents().changed_elsewhere(place.session) if opens else []
         )
-        inherited = self.session_documents.documents_inherited(place) if opens else []
+        inherited = self.session_records.documents_inherited(place) if opens else []
         if not files and not changed and not inherited:
             return None
         text = reconcile_request(

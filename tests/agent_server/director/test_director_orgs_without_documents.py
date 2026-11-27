@@ -98,7 +98,7 @@ async def test_an_org_whose_teams_keep_no_documents_splits_and_lands_its_work(
     assert (repo / "README.md").read_text() == "# Checkout\n"
     review = node(service, "root").review
     assert review is not None and review.state == "accepted"
-    assert service.session_documents.drafts(root.session) == {}
+    assert service.session_records.drafts(root.session) == {}
     await service.aclose()
 
 

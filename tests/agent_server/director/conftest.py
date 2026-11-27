@@ -678,7 +678,7 @@ def memory_of(service: DirectorService, file: str) -> str | None:
     """A file of team memory as the first session has it: what it wrote
     there and nobody accepted yet, else the org's."""
     [session, *_] = service.org_load.org.sessions()
-    return service.session_documents.read_file(
+    return service.session_records.read_file(
         service.org_load.org.session(session.id)[0], file
     )
 

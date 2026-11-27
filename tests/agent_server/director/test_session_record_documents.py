@@ -3,7 +3,7 @@ repository, a store of teams and a run state in memory."""
 
 from pathlib import Path
 from types import SimpleNamespace
-from typing import cast
+from typing import Any, cast
 
 import pytest
 
@@ -12,6 +12,7 @@ from openhands.agent_server.director.documents.store import (
     RecordDocumentStore,
 )
 from openhands.agent_server.director.documents.team_documents import TeamDocuments
+from openhands.agent_server.director.environment.git import GitCodingEnvironment
 from openhands.agent_server.director.environment.git.git_store import GitStore
 from openhands.agent_server.director.models import Report, SessionTeam
 from openhands.agent_server.director.org_store import OrgStore
@@ -19,15 +20,17 @@ from openhands.agent_server.director.run_state import USE, RunState
 from openhands.agent_server.director.service.agent_confinement_service import (
     AgentConfinementService,
 )
-from openhands.agent_server.director.service.session_document_service import (
-    SessionDocumentService,
-)
+from openhands.agent_server.director.service.org_save_service import OrgSaveService
 from openhands.agent_server.director.service.session_draft_service import (
     SessionDraftService,
+)
+from openhands.agent_server.director.service.session_record_service import (
+    SessionRecordService,
 )
 from openhands.agent_server.director.service.team_type_service import (
     TeamTypeService,
 )
+from openhands.agent_server.director.service.work_queue_service import WorkQueueService
 from tests.agent_server.director.conftest import open_session_in, small_tree
 from tests.agent_server.director.test_team_documents import AnyOrg, RootAboveApi
 
@@ -51,7 +54,7 @@ class Documents:
         open_session_in(self.store, "root", SESSION)
         self.drafts = SessionDraftService(run_state=lambda: self.run)
         self.dropped: list[str] = []
-        self.service = SessionDocumentService(
+        self.service = SessionRecordService(
             org=lambda: self.store,
             team_memory=lambda: GitStore(repo),
             require_team_memory=lambda: GitStore(repo),
@@ -62,7 +65,16 @@ class Documents:
             ),
             team_types=team_types,
             session_drafts=self.drafts,
-            home_of=lambda top, path: "root",
+            org_save=OrgSaveService(
+                environment=GitCodingEnvironment(),
+                org=lambda: self.store,
+                repo_dir=lambda: repo,
+                team_memory=lambda: GitStore(repo),
+                run_state=lambda: self.run,
+                work_queue=WorkQueueService(default_lane="org"),
+                delay=60,
+            ),
+            event=cast(Any, None),
             confinement=cast(
                 AgentConfinementService,
                 SimpleNamespace(drop_merge_checkout=self.dropped.append),
