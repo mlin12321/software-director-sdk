@@ -31,10 +31,7 @@ from openhands.agent_server.director.documents.team_documents import (
 )
 from openhands.agent_server.director.documents.tree import TeamTree
 from openhands.agent_server.director.git import (
-    GitError,
     enclosing_repository,
-    git,
-    head_of,
     is_git_repository,
 )
 from openhands.agent_server.director.git_store import (
@@ -179,8 +176,6 @@ ORG_WAITS = "org-waits"
 # The escalation that asks the human whether a session that reached its
 # token limit goes on.
 LIMIT_WAITS = "limit-reached"
-# How much of an error is kept as the reason an agent failed.
-_REASON_KEPT = 600
 
 
 def failure_waits(role: str) -> str:
@@ -219,20 +214,6 @@ def hand_over_of(place: SessionTeam) -> HandOverMode | None:
         if agent.hand_over is not None:
             return agent.hand_over
     return None
-
-
-def _agent_title(
-    team: str, name: str, session: str = "", *, division_lead: bool = False
-) -> str:
-    """What an agent's conversation is called. The session is named unless
-    it is called what its team is, and the agents a session's work is
-    reviewed by are called its Division Leads.
-
-    Args:
-        name: What the agent's member is called.
-    """
-    where = f"{team} · {session}" if session and session != team else team
-    return f"{where} ({'Division Lead ' + name if division_lead else name})"
 
 
 def _summary_of(text: str) -> str:
@@ -785,17 +766,6 @@ def _new_agents(ic_id: UUID, member: str) -> list[AgentRef]:
     return [AgentRef(role=member, conversation_id=str(ic_id), status="idle")]
 
 
-def _base_of(workspace: str) -> str:
-    return head_of(Path(workspace)) or ""
-
-
 def _instant() -> str:
     """Now, fine enough to put what two agents record in order."""
     return datetime.now(UTC).isoformat()
-
-
-def _branch_of(workspace: str) -> str:
-    try:
-        return git(Path(workspace), ["rev-parse", "--abbrev-ref", "HEAD"]).strip()
-    except (GitError, OSError):
-        return ""

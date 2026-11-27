@@ -19,6 +19,7 @@ from openhands.agent_server.director.org_store import (
 from openhands.agent_server.director.run_state import (
     JOINED,
 )
+from openhands.agent_server.director.service.agent_start_service import agent_title
 from openhands.agent_server.director.service.message_delivery_service import (
     MessageDeliveryService,
 )
@@ -30,7 +31,6 @@ from openhands.agent_server.director.service.state import (
     MODELS_LANE,
     ORG_LANE,
     SAVED_BEFORE_FORGOTTEN,
-    _agent_title,
     _instant,
     lane_for,
 )
@@ -252,7 +252,7 @@ class Delivery(Records):
                 with suppress(NotFound):
                     await launcher.rename(
                         UUID(agent.conversation_id),
-                        _agent_title(
+                        agent_title(
                             place.title,
                             self.team_types.team(place).title(agent.role),
                             store.session_title(place),

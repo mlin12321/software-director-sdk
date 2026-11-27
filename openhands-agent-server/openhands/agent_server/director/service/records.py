@@ -53,6 +53,7 @@ from openhands.agent_server.director.run_state import (
     USE,
     Intent,
 )
+from openhands.agent_server.director.service.agent_start_service import REASON_KEPT
 from openhands.agent_server.director.service.session_draft_service import (
     thread_name,
 )
@@ -60,7 +61,6 @@ from openhands.agent_server.director.service.session_landing_service import (
     SessionLandingService,
 )
 from openhands.agent_server.director.service.state import (
-    _REASON_KEPT,
     ASKED_TOLD,
     DECLINED_TOLD,
     HISTORY_TOLD,
@@ -137,7 +137,7 @@ class Records(ServiceState):
             team.parent_id or team.id,
             "failed",
             team,
-            f"{what}: not done. {type(error).__name__}: {error}"[:_REASON_KEPT],
+            f"{what}: not done. {type(error).__name__}: {error}"[:REASON_KEPT],
         )
 
     def _note_change(self, session: str) -> None:

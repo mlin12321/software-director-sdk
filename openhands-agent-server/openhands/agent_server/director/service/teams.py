@@ -4,23 +4,18 @@ import asyncio
 import json
 from contextlib import suppress
 from datetime import datetime
+from functools import cached_property
 from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
 
-from openhands.agent_server.director.context import (
-    briefing_block,
-    steady,
-)
 from openhands.agent_server.director.documents.store import DocumentRef
 from openhands.agent_server.director.git import (
     GitError,
     bring_over,
-    head_of,
     uncommitted,
 )
 from openhands.agent_server.director.intents import Brief, LaunchMember, StartTeam
-from openhands.agent_server.director.launch import StartedAgent
 from openhands.agent_server.director.models import (
     AgentRef,
     OrgNode,
@@ -32,17 +27,13 @@ from openhands.agent_server.director.org import TeamMember
 from openhands.agent_server.director.org_store import (
     AGENT_LOST,
     is_division_lead,
-    session_team_id,
     team_ref,
     utc_now,
 )
 from openhands.agent_server.director.prompts import (
-    brief,
     failure_notice,
-    hand_over_brief,
     left_for_team,
     manager_check,
-    role_text,
 )
 from openhands.agent_server.director.run_state import (
     CHECKS,
@@ -50,11 +41,12 @@ from openhands.agent_server.director.run_state import (
     PROGRESS,
     RUNNING,
     TASK,
-    TOLD,
     Intent,
 )
+from openhands.agent_server.director.service.agent_start_service import (
+    AgentStartService,
+)
 from openhands.agent_server.director.service.delivery import Delivery
-from openhands.agent_server.director.service.resumable_work_service import Held
 from openhands.agent_server.director.service.session_draft_service import (
     thread_name,
 )
@@ -62,12 +54,8 @@ from openhands.agent_server.director.service.stall_watch_service import (
     progress_of,
 )
 from openhands.agent_server.director.service.state import (
-    _REASON_KEPT,
     _STARTED_WITH,
     LEFT_REFS,
-    _agent_title,
-    _base_of,
-    _branch_of,
     _instant,
     _new_agents,
     checkout_root,
@@ -75,12 +63,10 @@ from openhands.agent_server.director.service.state import (
 )
 from openhands.sdk.conversation.state import ConversationExecutionStatus
 from openhands.sdk.errors import (
-    Conflict,
     Invalid,
     NotFound,
 )
 from openhands.sdk.logger import get_logger
-from openhands.sdk.tool.spec import Tool
 
 
 logger = get_logger(__name__)
@@ -88,6 +74,23 @@ logger = get_logger(__name__)
 
 class Teams(Delivery):
     """Starts agents and carries what is said between teams."""
+
+    @cached_property
+    def agent_start(self) -> AgentStartService:
+        """What starts the agents of a team."""
+        return AgentStartService(
+            org=lambda: self.org,
+            repo_dir=lambda: self._repo_dir,
+            org_state=self.org_state,
+            start_line=self.start_line,
+            message_delivery=self.message_delivery,
+            confinement=self.confinement,
+            team_types=self.team_types,
+            team_documents=lambda: self.team_documents,
+            launcher=self._require_launcher,
+            context_of=self.context_of,
+            tell_of_failure=self.tell_of_failure,
+        )
 
     def send_ref(
         self,
@@ -436,8 +439,10 @@ class Teams(Delivery):
                     StartTeam(
                         task=f"{purpose}{_STARTED_WITH}{text}",
                         purpose=purpose,
-                        parent=self._derived_from(place),
-                        checkout=place.worktree_path if self._in_place(place) else None,
+                        parent=self.agent_start.derived_from(place),
+                        checkout=place.worktree_path
+                        if self.agent_start.in_place(place)
+                        else None,
                     ),
                 )
                 if human and ic.conversation_id:
@@ -449,45 +454,6 @@ class Teams(Delivery):
         else:
             self.message_delivery.notify(conversation_id, text)
         return conversation_id
-
-    def _in_place(self, place: SessionTeam) -> bool:
-        """Whether a team that starts works in the checkout it has: a
-        session's Division Lead place, and the team a session is opened
-        at when sessions get no worktree or the session has one already."""
-        return is_division_lead(place) or (
-            self.org.opens_session(place)
-            and (
-                place.isolation != "worktree"
-                or checkout_root(place.worktree_path)
-                != checkout_root(str(self._repo_dir))
-            )
-        )
-
-    def _derived_from(self, place: SessionTeam) -> str | None:
-        """The place whose IC the IC of ``node`` is derived from when it
-        starts: the team above, or for the team a session is opened at and
-        its reviewer, who of the session works already."""
-        store = self.org
-        opened = store.session_of(place)
-        if is_division_lead(place) and opened:
-            return session_team_id(opened.team_id, opened.id)
-        if store.opens_session(place):
-            # A session that went a team higher has an IC below already.
-            return next(
-                (team.id for team in store.below(place.id) if team.agents),
-                place.parent_id,
-            )
-        return place.parent_id
-
-    async def _template(self) -> str | None:
-        """A conversation of the org to derive an agent from when nothing
-        above it has started: the IC a session started with, oldest first."""
-        store, launcher = self.org, self._require_launcher()
-        for session in store.sessions():
-            ic = session.conversation_id
-            if ic is not None and await launcher.started(UUID(ic)) is not None:
-                return ic
-        return None
 
     def _purpose(self, node: OrgNode) -> str:
         """What a team is for, without the message it was started with."""
@@ -698,322 +664,25 @@ class Teams(Delivery):
         if running == ConversationExecutionStatus.RUNNING:
             self._resuming.discard(conversation_id)
 
-    def _briefing(self, place: SessionTeam, role: str, task: str) -> tuple[str, str]:
-        """An agent's first message, and the context it tells, as kept to
-        find later what changed."""
-        context = self.context_of(place, role)
-        text = brief(
-            place,
-            role,
-            task,
-            self.team_documents.briefed(self.team_types.reader_of(place)),
-            briefing_block(
-                context, self.team_documents.told(self.team_types.reader_of(place))
-            ),
-            self.team_types.type_of(place).text_for(role),
-            works=role == self.team_types.team(place).writer,
-            titles=self.team_types.type_of(place).titles,
-            role_said=self.team_types.role_text(place, role),
-            names=self.team_types.team(place).names,
-        )
-        return text, json.dumps(steady(context))
-
-    def _hand_over_briefing(self, place: SessionTeam, job: str) -> str:
-        """The first message of an IC's hand-over conversation."""
-        return hand_over_brief(
-            place,
-            job,
-            self.team_documents.briefed(self.team_types.reader_of(place)),
-            briefing_block(
-                self.context_of(place, self.team_types.team(place).writer),
-                self.team_documents.told(self.team_types.reader_of(place)),
-            ),
-            role=role_text(
-                self.team_types.team(place).names,
-                works=True,
-                hand_over=True,
-                rules=self.team_types.document_rules(place),
-            ),
-            names=self.team_types.team(place).names,
-        )
-
-    async def _start_hand_over(
-        self, place: SessionTeam, conversation_id: str, job: str
-    ) -> bool:
-        """Start the hand-over conversation of a team's IC, derived from its
-        main one.
-
-        Returns:
-            Whether it runs.
-        """
-        names = self.team_types.team(place).names
-        launcher = self._require_launcher()
-        try:
-            if await launcher.started(UUID(conversation_id)) is not None:
-                return True
-            parent = await self._started_ic(place)
-            if parent is None:
-                raise NotFound(f"Team {place.id} has no {names.writer} to hand over")
-            text = await asyncio.to_thread(self._hand_over_briefing, place, job)
-            tool_params = await asyncio.to_thread(
-                self.confinement.confine,
-                place.id,
-                self.team_types.team(place).writer,
-                conversation_id,
-            )
-            adapt = await asyncio.to_thread(
-                self.confinement.adapter,
-                conversation_id,
-                self.team_types.hand_over_tools,
-            )
-
-            async def start() -> StartedAgent:
-                return await launcher.start_derived(
-                    UUID(parent),
-                    UUID(conversation_id),
-                    title=f"{place.title} ({names.writer}, hand-over)",
-                    task=text,
-                    isolation="shared",
-                    tool_params=tool_params,
-                    adapt_agent=adapt,
-                )
-
-            await self.start_line.when_there_is_room(place.id, start)
-            if self.org_state.paused is not None:
-                self.message_delivery.note_running(conversation_id, place.id, True)
-                await launcher.pause(UUID(conversation_id))
-        except Held:
-            raise
-        except Exception:
-            logger.exception("Could not start the hand-over of team %s", place.id)
-            return False
-        return True
-
-    async def _brief(self, place_id: str, role: str, task: str) -> None:
-        place = self.org.place(place_id)
-        if place is None:
-            return
-        conversation_id = self.team_types.team(place).conversation(role)
-        if conversation_id is not None:
-            text, told = await asyncio.to_thread(self._briefing, place, role, task)
-            self.org_state.run_state().mark(TOLD, conversation_id, told)
-            await self.message_delivery.send(conversation_id, text)
-
-    async def _start_agent(
-        self,
-        place_id: str,
-        role: str,
-        parent_conversation: str | None,
-        task: str,
-        checkout: str | None = None,
-    ) -> bool:
-        """Start one agent of a team from ``parent_conversation``.
-
-        Args:
-            checkout: The team's checkout when it has one already and the
-                agent is to work on in it.
-
-        Returns:
-            Whether it runs. A failure is recorded on the team.
-        """
-        store = self.org
-        place = store.place(place_id)
-        conversation_id = (
-            self.team_types.team(place).conversation(role) if place else None
-        )
-        if place is None or conversation_id is None:
-            return False
-        launcher = self._require_launcher()
-        try:
-            started = await launcher.started(UUID(conversation_id))
-            if started is None:
-                started = await self._start_new(
-                    place, role, conversation_id, parent_conversation, task, checkout
-                )
-                if self.org_state.paused is not None:
-                    self.message_delivery.note_running(conversation_id, place_id, True)
-                    await launcher.pause(UUID(conversation_id))
-        except Held:
-            raise
-        except Exception as error:
-            logger.exception("Could not start the %s of team %s", role, place_id)
-            store.set_agent(place_id, role, status=AGENT_LOST)
-            self.tell_of_failure(
-                place_id, role, f"It could not be started: {error}"[:_REASON_KEPT]
-            )
-            return False
-        store.set_agent(
-            place_id,
-            role,
-            kind=started.kind,
-            acp_server=started.acp_server,
-            model=started.model,
-        )
-        if role == self.team_types.team(place).writer:
-            store.update_place(
-                place_id,
-                worktree_path=started.workspace,
-                isolation=started.isolation,
-                branch=await asyncio.to_thread(_branch_of, started.workspace),
-                base_commit=place.base_commit
-                or await asyncio.to_thread(_base_of, started.workspace),
-                boundary_enforcement=self.confinement.enforcement(started.kind),
-            )
-        return True
-
-    async def _start_new(
-        self,
-        place: SessionTeam,
-        role: str,
-        conversation_id: str,
-        parent_conversation: str | None,
-        task: str,
-        checkout: str | None = None,
-    ) -> StartedAgent:
-        """Start the conversation of an agent that has none yet.
-
-        Raises:
-            NotFound: There is nobody to derive the agent from.
-            Conflict: A step of the director is replacing or removing the team.
-            Held: The org was paused while the team waited for a run.
-        """
-        place_id = place.id
-        launcher = self._require_launcher()
-        if self.message_delivery.is_settling(place_id):
-            # The step fixed which conversations it stops before this one.
-            raise Conflict(
-                f"Team {place.title!r} is being replaced or removed, so its "
-                f"{role} was not started"
-            )
-        text, told = await asyncio.to_thread(self._briefing, place, role, task)
-        tool_params = await asyncio.to_thread(self.confinement.confine, place_id, role)
-        if parent_conversation is None:
-            raise NotFound(f"Team {place_id} has nobody to derive its {role} from")
-        parent_id = UUID(parent_conversation)
-        # A team given a profile of its own starts its IC from it; its
-        # Manager, like every Manager, is derived from the IC.
-        works = role == self.team_types.team(place).writer
-        profile = place.agent_profile if works else None
-        kind = await (
-            launcher.profile_kind(profile)
-            if profile
-            else launcher.agent_kind(parent_id)
-        )
-        isolation = place.isolation if works else "shared"
-        leads = is_division_lead(place)
-        if kind == "acp" and works and not self.confinement.is_sandboxed:
-            # Nothing holds its process to the team's directory, so its
-            # work is kept apart and checked when it is merged.
-            isolation = "worktree"
-        tools = self.team_types.tools_for(place, role)
-        adapt = await asyncio.to_thread(
-            self.confinement.adapter, conversation_id, tools
-        )
-        # A session starts from where the repository's checkout is.
-        base = (
-            await asyncio.to_thread(head_of, self._repo_dir)
-            if works
-            and not checkout
-            and isolation == "worktree"
-            and self.org.opens_session(place)
-            else None
-        )
-        title = _agent_title(
-            place.title,
-            self.team_types.team(place).title(role),
-            self.org.session_title(place),
-            division_lead=leads,
-        )
-
-        async def start() -> StartedAgent:
-            if profile:
-                return await launcher.start_from_profile(
-                    profile,
-                    parent_id,
-                    UUID(conversation_id),
-                    [Tool(name=name) for name in tools],
-                    title=title,
-                    task=text,
-                    isolation=isolation,
-                    tool_params=tool_params,
-                    adapt_agent=adapt,
-                    checkout=checkout,
-                    base=base,
-                )
-            return await launcher.start_derived(
-                parent_id,
-                UUID(conversation_id),
-                title=title,
-                task=text,
-                isolation=isolation,
-                tool_params=tool_params,
-                adapt_agent=adapt,
-                checkout=checkout,
-                base=base,
-            )
-
-        started = await self.start_line.when_there_is_room(place_id, start)
-        self.org_state.run_state().mark(TOLD, conversation_id, told)
-        return started
-
-    async def _started_ic(self, place: SessionTeam | None) -> str | None:
-        """The IC of ``node`` or, while that team has not started, of the
-        nearest team above that has: the conversation a new agent is
-        derived from."""
-        store, launcher = self.org, self._require_launcher()
-        while place is not None:
-            ic = self.team_types.writer_conversation(place)
-            # Never a Division Lead IC, whose role of reviewer the new agent
-            # would inherit.
-            if (
-                ic is not None
-                and not is_division_lead(place)
-                and await launcher.started(UUID(ic)) is not None
-            ):
-                return ic
-            place = store.place(place.parent_id) if place.parent_id else None
-        return None
-
-    async def _launch_member(self, place_id: str, task: str, member: str) -> None:
-        place = self.org.place(place_id)
-        if place is not None:
-            # A Division Lead Manager is derived from the session's IC,
-            # never from the Division Lead IC, whose role it would inherit.
-            derived_from = await self._started_ic(
-                self.org.place(self._derived_from(place) or "")
-                if is_division_lead(place)
-                else place
-            )
-            # A member that reviews a session's work without being the one
-            # that works there still does it in the place's own checkout.
-            reviews_here = (
-                is_division_lead(place)
-                and member == self.team_types.team(place).reviewer
-            )
-            await self._start_agent(
-                place_id,
-                member,
-                derived_from,
-                task,
-                place.worktree_path if reviews_here else None,
-            )
-
     async def _do_brief(self, intent: Intent) -> None:
         brief = intent.of(Brief)
         place = self.org.place(intent.node_id)
         if place and brief.role == self.team_types.team(place).writer:
             self.org_state.run_state().mark(TASK, intent.node_id, brief.task)
-        await self._brief(intent.node_id, brief.role, brief.task)
+        await self.agent_start.brief(intent.node_id, brief.role, brief.task)
 
     async def _do_launch_member(self, intent: Intent) -> None:
         launch = intent.of(LaunchMember)
-        await self._launch_member(intent.node_id, launch.task, launch.role)
+        await self.agent_start.launch_member(intent.node_id, launch.task, launch.role)
 
     async def _do_start_team(self, intent: Intent) -> None:
         start = intent.of(StartTeam)
         place_id, task = intent.node_id, start.task
         above = self.org.place(start.parent or "")
-        parent_ic = await self._started_ic(above) or await self._template()
+        parent_ic = (
+            await self.agent_start.started_ic(above)
+            or await self.agent_start.template()
+        )
         checkout = start.checkout
         self.org_state.run_state().mark(TASK, place_id, task)
         self.progressed(place_id, by_above=True)
@@ -1036,7 +705,7 @@ class Teams(Delivery):
                     )
         if started is None:
             return
-        await self._start_agent(
+        await self.agent_start.start_agent(
             place_id,
             self.team_types.team(started).writer,
             parent_ic,

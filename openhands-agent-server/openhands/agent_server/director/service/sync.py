@@ -61,6 +61,7 @@ from openhands.agent_server.director.run_state import (
     RUNNING,
     WAITING,
 )
+from openhands.agent_server.director.service.agent_start_service import agent_title
 from openhands.agent_server.director.service.sessions import Sessions
 from openhands.agent_server.director.service.stall_watch_service import (
     STALL_WAITS,
@@ -72,7 +73,6 @@ from openhands.agent_server.director.service.state import (
     ORG_LANE,
     PAUSE_LANE,
     RESTART_NOTE,
-    _agent_title,
     _new_agents,
     apart,
     failure_waits,
@@ -430,7 +430,7 @@ class Sync(Sessions):
                 f"The {names.writer} of team {place.title} has a conversation here"
             )
         conversation = request.conversation
-        like = self._derived_from(place) if leads else place.parent_id
+        like = self.agent_start.derived_from(place) if leads else place.parent_id
         above = store.place(like) if like else None
         # A session's IC that never started has no checkout yet: it gets
         # one of its own, never the one of the team it works beside.
@@ -444,8 +444,8 @@ class Sync(Sessions):
             )
         if (
             conversation is None
-            and await self._started_ic(above) is None
-            and await self._template() is None
+            and await self.agent_start.started_ic(above) is None
+            and await self.agent_start.template() is None
         ):
             raise Conflict(
                 "No conversation of the org runs on this server to start "
@@ -480,7 +480,7 @@ class Sync(Sessions):
                     task=task,
                     parent=like,
                     checkout=place.worktree_path
-                    if own_checkout or self._in_place(place)
+                    if own_checkout or self.agent_start.in_place(place)
                     else None,
                 ),
             )
@@ -500,7 +500,7 @@ class Sync(Sessions):
                     }
                 ),
                 [Tool(name=name) for name in tools],
-                title=_agent_title(
+                title=agent_title(
                     place.title,
                     self.team_types.team(place).title(writer),
                     store.session_title(place),

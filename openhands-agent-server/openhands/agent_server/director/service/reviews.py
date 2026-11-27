@@ -83,6 +83,7 @@ from openhands.agent_server.director.run_state import (
     TURN,
     Intent,
 )
+from openhands.agent_server.director.service.agent_start_service import head_name_of
 from openhands.agent_server.director.service.session_landing_service import (
     Taken,
 )
@@ -93,7 +94,6 @@ from openhands.agent_server.director.service.state import (
     BASE_LANE,
     MERGE_WAITS,
     ORG_WAITS,
-    _branch_of,
     checkout_root,
 )
 from openhands.agent_server.director.service.team_history_service import ASKED_KEPT
@@ -2116,7 +2116,7 @@ class Reviews(Teams):
         started_on = session.branch if session else ""
         if not is_division_lead(above) or not started_on:
             return None
-        on = _branch_of(above.worktree_path)
+        on = head_name_of(above.worktree_path)
         return None if on == started_on else (started_on, on)
 
     async def _pass_up(self, place_id: str, *, acted: bool) -> None:

@@ -48,9 +48,9 @@ from openhands.agent_server.director.run_state import (
     TOLD,
     Intent,
 )
+from openhands.agent_server.director.service.agent_start_service import REASON_KEPT
 from openhands.agent_server.director.service.resumable_work_service import Held
 from openhands.agent_server.director.service.state import (
-    _REASON_KEPT,
     PRUNED_REFS,
     _child_node,
     conversations_of,
@@ -164,7 +164,7 @@ class Splits(Watch):
             if place is not None and place.pending_split is not None:
                 self._decline(
                     place,
-                    f"{type(error).__name__}: {error}."[:_REASON_KEPT],
+                    f"{type(error).__name__}: {error}."[:REASON_KEPT],
                     "Some of it may be done: read your team's context.",
                 )
             raise
@@ -575,11 +575,11 @@ class Splits(Watch):
                 # One hand-over at a time: the one before it ends here.
                 with suppress(NotFound):
                     await self._require_launcher().pause(UUID(before))
-        if await self._start_hand_over(place, conversation, job):
+        if await self.agent_start.start_hand_over(place, conversation, job):
             return
         # Once more, after what a full server is given to make room.
         await asyncio.sleep(self._run_limit_retry)
-        if await self._start_hand_over(place, conversation, job):
+        if await self.agent_start.start_hand_over(place, conversation, job):
             return
         run.unmark(HANDING, place.id)
         # The mode stays on the IC as lost, for whoever looks at the team.

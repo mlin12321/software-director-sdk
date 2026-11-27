@@ -40,15 +40,17 @@ from openhands.agent_server.director.run_state import (
     TOLD,
     Intent,
 )
+from openhands.agent_server.director.service.agent_start_service import (
+    agent_title,
+    base_of,
+    head_name_of,
+)
 from openhands.agent_server.director.service.request_routing_service import (
     RequestRoutingService,
 )
 from openhands.agent_server.director.service.splits import Splits
 from openhands.agent_server.director.service.state import (
     BASE_LANE,
-    _agent_title,
-    _base_of,
-    _branch_of,
     _new_agents,
     apart,
     conversations_of,
@@ -154,7 +156,7 @@ class Sessions(Splits):
         above = store.team(team.parent_id) if team.parent_id else team
         if above is None:
             raise NotFound(f"Unknown team: {team.parent_id}")
-        if conversation is None and await self._template() is None:
+        if conversation is None and await self.agent_start.template() is None:
             raise Conflict(
                 "No conversation of the org runs on this server to start the "
                 f"session's {self.team_types.type_of(team).names.writer} from. Send "
@@ -175,7 +177,7 @@ class Sessions(Splits):
         )
         run = self.org_state.run_state()
         checkout = str(self._repo_dir)
-        branch = await asyncio.to_thread(_branch_of, checkout)
+        branch = await asyncio.to_thread(head_name_of, checkout)
         lead_id = division_lead_id(above.id, session_id)
         ids = {current.id: session_team_id(current.id, session_id) for current in shape}
         top = store.open_session(
@@ -324,7 +326,7 @@ class Sessions(Splits):
                 }
             ),
             [Tool(name=name) for name in tools],
-            title=_agent_title(
+            title=agent_title(
                 top.title,
                 self.team_types.team(top).title(writer),
                 store.session_title(top),
@@ -345,8 +347,8 @@ class Sessions(Splits):
             top.id,
             worktree_path=started.workspace,
             isolation=started.isolation if apart else "shared",
-            branch=await asyncio.to_thread(_branch_of, started.workspace),
-            base_commit=await asyncio.to_thread(_base_of, started.workspace),
+            branch=await asyncio.to_thread(head_name_of, started.workspace),
+            base_commit=await asyncio.to_thread(base_of, started.workspace),
             boundary_enforcement=self.confinement.enforcement(started.kind),
         )
         self._checkout_for_session(top.id)
