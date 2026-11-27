@@ -10,12 +10,15 @@ from pathlib import Path
 from typing import Annotated, Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Header, Query, status
+from fastapi import APIRouter, Depends, Header, Query, Request, status
 from fastapi.responses import Response, StreamingResponse
 
 # The org's agents get their tools from this server, so it registers them.
 import openhands.agent_server.director.tools  # noqa: F401
-from openhands.agent_server.dependencies import get_director_service
+from openhands.agent_server.dependencies import (
+    get_director_service,
+    get_optional_director_service,
+)
 from openhands.agent_server.director.acp import TOOLS_PATH
 from openhands.agent_server.director.mcp_shim import TOKEN_HEADER
 from openhands.agent_server.director.models import (
@@ -82,6 +85,40 @@ director_router = APIRouter(prefix="/director", tags=["Director"])
 # For agents that run their own tools. They have no session key of the
 # server; each is known by its own token.
 director_tools_router = APIRouter(prefix=TOOLS_PATH, tags=["Director"])
+
+# The routes of a conversation that an agent of the org is not open to.
+_CLOSED_TO_ORG_AGENTS = frozenset(
+    {"delete_conversation", "fork_conversation", "start_child_conversation"}
+)
+
+
+def not_an_agent_of_the_org(
+    request: Request,
+    director: Annotated[DirectorService | None, Depends(get_optional_director_service)],
+) -> None:
+    """Refuse to copy, extend or delete an org agent's conversation: a copy
+    or a child would act as that agent, in no team, and a session whose
+    agent is deleted is left without it.
+
+    A dependency of every conversation route, so that the routes themselves
+    stay as OpenHands has them; it acts on the three it names.
+    """
+    endpoint = request.scope.get("endpoint")
+    if director is None or getattr(endpoint, "__name__", "") not in (
+        _CLOSED_TO_ORG_AGENTS
+    ):
+        return
+    try:
+        conversation_id = UUID(request.path_params.get("conversation_id", ""))
+    except ValueError:
+        return
+    if director.is_agent(conversation_id):
+        raise Conflict(
+            "This conversation is an agent of the org: it cannot be forked "
+            "or deleted, and starts no conversation of its own. Close its "
+            "session to end it, or open one to give the org more work."
+        )
+
 
 # How often an idle stream sends a comment, so proxies keep it open.
 STREAM_HEARTBEAT_SECONDS = 15.0

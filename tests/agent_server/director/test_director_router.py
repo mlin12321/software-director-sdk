@@ -870,3 +870,14 @@ async def test_the_conversation_of_an_agent_of_the_org_cannot_be_forked(running,
         json={"task": "Do it for me"},
     )
     assert child.status_code == 409
+
+
+def test_the_routes_closed_to_org_agents_are_routes_of_a_conversation():
+    """They are named, not decorated: a route OpenHands renames would
+    otherwise be open to an agent of the org without a word."""
+    from openhands.agent_server.conversation_router import conversation_router
+    from openhands.agent_server.director_router import _CLOSED_TO_ORG_AGENTS
+
+    names = {getattr(route, "name", "") for route in conversation_router.routes}
+
+    assert _CLOSED_TO_ORG_AGENTS <= names

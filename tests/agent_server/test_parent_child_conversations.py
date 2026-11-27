@@ -16,12 +16,8 @@ from openhands.agent_server.conversation_router import conversation_router
 from openhands.agent_server.conversation_service import (
     ConversationService,
     InvalidParentConversation,
-    _to_derive_from,
 )
-from openhands.agent_server.dependencies import (
-    get_conversation_service,
-    get_optional_director_service,
-)
+from openhands.agent_server.dependencies import get_conversation_service
 from openhands.agent_server.event_service import (
     ConversationRunLimitExceeded,
     EventService,
@@ -34,17 +30,13 @@ from openhands.agent_server.models import (
     StartConversationRequest,
 )
 from openhands.sdk import LLM, Agent, Message, TextContent
-from openhands.sdk.agent import ACPAgent
 from openhands.sdk.agent.base import AgentBase
-from openhands.sdk.conversation.request import ConversationWorktreeOptions
 from openhands.sdk.conversation.state import (
     ConversationExecutionStatus,
     ConversationState,
 )
 from openhands.sdk.git.exceptions import GitCommandError
 from openhands.sdk.git.utils import run_git_command
-from openhands.sdk.security.confirmation_policy import AlwaysConfirm, NeverConfirm
-from openhands.sdk.tool.spec import Tool
 from openhands.sdk.workspace import LocalWorkspace
 
 
@@ -250,7 +242,6 @@ def test_router_maps_invalid_parent_to_422(tmp_path):
         f"Parent conversation {uuid4()} not found"
     )
     app.dependency_overrides[get_conversation_service] = lambda: service
-    app.dependency_overrides[get_optional_director_service] = lambda: None
     client = TestClient(app)
 
     payload = _start_request(tmp_path, parent_conversation_id=uuid4()).model_dump(
@@ -322,10 +313,7 @@ class _ChildLaunch:
 
 
 async def _launch_child(
-    tmp_path: Path,
-    workspace_dir: Path,
-    request: StartChildConversationRequest,
-    **launch_options: Any,
+    tmp_path: Path, workspace_dir: Path, request: StartChildConversationRequest
 ) -> _ChildLaunch:
     """Start a parent in *workspace_dir*, then launch a child from it."""
     services: dict[UUID, Any] = {}
@@ -342,9 +330,7 @@ async def _launch_child(
             conversation_worktree_root=worktree_root,
         ) as service:
             parent_info, _ = await service.start_conversation(parent_request)
-            result = await service.start_child_conversation(
-                parent_info.id, request, **launch_options
-            )
+            result = await service.start_child_conversation(parent_info.id, request)
             parent = await service.get_conversation(parent_info.id)
             child = (
                 await service.get_conversation(result.conversation_id)
@@ -410,124 +396,6 @@ async def test_start_child_conversation_inherits_parent_configuration(
 
 
 @pytest.mark.asyncio
-async def test_start_child_conversation_takes_a_chosen_id(tmp_path, workspace_dir):
-    child_id = uuid4()
-    request = StartChildConversationRequest(task="Review the plan")
-
-    launch = await _launch_child(
-        tmp_path,
-        workspace_dir,
-        request,
-        child_id=child_id,
-    )
-
-    assert launch.result is not None
-    assert launch.result.conversation_id == child_id
-    assert child_id in launch.services
-
-
-@pytest.mark.asyncio
-async def test_start_child_conversation_adds_tags_to_the_ones_it_inherits(
-    tmp_path, workspace_dir
-):
-    launch = await _launch_child(
-        tmp_path,
-        workspace_dir,
-        StartChildConversationRequest(task="Review the plan"),
-        # One that is named with no value is not inherited.
-        extra_tags={"startedby": "director", "source": None},
-        confirmation_policy=AlwaysConfirm(),
-    )
-
-    assert launch.result is not None
-    child_stored = launch.services[launch.result.conversation_id].stored
-    assert child_stored.tags == {"startedby": "director"}
-    assert child_stored.confirmation_policy == AlwaysConfirm()
-    assert launch.services[launch.parent_id].stored.tags == {"source": "test"}
-    assert launch.services[launch.parent_id].stored.confirmation_policy == (
-        NeverConfirm()
-    )
-
-
-@pytest.mark.asyncio
-async def test_start_child_conversation_refuses_an_id_that_is_taken(
-    tmp_path, workspace_dir
-):
-    services: dict[UUID, Any] = {}
-    with patch(
-        "openhands.agent_server.conversation_service.EventService",
-        side_effect=_event_service_factory(services),
-    ):
-        async with ConversationService(
-            conversations_dir=tmp_path / "conversations"
-        ) as service:
-            parent_info, _ = await service.start_conversation(
-                _start_request(workspace_dir)
-            )
-
-            with pytest.raises(ValueError, match="already exists"):
-                await service.start_child_conversation(
-                    parent_info.id,
-                    StartChildConversationRequest(task="Again"),
-                    child_id=parent_info.id,
-                )
-
-
-@pytest.mark.asyncio
-async def test_start_child_conversation_worktree_can_start_from_the_parents_head(
-    tmp_path,
-):
-    repo_dir = tmp_path / "repo"
-    _init_git_repo(repo_dir)
-    run_git_command(["git", "checkout", "-b", "feature"], repo_dir)
-    (repo_dir / "feature.txt").write_text("in progress\n")
-    run_git_command(["git", "add", "feature.txt"], repo_dir)
-    run_git_command(
-        [
-            "git",
-            "-c",
-            "user.name=OpenHands Test",
-            "-c",
-            "user.email=openhands@example.com",
-            "commit",
-            "-m",
-            "feature",
-        ],
-        repo_dir,
-    )
-    request = StartChildConversationRequest(task="Continue", isolation="worktree")
-
-    launch = await _launch_child(
-        tmp_path,
-        repo_dir,
-        request,
-        worktree_options=ConversationWorktreeOptions(base="head"),
-    )
-
-    assert launch.result is not None and launch.result.workspace is not None
-    assert (Path(launch.result.workspace) / "feature.txt").exists()
-
-
-@pytest.mark.asyncio
-async def test_start_conversation_gives_the_agent_server_tools(tmp_path, workspace_dir):
-    services: dict[UUID, Any] = {}
-    with patch(
-        "openhands.agent_server.conversation_service.EventService",
-        side_effect=_event_service_factory(services),
-    ):
-        async with ConversationService(
-            conversations_dir=tmp_path / "conversations"
-        ) as service:
-            info, _ = await service.start_conversation(
-                _start_request(workspace_dir),
-                server_tools=[Tool(name="start_child_conversation")],
-            )
-
-    agent = services[info.id].get_conversation().agent
-    assert [tool.name for tool in agent.tools] == ["start_child_conversation"]
-
-
-@pytest.mark.asyncio
 async def test_start_child_conversation_shares_workspace_outside_git_repo(
     tmp_path, workspace_dir
 ):
@@ -538,34 +406,6 @@ async def test_start_child_conversation_shares_workspace_outside_git_repo(
     assert launch.result is not None
     assert launch.result.isolation == "shared"
     assert launch.result.workspace == str(workspace_dir)
-
-
-@pytest.mark.asyncio
-async def test_a_taken_child_id_leaves_the_worktree_of_its_conversation(tmp_path):
-    repo_dir = tmp_path / "repo"
-    _init_git_repo(repo_dir)
-    request = StartChildConversationRequest(task="Fix the bug", isolation="worktree")
-    services: dict[UUID, Any] = {}
-    with patch(
-        "openhands.agent_server.conversation_service.EventService",
-        side_effect=_event_service_factory(services),
-    ):
-        async with ConversationService(
-            conversations_dir=tmp_path / "conversations",
-            conversation_worktree_root=tmp_path / "worktrees",
-        ) as service:
-            parent, _ = await service.start_conversation(_start_request(repo_dir))
-            first = await service.start_child_conversation(parent.id, request)
-            assert first is not None and first.workspace is not None
-            worktree = Path(first.workspace)
-            (worktree / "draft.txt").write_text("uncommitted\n")
-
-            with pytest.raises(ValueError, match="already exists"):
-                await service.start_child_conversation(
-                    parent.id, request, child_id=first.conversation_id
-                )
-
-            assert (worktree / "draft.txt").read_text() == "uncommitted\n"
 
 
 @pytest.mark.asyncio
@@ -694,7 +534,6 @@ def _child_client(service: ConversationService) -> TestClient:
     add_domain_error_handler(app)
     app.include_router(conversation_router, prefix="/api")
     app.dependency_overrides[get_conversation_service] = lambda: service
-    app.dependency_overrides[get_optional_director_service] = lambda: None
     return TestClient(app)
 
 
@@ -747,25 +586,3 @@ def test_router_rejects_child_with_empty_task():
 
     assert response.status_code == 422
     service.start_child_conversation.assert_not_awaited()
-
-
-def test_a_child_of_a_running_acp_agent_holds_none_of_its_process():
-    parent = ACPAgent(acp_command=["npx", "-y", "some-acp-agent"])
-    parent._executor = object()
-    parent._process = object()
-    parent._session_id = "the-parents-session"
-
-    child = _to_derive_from(parent.model_copy(update={"acp_args": ["--flag"]}))
-
-    assert isinstance(child, ACPAgent)
-    assert child.acp_command == parent.acp_command
-    assert child.acp_args == ["--flag"]
-    assert child._executor is None
-    assert child._process is None
-    assert child._session_id is None
-
-
-def test_a_child_of_any_other_agent_starts_from_that_agent():
-    agent = Agent(llm=LLM(model="gpt-4o", usage_id="test"), tools=[])
-
-    assert _to_derive_from(agent) is agent
