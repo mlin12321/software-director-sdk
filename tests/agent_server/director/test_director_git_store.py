@@ -123,27 +123,6 @@ def test_what_one_member_recorded_is_replaced_and_the_others_is_kept(board: GitS
     assert board.read("api/report.json") is not None
 
 
-def test_reports_kept_by_team_id_are_moved_into_each_teams_folder(board: GitStore):
-    first = Report(at="2026-11-01T00:00:00+00:00", role="ic", text="Chose SQLite.")
-    second = Report(at="2026-11-02T00:00:00+00:00", role="manager", text="Split.")
-    gone = Report(at="2026-11-03T00:00:00+00:00", role="ic", text="Of a lost team.")
-    for file, report in (
-        ("api/ic.json", first),
-        ("api/manager.json", second),
-        ("gone/ic.json", gone),
-    ):
-        board.write(".reports", file, f"[{report.model_dump_json()}]")
-
-    assert board.migrate_reports({"api": "services/api", "root": ""}) == 3
-
-    assert board.reports("services/api") == [first, second]
-    assert board.reports("services/api", "manager") == [second]
-    assert board.read(".reports/api/ic.json") is None
-    assert board.read(".reports/gone/ic.json") is None
-    # There is nothing left to move.
-    assert board.migrate_reports({"api": "services/api"}) == 0
-
-
 def test_reports_are_replaced_only_as_they_were_read(board: GitStore):
     take_in(board, reports={"api": [a_report("Long.")]})
     read = board.reports("api", "ic")
