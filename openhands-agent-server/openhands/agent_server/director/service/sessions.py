@@ -226,7 +226,13 @@ class Sessions(Splits):
         await asyncio.to_thread(
             self.record_event, above.id, "session_opened", top, text[:ASKED_KEPT]
         )
-        brief = session_brief(top, title, others, names=self.team(top).names)
+        brief = session_brief(
+            top,
+            title,
+            others,
+            names=self.team(top).names,
+            kept=self.kept_documents(top),
+        )
         if conversation is None:
             conversation_id = self.tell_writer(top.id, text + brief, human=True) or ""
         else:
@@ -349,7 +355,13 @@ class Sessions(Splits):
         self.tell_writer(
             top.id,
             handed_up(place, request.text, why, names=names)
-            + session_brief(top, self.org.session_title(top), [], names=names),
+            + session_brief(
+                top,
+                self.org.session_title(top),
+                [],
+                names=names,
+                kept=self.kept_documents(top),
+            ),
         )
         self._save_soon()
         return (

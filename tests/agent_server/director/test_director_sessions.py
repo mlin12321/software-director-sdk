@@ -62,6 +62,7 @@ from tests.agent_server.director.conftest import (
     landed,
     manager,
     node,
+    own_document,
     propose_and_approve,
     record_of,
     root_conversation,
@@ -846,10 +847,8 @@ async def test_a_spec_a_session_writes_is_its_own_until_its_work_is_accepted(
     )
 
     assert service.team_memory.read("services/api/spec.md") == before
-    assert [spec.spec for spec in service.specs_of(node(service, top))] == ["# Refunds"]
-    assert "# Refunds" not in [
-        spec.spec for spec in service.specs_of(node(service, API))
-    ]
+    assert own_document(service, node(service, top), "spec") == "# Refunds"
+    assert own_document(service, node(service, API), "spec") != "# Refunds"
 
     commit(own_checkout(service, repo, tmp_path, top), ROUTES, "refunds\n")
     await use(service, ic(service, top), SubmitReviewTool, DONE)
@@ -934,7 +933,7 @@ async def test_a_spec_of_a_closed_session_is_dropped(service: DirectorService):
     await service.settled()
 
     assert service.team_memory.read("services/api/spec.md") == before
-    assert service.spec_draft(session.teams[0]) is None
+    assert service.document_draft(session.teams[0], "spec") is None
 
 
 async def test_work_that_goes_up_by_itself_takes_its_place_after_what_waits(

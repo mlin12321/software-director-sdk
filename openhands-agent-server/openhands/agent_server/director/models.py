@@ -532,29 +532,6 @@ class Report(BaseModel):
     )
 
 
-class InheritedSpec(BaseModel):
-    """The spec of a boundary."""
-
-    path: str
-    spec: str
-    readonly: bool = Field(
-        description=(
-            "False for the spec of the team's own boundary, which its IC writes."
-        )
-    )
-    old: bool = Field(
-        default=False,
-        description=(
-            "True for a spec a team before this one left. It describes how "
-            "that team worked and is to be rewritten."
-        ),
-    )
-    left_by: str | None = Field(
-        default=None,
-        description="The title of the team that left an old spec, when known.",
-    )
-
-
 class FormerThread(BaseModel):
     """Messages a removed team took part in, as they were kept."""
 
@@ -610,20 +587,6 @@ class FormerTeam(BaseModel):
         default="", description="When the team was set up, which tells it apart."
     )
     threads: list[FormerThread] = Field(default_factory=list)
-
-
-class BoundaryContracts(BaseModel):
-    """What the sub-teams of one boundary must keep between them."""
-
-    path: str = Field(description="The boundary that was split.")
-    contracts: str
-    own: bool = Field(
-        description=(
-            "True for the contracts between the team's own sub-teams. False "
-            "for the ones the team above set, which the team must keep with "
-            "the teams beside it."
-        )
-    )
 
 
 class FormerTeamSummary(BaseModel):
@@ -837,7 +800,7 @@ class MemorySync(BaseModel):
     kept_local: list[str] = Field(
         default_factory=list,
         description=(
-            "Specs and contracts both sides had changed. The local text was "
+            "Documents both sides had changed. The local text was "
             "kept; the remote text is in the team memory's history."
         ),
     )
@@ -1120,7 +1083,7 @@ class OrgConflict(BaseModel):
         description=(
             "`field`: one field of a team was changed on both sides. `team`: "
             "one side removed a team the other changed. `file`: both sides "
-            "changed the same lines of a spec or of contracts."
+            "changed the same lines of a document."
         )
     )
     node_id: str = Field(description="The team; '' for a file of the team_memory.")
@@ -1170,7 +1133,7 @@ class OrgSync(BaseModel):
         default=None, description="The merge waiting for choices, if any."
     )
     memory: MemorySync | None = Field(
-        default=None, description="What happened to specs, contracts and reports."
+        default=None, description="What happened to documents and reports."
     )
 
 
@@ -1495,7 +1458,7 @@ class MergeItem(BaseModel):
     with_team: str | None = Field(
         default=None,
         description=(
-            "The waiting team contracts come with: they are the session's "
+            "The waiting team a document comes with: it is the session's "
             "only if that team becomes the org's."
         ),
     )
@@ -1510,9 +1473,10 @@ class MergeItem(BaseModel):
 
 class Merge(BaseModel):
     """How the work a session submitted becomes the org's: what waits to be
-    settled, and how far it has come. Its code and specs go in when the
-    reviewing IC accepts; its teams and contracts when it is their turn and
-    the Division Lead Manager has settled what waits of them."""
+    settled, and how far it has come. Its code goes in when the reviewing
+    IC accepts, with the documents that land with it; its teams, and the
+    documents that wait with them, when it is their turn and the Division
+    Lead Manager has settled what waits of them."""
 
     seq: int = Field(
         description=(
@@ -1527,7 +1491,7 @@ class Merge(BaseModel):
     org_queued: bool = Field(
         default=False,
         description=(
-            "Whether its teams and contracts wait for those of a session "
+            "Whether what it makes of the org's teams waits for that of a session "
             "that submitted earlier. What waits of them is not known yet."
         ),
     )

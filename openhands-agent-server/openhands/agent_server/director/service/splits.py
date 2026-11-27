@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Literal
 from uuid import UUID, uuid4
 
+from openhands.agent_server.director.documents.store import DocumentRef
 from openhands.agent_server.director.git import (
     GitError,
     git,
@@ -53,7 +54,6 @@ from openhands.agent_server.director.service.state import (
     PRUNED_REFS,
     _child_node,
     _Held,
-    _spec_file,
     conversations_of,
     hand_over_of,
 )
@@ -209,7 +209,7 @@ class Splits(Watch):
                 team.model_copy(
                     update={
                         "leftover_documents": await asyncio.to_thread(
-                            self._specs_left_in,
+                            self._documents_left_in,
                             place,
                             team.boundary.path,
                             split.replaces,
@@ -320,6 +320,7 @@ class Splits(Watch):
                             self._so_far(below),
                             self.asked_of(below),
                             self.review_instructions(self.type_of(below)),
+                            self.kept_documents(above).read_by_sub_teams,
                         ),
                     )
                 # Under a new team it starts from now: its time without
@@ -449,17 +450,17 @@ class Splits(Watch):
                 self.record_event(plan.parent, "pruned", pruned, plan.reason)
                 intent = run.step_done(intent, "recorded")
             if pruned is not None and above is not None:
-                # The directory is the team above's again, with a spec that
-                # says how the pruned team worked.
+                # The directory is the team above's again, with what the
+                # pruned team left there of how it worked.
                 left = await asyncio.to_thread(
-                    self._specs_left_in, above, pruned.boundary.path, [pruned]
+                    self._documents_left_in, above, pruned.boundary.path, [pruned]
                 )
-                known = {old.path for old in above.leftover_documents}
+                known = {(old.name, old.path) for old in above.leftover_documents}
                 store.update_place(
                     above.id,
                     leftover_documents=[
                         *above.leftover_documents,
-                        *(old for old in left if old.path not in known),
+                        *(old for old in left if (old.name, old.path) not in known),
                     ],
                 )
             store.remove(place_id)
@@ -485,6 +486,7 @@ class Splits(Watch):
                 saved,
                 former,
                 names=self.names_at(intent.node_id),
+                rules=self.document_rules(above) if above else (),
             ),
         )
         if former and parent_ic is not None:
@@ -516,11 +518,20 @@ class Splits(Watch):
             for record in self.former_drafts(place.session)
             if (record.id, record.at) in wanted
         ]
-        specs = {
-            team.path: await asyncio.to_thread(
-                self.read_file, place, _spec_file(normalize_store_path(team.path))
-            )
-            or ""
+        stays = self.kept_documents(place).stay_when_removed
+        # What each of them wrote that stays in its folder, by the folder.
+        left = {
+            team.path: [
+                (name, text)
+                for name in stays
+                if (
+                    text := await asyncio.to_thread(
+                        self.read_file,
+                        place,
+                        DocumentRef(normalize_store_path(team.path), name).path,
+                    )
+                )
+            ]
             for team in former
         }
         children = payload.children
@@ -530,9 +541,10 @@ class Splits(Watch):
                 [team for team in store.below(place.id) if team.boundary.path in paths],
                 children,
                 former,
-                specs,
+                left,
                 names=self.names_at(intent.node_id),
                 rules=self.document_rules(place),
+                stays=stays,
             )
         else:
             job = pruned_job(
@@ -540,8 +552,10 @@ class Splits(Watch):
                 payload.where,
                 payload.reason,
                 former,
-                specs,
+                left,
                 names=self.names_at(intent.node_id),
+                rules=self.document_rules(place),
+                stays=stays,
             )
         mode = hand_over_of(place)
         before = mode.conversation_id if mode else None
@@ -552,7 +566,7 @@ class Splits(Watch):
             run.mark(
                 HANDING,
                 place.id,
-                json.dumps({"conversation": conversation, "given": [], "spec": False}),
+                json.dumps({"conversation": conversation, "given": [], "written": []}),
             )
             if before is not None:
                 # One hand-over at a time: the one before it ends here.
@@ -583,7 +597,16 @@ class Splits(Watch):
         done = json.loads(kept)
         self.notify(
             self.writer_conversation(place),
-            handed_over_notice(done["given"], done["spec"]),
+            handed_over_notice(
+                done["given"],
+                done["written"],
+                names=self.names_at(place_id),
+                rules=[
+                    protocol.document.rules_by_member
+                    for protocol in self.protocols_of(place)
+                    if protocol.document.name not in done["written"]
+                ],
+            ),
         )
 
     async def _archive(
@@ -592,7 +615,7 @@ class Splits(Watch):
         """Keep what a team that is being removed leaves, apart from the
         teams that come after it, and forget what was counted for it. A
         team of the same name or directory then starts from nothing but
-        the old team's spec. Doing it again changes nothing."""
+        what the old team left in its folder. Doing it again changes nothing."""
         kept = self.former_drafts(team.session)
         record = next((f for f in kept if f.id == team.team_id and f.at == at), None)
         if record is None:

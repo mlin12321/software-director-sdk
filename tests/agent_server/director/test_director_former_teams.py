@@ -62,6 +62,7 @@ from tests.agent_server.director.conftest import (
     memory_of,
     node,
     own_contracts,
+    own_document,
     proposing,
     shipped,
     split_api,
@@ -182,8 +183,9 @@ async def test_the_spec_of_the_team_before_stays_and_is_shown_as_old(
     assert orders.leftover_documents == [
         LeftoverDocument(name="spec", path="services/api", team="API")
     ]
-    [spec] = service.specs_of(orders)
-    assert (spec.spec, spec.old, spec.left_by) == ("# API by hand", True, "API")
+    [left] = service.documents_left_to(orders)
+    assert (left.name, left.text, left.left_by) == ("spec", "# API by hand", "API")
+    assert own_document(service, orders, "spec") is None
 
     await tasked(service)
     briefing = launcher.derived[-1].task
@@ -191,8 +193,13 @@ async def test_the_spec_of_the_team_before_stays_and_is_shown_as_old(
     assert "# API by hand" in briefing and "Chose SQLite." not in briefing
     context = service.context_of(node(service, API), "ic")
     assert context["spec"] is None
-    assert context["specs_left_by_teams_before_you"] == [
-        {"directory": "services/api", "team": "API", "spec": "# API by hand"}
+    assert context["documents_left_by_teams_before_you"] == [
+        {
+            "document": "spec",
+            "directory": "services/api",
+            "team": "API",
+            "text": "# API by hand",
+        }
     ]
 
     orders_ic = ic(service, API)
@@ -200,8 +207,8 @@ async def test_the_spec_of_the_team_before_stays_and_is_shown_as_old(
 
     orders = node(service, API)
     assert orders.leftover_documents == []
-    [own] = service.specs_of(orders)
-    assert (own.spec, own.old) == ("# Orders", False)
+    assert own_document(service, orders, "spec") == "# Orders"
+    assert service.documents_left_to(orders) == []
 
 
 async def test_teams_that_split_or_merge_directories_are_shown_the_specs_left_there(
@@ -221,7 +228,7 @@ async def test_teams_that_split_or_merge_directories_are_shown_the_specs_left_th
         LeftoverDocument(name="spec", path="services/api", team="API"),
         LeftoverDocument(name="spec", path="services/web", team="Web"),
     ]
-    assert {spec.spec for spec in service.specs_of(merged)} == {
+    assert {old.text for old in service.documents_left_to(merged)} == {
         "# API by hand",
         "# Web",
     }
@@ -314,8 +321,8 @@ async def test_a_pruned_team_is_recorded_and_its_spec_is_old_for_the_team_above(
         LeftoverDocument(name="spec", path="services/api", team="API")
     ]
     context = service.context_of(node(service, "root"), "ic")
-    [left] = context["specs_left_by_teams_before_you"]
-    assert left["spec"] == "# API by hand"
+    [left] = context["documents_left_by_teams_before_you"]
+    assert (left["document"], left["text"]) == ("spec", "# API by hand")
     # The record is the session's own until its work is accepted.
     assert service.team_memory.former(API) == []
 
@@ -642,7 +649,7 @@ async def test_the_ic_is_told_what_its_hand_over_conversation_did_when_it_ends(
     told = launcher.messages_to(ic(service))[-1]
     assert "Your hand-over mode has ended." in told
     assert "It handed over to: Orders." in told
-    assert "It rewrote your team's spec." in told
+    assert "It wrote your team's spec." in told
     # Told once.
     launcher.report(side, ConversationExecutionStatus.RUNNING)
     launcher.report(side, ConversationExecutionStatus.FINISHED)
@@ -668,7 +675,10 @@ async def test_a_hand_over_conversation_that_did_nothing_leaves_it_to_the_ic(
 
     told = launcher.messages_to(ic(service))[-1]
     assert "It gave nothing to any team." in told
-    assert "It did not rewrite your team's spec: do that with `write_spec`." in told
+    assert (
+        "Still yours to do, since it was not done there:\n- Rewrite your own spec"
+        in told
+    )
 
 
 async def test_each_hand_over_gets_a_conversation_of_its_own(

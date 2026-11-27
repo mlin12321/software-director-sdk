@@ -65,6 +65,7 @@ from tests.agent_server.director.conftest import (
     ic,
     manager,
     node,
+    own_document,
     proposing,
     root_conversation,
     server_config,
@@ -340,7 +341,7 @@ async def test_an_agent_calls_the_directors_tools_with_its_token_alone(
     assert not {"msg_ic", "approve_teams", "prune_team"} & set(tools)
     assert "text" in tools["msg_manager"]["inputSchema"]["properties"]
     assert spec.json()["is_error"] is False
-    assert service.specs_of(node(service, "root"))[0].spec == "# Spec"
+    assert own_document(service, node(service, "root"), "spec") == "# Spec"
     assert refused.status_code == 200 and refused.json()["is_error"] is True
     assert "not one of your tools" in refused.json()["text"]
     assert malformed.json()["is_error"] is True

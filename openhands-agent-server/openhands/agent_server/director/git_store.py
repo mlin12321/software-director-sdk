@@ -29,8 +29,6 @@ from openhands.sdk.errors import Invalid, NotSupported, OperationFailed
 
 
 MEMORY_REF = "refs/agents/memory"
-SPEC_FILE = "spec.md"
-CONTRACTS_FILE = "contracts.md"
 # What the members of a team recorded, in the team's folder beside its
 # other documents: one file for all of them.
 REPORTS_FILE = "report.json"

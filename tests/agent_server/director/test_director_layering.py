@@ -1,6 +1,7 @@
 """Which parts of the director may know of which."""
 
 import ast
+import re
 from pathlib import Path
 
 import pytest
@@ -120,3 +121,35 @@ def test_the_director_has_no_tool_for_any_one_document(module: str):
     assert "def write_spec" not in text and "def write_contracts" not in text
     assert "WRITE_SPEC" not in text and "EDIT_CONTRACTS" not in text
     assert "def report(" not in text and "REPORT = ToolSpec" not in text
+
+
+_DOCUMENT_NAMES = re.compile(
+    r"\b(specs?|contracts?)\b|write_spec|write_contracts", re.IGNORECASE
+)
+# Names of the director's own that hold the word and are no document's.
+_NOT_A_DOCUMENT = re.compile(r"pathspecs?|ToolSpec|tools?\.spec\b")
+
+
+@pytest.mark.parametrize(
+    "module",
+    [
+        "prompts.py",
+        "context.py",
+        "models.py",
+        "agent_actions.py",
+        "intents.py",
+        "tools/catalog.py",
+        *sorted(f"service/{path.name}" for path in (DIRECTOR / "service").glob("*.py")),
+    ],
+)
+def test_the_director_names_no_document_an_org_declares(module: str):
+    # Spec and contracts are documents of the shipped orgs: what the
+    # director does with a document it does by what the document's
+    # protocol says, and what it tells of one comes from the document.
+    named = [
+        line.strip()
+        for line in (DIRECTOR / module).read_text(encoding="utf-8").splitlines()
+        if _DOCUMENT_NAMES.search(_NOT_A_DOCUMENT.sub("", line))
+    ]
+
+    assert named == []

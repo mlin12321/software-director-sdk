@@ -191,7 +191,7 @@ def write_document(
             node.id, summary=written.summary, leftover_documents=[]
         )
     if caller.hand_over:
-        service.note_hand_over(node.id, spec=True)
+        service.note_hand_over(node.id, wrote=name)
     else:
         service.knows(node.id, caller.role, name)
     return written.answer
@@ -422,7 +422,7 @@ def approve_teams(service: DirectorService, caller: Caller) -> str:
         f"Approved. {len(proposal.children)} sub-teams are being set up.{waits} "
         f"None of them starts until your {names.writer} gives it its task. Your "
         f"{names.writer} is "
-        "told to rewrite the team's spec"
+        "told what is its to do now"
         + (" and to pass on what the replaced teams left" if split.replaces else "")
         + "; write to it with msg_ic if the change needs explaining."
     )
@@ -871,7 +871,7 @@ def prune_team(
     service.prune(place_id, reason.strip())
     return (
         f"Pruning {team.title!r}. Its folder goes back to your team's {names.writer} "
-        f"when it is gone. Your {names.writer} is given what the team left and told to "
-        "rewrite the team's spec; write to it with msg_ic if the change "
+        f"when it is gone. Your {names.writer} is given what the team left and told "
+        "what is its to do now; write to it with msg_ic if the change "
         "needs explaining."
     )

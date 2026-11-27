@@ -239,8 +239,8 @@ class PruneTeamArguments(BaseModel):
 
 READ_TEAM_CONTEXT = ToolSpec(
     name="read_team_context",
-    summary="Read your place in the org: your team, role and folder, your spec, "
-    "the contracts you keep and what your team has reported, your sub-teams "
+    summary="Read your place in the org: your team, role and folder, what "
+    "your team keeps and has reported, your sub-teams "
     "and their status, a split that "
     "is waiting, and the escalations you raised or must settle.",
     arguments=ReadTeamContextArguments,
@@ -470,8 +470,8 @@ HAND_OVER = ToolSpec(
 
 # Every tool of the director's own, by name.
 DIRECTOR_TOOL_SPECS: dict[str, ToolSpec] = {
-    spec.name: spec
-    for spec in (
+    tool.name: tool
+    for tool in (
         READ_TEAM_CONTEXT,
         MSG_MANAGER,
         PROPOSE_TEAMS,

@@ -655,9 +655,8 @@ class Teams(Delivery):
 
     def _task_of(self, place: SessionTeam) -> str:
         """What a team that is started again is to do, from what the org
-        kept of it."""
-        specs = [spec for spec in self.specs_of(place) if not spec.old]
-        task = specs[0].spec if specs else place.summary
+        kept of it. What its documents say comes with its briefing."""
+        task = place.summary
         if place.headline and place.headline not in task:
             task = f"{task}\n\nWhere the team last was: {place.headline}"
         return (
@@ -696,7 +695,7 @@ class Teams(Delivery):
             role,
             task,
             self.documents_briefed(place),
-            briefing_block(context),
+            briefing_block(context, self.documents_told(place)),
             self.type_of(place).text_for(role),
             works=role == self.team(place).writer,
             titles=self.type_of(place).titles,
@@ -711,7 +710,10 @@ class Teams(Delivery):
             place,
             job,
             self.documents_briefed(place),
-            briefing_block(self.context_of(place, self.team(place).writer)),
+            briefing_block(
+                self.context_of(place, self.team(place).writer),
+                self.documents_told(place),
+            ),
             role=role_text(
                 self.team(place).names,
                 works=True,
@@ -1061,7 +1063,7 @@ class Teams(Delivery):
             logger.exception("Could not pass what was left to team %s", team.id)
 
     def note_hand_over(
-        self, place_id: str, *, team: str | None = None, spec: bool = False
+        self, place_id: str, *, team: str | None = None, wrote: str | None = None
     ) -> None:
         """Keep what a team's hand-over conversation did, for its IC to be
         told when it ends. Safe from any thread."""
@@ -1072,5 +1074,6 @@ class Teams(Delivery):
         done = json.loads(kept)
         if team is not None and team not in done["given"]:
             done["given"].append(team)
-        done["spec"] = done["spec"] or spec
+        if wrote is not None and wrote not in done["written"]:
+            done["written"].append(wrote)
         run.mark(HANDING, place_id, json.dumps(done))

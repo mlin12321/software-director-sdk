@@ -5,7 +5,6 @@ from uuid import UUID
 
 import pytest
 
-from openhands.agent_server.director.git_store import SPEC_FILE
 from openhands.agent_server.director.models import (
     OrgNode,
     ResolveMergeRequest,
@@ -469,9 +468,9 @@ async def test_a_spec_both_sides_rewrote_is_a_conflict_about_the_file(
     repo: Path, launcher: FakeLauncher, remote: Path, tmp_path: Path
 ):
     here, there = await an_org_on_two_machines(repo, launcher, remote, tmp_path)
-    here.team_memory.write("services/api", SPEC_FILE, "Serve orders over REST\n")
-    there.team_memory.write("services/api", SPEC_FILE, "Serve orders over gRPC\n")
-    there.team_memory.write("apps/web", SPEC_FILE, "Pages for checkout\n")
+    here.team_memory.write("services/api", "spec.md", "Serve orders over REST\n")
+    there.team_memory.write("services/api", "spec.md", "Serve orders over gRPC\n")
+    there.team_memory.write("apps/web", "spec.md", "Pages for checkout\n")
     await there.push_org("origin")
 
     pulled = await here.pull_org("origin")
@@ -522,7 +521,7 @@ async def test_a_team_whose_conversation_is_gone_is_started_again_on_its_work(
 ):
     here = await started(repo, launcher)
     await split_root(here)
-    here.team_memory.write("services/api", SPEC_FILE, "Serve orders over REST\n")
+    here.team_memory.write("services/api", "spec.md", "Serve orders over REST\n")
     lost = ic(here, API)
     assert lost is not None
     del launcher.known[UUID(lost)]

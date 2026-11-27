@@ -9,7 +9,6 @@ from uuid import UUID
 import pytest
 from pydantic import ValidationError
 
-from openhands.agent_server.director.git_store import CONTRACTS_FILE
 from openhands.agent_server.director.intents import Accept, Prune, Split
 from openhands.agent_server.director.models import (
     DirectorSettingsUpdate,
@@ -249,7 +248,7 @@ async def test_a_team_start_cut_off_by_a_crash_is_finished_without_a_second_of_a
     assert node(second, "root").pending_split is None
     starts = [str(start.conversation_id) for start in launcher.derived]
     assert len(set(starts)) == len(starts) == 3
-    contracts = memory_of(second, CONTRACTS_FILE) or ""
+    contracts = memory_of(second, "contracts.md") or ""
     assert contracts.count("POST /checkout returns {order_id}") == 1
     told = [
         text
@@ -305,7 +304,7 @@ async def test_a_prune_cut_off_after_it_is_recorded_is_recorded_once(
         raise ServerEnded
 
     # The team is on record as pruned by now, and not yet removed.
-    monkeypatch.setattr(first, "_specs_left_in", server_ends)
+    monkeypatch.setattr(first, "_documents_left_in", server_ends)
     await cut_off(launcher, ended, use(first, manager(first), PruneTeamTool, PRUNE_API))
 
     second = await again(repo, launcher)

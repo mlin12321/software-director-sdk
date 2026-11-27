@@ -2,6 +2,7 @@
 
 import textwrap
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any, Literal
 
 from openhands.agent_server.director.agent_types import Names
@@ -90,6 +91,42 @@ _PARTS: tuple[tuple[Literal["writer", "reviewer"], str], ...] = (
 def _bullet(line: str) -> str:
     """A point of one line, wrapped as the points written out here are."""
     return textwrap.fill(line, width=76, subsequent_indent="  ")
+
+
+@dataclass(frozen=True)
+class KeptDocuments:
+    """The documents a team keeps, as the director's own messages name
+    them. The record its members keep is not one of them.
+
+    Attributes:
+        names: All of them, in the order the team's type lists them.
+        wait_with_teams: Those a session's changes to become the org's
+            only once its changes to the teams are settled.
+        read_by_sub_teams: Those every team directly below reads.
+        stay_when_removed: Those a removed team leaves in its folder.
+        reports: Whether its members keep a record with `report`.
+    """
+
+    names: Sequence[str] = ()
+    wait_with_teams: Sequence[str] = ()
+    read_by_sub_teams: Sequence[str] = ()
+    stay_when_removed: Sequence[str] = ()
+    reports: bool = False
+
+    @property
+    def land_with_work(self) -> list[str]:
+        """Those a session's changes to become the org's with its code."""
+        return [name for name in self.names if name not in self.wait_with_teams]
+
+
+NO_DOCUMENTS = KeptDocuments()
+
+
+def _listed(things: Sequence[str], last: str = "and") -> str:
+    """``things`` as they are said in a sentence: 'a, b and c'."""
+    if len(things) < 2:
+        return "".join(things)
+    return f"{', '.join(things[:-1])} {last} {things[-1]}"
 
 
 def rules_said(
@@ -284,14 +321,15 @@ def _now_with(team: FormerTeam, children: list[SplitChild]) -> str:
 def left_behind(
     former: list[FormerTeam],
     children: list[SplitChild] | None = None,
-    specs: dict[str, str] | None = None,
+    left: Mapping[str, Sequence[tuple[str, str]]] | None = None,
 ) -> list[str]:
     """What removed teams left, as the IC that is to pass it on reads it.
 
     Args:
         children: The teams that replaced them, to say who has each
             directory now.
-        specs: The spec each of them wrote, by its directory.
+        left: What each of them wrote that stays in its folder, by the
+            folder: the name of each document and its text.
     """
     lines: list[str] = []
     for team in former:
@@ -307,13 +345,13 @@ def left_behind(
         for name, text in team.documents.items():
             if text.strip():
                 lines += [f"Its {name}:", text.strip()]
-        spec = (specs or {}).get(team.path, "").strip()
-        if spec:
-            lines += [
-                "The spec it wrote (old; it stays in "
-                f"{team.path or 'the repository'}):",
-                spec,
-            ]
+        for name, text in (left or {}).get(team.path, ()):
+            if text.strip():
+                lines += [
+                    f"The {name} it wrote (old; it stays in "
+                    f"{team.path or 'the repository'}):",
+                    text.strip(),
+                ]
     return lines
 
 
@@ -398,12 +436,12 @@ def left_for_team(files: list[str], *, names: Names) -> str:
 
 
 _ASIDE = (
-    "What they left (reports, contracts, specs) is being passed on in "
-    "hand-over mode: a side conversation of yours, which the director has "
-    "started with all of it. It has a context of its own and sees nothing "
-    "of this conversation. There you give your teams their notes with "
-    "`hand_over` and rewrite your team's spec with `write_spec`; you are "
-    "told here when it has ended and need do neither here."
+    "What they left is being passed on in hand-over mode: a side "
+    "conversation of yours, which the director has started with all of it. "
+    "It has a context of its own and sees nothing of this conversation. "
+    "There you give your teams what they should know with `hand_over` and "
+    "write what your own team keeps anew; you are told here when it has "
+    "ended and need do neither here."
 )
 
 _HAND_OVER = (
@@ -416,14 +454,16 @@ _HAND_OVER = (
     "(`former_teams`)."
 )
 
-_SPEC_STAYS = (
-    "- A spec a removed team wrote stays in its folder. The team that has "
-    "the folder now is told it is old."
-)
 
-_REWRITE_SPEC = (
-    "- Rewrite your own spec with `write_spec` to say how your folder is divided now."
-)
+def _stays(names: Sequence[str], whose: str = "a removed team") -> list[str]:
+    """What is said of the documents a removed team leaves in its folder."""
+    return [
+        _bullet(
+            f"- A {name} {whose} wrote stays in its folder. The team that "
+            "has the folder now is told it is old."
+        )
+        for name in names
+    ]
 
 
 def approved_notice(
@@ -441,8 +481,10 @@ def approved_notice(
             changed there and not committed.
         former: The teams they replaced. What those left is passed on in
             hand-over mode and is not given here.
-        rules: What each document the team keeps says of itself; the
-            `teams_replaced` of each is told where teams were replaced.
+        rules: What each document the team keeps says of itself: the
+            `teams_replaced` of each is told where teams were replaced,
+            and the `sub_teams_changed` where none were, since the
+            hand-over conversation is told that otherwise.
     """
     lines = [_approved(children, names=names), "", _split_effects(children, unfinished)]
     todo = []
@@ -457,7 +499,7 @@ def approved_notice(
         ]
         todo += _rules_for(rules, "teams_replaced", names.words())
     else:
-        todo += [_REWRITE_SPEC]
+        todo += _rules_for(rules, "sub_teams_changed", names.words())
     todo += ["- Give a team its task with `msg_team` when there is one."]
     return "\n".join(
         [
@@ -476,18 +518,21 @@ def replaced_job(
     teams: list[SessionTeam],
     children: list[SplitChild],
     former: list[FormerTeam],
-    specs: dict[str, str],
+    left: Mapping[str, Sequence[tuple[str, str]]],
     *,
     names: Names,
     rules: Sequence[Mapping[str, str]] = (),
+    stays: Sequence[str] = (),
 ) -> str:
     """What a hand-over conversation is to do after teams were replaced.
 
     Args:
         teams: The sub-teams that were set up.
-        specs: The spec each replaced team wrote, by its directory.
+        left: What each replaced team wrote that stays in its folder, by
+            the folder: the name of each document and its text.
         rules: What each document the team keeps says of itself; the
-            `teams_replaced` of each is told.
+            `teams_replaced` and `sub_teams_changed` of each are told.
+        stays: The documents a removed team leaves in its folder.
     """
     lines = [
         f"What changed: your {names.manager} approved the sub-teams you proposed, and "
@@ -502,13 +547,13 @@ def replaced_job(
         "The teams they replaced are gone; what those had committed is in the "
         "checkout. What each of them left is below. Nothing of it reaches a "
         "new team unless you hand it over.",
-        *left_behind(former, children, specs),
+        *left_behind(former, children, left),
         "",
         "What is yours to do here:",
         _HAND_OVER,
-        _SPEC_STAYS,
+        *_stays(stays),
         *_rules_for(rules, "teams_replaced", names.words()),
-        _REWRITE_SPEC,
+        *_rules_for(rules, "sub_teams_changed", names.words()),
     ]
     return "\n".join(lines)
 
@@ -518,21 +563,31 @@ def pruned_job(
     where: str,
     reason: str,
     former: list[FormerTeam],
-    specs: dict[str, str],
+    left: Mapping[str, Sequence[tuple[str, str]]],
     *,
     names: Names,
+    rules: Sequence[Mapping[str, str]] = (),
+    stays: Sequence[str] = (),
 ) -> str:
-    """What a hand-over conversation is to do after a team was pruned."""
+    """What a hand-over conversation is to do after a team was pruned.
+
+    Args:
+        left: What it wrote that stays in its folder, by the folder: the
+            name of each document and its text.
+        rules: What each document the team keeps says of itself; the
+            `sub_teams_changed` of each is told.
+        stays: The documents a removed team leaves in its folder.
+    """
     lines = [
         f"What changed: your {names.manager} pruned the team {title!r} ({where}): "
         f"{reason} {where} is your team's again.",
         "",
         "What it left is below. It is yours to use or to pass on.",
-        *left_behind(former, None, specs),
+        *left_behind(former, None, left),
         "",
         "What is yours to do here:",
-        _REWRITE_SPEC + " The spec the pruned team wrote stays in its "
-        "folder and is old.",
+        *_rules_for(rules, "sub_teams_changed", names.words()),
+        *_stays(stays, "the pruned team"),
         "- If a team you still have should know of what the pruned team "
         "left, give it to that team with `hand_over`.",
     ]
@@ -545,31 +600,52 @@ HAND_OVER_FAILED = (
 )
 
 
-CHANGED_SINCE_ACCEPT = (
-    "Your team's work was accepted, and your team has changed since: its "
-    "teams, its spec or its contracts. The org does not have these changes "
-    "yet. When your team is done, submit with `submit_review`: the org takes "
-    "them when that is accepted."
-)
+def changed_since_accept(kept: KeptDocuments) -> str:
+    """What a session's IC is told when its team changed after its work
+    was accepted."""
+    changed = _listed([f"its {name}" for name in ("teams", *kept.names)], "or")
+    return (
+        f"Your team's work was accepted, and your team has changed since: "
+        f"{changed}. The org does not have these changes "
+        "yet. When your team is done, submit with `submit_review`: the org takes "
+        "them when that is accepted."
+    )
 
 
-def handed_over_notice(given: list[str], spec: bool) -> str:
+def handed_over_notice(
+    given: list[str],
+    written: Sequence[str],
+    *,
+    names: Names,
+    rules: Sequence[Mapping[str, str]] = (),
+) -> str:
     """What an IC is told in its main conversation once its hand-over
-    conversation has ended."""
+    conversation has ended.
+
+    Args:
+        given: The teams it handed something over to.
+        written: The documents of its own team it wrote there.
+        rules: What each document it did not write there says of itself;
+            the `sub_teams_changed` of each is still the IC's to do.
+    """
     to = (
         f"It handed over to: {', '.join(given)}."
         if given
         else "It gave nothing to any team."
     )
-    spec_line = (
-        "It rewrote your team's spec."
-        if spec
-        else "It did not rewrite your team's spec: do that with `write_spec`."
-    )
-    return (
-        f"Your hand-over mode has ended. {to} {spec_line} "
-        "`read_team_context` returns what the removed teams left "
-        "(`former_teams`) if more of it should be given with `hand_over`."
+    wrote = f" It wrote your team's {_listed(list(written))}." if written else ""
+    todo = _rules_for(rules, "sub_teams_changed", names.words())
+    return "\n".join(
+        [
+            f"Your hand-over mode has ended. {to}{wrote} "
+            "`read_team_context` returns what the removed teams left "
+            "(`former_teams`) if more of it should be given with `hand_over`.",
+            *(
+                ["", "Still yours to do, since it was not done there:", *todo]
+                if todo
+                else []
+            ),
+        ]
     )
 
 
@@ -581,12 +657,15 @@ def pruned_notice(
     former: list[FormerTeam],
     *,
     names: Names,
+    rules: Sequence[Mapping[str, str]] = (),
 ) -> str:
     """What the IC above is told once its Manager's prune is carried out.
 
     Args:
         former: What the pruned team left, if it left a record. It is
             passed on in hand-over mode and is not given here.
+        rules: What each document the team keeps says of itself; the
+            `sub_teams_changed` of each is told where nothing is passed on.
     """
     pruned = (
         f"Your {names.manager} pruned the team {title!r} ({where}): {reason} Its "
@@ -596,7 +675,10 @@ def pruned_notice(
     )
     if former:
         return f"{pruned}\n\n{_ASIDE}"
-    return "\n".join([pruned, "", "What is now yours to do:", _REWRITE_SPEC])
+    todo = _rules_for(rules, "sub_teams_changed", names.words())
+    return "\n".join(
+        [pruned, "", "What is now yours to do:", *todo] if todo else [pruned]
+    )
 
 
 def left_document(name: str, path: str, left_by: str | None, tool: str) -> str:
@@ -791,33 +873,43 @@ def session_work(
     team: SessionTeam,
     title: str,
     request: str,
-    contracts: Sequence[tuple[str, str]] = (),
+    waiting: Sequence[tuple[str, str, str]] = (),
     *,
     names: Names,
+    kept: KeptDocuments = NO_DOCUMENTS,
 ) -> str:
     """What comes before the review request for the work of the session
     titled ``title``, which was opened for ``request``.
 
     Args:
-        contracts: The contracts it wrote that are not the org's: each
-            directory with the session's text.
+        waiting: What it wrote of the documents that wait with its teams
+            and is not the org's: each by name and folder, with the
+            session's text.
+        kept: The documents the reviewer's team keeps.
     """
     written = "".join(
-        f"Contracts it wrote for {directory or 'the repository'}, which its "
-        "code is written to. They are not the org's yet: the Division Lead "
-        f"{names.manager} settles them if other accepted work changed them too. "
-        f"Judge the code by these:\n{text or '(none)'}\n\n"
-        for directory, text in contracts
+        f"What it wrote as the {name} of {directory or 'the repository'}, "
+        "which its code is written to. This is not the org's yet: the "
+        f"Division Lead {names.manager} settles it if other accepted work "
+        f"changed it too. Judge the code by it:\n{text or '(none)'}\n\n"
+        for name, directory, text in waiting
+    )
+    own = (
+        f"What it wrote of its {_listed(kept.land_with_work, 'or')} and the "
+        "sub-teams it set up are"
+        if kept.land_with_work
+        else "Sub-teams it set up are"
     )
     return (
         f"The session {title!r} at {team.title!r} submits its work. It was "
         f"opened for this request:\n{request}\n\nIt worked in a checkout of "
         f"its own ({team.worktree_path}, branch {team.branch}). Judge its "
-        "work by that request and by your team's spec, contracts and "
-        "records. Accepted work is merged into the repository's checkout in "
+        "work by that request and by your team's "
+        f"{_listed([*kept.names, 'records'])}. Accepted work is merged into "
+        "the repository's checkout in "
         "the order work was submitted. If it does not merge with what went "
-        "in meanwhile, the merge is laid out for you to finish. A spec it "
-        "wrote and sub-teams it set up are its own until you accept its "
+        f"in meanwhile, the merge is laid out for you to finish. {own} its "
+        "own until you accept its "
         "work and the org's from then on.\n\n" + written
     )
 
@@ -857,10 +949,11 @@ def reconcile_request(
     tip: str,
     files: list[str],
     landed: list[str],
-    specs: list[tuple[str, str, str]],
-    inherited: Sequence[tuple[str, str, str, str]] = (),
+    changed: Sequence[tuple[str, str, str, str]] = (),
+    inherited: Sequence[tuple[str, str, str, str, str]] = (),
     *,
     names: Names,
+    reports: bool = True,
 ) -> str:
     """What a reviewing IC is told when work it accepts meets other work.
 
@@ -870,11 +963,13 @@ def reconcile_request(
         files: The files changed both by it and in the reviewer's checkout
             since it began.
         landed: The teams whose work was merged there meanwhile.
-        specs: For each spec it wrote while the team's spec changed: the
-            directory, the team's spec now and the one it wrote.
-        inherited: For each spec it wrote for a team the org no longer
-            has: the directory of the team it is kept with, that team's
-            spec now, what the lost team was called and the spec.
+        changed: For each document it wrote while the team's changed:
+            its name, the folder, the team's now and the one it wrote.
+        inherited: For each document it wrote for a team the org no
+            longer has: its name, the folder of the team it is kept with,
+            that team's own now, what the lost team was called and the
+            text.
+        reports: Whether the reviewer's team keeps a record with `report`.
     """
     lines = [
         f"Not merged yet: the work of {team.title!r} (id {team.id}) meets "
@@ -894,45 +989,50 @@ def reconcile_request(
             f"  git diff {tip}...HEAD -- <file>   (what changed in your checkout)",
             f"  git diff HEAD...{tip} -- <file>   (what {team.title} changed)",
         ]
-    for directory, theirs, written in specs:
+    for name, directory, theirs, written in changed:
         lines += [
             "",
-            f"It wrote a spec for {directory or 'the repository'} while the "
-            "team's spec there was changed by someone else. Accepting puts "
-            "its spec in place of the team's.",
-            "The team's spec now:",
+            f"It wrote a {name} for {directory or 'the repository'} while the "
+            f"team's {name} there was changed by someone else. Accepting puts "
+            f"its {name} in place of the team's.",
+            f"The team's {name} now:",
             theirs or "(none)",
-            "The spec it wrote:",
+            f"The {name} it wrote:",
             written,
         ]
-    for home, theirs, lost, written in inherited:
+    for name, home, theirs, lost, written in inherited:
         lines += [
             "",
-            f"It wrote a spec for {lost!r}, a team the org no longer has. "
+            f"It wrote a {name} for {lost!r}, a team the org no longer has. "
             f"The team that holds its folder now is the one in "
-            f"{home or 'the repository'}, which is left that spec as an old "
-            "one. If something in it has to hold on, write the spec of "
+            f"{home or 'the repository'}, which is left that {name} as an old "
+            f"one. If something in it has to hold on, write the {name} of "
             f"{home or 'the repository'} from both in `merge_choices`; otherwise "
             "the next session there is told to.",
-            f"The spec of {home or 'the repository'} now:",
+            f"The {name} of {home or 'the repository'} now:",
             theirs or "(none)",
-            f"The spec written for {lost!r}:",
+            f"The {name} written for {lost!r}:",
             written,
         ]
     lines += [
         "",
         "Decide what holds. If its work must change, reject it with what "
         "must change. If what is already in your checkout must change, "
-        f"change it or give that team the task; a Division Lead {names.reviewer}, "
-        "who does "
-        "neither, records it with `report`. Then accept again with "
+        "change it or give that team the task"
+        + (
+            f"; a Division Lead {names.reviewer}, who does neither, records "
+            "it with `report`"
+            if reports
+            else ""
+        )
+        + ". Then accept again with "
         "`review_team` and say in `reconciled` what you decided; without "
         "that it is not merged."
         + (
-            " For each spec above you may say in `merge_choices` whether the org's "
-            "stays, the session's holds, or a text you write from both does; "
-            "unnamed, the session's holds."
-            if specs or inherited
+            " For each document above you may say in `merge_choices` whether "
+            "the org's stays, the session's holds, or a text you write from "
+            "both does; unnamed, the session's holds."
+            if changed or inherited
             else ""
         ),
     ]
@@ -968,7 +1068,8 @@ def merge_request(
     names: Names,
 ) -> str:
     """What the Manager of a session's Division Lead place is told
-    when teams or contracts of the session wait for it.
+    when teams of the session, or documents that wait with them, wait
+    for it.
 
     Args:
         waiting: What waits for it, with what it decided before of what is
@@ -983,8 +1084,8 @@ def merge_request(
             if accepted
             else f"is submitted and its {names.reviewer} reviews the code."
         )
-        + " This of its teams and contracts the org made something else of "
-        "while the session worked:",
+        + " This of its teams, and of what is settled with them, the org "
+        "made something else of while the session worked:",
     ]
     for item in waiting:
         if item.kind == "team":
@@ -1004,11 +1105,10 @@ def merge_request(
         else:
             lines += [
                 "",
-                f"- the contracts between the sub-teams of "
-                f"{item.key or 'the repository'}"
+                f"- the {item.document} of {item.key or 'the repository'}"
                 + (
-                    f" (they come with team {item.with_team} and hold only if "
-                    "it is taken)"
+                    f" (it comes with team {item.with_team} and holds only if "
+                    "that team is taken)"
                     if item.with_team
                     else ""
                 ),
@@ -1023,21 +1123,21 @@ def merge_request(
                 + (f", under {item.under}" if item.under else "")
                 + (f", called {item.named!r}" if item.named else "")
             )
-    contracts = any(item.waits_with_teams for item in waiting)
+    documents = any(item.waits_with_teams for item in waiting)
     lines += [
         "",
-        "Nothing the session made of its teams and contracts is the org's "
-        "until you settle this. Call `settle_teams` once: say in `teams` "
+        "Nothing of this is the org's as the session made it "
+        "until you settle it. Call `settle_teams` once: say in `teams` "
         "for each team above whether the 'org' holds or the 'session'; "
         "unnamed, a team becomes what the session made of it. A team you "
         "take from the session you may put under another team of the org "
         "(`under`) or call otherwise (`title`), so that it fits the org as "
         "it is now."
         + (
-            " For each contracts above say in `merge_choices` which holds: "
-            "'org', 'session', or 'replacement' with the contracts you write from "
-            "both. Unnamed, the session's hold."
-            if contracts
+            " For each document above say in `merge_choices` which holds: "
+            "'org', 'session', or 'replacement' with the text you write from "
+            "both. Unnamed, the session's holds."
+            if documents
             else ""
         ),
         "What you settle becomes the org's together, once the session's "
@@ -1068,9 +1168,9 @@ def teams_settled(
     above: str,
     taken: list[str],
     kept: list[str],
-    agreed: list[str],
-    held: list[str],
-    others: Sequence[tuple[str, str]] = (),
+    agreed: Sequence[tuple[str, str]],
+    held: Sequence[tuple[str, str]],
+    others: Sequence[tuple[str, str, str]] = (),
     *,
     names: Names,
 ) -> str:
@@ -1078,18 +1178,25 @@ def teams_settled(
     settled.
 
     Args:
-        agreed: The directories whose contracts are the session's or what
-            the Manager wrote from both.
-        held: The directories whose contracts stay the org's.
-        others: Where the contracts the session wrote do not hold: each
-            directory with the contracts that do.
+        agreed: The documents that are the session's or what the Manager
+            wrote from both: each by name and folder.
+        held: The documents that stay the org's.
+        others: Where what the session wrote does not hold: each document
+            by name and folder, with the text that does.
     """
+
+    def said(documents: Sequence[tuple[str, str]]) -> str:
+        return ", ".join(
+            f"the {name} of {directory or 'the repository'}"
+            for name, directory in documents
+        )
+
     follow_up = "".join(
-        f"\n\nThe contracts that hold for {directory or 'the repository'} "
-        "are not the ones you wrote. Your merged code was written to yours: "
-        "check it against these and deliver what must change in this "
+        f"\n\nWhat holds as the {name} of {directory or 'the repository'} "
+        "is not what you wrote. Your merged code was written to yours: "
+        "check it against this and deliver what must change in this "
         f"session.\n{text or '(none)'}"
-        for directory, text in others
+        for name, directory, text in others
     )
     return (
         f"The {names.manager} of {above!r} settled what the org had made something "
@@ -1102,12 +1209,11 @@ def teams_settled(
             else ""
         )
         + (
-            f"Contracts settled for: {', '.join(agreed)}; read them with "
-            "`read_team_context`. "
+            f"Settled: {said(agreed)}; read them with `read_team_context`. "
             if agreed
             else ""
         )
-        + (f"The org's contracts stay for: {', '.join(held)}." if held else "")
+        + (f"The org's stay: {said(held)}." if held else "")
     ).strip() + follow_up
 
 
@@ -1126,9 +1232,18 @@ def handed_up(sent: SessionTeam, text: str, why: str, *, names: Names) -> str:
 
 
 def session_brief(
-    team: SessionTeam, title: str, others: list[str], *, names: Names
+    team: SessionTeam,
+    title: str,
+    others: list[str],
+    *,
+    names: Names,
+    kept: KeptDocuments = NO_DOCUMENTS,
 ) -> str:
-    """What the IC a session starts with is told after the human's request."""
+    """What the IC a session starts with is told after the human's request.
+
+    Args:
+        kept: The documents its team keeps.
+    """
     beside = (
         f" Other sessions at work on this team's folder: {', '.join(others)}."
         if others
@@ -1140,10 +1255,20 @@ def session_brief(
         "- Every request is worked on in a session like this one, in a "
         f"checkout and on a branch of its own.{beside} "
         "`other_sessions_of_your_team` in your context names them.\n"
-        "- You start from the team's spec, contracts and records. The "
-        "team's reports are shared with other sessions: `report` what they "
-        "must know.\n"
-        f"- A spec you write and sub-teams your {names.manager} approves are this "
+        f"- You start from the team's {_listed([*kept.names, 'records'])}."
+        + (
+            " The team's reports are shared with other sessions: `report` "
+            "what they must know."
+            if kept.reports
+            else ""
+        )
+        + "\n"
+        + (
+            f"- What you write of the {_listed(kept.land_with_work, 'or')} and "
+            if kept.land_with_work
+            else "- The "
+        )
+        + f"sub-teams your {names.manager} approves are this "
         "session's alone until your work is accepted.\n"
         "- The sub-teams you see are not started. One starts when you give "
         "it a task with `msg_team`.\n"
@@ -1158,7 +1283,8 @@ def session_brief(
         f"{names.reviewer} finishes the merge and you are told which files it changed. "
         "Work comes back to you only if it must change or touches files "
         "outside your folder.\n"
-        "- Teams and contracts you changed may become the org's a little "
+        f"- {_listed(['Teams', *kept.wait_with_teams])} you changed may "
+        "become the org's a little "
         f"after your code: the Division Lead {names.manager} settles those that "
         "other accepted work changed too."
     )
@@ -1181,6 +1307,7 @@ def review_request(
     so_far: str = "",
     asked: list[str] | None = None,
     instructions: str = "",
+    set_for_team: Sequence[str] = (),
 ) -> str:
     """What the IC above is told when a team below submits its work.
 
@@ -1190,6 +1317,8 @@ def review_request(
             last accepted.
         instructions: The code review skill, for this IC to apply to the
             diff. Empty when it could not be loaded.
+        set_for_team: The documents of the reviewer's team that the team
+            below reads.
     """
     directory = team.boundary.path or "the repository"
     lines = [
@@ -1229,7 +1358,8 @@ def review_request(
     lines += [
         "The account is the team's own. Read the diff of "
         "what you rely on, run the repository's checks on it, and compare it "
-        "with the contracts you set and with the team's task. Then call "
+        + (f"with the {_listed(set_for_team)} you set and " if set_for_team else "")
+        + "with the team's task. Then call "
         f"`review_team` for team {team.id}: `accept`, or `reject` with what "
         "must change. Set `needed_above` only if a team above yours waits on "
         "this work. Accepted work of a team with its own worktree is merged "

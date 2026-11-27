@@ -23,6 +23,7 @@ from tests.agent_server.director.conftest import (
     node,
     org_config,
     own_contracts,
+    own_document,
     split_into_typed_teams,
     use,
 )
@@ -104,8 +105,8 @@ async def test_the_spec_is_changed_in_one_place_as_a_file_editor_changes_a_file(
         ),
     )
     assert not changed.is_error
-    [spec] = service.specs_of(root)
-    assert spec.spec == "# Lab\n\nBaseline: 0.97\nSeeds: 3\n"
+    spec = own_document(service, root, "spec")
+    assert spec == "# Lab\n\nBaseline: 0.97\nSeeds: 3\n"
 
     twice = await use(
         service,
@@ -142,7 +143,7 @@ async def test_the_spec_is_changed_in_one_place_as_a_file_editor_changes_a_file(
         WriteSpecAction(command="create", old_str="Seeds: 3", new_str="Seeds: 5"),
     )
     assert whole.is_error
-    assert service.specs_of(root)[0].spec == spec.spec
+    assert own_document(service, root, "spec") == spec
 
     # As the editor inserts: after a line, and at the end with none named.
     await use(
@@ -157,7 +158,7 @@ async def test_the_spec_is_changed_in_one_place_as_a_file_editor_changes_a_file(
         WriteSpecTool,
         WriteSpecAction(command="insert", new_str="Epochs: 9"),
     )
-    assert service.specs_of(root)[0].spec == (
+    assert own_document(service, root, "spec") == (
         "# Lab\nOwner: Lab\n\nBaseline: 0.97\nSeeds: 3\n\nEpochs: 9\n"
     )
 
