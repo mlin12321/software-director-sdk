@@ -41,7 +41,7 @@ from openhands.agent_server.director.sandbox import (
 )
 from openhands.agent_server.director.service import (
     DirectorService,
-    reviews as reviews_module,
+    review_service as reviews_module,
 )
 from openhands.agent_server.director.tools import (
     ApproveTeamsTool,

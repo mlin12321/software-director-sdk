@@ -12,10 +12,6 @@ from uuid import uuid4
 
 from openhands.agent_server.config import Config
 from openhands.agent_server.director import bugbot
-from openhands.agent_server.director.agent_types import (
-    DEFAULT_TYPE,
-    TeamTemplate,
-)
 from openhands.agent_server.director.documents.store import (
     DocumentStore,
     RecordDocumentStore,
@@ -112,25 +108,14 @@ MODEL_CALL_TIMEOUT_SECONDS = 120.0
 # checkout of its own is kept: under `left`, what went to the team as it
 # started; under `aside`, what was in the way of the team's accepted work.
 LEFT_REFS = "refs/agents/left"
-ASIDE_REFS = "refs/agents/aside"
 # After a conversation id: the script an ACP agent's process is started by.
 _REMEMBERED_FILE = "director.json"
 STALL_LANE = "stalls"
 # The steps the director takes for a team's review, in its own lane.
 _REVIEW_STEPS = ("request_review", "accept")
-# The escalation that asks the human to clear the way for a merge.
-MERGE_WAITS = "merge-waits"
-# The id of the escalation raised when a Manager does not settle the teams
-# of accepted work, and what is settled with them.
-ORG_WAITS = "org-waits"
 # The escalation that asks the human whether a session that reached its
 # token limit goes on.
 LIMIT_WAITS = "limit-reached"
-
-
-# How long a message waits for an IC that submitted to end its turn.
-_REST_CHECKS = 600
-_REST_CHECK_SECONDS = 0.05
 
 
 class _TeamsOfTheOrg:
@@ -206,12 +191,10 @@ class ServiceState:
         # Where the org is; moves up when the store is loaded from above.
         self._repo_dir = repo_dir
         self.remembered = RememberedFile(remembered)
-        self._find_review_instructions = find_review_instructions
+        self.find_review_instructions = find_review_instructions
         # The public skills that were looked for, by name; '' for one that
         # could not be loaded.
-        self._review_instructions: dict[str, str] = {}
         self._review_instructions_ready: asyncio.Task[None] | None = None
-        self._loading_review_instructions = threading.Lock()
         # The sessions that changed something of the org's after their
         # work was accepted, and whether their IC was told to submit it.
         self._changed_since_accept: dict[str, bool] = {}
@@ -294,45 +277,6 @@ class ServiceState:
         self._stop_status: Callable[[], None] | None = None
         self._create_lock = asyncio.Lock()
         self._first_message_lock = asyncio.Lock()
-
-    def review_instructions(self, kind: TeamTemplate | None = None) -> str:
-        """What an IC reviewing a team below checks its work by: the skill
-        the team's type names, then the type's own checklist.
-
-        A skill is loaded once. One that cannot be loaded is left out, and
-        the review request stands without it.
-
-        Args:
-            kind: The type of the team whose work is reviewed; the default
-                type when None.
-        """
-        kind = kind or self.team_types.agent_types.get(DEFAULT_TYPE)
-        if kind is None:
-            return ""
-        parts: list[str] = []
-        skill = kind.review.checklist_skill
-        if skill:
-            # One fetch at a time: two would clone the same repository.
-            with self._loading_review_instructions:
-                if skill not in self._review_instructions:
-                    found = (
-                        self._find_review_instructions()
-                        if skill in bugbot.CODE_REVIEW_SKILLS
-                        else bugbot.public_skill((skill,))
-                    )
-                    self._review_instructions[skill] = found.strip() if found else ""
-            parts.append(self._review_instructions[skill])
-        parts.append(kind.review.checklist.strip())
-        return "\n\n".join(part for part in parts if part)
-
-    def _load_review_instructions(self) -> None:
-        """Fetch what reviewers of every type check work by, so that it is
-        there when a review is requested. Safe from any thread."""
-        try:
-            for kind in self.team_types.agent_types.values():
-                self.review_instructions(kind)
-        except Exception:
-            logger.exception("Could not load the review instructions")
 
     @classmethod
     def from_config(cls, config: Config) -> Self:

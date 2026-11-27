@@ -504,7 +504,7 @@ async def test_accepted_work_the_server_ended_before_passing_up_still_goes_up(
 
     # The server ends with the sub-team's work accepted and saved, before
     # the team above it is looked at.
-    monkeypatch.setattr(first, "_pass_up", end_instead)
+    monkeypatch.setattr(first.reviews, "pass_up", end_instead)
     await cut_off(
         launcher,
         ended,

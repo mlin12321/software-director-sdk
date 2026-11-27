@@ -39,6 +39,6 @@ class Splits(Watch):
             team_documents=lambda: self.team_documents,
             launcher=self._require_launcher,
             is_running=lambda: self._loop is not None,
-            review_instructions=self.review_instructions,
+            reviews=self.reviews,
             retry=self._run_limit_retry,
         )

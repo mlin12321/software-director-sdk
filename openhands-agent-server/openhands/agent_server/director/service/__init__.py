@@ -42,13 +42,13 @@ from openhands.agent_server.director.service.org_run_service import (
     AGENT_PAUSED,
     RESTART_NOTE,
 )
+from openhands.agent_server.director.service.review_service import MERGE_WAITS
+from openhands.agent_server.director.service.session_merge_service import ORG_WAITS
 from openhands.agent_server.director.service.stall_watch_service import (
     STALL_WAITS,
 )
 from openhands.agent_server.director.service.state import (
     LIMIT_WAITS,
-    MERGE_WAITS,
-    ORG_WAITS,
     ROOT_ID,
 )
 from openhands.agent_server.director.service.sync import Sync
@@ -110,9 +110,9 @@ class DirectorService(Sync):
             "start_team": self._do_start_team,
             "finish_split": self.team_splits.do_finish_split,
             "hand_over": self.team_splits.do_hand_over,
-            "request_review": self._do_request_review,
-            "accept": self._do_accept,
-            "land_org": self._do_land_org,
+            "request_review": self.reviews.do_request_review,
+            "accept": self.reviews.do_accept,
+            "land_org": self.session_merges.do_land_org,
             "prune": self.team_splits.do_prune,
             "close_session": self.session_lifecycle.do_close_session,
         }.items():
@@ -132,7 +132,7 @@ class DirectorService(Sync):
         # What reviewers check work by is fetched now, off the loop, so
         # that no review request is the first to wait for it.
         self._review_instructions_ready = asyncio.create_task(
-            asyncio.to_thread(self._load_review_instructions),
+            asyncio.to_thread(self.reviews.load_review_instructions),
             name="director-review-instructions",
         )
         self._stall_timer = asyncio.create_task(
@@ -526,7 +526,7 @@ class DirectorService(Sync):
             decided = json.loads(
                 self.org_state.run_state().marked(CLEARING).get(place_id) or "{}"
             )
-            self.accept_review(place_id, "", **decided)
+            self.reviews.accept_review(place_id, "", **decided)
             return store.place(place_id) or place
         if escalation_id == ORG_WAITS:
             # The human goes on without the Manager.

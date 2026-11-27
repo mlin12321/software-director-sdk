@@ -659,8 +659,8 @@ def submit_review(service: DirectorService, caller: Caller, summary: str) -> str
         ),
     )
     service.team_messaging.progressed(node.id)
-    service.rest(node.id)
-    service.request_review(node.id)
+    service.reviews.rest(node.id)
+    service.reviews.request_review(node.id)
     service.team_summaries.refresh_headline(
         node.id, f"it submitted its work. {summary}"
     )
@@ -698,11 +698,13 @@ def review_team(
     if decision == "reject":
         if not findings:
             raise Invalid("Say what must change before you can accept the work")
-        service.request_changes(place_id, findings)
+        service.reviews.request_changes(place_id, findings)
         return f"Sent back to {team.title!r} with what must change."
-    chosen = service.document_choices(place_id, choices)
-    service.check_accept(place_id, reconciled.strip())
-    service.accept_review(place_id, needed_above.strip(), reconciled.strip(), chosen)
+    chosen = service.session_merges.document_choices(place_id, choices)
+    service.reviews.check_accept(place_id, reconciled.strip())
+    service.reviews.accept_review(
+        place_id, needed_above.strip(), reconciled.strip(), chosen
+    )
     return (
         f"Accepting the work of {team.title!r}. You are told if it cannot be "
         "brought into your checkout."
@@ -722,7 +724,7 @@ def settle_teams(
         choices: For the documents that wait with the teams: which holds.
     """
     _has(service, caller, "settle_teams", "settle the sub-teams of a session")
-    return service.settle_teams(
+    return service.session_merges.settle_teams(
         caller.node.id,
         [
             choice.model_copy(
