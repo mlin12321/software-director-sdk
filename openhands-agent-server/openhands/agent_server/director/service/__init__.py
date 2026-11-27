@@ -118,6 +118,12 @@ class DirectorService(Sync):
                 "file tools, and nothing holds the process of an ACP agent"
             )
         bind_director(self)
+        # What reviewers check work by is fetched now, off the loop, so
+        # that no review request is the first to wait for it.
+        self._review_instructions_ready = asyncio.create_task(
+            asyncio.to_thread(self._load_review_instructions),
+            name="director-review-instructions",
+        )
         self._stall_timer = asyncio.create_task(
             self._watch_for_stalls(), name="director-stall-watch"
         )
@@ -154,6 +160,9 @@ class DirectorService(Sync):
         if self._stall_timer is not None:
             workers.append(self._stall_timer)
             self._stall_timer = None
+        if self._review_instructions_ready is not None:
+            workers.append(self._review_instructions_ready)
+            self._review_instructions_ready = None
         for worker in workers:
             worker.cancel()
         await asyncio.gather(*workers, return_exceptions=True)

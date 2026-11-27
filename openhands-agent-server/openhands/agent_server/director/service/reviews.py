@@ -1771,6 +1771,9 @@ class Reviews(Teams):
             # Its Manager is asked what waits for it beside the review.
             await asyncio.to_thread(self._org_turn)
         if place.parent_id is not None:
+            # A skill is fetched over the network the first time: not on
+            # the loop, where every agent's turn would wait for it.
+            await asyncio.to_thread(self.review_instructions, self.type_of(place))
             self._runs().mark(HELD, place_id)
             self._release_reviews(place.parent_id)
 
