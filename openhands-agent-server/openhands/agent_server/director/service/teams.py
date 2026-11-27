@@ -5,11 +5,7 @@ from contextlib import suppress
 from functools import cached_property
 from pathlib import Path
 
-from openhands.agent_server.director.git import (
-    GitError,
-    bring_over,
-    uncommitted,
-)
+from openhands.agent_server.director.environment import EnvironmentFailed
 from openhands.agent_server.director.intents import Brief, LaunchMember, StartTeam
 from openhands.agent_server.director.models import (
     SessionTeam,
@@ -30,7 +26,6 @@ from openhands.agent_server.director.service.agent_start_service import (
 from openhands.agent_server.director.service.delivery import Delivery
 from openhands.agent_server.director.service.state import (
     LEFT_REFS,
-    checkout_root,
 )
 from openhands.agent_server.director.service.team_messaging_service import (
     TeamMessagingService,
@@ -48,6 +43,7 @@ class Teams(Delivery):
     def agent_start(self) -> AgentStartService:
         """What starts the agents of a team."""
         return AgentStartService(
+            checkouts=self.checkouts,
             org=lambda: self.org,
             repo_dir=lambda: self._repo_dir,
             org_state=self.org_state,
@@ -130,9 +126,9 @@ class Teams(Delivery):
             # A team of the same name before it left nothing to count on.
             self.check_counts.work_accepted(started)
             if above is not None and not opens:
-                with suppress(GitError, OSError):
+                with suppress(EnvironmentFailed, OSError):
                     left = await asyncio.to_thread(
-                        uncommitted,
+                        self.checkouts.uncommitted,
                         Path(above.worktree_path),
                         started.boundary.path,
                     )
@@ -179,14 +175,16 @@ class Teams(Delivery):
         team = self.org.place(place_id)
         if team is None or not team.worktree_path:
             return
-        with suppress(GitError, OSError):
+        with suppress(EnvironmentFailed, OSError):
             # The shell the IC above starts next cannot write there.
             self.confinement.confine(above.id, self.team_types.team(above).writer)
         source, target = Path(above.worktree_path), Path(team.worktree_path)
-        if checkout_root(str(source)) == checkout_root(str(target)):
+        if self.checkouts.root_of(str(source)) == self.checkouts.root_of(str(target)):
             # In one checkout the team finds the files where they are.
             return
         try:
-            bring_over(source, target, team.boundary.path, f"{LEFT_REFS}/{team.id}")
-        except (GitError, OSError):
+            self.checkouts.bring_over(
+                source, target, team.boundary.path, f"{LEFT_REFS}/{team.id}"
+            )
+        except (EnvironmentFailed, OSError):
             logger.exception("Could not pass what was left to team %s", team.id)

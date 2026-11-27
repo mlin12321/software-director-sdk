@@ -15,7 +15,6 @@ from pydantic import BaseModel
 
 from openhands.agent_server.director.boundary import owns
 from openhands.agent_server.director.documents.schema import DocumentToolCall
-from openhands.agent_server.director.git import head_of, uncommitted
 from openhands.agent_server.director.git_store import team_key
 from openhands.agent_server.director.models import (
     DocumentChoice,
@@ -621,7 +620,7 @@ def submit_review(service: DirectorService, caller: Caller, summary: str) -> str
             "works or write to it with msg_team, or remove one you no "
             "longer need with prune_team. Then submit."
         )
-    left = uncommitted(Path(node.worktree_path), node.boundary.path)
+    left = service.checkouts.uncommitted(Path(node.worktree_path), node.boundary.path)
     for team in store.below(node.id):
         theirs = [path for path in left if owns(team, path)]
         if theirs:
@@ -644,7 +643,7 @@ def submit_review(service: DirectorService, caller: Caller, summary: str) -> str
             f"committed: {', '.join(left[:10])}"
             + (f" and {len(left) - 10} more" if len(left) > 10 else "")
         )
-    astray = service.work_astray(node)
+    astray = service.checkouts.astray(node, store.below(node.id), service.repo_dir)
     if astray is not None:
         raise Conflict(astray)
     again = review is not None and review.state == "changes_requested"
@@ -656,7 +655,7 @@ def submit_review(service: DirectorService, caller: Caller, summary: str) -> str
             summary=summary,
             at=utc_now(),
             seq=service.next_submission(),
-            commit=head_of(Path(node.worktree_path)) or "",
+            commit=service.checkouts.version(Path(node.worktree_path)) or "",
         ),
     )
     service.team_messaging.progressed(node.id)
@@ -795,7 +794,9 @@ def msg_team(service: DirectorService, caller: Caller, team: str, text: str) -> 
     target = _team_below(service, caller, team)
     new = service.team_types.writer_conversation(target) is None
     left = (
-        uncommitted(Path(caller.node.worktree_path), target.boundary.path)
+        service.checkouts.uncommitted(
+            Path(caller.node.worktree_path), target.boundary.path
+        )
         if new
         else []
     )

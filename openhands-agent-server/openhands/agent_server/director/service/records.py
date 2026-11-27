@@ -70,6 +70,7 @@ class Records(ServiceState):
     def team_context(self) -> TeamContextService:
         """What each agent reads of its place."""
         return TeamContextService(
+            checkouts=self.checkouts,
             org=lambda: self.org,
             org_state=self.org_state,
             org_settings=self.org_settings,

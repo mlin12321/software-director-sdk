@@ -14,14 +14,8 @@ from uuid import UUID, uuid4
 from openhands.agent_server.director.agent_types import TeamTemplate
 from openhands.agent_server.director.documents.store import DocumentRef
 from openhands.agent_server.director.documents.team_documents import TeamDocuments
-from openhands.agent_server.director.git import (
-    GitError,
-    git,
-    head_of,
-    ref_stamp,
-    save_and_discard,
-    uncommitted,
-)
+from openhands.agent_server.director.environment import EnvironmentFailed
+from openhands.agent_server.director.environment.checkouts import Checkouts, time_stamp
 from openhands.agent_server.director.git_store import (
     normalize_store_path,
     team_key,
@@ -29,7 +23,6 @@ from openhands.agent_server.director.git_store import (
 from openhands.agent_server.director.headline import provisional_summary, summary_of
 from openhands.agent_server.director.intents import FinishSplit, HandOver, Prune, Split
 from openhands.agent_server.director.launch import TeamLauncher
-from openhands.agent_server.director.merge_back import merge_back
 from openhands.agent_server.director.models import (
     FormerTeam,
     HandOverMode,
@@ -174,6 +167,8 @@ class TeamSplitService:
 
     org: Callable[[], OrgStore]
     """The org whose teams are set up and removed."""
+    checkouts: Checkouts
+    """Where each team's work is and how it moves."""
     org_state: OrgStateService
     org_save: OrgSaveService
     org_settings: OrgSettingsService
@@ -252,14 +247,12 @@ class TeamSplitService:
         # A team in the team's own checkout has its files there already.
         apart = [team for team in teams if team.worktree_path != place.worktree_path]
         checkout = Path(place.worktree_path)
-        before = head_of(checkout)
+        before = self.checkouts.version(checkout)
         for team in apart:
             refusal = None
             try:
-                merged = merge_back(
-                    checkout, Path(team.worktree_path), team.boundary, team.title
-                )
-            except (GitError, OSError) as error:
+                merged = self.checkouts.merge(team, place, team.title)
+            except (EnvironmentFailed, OSError) as error:
                 refusal = f"could not be read ({error})."
             else:
                 if merged.outcome in ("conflicts", "outside", "refused"):
@@ -269,10 +262,10 @@ class TeamSplitService:
                         f"{detail})."
                     )
             if refusal:
-                if before and head_of(checkout) != before:
+                if before and self.checkouts.version(checkout) != before:
                     # The teams merged before it are taken out again, and
                     # what is uncommitted stays.
-                    git(checkout, ["reset", "--merge", "--quiet", before])
+                    self.checkouts.undo_merge(checkout, before)
                 return f"the work {team.title!r} committed {refusal}"
         for team in teams:
             self.confinement.forget_shells(team)
@@ -370,7 +363,7 @@ class TeamSplitService:
                     }
                 ),
                 was_stopped=any(team.stopped is not None for team in split.replaces),
-                stamp=ref_stamp(),
+                stamp=time_stamp(),
             )
         plan = intent.of(Split)
         moves = plan.moves
@@ -475,7 +468,7 @@ class TeamSplitService:
         if place is None or proposal is None or proposal.status != "approved":
             return
         # The shell the IC starts next can no longer write what it gave away.
-        with suppress(GitError, OSError):
+        with suppress(EnvironmentFailed, OSError):
             await asyncio.to_thread(self.confinement.confine, place_id)
         # The record each replaced team left last: the one just made.
         kept = self.session_drafts.former(place.session)
@@ -486,9 +479,9 @@ class TeamSplitService:
         ]
         unfinished: dict[str, list[str]] = {}
         for child in proposal.children:
-            with suppress(GitError, OSError):
+            with suppress(EnvironmentFailed, OSError):
                 unfinished[child.path] = await asyncio.to_thread(
-                    uncommitted, Path(place.worktree_path), child.path
+                    self.checkouts.uncommitted, Path(place.worktree_path), child.path
                 )
         self.message_delivery.notify(
             self.team_types.writer_conversation(place),
@@ -545,7 +538,7 @@ class TeamSplitService:
                 parent=above.id,
                 teams=[team.id for team in teams],
                 conversations=conversations_of(teams),
-                stamp=ref_stamp(),
+                stamp=time_stamp(),
             )
         plan = intent.of(Prune)
         where = plan.path
@@ -599,7 +592,7 @@ class TeamSplitService:
                 )
             store.remove(place_id)
             # The shell the IC above starts next can write there again.
-            with suppress(GitError, OSError):
+            with suppress(EnvironmentFailed, OSError):
                 await asyncio.to_thread(self.confinement.confine, plan.parent)
             await self.org_save.save()
             intent = run.step_done(intent, "removed")
@@ -810,10 +803,10 @@ class TeamSplitService:
                 continue
             ref = f"{PRUNED_REFS}/{team.id}/{stamp}"
             try:
-                saved = save_and_discard(
+                saved = self.checkouts.set_aside(
                     Path(team.worktree_path), team.boundary.path, ref
                 )
-            except (GitError, OSError):
+            except (EnvironmentFailed, OSError):
                 logger.exception("Could not discard the work of team %s", team.id)
                 continue
             if index == 0 and saved is not None:

@@ -7,7 +7,7 @@ from pathlib import Path
 
 from openhands.agent_server.director import routing
 from openhands.agent_server.director.boundary import owns
-from openhands.agent_server.director.git import GitError, git
+from openhands.agent_server.director.environment.checkouts import Checkouts
 from openhands.agent_server.director.git_store import team_key
 from openhands.agent_server.director.models import OrgNode, RoutedRequest, SessionTeam
 from openhands.agent_server.director.org_store import (
@@ -29,14 +29,6 @@ logger = get_logger(__name__)
 # How many of the requests a team took before are on its card.
 _TOOK_SHOWN = 3
 _NOT_THEIRS_SHOWN = 10
-
-
-def _tracked(checkout: Path) -> list[str]:
-    try:
-        listed = git(checkout, ["ls-files", "-z", "--full-name", "--", ":(top)"])
-    except (GitError, OSError):
-        return []
-    return [path for path in listed.split("\0") if path]
 
 
 def takes_requests(place: SessionTeam, writer: str) -> bool:
@@ -66,6 +58,8 @@ class RequestRoutingService:
 
     org: Callable[[], OrgStore]
     """The org's tree, as it is when asked."""
+    checkouts: Checkouts
+    """Where each team's work is and how it moves."""
     model_calls: ModelCallService
     """Asks the model which teams a request concerns."""
     checkout: Callable[[], Path]
@@ -162,7 +156,7 @@ class RequestRoutingService:
         }
         if len(takes) == 1:
             return Choice(start.id, "top", False, "no team below can take it")
-        tracked = await asyncio.to_thread(_tracked, checkout)
+        tracked = await asyncio.to_thread(self.checkouts.files, checkout)
         named = routing.paths_named(text, tracked)
         owners = [
             max(holding, key=lambda node: len(node.boundary.path)).id

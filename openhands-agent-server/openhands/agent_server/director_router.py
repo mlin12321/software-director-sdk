@@ -17,12 +17,6 @@ from fastapi.responses import Response, StreamingResponse
 import openhands.agent_server.director.tools  # noqa: F401
 from openhands.agent_server.dependencies import get_director_service
 from openhands.agent_server.director.acp import TOOLS_PATH
-from openhands.agent_server.director.changes import (
-    accepted_changes,
-    accepted_file,
-    file_sides,
-    team_changes,
-)
 from openhands.agent_server.director.mcp_shim import TOKEN_HEADER
 from openhands.agent_server.director.models import (
     AcceptedChanges,
@@ -62,7 +56,6 @@ from openhands.agent_server.director.models import (
     Thread,
 )
 from openhands.agent_server.director.org_store import OrgChange
-from openhands.agent_server.director.ownership import node_ownership
 from openhands.agent_server.director.service import DirectorService
 from openhands.agent_server.director.tools.remote import (
     RemoteTool,
@@ -756,9 +749,11 @@ def get_node_ownership(
     store = service.org
     place = store.place(node_id)
     if place is not None:
-        return node_ownership(place, store.below(node_id), Path(place.worktree_path))
+        return service.checkouts.ownership(
+            place, store.below(node_id), Path(place.worktree_path)
+        )
     node = _require_node(service, node_id)
-    return node_ownership(node, store.sub_teams(node_id), service.repo_dir)
+    return service.checkouts.ownership(node, store.sub_teams(node_id), service.repo_dir)
 
 
 _NO_CHECKOUT: dict[type[DomainError], str] = {
@@ -777,7 +772,7 @@ def get_node_changes(
     """List the files a team changed in its directory since its work
     started or was last accepted, uncommitted and new files included.
     `node_id` is a place of a session."""
-    return team_changes(_require_place(service, node_id))
+    return service.checkouts.team_changes(_require_place(service, node_id))
 
 
 @director_router.get(
@@ -798,7 +793,7 @@ def get_node_changed_file(
 ) -> FileSides:
     """Get one file as it was at the team's base commit and as it is in the
     team's checkout now. `node_id` is a place of a session."""
-    return file_sides(_require_place(service, node_id), path)
+    return service.checkouts.file_sides(_require_place(service, node_id), path)
 
 
 _NO_COMMIT: dict[type[DomainError], str] = {
@@ -824,7 +819,7 @@ def get_accepted_changes(
     """List the files an accept took: what differs under `path` between the
     `base` and the `head` of an `accepted` event in the history. It can be
     read after the team's session is closed."""
-    return accepted_changes(service.repo_dir, base, head, path)
+    return service.checkouts.accepted_changes(service.repo_dir, base, head, path)
 
 
 @director_router.get(
@@ -839,7 +834,7 @@ def get_accepted_file(
     service: DirectorService = Depends(get_director_service),
 ) -> FileSides:
     """Get one file as it was before an accept and as it was accepted."""
-    return accepted_file(service.repo_dir, base, head, path)
+    return service.checkouts.accepted_file(service.repo_dir, base, head, path)
 
 
 @director_router.put(

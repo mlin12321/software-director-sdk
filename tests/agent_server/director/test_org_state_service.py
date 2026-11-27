@@ -4,6 +4,9 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 
+from openhands.agent_server.director.environment.git import (
+    GitCodingEnvironment,
+)
 from openhands.agent_server.director.models import OrgStateEvent, RecoveryItem
 from openhands.agent_server.director.run_state import PROGRESS, RUNNING
 from openhands.agent_server.director.service.org_state_service import OrgStateService
@@ -13,7 +16,9 @@ NOW = datetime(2026, 1, 2, tzinfo=UTC)
 
 
 def state_of(repo: Path) -> OrgStateService:
-    return OrgStateService(repo_dir=lambda: repo, clock=lambda: NOW)
+    return OrgStateService(
+        repo_dir=lambda: repo, clock=lambda: NOW, environment=GitCodingEnvironment()
+    )
 
 
 def test_a_pause_is_kept_for_the_next_start_of_the_server(repo: Path):
@@ -75,7 +80,9 @@ def test_the_run_state_follows_the_org_to_another_repository(
     repo: Path, tmp_path: Path
 ):
     where = [repo]
-    org_state = OrgStateService(repo_dir=lambda: where[0], clock=lambda: NOW)
+    org_state = OrgStateService(
+        repo_dir=lambda: where[0], clock=lambda: NOW, environment=GitCodingEnvironment()
+    )
     org_state.run_state().mark(RUNNING, "c1", "a@s1")
     org_state.hold("human")
 

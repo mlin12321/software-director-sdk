@@ -10,6 +10,10 @@ from uuid import uuid4
 import pytest
 
 from openhands.agent_server.director.documents.team_documents import TeamDocuments
+from openhands.agent_server.director.environment.git import (
+    GitCheckouts,
+    GitCodingEnvironment,
+)
 from openhands.agent_server.director.git_store import GitStore
 from openhands.agent_server.director.org_store import OrgStore
 from openhands.agent_server.director.remembered import RememberedFile
@@ -79,7 +83,9 @@ class Starts:
         self.failures: list[tuple[str, str, str]] = []
         self.queue = WorkQueueService(default_lane="org")
         self.org_state = OrgStateService(
-            repo_dir=lambda: repo, clock=lambda: datetime.now(UTC)
+            repo_dir=lambda: repo,
+            clock=lambda: datetime.now(UTC),
+            environment=GitCodingEnvironment(),
         )
         self.start_line = start_line = StartLineService(
             org=lambda: self.store, org_state=self.org_state, retry=0
@@ -109,12 +115,14 @@ class Starts:
             retry=0,
         )
         self.service = AgentStartService(
+            checkouts=GitCheckouts(),
             org=lambda: self.store,
             repo_dir=lambda: repo,
             org_state=self.org_state,
             start_line=start_line,
             message_delivery=message_delivery,
             confinement=AgentConfinementService(
+                checkouts=GitCheckouts(),
                 repo_dir=lambda: repo,
                 worktree_root=None,
                 find_sandbox=lambda: None,

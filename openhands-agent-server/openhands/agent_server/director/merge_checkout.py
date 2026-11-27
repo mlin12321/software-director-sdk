@@ -11,29 +11,15 @@ import shutil
 from contextlib import suppress
 from pathlib import Path
 
-from pydantic import BaseModel
-
+from openhands.agent_server.director.environment.checkouts import (
+    MergeCheckout,
+    Unfinished,
+)
 from openhands.agent_server.director.git import DIRECTOR_IDENTITY, GitError, git
 
 
 _MARKERS = ("<<<<<<< ", ">>>>>>> ")
 _MERGE_TIMEOUT_SECONDS = 120
-
-
-class MergeCheckout(BaseModel):
-    """A merge a reviewer finishes."""
-
-    where: str
-    # The commit of the checkout above the work is merged onto.
-    ours: str
-    # The commit of the work.
-    tip: str
-    # The files that do not merge, relative to the repository.
-    files: list[str]
-
-
-class Unfinished(Exception):
-    """The merge is not as it has to be to be taken."""
 
 
 def prepare(repo_dir: Path, where: Path, ours: str, tip: str) -> None:

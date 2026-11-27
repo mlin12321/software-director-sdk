@@ -6,11 +6,11 @@ or the repository is copied to another machine. What no longer fits is put
 aside and named, never applied.
 """
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Mapping
 from pathlib import Path
 from uuid import UUID
 
-from openhands.agent_server.director.git import GitError, git
+from openhands.agent_server.director.environment.checkouts import Checkouts
 from openhands.agent_server.director.models import (
     RecoveryItem,
     RecoveryKind,
@@ -132,6 +132,7 @@ def describe(
     store: OrgStore,
     statuses: Mapping[UUID, ConversationExecutionStatus],
     repo_dir: Path,
+    checkouts: Checkouts,
 ) -> list[RecoveryItem]:
     """What resuming the org does, and what it cannot do."""
     nodes = {node.id: node for node in store.places()}
@@ -212,8 +213,8 @@ def describe(
                 place_id=place_id,
             )
         )
-    for node in missing_worktrees(nodes.values()):
-        if _has_branch(repo_dir, node.branch):
+    for node, restorable in checkouts.missing(repo_dir, nodes.values()):
+        if restorable:
             items.append(
                 _item(
                     node,
@@ -246,54 +247,6 @@ def describe(
                     )
                 )
     return items
-
-
-def missing_worktrees(nodes: Iterable[SessionTeam]) -> list[SessionTeam]:
-    """The teams whose own worktree is not on disk, parents first."""
-    seen: set[str] = set()
-    missing: list[SessionTeam] = []
-    for node in nodes:
-        path = node.worktree_path
-        if node.isolation != "worktree" or path in seen:
-            continue
-        seen.add(path)
-        if not Path(path).is_dir():
-            missing.append(node)
-    return missing
-
-
-def restore_worktrees(
-    repo_dir: Path, nodes: Iterable[SessionTeam], within: str
-) -> None:
-    """Make the worktrees that are gone again, each from its team's branch.
-
-    Args:
-        within: Where in a checkout the teams' workspaces are; '' at its top.
-    """
-    missing = [
-        node for node in missing_worktrees(nodes) if _has_branch(repo_dir, node.branch)
-    ]
-    if not missing:
-        return
-    try:
-        git(repo_dir, ["worktree", "prune"])
-        for node in missing:
-            top = Path(node.worktree_path)
-            if within:
-                top = Path(str(top).removesuffix(within).rstrip("/"))
-            git(repo_dir, ["worktree", "add", str(top), node.branch])
-    except (GitError, OSError):
-        logger.exception("Could not make a worktree again in %s", repo_dir)
-
-
-def _has_branch(repo_dir: Path, branch: str) -> bool:
-    if not branch:
-        return False
-    try:
-        git(repo_dir, ["rev-parse", "--verify", "--quiet", f"refs/heads/{branch}"])
-    except (GitError, OSError):
-        return False
-    return True
 
 
 def _unfit(intent: Intent, nodes: Mapping[str, SessionTeam]) -> str | None:

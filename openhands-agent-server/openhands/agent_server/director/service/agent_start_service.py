@@ -10,14 +10,9 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
-from openhands.agent_server.director.confinement import checkout_root
 from openhands.agent_server.director.context import briefing_block, steady
 from openhands.agent_server.director.documents.team_documents import TeamDocuments
-from openhands.agent_server.director.git import (
-    GitError,
-    git,
-    head_of,
-)
+from openhands.agent_server.director.environment.checkouts import Checkouts
 from openhands.agent_server.director.launch import StartedAgent, TeamLauncher
 from openhands.agent_server.director.models import SessionTeam
 from openhands.agent_server.director.org_store import (
@@ -69,20 +64,6 @@ def agent_title(
     return f"{where} ({'Division Lead ' + name if division_lead else name})"
 
 
-def base_of(workspace: str) -> str:
-    """The commit a checkout is at; '' when it is at none."""
-    return head_of(Path(workspace)) or ""
-
-
-def head_name_of(workspace: str) -> str:
-    """What a checkout has checked out, as git names it: its branch, or
-    ``HEAD`` when it is on none; '' when it cannot be asked."""
-    try:
-        return git(Path(workspace), ["rev-parse", "--abbrev-ref", "HEAD"]).strip()
-    except (GitError, OSError):
-        return ""
-
-
 @dataclass
 class AgentStartService:
     """Starts the agents of a team.
@@ -95,6 +76,8 @@ class AgentStartService:
 
     org: Callable[[], OrgStore]
     """The org whose agents are started."""
+    checkouts: Checkouts
+    """Where each team's work is and how it moves."""
     repo_dir: Callable[[], Path]
     """The repository the org is in."""
     org_state: OrgStateService
@@ -127,8 +110,8 @@ class AgentStartService:
             self.org().opens_session(place)
             and (
                 place.isolation != "worktree"
-                or checkout_root(place.worktree_path)
-                != checkout_root(str(self.repo_dir()))
+                or self.checkouts.root_of(place.worktree_path)
+                != self.checkouts.root_of(str(self.repo_dir()))
             )
         )
 
@@ -314,9 +297,12 @@ class AgentStartService:
                 place_id,
                 worktree_path=started.workspace,
                 isolation=started.isolation,
-                branch=await asyncio.to_thread(head_name_of, started.workspace),
+                branch=await asyncio.to_thread(
+                    self.checkouts.branch, started.workspace
+                ),
                 base_commit=place.base_commit
-                or await asyncio.to_thread(base_of, started.workspace),
+                or await asyncio.to_thread(self.checkouts.version, started.workspace)
+                or "",
                 boundary_enforcement=self.confinement.enforcement(started.kind),
             )
         return True
@@ -371,7 +357,7 @@ class AgentStartService:
         )
         # A session starts from where the repository's checkout is.
         base = (
-            await asyncio.to_thread(head_of, self.repo_dir())
+            await asyncio.to_thread(self.checkouts.version, self.repo_dir())
             if works
             and not checkout
             and isolation == "worktree"

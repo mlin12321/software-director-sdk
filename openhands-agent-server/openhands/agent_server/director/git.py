@@ -5,8 +5,9 @@ import re
 import subprocess
 import tempfile
 from collections.abc import Mapping
-from datetime import UTC, datetime
 from pathlib import Path
+
+from openhands.agent_server.director.environment.errors import EnvironmentFailed
 
 
 _TIMEOUT_SECONDS = 30
@@ -19,7 +20,7 @@ DIRECTOR_IDENTITY = {
 }
 
 
-class GitError(Exception):
+class GitError(EnvironmentFailed):
     """A git command exited with a non-zero status."""
 
     def __init__(self, args: list[str], code: int, stderr: str, stdout: str) -> None:
@@ -179,11 +180,6 @@ def common_dir(directory: Path) -> Path:
             directory, ["rev-parse", "--path-format=absolute", "--git-common-dir"]
         ).strip()
     )
-
-
-def ref_stamp() -> str:
-    """The time now, as it is written into the name of a ref."""
-    return datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
 
 
 def head_of(checkout: Path) -> str | None:

@@ -8,6 +8,9 @@ from typing import Any, cast
 
 import pytest
 
+from openhands.agent_server.director.environment.git import (
+    GitCheckouts,
+)
 from openhands.agent_server.director.models import RoutedRequest, SessionTeam
 from openhands.agent_server.director.org_store import OrgStore
 from openhands.agent_server.director.service.model_call_service import (
@@ -46,6 +49,7 @@ def routing(
         return "Handed on."
 
     return RequestRoutingService(
+        checkouts=GitCheckouts(),
         org=lambda: cast(OrgStore, SimpleNamespace(place=places.get)),
         model_calls=cast(ModelCallService, None),
         checkout=lambda: Path("."),

@@ -205,3 +205,58 @@ def test_the_director_names_no_document_an_org_declares(module: str):
     ]
 
     assert named == []
+
+
+# What runs git on a team's checkout. Only the git environment
+# (`environment/git/`) may reach them, and they each other.
+_CHECKOUT_GIT = {
+    "git",
+    "git_index",
+    "merge_back",
+    "merge_checkout",
+    "ownership",
+    "reconcile",
+    "changes",
+}
+# Still git of their own, for now: what confines the agents' own git, and
+# the records kept in hidden refs.
+_OTHER_GIT = {"confinement", "git_store", "org_sync"}
+
+
+def _reached(path: Path) -> set[str]:
+    """What a module imports, a module taken from its package included."""
+    found: set[str] = set()
+    for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+        if isinstance(node, ast.ImportFrom) and node.module:
+            found.add(node.module)
+            found.update(f"{node.module}.{alias.name}" for alias in node.names)
+    return found
+
+
+def test_only_the_git_environment_runs_git_on_a_teams_checkout():
+    prefix = "openhands.agent_server.director."
+    modules = [
+        path
+        for path in [*DIRECTOR.rglob("*.py"), DIRECTOR.parent / "director_router.py"]
+        if "environment/git" not in path.as_posix()
+        and path.stem not in _CHECKOUT_GIT | _OTHER_GIT
+    ]
+    reached = {
+        f"{path.relative_to(DIRECTOR.parent)} imports {name}"
+        for path in modules
+        for name in _reached(path)
+        if name.removeprefix(prefix) in _CHECKOUT_GIT
+    }
+
+    assert not reached
+
+
+def test_the_environment_is_said_without_git():
+    for module in ("environment/__init__.py", "environment/checkouts.py"):
+        assert not {
+            name
+            for name in _imports(module)
+            if name.startswith("openhands.agent_server.director.")
+            and not name.endswith((".models", ".environment.checkouts"))
+            and not name.endswith(".environment.errors")
+        }, module

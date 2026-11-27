@@ -7,7 +7,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from openhands.agent_server.director.git import GitError
+from openhands.agent_server.director.environment import EnvironmentFailed
 from openhands.agent_server.director.git_store import (
     GitStore,
     Landing,
@@ -110,7 +110,7 @@ class OrgSaveService:
 
         try:
             await asyncio.to_thread(keep)
-        except (GitError, RunStateError):
+        except (EnvironmentFailed, RunStateError):
             logger.exception("Could not keep the sessions of %s", self.repo_dir())
 
     async def _save_due(self) -> None:
@@ -133,7 +133,7 @@ class OrgSaveService:
         saves what it would have."""
         try:
             await asyncio.to_thread(self.save_tree, self.org())
-        except GitError:
+        except EnvironmentFailed:
             logger.exception("Could not save the org tree to %s", self.repo_dir())
 
     def save_tree(self, store: OrgStore) -> None:
@@ -141,7 +141,7 @@ class OrgSaveService:
         have beside it.
 
         Raises:
-            GitError: The repository could not be written.
+            EnvironmentFailed: The repository could not be written.
         """
         with self.lock:
             save_org(create_org_board(self.repo_dir()), store)

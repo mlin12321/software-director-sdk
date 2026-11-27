@@ -11,10 +11,7 @@ from openhands.agent_server.director.documents.schema import (
 )
 from openhands.agent_server.director.documents.store import DocumentRef, DocumentStore
 from openhands.agent_server.director.documents.team_documents import TeamDocuments
-from openhands.agent_server.director.git import (
-    changed_together,
-    tracked_files,
-)
+from openhands.agent_server.director.environment.checkouts import Checkouts
 from openhands.agent_server.director.git_store import (
     team_key,
 )
@@ -85,6 +82,8 @@ class TeamContextService:
 
     org: Callable[[], OrgStore]
     """The org whose teams are read."""
+    checkouts: Checkouts
+    """Where each team's work is and how it moves."""
     org_state: OrgStateService
     """The run state, for what the human joined."""
     org_settings: OrgSettingsService
@@ -166,12 +165,17 @@ class TeamContextService:
         them before."""
         checkout = Path(place.worktree_path)
         children = proposal.children
-        sizes = [(child, tracked_files(checkout, child.path)) for child in children]
+        sizes = [
+            (child, self.checkouts.file_count(checkout, child.path))
+            for child in children
+        ]
         together = [
             (one.path, other.path, count)
             for index, one in enumerate(children)
             for other in children[index + 1 :]
-            if (count := changed_together(checkout, one.path, other.path))
+            if (
+                count := self.checkouts.changed_together(checkout, one.path, other.path)
+            )
             >= TOGETHER_WORTH_SAYING
         ]
         history = self.team_history.history_of(place.id)

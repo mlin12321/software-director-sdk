@@ -1,12 +1,25 @@
 """What a team's IC is asked about its own work before it is reviewed."""
 
 from pathlib import Path
+from types import SimpleNamespace
+from typing import cast
 
 import pytest
 
 from openhands.agent_server.director import bugbot
+from openhands.agent_server.director.environment.git import GitCheckouts
+from openhands.agent_server.director.models import SessionTeam
 from openhands.sdk.skills import KeywordTrigger, Skill
 from tests.agent_server.director.conftest import run_git
+
+
+def _listed(repo: Path, base: str) -> str | None:
+    team = SimpleNamespace(
+        worktree_path=str(repo),
+        base_commit=base,
+        boundary=SimpleNamespace(path="services/api"),
+    )
+    return GitCheckouts().changes_listed(cast(SessionTeam, team))
 
 
 def test_the_write_up_carries_gits_list_of_every_changed_file(repo: Path):
@@ -17,7 +30,7 @@ def test_the_write_up_carries_gits_list_of_every_changed_file(repo: Path):
     run_git(repo, "add", "-A")
     run_git(repo, "commit", "--quiet", "-m", "work")
 
-    files = bugbot.changed_files(repo, base, "services/api")
+    files = _listed(repo, base)
 
     assert files is not None
     assert "services/api/app.py" in files and "services/api/big.py" in files
@@ -28,8 +41,8 @@ def test_the_write_up_carries_gits_list_of_every_changed_file(repo: Path):
 def test_no_change_and_no_such_commit_are_told_apart(repo: Path):
     head = run_git(repo, "rev-parse", "HEAD").strip()
 
-    assert bugbot.changed_files(repo, head, "services/api") == ""
-    assert bugbot.changed_files(repo, "0" * 40, "services/api") is None
+    assert _listed(repo, head) == ""
+    assert _listed(repo, "0" * 40) is None
 
 
 def test_the_instructions_are_the_public_code_review_skill(

@@ -42,6 +42,7 @@ class Watch(Reviews):
         """Finds teams that show no progress. Built here, where everything
         it is given is defined."""
         return StallWatchService(
+            checkouts=self.checkouts,
             org=lambda: self.org,
             has_org=lambda: self._store is not None,
             settings=lambda: self.org_settings.settings,

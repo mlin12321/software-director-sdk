@@ -11,7 +11,7 @@ from uuid import UUID
 from pydantic import BaseModel, Field, ValidationError
 
 from openhands.agent_server.director.agent_actions import Caller, acting, caller_of
-from openhands.agent_server.director.git import GitError
+from openhands.agent_server.director.environment import EnvironmentFailed
 from openhands.agent_server.director.service import DirectorService
 from openhands.agent_server.director.tools.definition import DIRECTOR_TOOLS, tool_named
 from openhands.sdk.errors import DomainError, NotFound
@@ -78,5 +78,5 @@ def call_tool(
         if name not in _offered(service, caller):
             return ToolAnswer(text=f"{name} is not one of your tools.", is_error=True)
         return ToolAnswer(text=tool.spec.act(service, caller, action), is_error=False)
-    except (DomainError, GitError) as error:
+    except (DomainError, EnvironmentFailed) as error:
         return ToolAnswer(text=str(error), is_error=True)

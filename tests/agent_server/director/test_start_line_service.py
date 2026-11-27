@@ -7,6 +7,9 @@ from pathlib import Path
 
 import pytest
 
+from openhands.agent_server.director.environment.git import (
+    GitCodingEnvironment,
+)
 from openhands.agent_server.director.org_store import OrgStore
 from openhands.agent_server.director.run_state import WAITING
 from openhands.agent_server.director.service.org_state_service import OrgStateService
@@ -29,7 +32,9 @@ def line(tmp_path: Path) -> StartLineService:
         store.upsert(node)
     open_session_in(store, "root", "s1")
     org_state = OrgStateService(
-        repo_dir=lambda: tmp_path, clock=lambda: datetime.now(UTC)
+        repo_dir=lambda: tmp_path,
+        clock=lambda: datetime.now(UTC),
+        environment=GitCodingEnvironment(),
     )
     return StartLineService(org=lambda: store, org_state=org_state, retry=60)
 
