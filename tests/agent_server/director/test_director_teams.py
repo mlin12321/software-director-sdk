@@ -301,7 +301,7 @@ async def test_a_replacement_cut_off_by_a_crash_is_finished_once(
     assert has_place(first, API)
 
     second = await again(repo, launcher)
-    await second.resume()
+    await second.org_run.resume()
     await second.settled()
     await tasked(second)
 
@@ -334,7 +334,7 @@ async def test_an_approval_the_kept_session_does_not_have_is_dropped_and_given_a
     run.close()
 
     second = await again(repo, launcher)
-    await second.resume()
+    await second.org_run.resume()
     await second.settled()
 
     assert below(second, "root") == ["apps.web", API]
@@ -619,7 +619,7 @@ async def test_a_team_made_in_place_of_one_is_not_taken_for_it(
     )
 
     second = await again(repo, launcher)
-    await second.resume()
+    await second.org_run.resume()
     await second.settled()
 
     assert node(second, API).title == "Orders"

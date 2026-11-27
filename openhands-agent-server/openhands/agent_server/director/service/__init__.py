@@ -39,15 +39,17 @@ from openhands.agent_server.director.recovery import (
 from openhands.agent_server.director.run_state import CLEARING
 from openhands.agent_server.director.runtime import bind_director
 from openhands.agent_server.director.scope import Scope, named_paths, searched_folder
+from openhands.agent_server.director.service.org_run_service import (
+    AGENT_PAUSED,
+    RESTART_NOTE,
+)
 from openhands.agent_server.director.service.stall_watch_service import (
     STALL_WAITS,
 )
 from openhands.agent_server.director.service.state import (
-    AGENT_PAUSED,
     LIMIT_WAITS,
     MERGE_WAITS,
     ORG_WAITS,
-    RESTART_NOTE,
     ROOT_ID,
     checkout_root,
 )
@@ -124,7 +126,7 @@ class DirectorService(Sync):
         self._launcher = launcher
         await self.work_queue.__aenter__()
         await self.org_save.__aenter__()
-        self._stop_status = launcher.on_status(self._on_status)
+        self._stop_status = launcher.on_status(self.org_run.on_status)
         self._stop_guard = launcher.on_action(self.guard_action)
         self._stop_resume = launcher.on_resume(self.confinement.with_tools_again)
         await asyncio.to_thread(self.confinement.look_for_sandbox)
@@ -511,7 +513,9 @@ class DirectorService(Sync):
             # It has no conversation to answer in: the team starts again
             # with the answer, and is asked of no longer once it has.
             async def again() -> None:
-                await self.start_again(place_id, StartAgainRequest(), said=answer)
+                await self.org_run.start_again(
+                    place_id, StartAgainRequest(), said=answer
+                )
                 with suppress(NotFound):
                     store.settle_escalation(place_id, escalation_id)
 

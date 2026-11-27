@@ -226,9 +226,9 @@ async def an_org_on_two_machines(
     here = await started(repo, launcher)
     await split_root(here)
     await landed(here)
-    await here.push_org("origin")
+    await here.org_sync.push_org("origin")
     there, _ = await elsewhere(remote, tmp_path)
-    await there.pull_org("origin")
+    await there.org_sync.pull_org("origin")
     await there.settled()
     return here, there
 
@@ -252,9 +252,9 @@ async def test_a_pushed_org_is_whole_in_another_clone_except_for_its_sessions(
     report(here, node(here, API), "ic", "Never log card numbers")
     await landed(here)
 
-    pushed = await here.push_org("origin")
+    pushed = await here.org_sync.push_org("origin")
     there, _ = await elsewhere(remote, tmp_path)
-    pulled = await there.pull_org("origin")
+    pulled = await there.org_sync.pull_org("origin")
     await there.settled()
 
     assert pushed.result == "pushed" and pulled.result == "fast_forward"
@@ -277,7 +277,7 @@ async def test_a_pull_takes_only_the_org_and_team_memory(
     here = await started(repo, launcher)
     await split_root(here)
     await landed(here)
-    await here.push_org("origin")
+    await here.org_sync.push_org("origin")
     # What a server keeps for itself is never given, and never taken where
     # someone put it on the remote all the same.
     head = run_git(repo, "rev-parse", "HEAD").strip()
@@ -288,7 +288,7 @@ async def test_a_pull_takes_only_the_org_and_team_memory(
     ) == ["refs/agents/aside/left", "refs/agents/memory", "refs/agents/org"]
 
     there, clone = await elsewhere(remote, tmp_path)
-    await there.pull_org("origin")
+    await there.org_sync.pull_org("origin")
     await there.settled()
 
     assert sorted(
@@ -309,12 +309,12 @@ async def test_what_each_side_changed_is_merged_and_goes_back_with_the_next_push
     change(here, API, headline="API has its routes")
     change(there, WEB, headline="Web has its pages")
     change(there, API, title="Orders API")
-    await here.push_org("origin")
+    await here.org_sync.push_org("origin")
     with pytest.raises(Conflict, match="Pull first"):
-        await there.push_org("origin")
-    merged = await there.pull_org("origin")
-    await there.push_org("origin")
-    back = await here.pull_org("origin")
+        await there.org_sync.push_org("origin")
+    merged = await there.org_sync.pull_org("origin")
+    await there.org_sync.push_org("origin")
+    back = await here.org_sync.pull_org("origin")
     await here.settled()
 
     assert merged.result == "merged" and merged.merge is None
@@ -344,7 +344,7 @@ async def conflicting(
     change(here, API, headline="Mine")
     change(there, API, headline="Theirs")
     change(there, WEB, headline="Web moved on")
-    await there.push_org("origin")
+    await there.org_sync.push_org("origin")
     return here, there
 
 
@@ -354,7 +354,7 @@ async def test_a_pull_stops_on_a_conflict_and_writes_nothing(
     here, there = await conflicting(repo, launcher, remote, tmp_path)
     before = create_org_board(repo).head()
 
-    pulled = await here.pull_org("origin")
+    pulled = await here.org_sync.pull_org("origin")
 
     assert pulled.result == "conflicts" and pulled.merge is not None
     (conflict,) = pulled.merge.conflicts
@@ -368,11 +368,11 @@ async def test_a_pull_stops_on_a_conflict_and_writes_nothing(
     )
     assert create_org_board(repo).head() == before
     assert here.summary().merging and here.summary().paused == "human"
-    assert await here.merge() == pulled.merge
+    assert await here.org_sync.merge() == pulled.merge
     with pytest.raises(Conflict, match="merge waits"):
-        await here.pull_org("origin")
+        await here.org_sync.pull_org("origin")
     with pytest.raises(Conflict, match="merge waits"):
-        await here.push_org("origin")
+        await here.org_sync.push_org("origin")
     await here.aclose()
     await there.aclose()
 
@@ -389,9 +389,9 @@ async def test_a_pull_that_fails_while_it_merges_leaves_the_org_running(
     def fails(*_):
         raise OSError("disk full")
 
-    monkeypatch.setattr(here, "_weigh", fails)
+    monkeypatch.setattr(here.org_sync, "_weigh", fails)
     with pytest.raises(OSError, match="disk full"):
-        await here.pull_org("origin")
+        await here.org_sync.pull_org("origin")
 
     # Nothing waits to be resolved, so nothing holds the org.
     assert not here.summary().merging and here.summary().paused is None
@@ -409,9 +409,9 @@ async def test_a_conflict_is_resolved_either_way_and_the_merge_is_finished(
     headline: str,
 ):
     here, there = await conflicting(repo, launcher, remote, tmp_path)
-    await here.pull_org("origin")
+    await here.org_sync.pull_org("origin")
 
-    done = await here.resolve_merge(
+    done = await here.org_sync.resolve_merge(
         ResolveMergeRequest.model_validate({"choices": {f"field:{API}:headline": side}})
     )
     await here.settled()
@@ -421,7 +421,7 @@ async def test_a_conflict_is_resolved_either_way_and_the_merge_is_finished(
     assert team(here, WEB).headline == "Web moved on"
     summary = here.summary()
     assert not summary.merging and summary.paused is None
-    assert (await here.push_org("origin")).result == "pushed"
+    assert (await here.org_sync.push_org("origin")).result == "pushed"
     await here.aclose()
     await there.aclose()
 
@@ -430,7 +430,7 @@ async def test_a_merge_that_waits_survives_a_restart_and_can_be_abandoned(
     repo: Path, launcher: FakeLauncher, remote: Path, tmp_path: Path
 ):
     here, there = await conflicting(repo, launcher, remote, tmp_path)
-    await here.pull_org("origin")
+    await here.org_sync.pull_org("origin")
     await here.aclose()
     launcher.listeners.clear()
     again = DirectorService(
@@ -442,20 +442,20 @@ async def test_a_merge_that_waits_survives_a_restart_and_can_be_abandoned(
     await again.start(launcher)
     await again.settled()
 
-    waiting = await again.merge()
+    waiting = await again.org_sync.merge()
     with pytest.raises(Unprocessable, match="no conflict named"):
-        await again.resolve_merge(
+        await again.org_sync.resolve_merge(
             ResolveMergeRequest.model_validate({"choices": {"field:x:y": "mine"}})
         )
-    abandoned = await again.abort_merge()
+    abandoned = await again.org_sync.abort_merge()
     await again.settled()
 
     assert waiting is not None and len(waiting.conflicts) == 1
-    assert abandoned.result == "up_to_date" and await again.merge() is None
+    assert abandoned.result == "up_to_date" and await again.org_sync.merge() is None
     assert team(again, API).headline == "Mine"
     assert not again.summary().merging and again.summary().paused is None
-    taken = await again.pull_org("origin")
-    everything = await again.resolve_merge(
+    taken = await again.org_sync.pull_org("origin")
+    everything = await again.org_sync.resolve_merge(
         ResolveMergeRequest.model_validate({"rest": "theirs"})
     )
     assert taken.result == "conflicts" and everything.result == "merged"
@@ -471,10 +471,10 @@ async def test_a_spec_both_sides_rewrote_is_a_conflict_about_the_file(
     here.team_memory.write("services/api", "spec.md", "Serve orders over REST\n")
     there.team_memory.write("services/api", "spec.md", "Serve orders over gRPC\n")
     there.team_memory.write("apps/web", "spec.md", "Pages for checkout\n")
-    await there.push_org("origin")
+    await there.org_sync.push_org("origin")
 
-    pulled = await here.pull_org("origin")
-    done = await here.resolve_merge(
+    pulled = await here.org_sync.pull_org("origin")
+    done = await here.org_sync.resolve_merge(
         ResolveMergeRequest.model_validate(
             {"choices": {"file:services/api/spec.md": "theirs"}}
         )
@@ -498,12 +498,12 @@ async def test_a_session_goes_on_with_a_team_the_pull_removed(
 ):
     here, there = await an_org_on_two_machines(repo, launcher, remote, tmp_path)
     there.org.remove(API)
-    await there.push_org("origin")
-    await here.pause()
+    await there.org_sync.push_org("origin")
+    await here.org_run.pause()
     here.message_delivery.notify(ic(here, API), "Use idempotency keys")
     await here.settled()
 
-    pulled = await here.pull_org("origin")
+    pulled = await here.org_sync.pull_org("origin")
 
     assert pulled.result in ("merged", "fast_forward")
     assert here.org.team(API) is None
@@ -511,7 +511,7 @@ async def test_a_session_goes_on_with_a_team_the_pull_removed(
     # while it works.
     assert team_id_of(node(here, API)) == API and ic(here, API) is not None
     assert here.summary().paused == "human"
-    assert (await here.recovery()).messages_held == 1
+    assert (await here.org_run.recovery()).messages_held == 1
     await here.aclose()
     await there.aclose()
 
@@ -528,7 +528,7 @@ async def test_a_team_whose_conversation_is_gone_is_started_again_on_its_work(
     derived = len(launcher.derived)
     api = node(here, API).id
 
-    started_again = await here.start_again(
+    started_again = await here.org_run.start_again(
         api, StartAgainRequest(conversation=root_conversation(repo))
     )
     await here.settled()
@@ -542,7 +542,7 @@ async def test_a_team_whose_conversation_is_gone_is_started_again_on_its_work(
     assert len(launcher.derived) == derived
     assert {agent.status for agent in started_again.agents} != {AGENT_LOST}
     with pytest.raises(Conflict, match="has a conversation here"):
-        await here.start_again(
+        await here.org_run.start_again(
             api, StartAgainRequest(conversation=root_conversation(repo))
         )
     await here.aclose()
@@ -560,16 +560,16 @@ async def test_such_a_team_is_started_again_like_the_ic_above_in_its_own_checkou
 
     # Nobody works at a team of the org itself.
     with pytest.raises(Conflict, match="open a session there"):
-        await here.start_again("root", StartAgainRequest())
+        await here.org_run.start_again("root", StartAgainRequest())
     # With no conversation of the org left here there is nothing to start
     # it like.
     kept = launcher.known.pop(UUID(top_ic))
     with pytest.raises(Conflict, match="Start it again with a conversation"):
-        await here.start_again(api, StartAgainRequest())
+        await here.org_run.start_again(api, StartAgainRequest())
     launcher.known[UUID(top_ic)] = kept
 
     before = len(launcher.derived)
-    await here.start_again(api, StartAgainRequest())
+    await here.org_run.start_again(api, StartAgainRequest())
     await here.settled()
 
     [again] = launcher.derived[before:]
@@ -616,11 +616,11 @@ async def test_a_pull_shows_the_tree_again_to_a_page_that_has_it_open(
 ):
     here, there = await an_org_on_two_machines(repo, launcher, remote, tmp_path)
     change(here, API, title="Payments")
-    await here.push_org("origin")
+    await here.org_sync.push_org("origin")
     events: list[OrgChange] = []
     there.org.subscribe("root", events.append, full=True)
 
-    await there.pull_org("origin")
+    await there.org_sync.pull_org("origin")
 
     shown = events[-1]
     assert isinstance(shown, SnapshotEvent)
@@ -640,7 +640,7 @@ async def test_a_sessions_reviewer_that_is_lost_is_started_again(
     del launcher.known[UUID(lost)]
 
     before = len(launcher.derived)
-    await here.start_again(lead, StartAgainRequest())
+    await here.org_run.start_again(lead, StartAgainRequest())
     await here.settled()
 
     # Like the first time: from the IC the session works with.
@@ -663,7 +663,9 @@ async def test_a_team_started_again_keeps_its_manager_and_hears_the_human(
     del launcher.known[UUID(lost)]
 
     before = len(launcher.derived)
-    await here.start_again(api, StartAgainRequest(), said="Use the smaller migration.")
+    await here.org_run.start_again(
+        api, StartAgainRequest(), said="Use the smaller migration."
+    )
     await here.settled()
 
     assert manager(here, API) == kept and ic(here, API) != lost

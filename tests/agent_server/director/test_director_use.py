@@ -482,12 +482,12 @@ async def test_a_session_set_going_while_the_org_is_paused_goes_on_when_it_resum
     await counted(service)
     top = node(service, "root")
     assert top.stopped is not None and top.stopped.running == [api]
-    await service.pause()
+    await service.org_run.pause()
     await service.settled()
 
     service.answer_escalation(top.id, LIMIT_WAITS, "Go on.")
     await service.settled()
-    await service.resume()
+    await service.org_run.resume()
     await service.settled()
 
     # The agent that was cut off in its turn runs again.

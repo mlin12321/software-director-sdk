@@ -352,7 +352,7 @@ async def test_what_an_agent_was_told_outlasts_the_server(
     await first.aclose()
 
     second = await again(repo, launcher)
-    await second.resume()
+    await second.org_run.resume()
 
     assert await tell(second, launcher, "") == "Go on."
     await second.aclose()

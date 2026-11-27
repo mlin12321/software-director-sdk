@@ -398,7 +398,7 @@ async def pause_org(
     a paused org changes nothing. The answer says what `POST /org/resume`
     would do.
     """
-    return await service.pause()
+    return await service.org_run.pause()
 
 
 @director_router.post(
@@ -417,7 +417,7 @@ async def resume_org(
     ended in the middle of a step is told so first. The answer lists only
     what was put aside because it no longer fits the org.
     """
-    return await service.resume()
+    return await service.org_run.resume()
 
 
 @director_router.get("/org/recovery", response_model=Recovery)
@@ -431,7 +431,7 @@ async def get_recovery(
     (`OrgSummary.paused` says which). Without a paused org the list is
     empty.
     """
-    return await service.recovery()
+    return await service.org_run.recovery()
 
 
 @director_router.post(
@@ -867,7 +867,7 @@ async def edit_node_file(
     for a file the team's own agents may not write.
     """
     _require_place(service, node_id)
-    return await service.edit_file(node_id, path, request.content)
+    return await service.org_run.edit_file(node_id, path, request.content)
 
 
 @director_router.post(
@@ -895,7 +895,7 @@ async def pull_org(
     nothing is written, the org stays paused, and `merge` lists what to
     choose with `POST /org/merge/resolve`.
     """
-    return await service.pull_org((request or OrgSyncRequest()).remote)
+    return await service.org_sync.pull_org((request or OrgSyncRequest()).remote)
 
 
 @director_router.post(
@@ -921,7 +921,7 @@ async def push_org(
     push is refused while the remote has changes of the org that are not
     here.
     """
-    return await service.push_org((request or OrgSyncRequest()).remote)
+    return await service.org_sync.push_org((request or OrgSyncRequest()).remote)
 
 
 @director_router.get("/org/merge", response_model=OrgMerge | None)
@@ -929,7 +929,7 @@ async def get_merge(
     service: DirectorService = Depends(get_director_service),
 ) -> OrgMerge | None:
     """The merge that waits for choices; null when none does."""
-    return await service.merge()
+    return await service.org_sync.merge()
 
 
 @director_router.post(
@@ -952,7 +952,7 @@ async def resolve_merge(
     both sides as parents, and the org is resumed if the pull had paused it.
     Until then the result is `conflicts` with what is still open.
     """
-    return await service.resolve_merge(request)
+    return await service.org_sync.resolve_merge(request)
 
 
 @director_router.post(
@@ -964,7 +964,7 @@ async def abort_merge(
     service: DirectorService = Depends(get_director_service),
 ) -> OrgSync:
     """Abandon the merge that waits. The org is as it was before the pull."""
-    return await service.abort_merge()
+    return await service.org_sync.abort_merge()
 
 
 @director_router.post(
@@ -1003,7 +1003,7 @@ async def start_team_again(
     )
     if team is None:
         raise NotFound(f"Session {session_id!r} has no team {node_id}")
-    return await service.start_again(team.id, request)
+    return await service.org_run.start_again(team.id, request)
 
 
 @director_tools_router.get("")

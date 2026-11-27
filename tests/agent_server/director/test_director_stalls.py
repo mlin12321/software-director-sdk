@@ -250,10 +250,10 @@ async def test_the_time_an_org_is_paused_does_not_count(
 ):
     await looked(service)
     clock.passes(100)
-    await service.pause()
+    await service.org_run.pause()
     clock.passes(500)
     await looked(service)
-    await service.resume()
+    await service.org_run.resume()
     await service.settled()
     clock.passes(100)
     await looked(service)
@@ -450,7 +450,7 @@ async def test_a_stopped_team_is_still_stopped_after_a_restart(
     await second.start(launcher)
     await second.settled()
     if second.summary().paused is not None:
-        await second.resume()
+        await second.org_run.resume()
         await second.settled()
 
     stopped = node(second, API).stopped
@@ -497,8 +497,8 @@ async def test_a_team_set_up_and_given_no_task_is_told_to_the_ic_above(
     # that was paused in between does not say it again.
     clock.passes(240)
     await looked(service)
-    await service.pause()
-    await service.resume()
+    await service.org_run.pause()
+    await service.org_run.resume()
     clock.passes(240)
     await looked(service)
     service.team_messaging.tell_writer(api, "Begin.")

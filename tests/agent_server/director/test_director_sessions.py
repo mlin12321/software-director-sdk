@@ -1064,7 +1064,7 @@ async def test_a_close_cut_off_records_no_end_of_a_session_the_org_never_knew(
     first.org.close_session = real  # type: ignore[method-assign]
 
     second = await again(repo, launcher)
-    await second.resume()
+    await second.org_run.resume()
     await second.settled()
 
     assert all(session.id != opened.session.id for session in second.org.sessions())

@@ -28,9 +28,11 @@ from openhands.agent_server.director.run_state import (
     RunStateError,
 )
 from openhands.agent_server.director.service import (
+    DirectorService,
+)
+from openhands.agent_server.director.service.org_run_service import (
     AGENT_PAUSED,
     RESTART_NOTE,
-    DirectorService,
 )
 from openhands.agent_server.director.service.resumable_work_service import Held
 from openhands.agent_server.director.session_state import kept_sessions
@@ -105,23 +107,23 @@ async def test_a_paused_org_holds_messages_and_delivers_them_in_order_on_resume(
     service = await started(repo, launcher)
     before = len(launcher.sent)
 
-    paused = await service.pause()
+    paused = await service.org_run.pause()
     service.team_messaging.tell_writer(place(service), "First", human=True)
     service.message_delivery.notify(ic(service), "Second")
     await service.settled()
 
     assert paused.paused == "human" and service.summary().paused == "human"
     assert len(launcher.sent) == before
-    held = await service.recovery()
+    held = await service.org_run.recovery()
     assert held.messages_held == 2 and (place(service), "message") in kinds(held)
 
-    resumed = await service.resume()
+    resumed = await service.org_run.resume()
     await service.settled()
 
     assert resumed.paused is None and service.summary().paused is None
     first, second = launcher.messages_to(ic(service))[-2:]
     assert first == "First" and "Second" in second
-    assert (await service.recovery()).items == []
+    assert (await service.org_run.recovery()).items == []
     await service.aclose()
 
 
@@ -133,15 +135,15 @@ async def test_pausing_stops_the_agents_that_run_and_resuming_runs_only_those(
     assert root_ic is not None
     launcher.report(root_ic, ConversationExecutionStatus.RUNNING)
 
-    await service.pause()
+    await service.org_run.pause()
     await service.settled()
 
     assert launcher.paused == [UUID(root_ic)]
     statuses = {agent.role: agent.status for agent in node(service, "root").agents}
     assert statuses == {"ic": AGENT_PAUSED}
-    assert (place(service), "run_again") in kinds(await service.recovery())
+    assert (place(service), "run_again") in kinds(await service.org_run.recovery())
 
-    await service.resume()
+    await service.org_run.resume()
     await service.settled()
 
     assert launcher.resumed == [(UUID(root_ic), None)]
@@ -155,13 +157,13 @@ async def test_what_an_agent_decides_while_the_org_is_paused_is_done_after_resum
     service = await started(repo, launcher)
     await use(service, ic(service), ProposeTeamsTool, SPLIT)
 
-    await service.pause()
+    await service.org_run.pause()
     answer = await use(service, manager(service), ApproveTeamsTool, APPROVE)
 
     assert not answer.is_error and node(service, "root").child_ids == []
-    assert (place(service), "continue") in kinds(await service.recovery())
+    assert (place(service), "continue") in kinds(await service.org_run.recovery())
 
-    await service.resume()
+    await service.org_run.resume()
     await service.settled()
     assert len(launcher.derived) == 1
     await tasked(service)
@@ -193,7 +195,7 @@ async def test_a_server_stopped_while_teams_wait_starts_them_in_order_once_resum
 
     launcher.full_for = 0
     second = await again(repo, launcher)
-    left = await second.recovery()
+    left = await second.org_run.recovery()
 
     assert second.summary().paused == "shutdown" and len(launcher.derived) == 1
     waited = [node_id for node_id, kind in kinds(left) if kind == "start"]
@@ -208,7 +210,7 @@ async def test_a_server_stopped_while_teams_wait_starts_them_in_order_once_resum
         agent.status for team in second.org.below(top) for agent in team.agents
     } == {"idle"}
 
-    await second.resume()
+    await second.org_run.resume()
     await second.settled()
 
     teams = second.org.below(top)
@@ -238,9 +240,9 @@ async def test_a_team_start_cut_off_by_a_crash_is_finished_without_a_second_of_a
     second = await again(repo, launcher)
 
     assert second.summary().paused == "crash"
-    assert (api, "start") in kinds(await second.recovery())
+    assert (api, "start") in kinds(await second.org_run.recovery())
 
-    await second.resume()
+    await second.org_run.resume()
     await second.settled()
     await tasked(second)
 
@@ -276,8 +278,8 @@ async def test_a_prune_cut_off_by_a_crash_is_finished_and_recorded_once(
     assert len(launcher.deleted) == 1
 
     second = await again(repo, launcher)
-    assert (api, "continue") in kinds(await second.recovery())
-    await second.resume()
+    assert (api, "continue") in kinds(await second.org_run.recovery())
+    await second.org_run.resume()
     await second.settled()
 
     assert second.org.place(api) is None
@@ -308,7 +310,7 @@ async def test_a_prune_cut_off_after_it_is_recorded_is_recorded_once(
     await cut_off(launcher, ended, use(first, manager(first), PruneTeamTool, PRUNE_API))
 
     second = await again(repo, launcher)
-    await second.resume()
+    await second.org_run.resume()
     await second.settled()
 
     assert second.org.place(api) is None
@@ -341,8 +343,8 @@ async def test_the_end_of_a_split_cut_off_by_a_crash_is_told_once(
     )
 
     second = await again(repo, launcher)
-    assert (place(second), "message") in kinds(await second.recovery())
-    await second.resume()
+    assert (place(second), "message") in kinds(await second.org_run.recovery())
+    await second.org_run.resume()
     await second.settled()
 
     assert node(second, "root").pending_split is None
@@ -375,7 +377,7 @@ async def test_the_end_of_a_split_cut_off_before_it_is_told_is_told(
     )
 
     second = await again(repo, launcher)
-    await second.resume()
+    await second.org_run.resume()
     await second.settled()
 
     assert node(second, "root").pending_split is None
@@ -399,7 +401,7 @@ async def test_a_team_in_line_to_start_is_held_when_the_org_is_paused(
 
     waits = asyncio.create_task(service.start_line.when_there_is_room("behind", start))
     await asyncio.sleep(0)
-    await service.pause()
+    await service.org_run.pause()
 
     # The one ahead of it may never start now.
     with pytest.raises(Held):
@@ -424,8 +426,10 @@ async def test_a_review_request_cut_off_by_a_crash_reaches_the_reviewer_once(
     await asyncio.to_thread(first.org_save.wait)
 
     second = await again(repo, launcher)
-    assert (place(second, "services.api"), "continue") in kinds(await second.recovery())
-    await second.resume()
+    assert (place(second, "services.api"), "continue") in kinds(
+        await second.org_run.recovery()
+    )
+    await second.org_run.resume()
     await second.settled()
 
     review = node(second, "services.api").review
@@ -465,8 +469,10 @@ async def test_an_acceptance_the_server_ended_before_saving_is_not_lost(
     second = await again(repo, launcher)
     saved = node(second, "services.api").review
     assert saved is not None and saved.state == "pending"
-    assert (place(second, "services.api"), "continue") in kinds(await second.recovery())
-    await second.resume()
+    assert (place(second, "services.api"), "continue") in kinds(
+        await second.org_run.recovery()
+    )
+    await second.org_run.resume()
     await second.settled()
 
     review = node(second, "services.api").review
@@ -509,7 +515,7 @@ async def test_accepted_work_the_server_ended_before_passing_up_still_goes_up(
     saved = node(second, SCHEMA).review
     assert saved is not None and saved.state == "accepted"
     assert node(second, "services.api").review is None
-    await second.resume()
+    await second.org_run.resume()
     await second.settled()
 
     api = node(second, "services.api")
@@ -533,9 +539,9 @@ async def test_an_agent_cut_off_in_a_step_shows_paused_is_told_and_runs_again(
     assert second.summary().paused == "crash"
     root = node(second, "root")
     assert root.agents[0].status == AGENT_PAUSED and root.status != "blocked"
-    assert (place(second), "run_again") in kinds(await second.recovery())
+    assert (place(second), "run_again") in kinds(await second.org_run.recovery())
 
-    await second.resume()
+    await second.org_run.resume()
     await second.settled()
 
     assert launcher.resumed == [(UUID(root_ic), RESTART_NOTE)]
@@ -559,7 +565,7 @@ async def test_an_agent_cut_off_in_a_step_is_not_a_failure_when_it_is_run_again(
 
     monkeypatch.setattr(launcher, "resume", told_before_it_runs)
 
-    await second.resume()
+    await second.org_run.resume()
     await second.settled()
 
     root = node(second, "root")
@@ -584,7 +590,7 @@ async def test_a_server_stopped_with_nothing_under_way_comes_back_running(
     second = await again(repo, launcher)
 
     assert second.summary().paused is None
-    assert (await second.recovery()).items == []
+    assert (await second.org_run.recovery()).items == []
     await second.aclose()
 
 
@@ -593,7 +599,7 @@ async def test_an_org_set_to_resume_on_start_takes_its_work_up_unasked(
 ):
     first = await started(repo, launcher)
     first.org_settings.update_settings(DirectorSettingsUpdate(resume_on_start=True))
-    await first.pause()
+    await first.org_run.pause()
     first.message_delivery.notify(ic(first), "Carry on")
     await first.settled()
     await first.aclose()
@@ -603,7 +609,7 @@ async def test_an_org_set_to_resume_on_start_takes_its_work_up_unasked(
 
     # A human's pause holds across restarts; only a stop or a crash does not.
     assert second.summary().paused == "human" and len(launcher.sent) == before
-    await second.resume()
+    await second.org_run.resume()
     await second.settled()
     assert "Carry on" in launcher.messages_to(ic(second))[-1]
 
@@ -630,7 +636,7 @@ async def test_a_session_stays_when_the_org_no_longer_has_its_team(
         OpenSessionRequest(text="Restyle it", node_id="apps.web")
     )
     await first.settled()
-    await first.pause()
+    await first.org_run.pause()
     first.message_delivery.notify(at_api.conversation_id, "Rename the endpoint")
     first.message_delivery.notify(at_web.conversation_id, "Carry on")
     await first.settled()
@@ -643,7 +649,7 @@ async def test_a_session_stays_when_the_org_no_longer_has_its_team(
     before = len(launcher.sent)
 
     second = await again(repo, launcher)
-    left = await second.recovery()
+    left = await second.org_run.recovery()
 
     # A session is not dropped with its team: what becomes of the team is
     # decided when the session's work is reviewed.
@@ -653,7 +659,7 @@ async def test_a_session_stays_when_the_org_no_longer_has_its_team(
     assert [item for item in left.items if item.kind == "dropped"] == []
     assert left.messages_held == 2
 
-    await second.resume()
+    await second.org_run.resume()
     await second.settled()
 
     assert "Rename the endpoint" in launcher.messages_to(at_api.conversation_id)[-1]
@@ -666,7 +672,7 @@ async def test_a_sessions_run_state_is_kept_when_its_team_changed_in_the_org(
     repo: Path, launcher: FakeLauncher
 ):
     first = await started(repo, launcher)
-    await first.pause()
+    await first.org_run.pause()
     first.message_delivery.notify(ic(first), "Carry on")
     await first.settled()
     await first.aclose()
@@ -677,7 +683,7 @@ async def test_a_sessions_run_state_is_kept_when_its_team_changed_in_the_org(
     before = len(launcher.sent)
 
     second = await again(repo, launcher)
-    resumed = await second.resume()
+    resumed = await second.org_run.resume()
     await second.settled()
 
     # What a session has at a team is this machine's, whatever the org's
@@ -692,7 +698,7 @@ async def test_run_state_written_by_another_server_is_not_used(
     repo: Path, launcher: FakeLauncher
 ):
     first = await started(repo, launcher)
-    await first.pause()
+    await first.org_run.pause()
     first.message_delivery.notify(ic(first), "Carry on")
     await first.settled()
     await first.aclose()
@@ -708,7 +714,7 @@ async def test_run_state_written_by_another_server_is_not_used(
     await other.settled()
 
     assert other.summary().paused is None
-    await other.resume()
+    await other.org_run.resume()
     await other.settled()
     assert len(launcher.sent) == before
     await other.aclose()
@@ -855,8 +861,8 @@ async def test_resuming_waits_for_a_pause_that_is_still_stopping_agents(
 
     launcher.pause = slow_pause  # type: ignore[method-assign]
 
-    await service.pause()
-    resumed = asyncio.create_task(service.resume())
+    await service.org_run.pause()
+    resumed = asyncio.create_task(service.org_run.resume())
     await asyncio.sleep(0.05)
     waits = not resumed.done()
     stopped.set()
@@ -885,7 +891,7 @@ async def test_an_agent_not_yet_run_again_is_taken_up_by_the_next_start(
 
     launcher.resume = cut_off  # type: ignore[method-assign]
 
-    await second.resume()
+    await second.org_run.resume()
     await asyncio.sleep(0.05)
 
     # The server ends here a second time: the agent is still one to run again.
@@ -917,10 +923,10 @@ async def test_two_resumes_at_once_run_an_agent_again_once(
     root_ic = ic(service)
     assert root_ic is not None
     launcher.report(root_ic, ConversationExecutionStatus.RUNNING)
-    await service.pause()
+    await service.org_run.pause()
     await service.settled()
 
-    await asyncio.gather(service.resume(), service.resume())
+    await asyncio.gather(service.org_run.resume(), service.org_run.resume())
     await service.settled()
 
     assert launcher.resumed == [(UUID(root_ic), None)]

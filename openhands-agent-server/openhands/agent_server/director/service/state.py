@@ -92,7 +92,6 @@ from openhands.agent_server.director.session_state import (
 from openhands.agent_server.director.split import (
     clean_path,
 )
-from openhands.sdk.conversation.state import ConversationExecutionStatus
 from openhands.sdk.errors import (
     DomainError,
     Unavailable,
@@ -121,22 +120,8 @@ MODEL_CALL_TIMEOUT_SECONDS = 120.0
 # started; under `aside`, what was in the way of the team's accepted work.
 LEFT_REFS = "refs/agents/left"
 ASIDE_REFS = "refs/agents/aside"
-# An agent whose conversation is gone, or could not be started.
-# An agent that was running when its org was paused, and runs again when it
-# is resumed.
-AGENT_PAUSED = "paused"
-# What an agent is told when the server ended in the middle of its step.
-RESTART_NOTE = (
-    "The server was restarted while you were working. The command or edit "
-    "you were in the middle of may not have finished: check what is there "
-    "before you carry on with your task."
-)
-# How often a merge is made again because the org was saved meanwhile.
-_MERGE_ATTEMPTS = 4
 # After a conversation id: the script an ACP agent's process is started by.
 _REMEMBERED_FILE = "director.json"
-# The lane agents are paused in, so that nothing waits for their last step.
-PAUSE_LANE = "pause"
 STALL_LANE = "stalls"
 # The steps the director takes for a team's review, in its own lane.
 _REVIEW_STEPS = ("request_review", "accept")
@@ -149,12 +134,6 @@ ORG_WAITS = "org-waits"
 # token limit goes on.
 LIMIT_WAITS = "limit-reached"
 
-
-_AGENT_STATUS: dict[ConversationExecutionStatus, str] = {
-    ConversationExecutionStatus.RUNNING: "working",
-    ConversationExecutionStatus.ERROR: "blocked",
-    ConversationExecutionStatus.STUCK: "blocked",
-}
 
 # How long a message waits for an IC that submitted to end its turn.
 _REST_CHECKS = 600
@@ -315,9 +294,6 @@ class ServiceState:
         self._stop_status: Callable[[], None] | None = None
         self._create_lock = asyncio.Lock()
         self._first_message_lock = asyncio.Lock()
-        # Held by a pull, a push or a step of a merge, one at a time.
-        self._sync_lock = asyncio.Lock()
-        self._resume_lock = asyncio.Lock()
 
     def review_instructions(self, kind: TeamTemplate | None = None) -> str:
         """What an IC reviewing a team below checks its work by: the skill
@@ -598,18 +574,6 @@ class ServiceState:
     def next_submission(self) -> int:
         """The place in the order of the work that is submitted now."""
         return self.org_state.run_state().count("submitted")
-
-    def _shown(self, conversation_id: str, status: ConversationExecutionStatus) -> str:
-        """An agent's status as the org shows it. One that was running when
-        the org was paused is paused, whatever stopping did to it."""
-        held = (
-            self.org_state.paused is not None
-            and conversation_id in self.org_state.running
-        )
-        if held or conversation_id in self.org_state.resuming:
-            if status != ConversationExecutionStatus.RUNNING:
-                return AGENT_PAUSED
-        return _AGENT_STATUS.get(status, "idle")
 
     async def _came_back(self) -> None:
         """Take up what the org had begun before the server stopped."""

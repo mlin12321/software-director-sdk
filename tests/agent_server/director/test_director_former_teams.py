@@ -775,7 +775,7 @@ async def test_a_hand_over_that_ended_while_the_server_was_down_is_told_at_its_s
     launcher.known[UUID(side)] = ConversationExecutionStatus.FINISHED
 
     second = await again(repo, launcher)
-    await second.resume()
+    await second.org_run.resume()
     await second.settled()
 
     mode = hand_over_of(node(second, "root"))
@@ -797,7 +797,7 @@ async def test_a_hand_over_conversation_gone_with_the_server_is_shown_as_lost(
     del launcher.known[UUID(side)]
 
     second = await again(repo, launcher)
-    await second.resume()
+    await second.org_run.resume()
     await second.settled()
 
     mode = hand_over_of(node(second, "root"))
@@ -818,7 +818,7 @@ async def test_a_server_that_ends_as_a_hand_over_starts_starts_it_at_its_next_st
     await service.aclose()
 
     second = await again(repo, launcher)
-    await second.resume()
+    await second.org_run.resume()
     await second.settled()
 
     assert "Team 'API'" in given_aside(second, launcher)
@@ -836,18 +836,18 @@ async def test_a_paused_org_pauses_a_hand_over_and_it_goes_on_when_resumed(
     assert side is not None
     launcher.report(side, ConversationExecutionStatus.RUNNING)
 
-    await service.pause()
+    await service.org_run.pause()
     await service.settled()
 
     assert UUID(side) in launcher.paused
     assert ended_notices(service, launcher) == []
     # What resuming does names the hand-over, whose conversation is there.
-    told = await service.recovery()
+    told = await service.org_run.recovery()
     assert [(item.kind, item.detail) for item in told.items] == [
         ("run_again", "Its IC in hand-over mode runs again.")
     ]
 
-    await service.resume()
+    await service.org_run.resume()
     await service.settled()
 
     assert UUID(side) in [conversation for conversation, _ in launcher.resumed]
@@ -963,7 +963,7 @@ async def test_a_split_finished_again_after_a_restart_hands_over_once(
     await service.aclose()
 
     second = await again(repo, launcher)
-    await second.resume()
+    await second.org_run.resume()
     await second.settled()
 
     asides = [s for s in launcher.derived if shipped(HAND_OVER_ROLE) in s.task]

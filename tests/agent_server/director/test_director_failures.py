@@ -328,7 +328,7 @@ async def test_an_answer_about_a_lost_ic_waits_until_the_team_has_started_again(
         if len(heard) == 1:
             raise Conflict("No conversation of the org runs on this server")
 
-    monkeypatch.setattr(service, "start_again", start_again)
+    monkeypatch.setattr(service.org_run, "start_again", start_again)
 
     service.answer_escalation(top, failure_waits("ic"), "The key is set.")
     await service.settled()

@@ -383,13 +383,13 @@ async def test_reviews_that_waited_through_a_pause_go_out_after_it(
     service: DirectorService, launcher: FakeLauncher, repo: Path
 ):
     await split_root(service)
-    await service.pause()
+    await service.org_run.pause()
     await api_submits(service, repo)
     commit(repo, "apps/web/page.tsx", "export {}\n")
     await use(service, ic(service, "apps.web"), SubmitReviewTool, DONE)
     assert requests(service, launcher) == []
 
-    await service.resume()
+    await service.org_run.resume()
     await service.settled()
 
     asked = "\n".join(requests(service, launcher))

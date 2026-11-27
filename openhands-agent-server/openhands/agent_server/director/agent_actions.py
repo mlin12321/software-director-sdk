@@ -79,7 +79,7 @@ def acting(service: DirectorService, conversation_id: UUID) -> Caller:
     """
     caller = caller_of(service, conversation_id)
     if not caller.hand_over:
-        service.acts(caller.node.id, caller.role)
+        service.org_run.acts(caller.node.id, caller.role)
     return caller
 
 

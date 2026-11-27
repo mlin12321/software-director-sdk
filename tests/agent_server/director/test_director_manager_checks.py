@@ -212,7 +212,7 @@ async def test_what_was_counted_is_kept_over_a_restart(
     await second.start(launcher)
     await second.settled()
     if second.summary().paused is not None:
-        await second.resume()
+        await second.org_run.resume()
         await second.settled()
     await escalates(second, API)
 
