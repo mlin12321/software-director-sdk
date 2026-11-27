@@ -329,6 +329,14 @@ jobs:
 
     agent-server-tests:
         runs-on: ubuntu-24.04
+        strategy:
+            fail-fast: false
+            matrix:
+                # The test files are dealt out over this many runners. Change
+                # SHARDS below with it.
+                shard: [0, 1, 2, 3]
+        env:
+            SHARDS: 4
         steps:
             - name: Checkout
               uses: actions/checkout@v7.0.1
@@ -364,18 +372,33 @@ jobs:
               run: |
                   # Clean up any existing coverage file
                   rm -f .coverage
-                  # Use pytest-xdist (-n auto) for parallel execution with proper
-                  # coverage collection. --forked prevents coverage from child processes.
-                  CI=true uv run python -m pytest -vvs \
-                    -n auto \
+                  # Every test file is in exactly one shard: the files are
+                  # sorted and dealt out by their place in that order.
+                  find tests/agent_server -name 'test_*.py' | LC_ALL=C sort > all-files.txt
+                  total=$(wc -l < all-files.txt)
+                  dealt=0
+                  for shard in $(seq 0 $((SHARDS - 1))); do
+                    count=$(awk -v n="$SHARDS" -v s="$shard" '(NR - 1) % n == s' all-files.txt | wc -l)
+                    dealt=$((dealt + count))
+                  done
+                  if [ "$total" -eq 0 ] || [ "$dealt" -ne "$total" ]; then
+                    echo "The shards hold $dealt of $total test files" >&2
+                    exit 1
+                  fi
+                  awk -v n="$SHARDS" -v s="${{ matrix.shard }}" '(NR - 1) % n == s' all-files.txt > shard-files.txt
+                  echo "Shard ${{ matrix.shard }} of $SHARDS: $(wc -l < shard-files.txt) of $total test files"
+                  # Use pytest-xdist for parallel execution with proper coverage
+                  # collection, with a worker for each logical core of the runner
+                  # (-n auto counts only the physical ones).
+                  CI=true xargs -a shard-files.txt uv run python -m pytest -vvs \
+                    -n 4 \
                     --cov=openhands-agent-server \
                     --cov-report=term-missing \
                     --cov-fail-under=0 \
-                    --cov-config=pyproject.toml \
-                    tests/agent_server
+                    --cov-config=pyproject.toml
                   # Rename coverage file for upload
                   if [ -f .coverage ]; then
-                    mv .coverage coverage-agent-server.dat
+                    mv .coverage coverage-agent-server-${{ matrix.shard }}.dat
                     echo "Agent Server coverage file prepared for upload"
                   fi
 
@@ -383,8 +406,8 @@ jobs:
               if: steps.changed.outputs.any_changed == 'true' && always()
               uses: actions/upload-artifact@v7
               with:
-                  name: coverage-agent-server
-                  path: coverage-agent-server.dat
+                  name: coverage-agent-server-${{ matrix.shard }}
+                  path: coverage-agent-server-${{ matrix.shard }}.dat
                   if-no-files-found: warn
 
     agent-server-stress-tests:
@@ -582,8 +605,10 @@ jobs:
                       cp "$dat_file" .coverage.sdk
                     elif [[ "$dat_file" == *coverage-tools.dat ]]; then
                       cp "$dat_file" .coverage.tools  
-                    elif [[ "$dat_file" == *coverage-agent-server.dat ]]; then
-                      cp "$dat_file" .coverage.agent-server
+                    elif [[ "$dat_file" == *coverage-agent-server-*.dat ]]; then
+                      # One file from each shard of the agent server's tests.
+                      shard="${dat_file##*coverage-agent-server-}"
+                      cp "$dat_file" ".coverage.agent-server-${shard%.dat}"
                     elif [[ "$dat_file" == *coverage-workspace.dat ]]; then
                       cp "$dat_file" .coverage.workspace
                     elif [[ "$dat_file" == *coverage-cross.dat ]]; then
