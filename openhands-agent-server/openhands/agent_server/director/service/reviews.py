@@ -262,7 +262,7 @@ class Reviews(Teams):
             for path in finding.path.split(", "):
                 if path.strip():
                     self.record_need(place, path.strip(), NEED_FINDING)
-        limit = self.settings.manager_check_ic_setbacks
+        limit = self.org_settings.settings.manager_check_ic_setbacks
         if limit and place.parent_id is not None and review.round % limit == 0:
             with self._counting:
                 counted = self._counted(place.parent_id)
@@ -847,7 +847,7 @@ class Reviews(Teams):
         the org's teams, so it is asked once more after the time a team
         may show no progress, and after as long again the human is asked:
         their answer lets the org's stand wherever nothing was decided."""
-        limit = self.settings.soft_check_in_minutes
+        limit = self.org_settings.settings.soft_check_in_minutes
         if not limit:
             return
         with self._weighing:
@@ -1095,9 +1095,10 @@ class Reviews(Teams):
                 f"goes under team {holder.id} or one below it."
             )
         level = len(store.teams_above(home.id)) + 2
-        if level > self.settings.max_depth:
+        max_depth = self.org_settings.settings.max_depth
+        if level > max_depth:
             raise Invalid(
-                f"An org may have at most {self.settings.max_depth} levels of "
+                f"An org may have at most {max_depth} levels of "
                 f"teams, and under team {choice.under} it would be level {level}."
             )
 

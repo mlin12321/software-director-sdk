@@ -220,8 +220,8 @@ class DirectorService(Sync):
             raise Unprocessable(
                 "An org's agents run in the server's own process, not in Docker"
             )
-        root_type = request.agent_type or self.settings.default_agent_type
-        allowed = self.settings.allowed_agent_types
+        root_type = request.agent_type or self.org_settings.settings.default_agent_type
+        allowed = self.org_settings.settings.allowed_agent_types
         if root_type not in await asyncio.to_thread(
             lambda: self.team_types.agent_types
         ):
@@ -276,7 +276,7 @@ class DirectorService(Sync):
                 store.remove(ROOT_ID)
                 self._repo_dir = configured
                 raise
-            await asyncio.to_thread(self._remember, repo_path=str(self._repo_dir))
+            await asyncio.to_thread(self.remembered.keep, repo_path=str(self._repo_dir))
             await asyncio.to_thread(self._working)
         if request.title is None:
             # The org is named after what its first session is for.
@@ -305,7 +305,7 @@ class DirectorService(Sync):
         top = place = places[0]
         chosen_by: ChosenBy = "path"
         reason = ""
-        if self.settings.route_requests and len(places) > 1:
+        if self.org_settings.settings.route_requests and len(places) > 1:
             choice = await self.request_routing.choose_team(
                 text, top, within=session_id
             )
@@ -395,7 +395,7 @@ class DirectorService(Sync):
         text = request.text
         chosen_by: ChosenBy = "path"
         reason = ""
-        if request.auto and self.settings.route_requests:
+        if request.auto and self.org_settings.settings.route_requests:
             choice = await self.request_routing.choose_team(text, node)
             chosen_by, reason = choice.by, choice.reason
             node = store.team(choice.node_id) or node

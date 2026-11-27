@@ -406,7 +406,7 @@ async def test_what_the_human_says_in_a_session_is_routed_among_its_own_teams(
     assert "Handed to the IC of the team above" in handed.text
     assert "Make the cart page faster." in launcher.messages_to(ic(service))[-1]
 
-    service.update_settings(DirectorSettingsUpdate(route_requests=False))
+    service.org_settings.update_settings(DirectorSettingsUpdate(route_requests=False))
     kept = await service.route_message(
         RouteMessageRequest(text="Make the cart page lighter.", session_id=session.id)
     )
@@ -1390,7 +1390,9 @@ async def test_a_manager_that_does_not_answer_is_asked_again_and_then_the_human(
 ):
     now = [datetime(2026, 11, 14, tzinfo=UTC)]
     service = await started(repo, launcher, clock=lambda: now[0], stall_poll=3600)
-    service.update_settings(DirectorSettingsUpdate(soft_check_in_minutes=60))
+    service.org_settings.update_settings(
+        DirectorSettingsUpdate(soft_check_in_minutes=60)
+    )
     top, conversation = await at_api(service)
     sets_up_jobs(service, top)
     org_gains(service, JOBS, "services/api/workers")

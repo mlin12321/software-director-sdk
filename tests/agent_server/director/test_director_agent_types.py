@@ -226,11 +226,11 @@ async def test_settings_come_from_director_yaml_and_a_change_holds_over_it(
     config = org_config(tmp_path, "soft_check_in_minutes: 30\nmax_depth: 2\n")
     service = await an_org(repo, launcher, config)
     try:
-        assert service.settings.soft_check_in_minutes == 30
-        assert service.settings.max_depth == 2
+        assert service.org_settings.settings.soft_check_in_minutes == 30
+        assert service.org_settings.settings.max_depth == 2
         # The org page sends every setting with the one that changed: only
         # that one holds over the file, also after a restart.
-        service.update_settings(
+        service.org_settings.update_settings(
             DirectorSettingsUpdate(soft_check_in_minutes=45, max_depth=2, max_teams=32)
         )
     finally:
@@ -239,9 +239,9 @@ async def test_settings_come_from_director_yaml_and_a_change_holds_over_it(
     again = DirectorService(
         repo, config_file=config, remembered=repo.parent / "director.json"
     )
-    assert again.settings.soft_check_in_minutes == 45
-    assert again.settings.max_depth == 3
-    assert again.settings.max_teams == 5
+    assert again.org_settings.settings.soft_check_in_minutes == 45
+    assert again.org_settings.settings.max_depth == 3
+    assert again.org_settings.settings.max_teams == 5
 
 
 @pytest.mark.parametrize(
@@ -260,14 +260,14 @@ def test_a_director_yaml_that_holds_no_settings_stops_the_server(
 async def test_an_org_sets_the_type_of_its_new_teams_and_which_they_may_be(
     service: DirectorService, launcher: FakeLauncher, repo: Path, tmp_path: Path
 ):
-    state = service.org_settings_state()
+    state = service.org_settings.org_settings_state()
     assert state.default_agent_type == "software-engineer"
     assert {kind.name for kind in state.agent_types if kind.allowed} >= {
         "analyst",
         "software-engineer",
     }
 
-    changed = service.update_org_settings(
+    changed = service.org_settings.update_org_settings(
         OrgSettings(
             default_agent_type="analyst",
             allowed_agent_types=["analyst", "software-engineer"],
@@ -299,7 +299,9 @@ async def test_an_org_sets_the_type_of_its_new_teams_and_which_they_may_be(
 
     # What is allowed holds for teams made from now on, not for the ones
     # there are: the team keeps its type and is still told what it says.
-    service.update_org_settings(OrgSettings(allowed_agent_types=["analyst"]))
+    service.org_settings.update_org_settings(
+        OrgSettings(allowed_agent_types=["analyst"])
+    )
     assert node(service, "harness").agent_type == "software-engineer"
     kind = service.team_types.type_of(node(service, "harness"))
     assert kind.name == "software-engineer"
@@ -325,8 +327,8 @@ async def test_an_org_sets_the_type_of_its_new_teams_and_which_they_may_be(
     again = DirectorService(repo, save_delay=0, run_limit_retry=0)
     await again.start(launcher)
     try:
-        assert again.own_settings.allowed_agent_types == ["analyst"]
-        assert again.default_type() == "analyst"
+        assert again.org_settings.own_settings.allowed_agent_types == ["analyst"]
+        assert again.org_settings.default_type() == "analyst"
     finally:
         await again.aclose()
 
@@ -335,14 +337,16 @@ async def test_an_org_cannot_set_a_type_there_is_not_or_a_default_not_allowed(
     service: DirectorService,
 ):
     with pytest.raises(Invalid, match="astrologer"):
-        service.update_org_settings(OrgSettings(allowed_agent_types=["astrologer"]))
+        service.org_settings.update_org_settings(
+            OrgSettings(allowed_agent_types=["astrologer"])
+        )
     with pytest.raises(Invalid, match="not among the allowed"):
-        service.update_org_settings(
+        service.org_settings.update_org_settings(
             OrgSettings(
                 default_agent_type="analyst", allowed_agent_types=["software-engineer"]
             )
         )
-    assert service.own_settings == OrgSettings()
+    assert service.org_settings.own_settings == OrgSettings()
 
 
 async def test_a_type_added_while_the_server_runs_can_be_given_to_the_next_team(
@@ -354,9 +358,9 @@ async def test_a_type_added_while_the_server_runs_can_be_given_to_the_next_team(
         members_yaml() + "description: Checks what other teams claim.\n"
     )
 
-    assert "auditor" in {kind.name for kind in service.types_allowed()}
-    service.update_org_settings(OrgSettings(default_agent_type="auditor"))
-    assert service.default_type() == "auditor"
+    assert "auditor" in {kind.name for kind in service.org_settings.types_allowed()}
+    service.org_settings.update_org_settings(OrgSettings(default_agent_type="auditor"))
+    assert service.org_settings.default_type() == "auditor"
 
 
 async def test_every_org_starts_with_what_director_yaml_says_of_types(
@@ -382,7 +386,7 @@ async def test_every_org_starts_with_what_director_yaml_says_of_types(
         )
         await service.settled()
         assert node(service, "root").agent_type == "analyst"
-        state = service.org_settings_state()
+        state = service.org_settings.org_settings_state()
         assert state.allowed_agent_types == ["analyst"]
         assert state.own == OrgSettings()
     finally:
@@ -400,12 +404,14 @@ async def test_a_type_can_name_the_profile_its_teams_run_on(
 ):
     launcher.profiles = {"checker": "openhands", "other": "openhands"}
     a_type_on(tmp_path, "sas_profile: checker\n")
-    service.update_settings(DirectorSettingsUpdate(allowed_profiles=["other"]))
+    service.org_settings.update_settings(
+        DirectorSettingsUpdate(allowed_profiles=["other"])
+    )
     context = service.context_of(node(service, "root"), "ic")
     assert "'checker'" in context["types_a_sub_team_may_be"]["auditor"]
     [info] = [
         kind
-        for kind in service.org_settings_state().agent_types
+        for kind in service.org_settings.org_settings_state().agent_types
         if kind.name == "auditor"
     ]
     assert info.sas_profile == "checker"

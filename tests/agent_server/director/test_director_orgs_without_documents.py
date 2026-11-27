@@ -72,7 +72,7 @@ async def test_an_org_whose_teams_keep_no_documents_splits_and_lands_its_work(
     context = service.context_of(root, "ic")
     assert "spec" not in context and "reports_of_your_team" not in context
 
-    service.update_org_settings(OrgSettings(default_agent_type="bare"))
+    service.org_settings.update_org_settings(OrgSettings(default_agent_type="bare"))
     # A team that keeps no contracts has no tool to write any, and the
     # tools that set up its sub-teams ask for none.
     refused = await write_contracts(service, SPLIT_CONTRACTS)
@@ -171,7 +171,7 @@ async def _an_org_with_documents_of_its_own(
         "protocol: settled-with-teams\n"
     )
     service = await an_org(repo, launcher, config, agent_type="ops")
-    service.update_org_settings(OrgSettings(default_agent_type="ops"))
+    service.org_settings.update_org_settings(OrgSettings(default_agent_type="ops"))
     return service
 
 

@@ -281,7 +281,7 @@ def get_settings(
     service: DirectorService = Depends(get_director_service),
 ) -> DirectorSettingsState:
     """Get the limits on new teams, beside how large the org is now."""
-    return service.settings_state()
+    return service.org_settings.settings_state()
 
 
 @director_router.get("/org/settings", response_model=OrgSettingsState)
@@ -294,7 +294,7 @@ def get_org_settings(
     Without an org these are the ones for every org, which a new org
     starts with.
     """
-    return service.org_settings_state()
+    return service.org_settings.org_settings_state()
 
 
 @director_router.patch("/org/settings", response_model=OrgSettingsState)
@@ -309,7 +309,7 @@ def update_org_settings(
     from now on: a team that exists keeps its type. An empty default goes
     back to the one for every org.
     """
-    return service.update_org_settings(request)
+    return service.org_settings.update_org_settings(request)
 
 
 @director_router.patch("/settings", response_model=DirectorSettingsState)
@@ -323,7 +323,7 @@ def update_settings(
     org already has removes nothing; it refuses the next split. The values
     are kept for the server's next start.
     """
-    return service.update_settings(request)
+    return service.org_settings.update_settings(request)
 
 
 @director_router.get("/org/search", response_model=list[TeamMatch])

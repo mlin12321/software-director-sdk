@@ -563,7 +563,9 @@ async def test_a_sub_team_runs_on_another_agent_profile_when_the_org_allows_it(
     codex = SplitChild(title="API", path="svc/api", task="Serve", agent_profile="codex")
 
     refused = await use(service, ic(service), ProposeTeamsTool, split(codex))
-    service.update_settings(DirectorSettingsUpdate(allowed_profiles=["codex"]))
+    service.org_settings.update_settings(
+        DirectorSettingsUpdate(allowed_profiles=["codex"])
+    )
     await carry_out(service, codex, SplitChild(title="Web", path="web", task="Pages"))
 
     assert refused.is_error and "leave `model` out" in refused.text
@@ -590,7 +592,9 @@ async def test_the_profiles_a_sub_team_may_run_on_are_kept_and_told_to_the_ic(
     launcher = FakeLauncher(profiles={"codex": "acp"})
     service = await started_with_server(repo, launcher)
 
-    service.update_settings(DirectorSettingsUpdate(allowed_profiles=["codex"]))
+    service.org_settings.update_settings(
+        DirectorSettingsUpdate(allowed_profiles=["codex"])
+    )
     other = await use(
         service,
         ic(service),
@@ -602,9 +606,13 @@ async def test_the_profiles_a_sub_team_may_run_on_are_kept_and_told_to_the_ic(
     kept = json.loads((repo.parent / "state" / "director.json").read_text())
     assert kept["settings"]["allowed_profiles"] == ["codex"]
     # Limits that are not named stay.
-    assert service.update_settings(DirectorSettingsUpdate(max_depth=3)).model_dump(
-        include={"allowed_profiles", "max_depth", "max_teams"}
-    ) == {"allowed_profiles": ["codex"], "max_depth": 3, "max_teams": 32}
+    assert service.org_settings.update_settings(
+        DirectorSettingsUpdate(max_depth=3)
+    ).model_dump(include={"allowed_profiles", "max_depth", "max_teams"}) == {
+        "allowed_profiles": ["codex"],
+        "max_depth": 3,
+        "max_teams": 32,
+    }
     await service.aclose()
 
 

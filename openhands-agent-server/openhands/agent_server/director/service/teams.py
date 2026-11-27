@@ -117,7 +117,7 @@ class Teams(Delivery):
             raise NotFound(
                 f"There is no {ref.name} of {ref.folder or 'the repository'}"
             )
-        if not self.org_kind.allows_ref(
+        if not self.org_settings.org_kind.allows_ref(
             TeamMember(team_ref(sender_place), sender),
             TeamMember(team_ref(target_place), target),
             ref,
@@ -163,7 +163,7 @@ class Teams(Delivery):
         target_place = store.place(target_place_id)
         if sender_place is None or target_place is None:
             raise NotFound("That team is no longer in the org")
-        if not self.org_kind.allows_msg(
+        if not self.org_settings.org_kind.allows_msg(
             TeamMember(team_ref(sender_place), sender),
             TeamMember(team_ref(target_place), target),
         ):
@@ -494,7 +494,7 @@ class Teams(Delivery):
         to look at its teams when that makes as many as the org set. Safe
         from any thread."""
         names = self.team_types.names_at(place_id)
-        limit = self.settings.manager_check_accepted_reviews
+        limit = self.org_settings.settings.manager_check_accepted_reviews
         if not limit:
             return
         with self._counting:
@@ -520,7 +520,7 @@ class Teams(Delivery):
         many, on the work it has in hand, as the org set. Safe from any
         thread."""
         names = self.team_types.names_at(place_id)
-        limit = self.settings.manager_check_ic_setbacks
+        limit = self.org_settings.settings.manager_check_ic_setbacks
         team = self.org.place(below_id)
         if not limit or team is None:
             return
@@ -583,7 +583,7 @@ class Teams(Delivery):
                 counted["escalations"],
                 self.history_of(place_id),
                 after_successes=after_successes,
-                escalation_limit=self.settings.manager_check_ic_setbacks,
+                escalation_limit=self.org_settings.settings.manager_check_ic_setbacks,
                 names=self.team_types.names_at(place_id),
             ),
         )

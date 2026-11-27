@@ -592,7 +592,7 @@ async def test_an_org_set_to_resume_on_start_takes_its_work_up_unasked(
     repo: Path, launcher: FakeLauncher
 ):
     first = await started(repo, launcher)
-    first.update_settings(DirectorSettingsUpdate(resume_on_start=True))
+    first.org_settings.update_settings(DirectorSettingsUpdate(resume_on_start=True))
     await first.pause()
     first.notify(ic(first), "Carry on")
     await first.settled()

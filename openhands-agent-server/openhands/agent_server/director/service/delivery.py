@@ -112,7 +112,7 @@ class Delivery(Records):
         """Compact what one member of the team of ``folder`` recorded, if
         it has grown past what the org set. Safe from any thread."""
         reports = self._memory().reports(folder, role)
-        if compaction.due(reports, self.settings.report_compaction_chars):
+        if compaction.due(reports, self.org_settings.settings.report_compaction_chars):
             self.work_queue.enqueue(lambda: self._compact(folder, role), MODELS_LANE)
 
     def joined(self, conversation_id: str) -> None:
@@ -457,7 +457,9 @@ class Delivery(Records):
             return
         team_memory = self._memory()
         reports = await asyncio.to_thread(team_memory.reports, folder, role)
-        if not compaction.due(reports, self.settings.report_compaction_chars):
+        if not compaction.due(
+            reports, self.org_settings.settings.report_compaction_chars
+        ):
             return
         answer = await self.model_calls.ask(
             asker, *compaction.prompt(reports), compaction.USAGE_ID

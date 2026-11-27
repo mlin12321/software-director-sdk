@@ -60,7 +60,9 @@ async def reporting_service(repo: Path, launcher: FakeLauncher) -> DirectorServi
             title="Checkout", task="Build", conversation=root_conversation(repo)
         )
     )
-    service.update_settings(DirectorSettingsUpdate(report_compaction_chars=1_000))
+    service.org_settings.update_settings(
+        DirectorSettingsUpdate(report_compaction_chars=1_000)
+    )
     await service.settled()
     return service
 

@@ -189,7 +189,7 @@ class Splits(Watch):
                     store,
                     place,
                     len(split.children) - len(split.replaces),
-                    self.settings,
+                    self.org_settings.settings,
                 )
             except OrgStoreError as error:
                 self._decline(place, str(error))

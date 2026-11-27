@@ -203,7 +203,7 @@ def _checked(
 ) -> SplitProposal:
     """Proposed sub-teams, held to what the org allows."""
     store = service.org
-    allowed = service.settings.allowed_profiles
+    allowed = service.org_settings.settings.allowed_profiles
     for child in proposed.children:
         if child.agent_profile and child.agent_profile not in allowed:
             raise Invalid(
@@ -215,7 +215,7 @@ def _checked(
                     else "The org allows none; leave `model` out."
                 )
             )
-    types = {kind.name: kind for kind in service.types_allowed()}
+    types = {kind.name: kind for kind in service.org_settings.types_allowed()}
     children = []
     for child in proposed.children:
         kind = types.get(child.agent_type)
@@ -241,7 +241,10 @@ def _checked(
     proposed = proposed._replace(children=children)
     split = normalize_split(store, place, proposed.children, proposed.keep)
     check_limits(
-        store, place, len(split.children) - len(split.replaces), service.settings
+        store,
+        place,
+        len(split.children) - len(split.replaces),
+        service.org_settings.settings,
     )
     return SplitProposal(
         children=split.children,
@@ -306,7 +309,7 @@ def propose_teams(
     service.team_documents.before_sub_teams_are_proposed(
         service.team_types.reader_of(node)
     )
-    proposed = proposed_teams(teams, keep, text, service.default_type())
+    proposed = proposed_teams(teams, keep, text, service.org_settings.default_type())
     proposal = _checked(service, node, proposed)
     store = service.org
     store.update_place(node.id, pending_split=proposal)
@@ -403,7 +406,7 @@ def approve_teams(service: DirectorService, caller: Caller) -> str:
         service.org,
         node,
         len(split.children) - len(split.replaces),
-        service.settings,
+        service.org_settings.settings,
     )
     service.org.update_place(
         node.id,

@@ -131,7 +131,7 @@ class Sessions(Splits):
             raise Conflict("There is no org to open a session in")
         if self._paused is not None:
             raise Conflict("The org is paused; resume it before opening a session")
-        most = self.settings.max_open_sessions
+        most = self.org_settings.settings.max_open_sessions
         if most and len(store.sessions()) >= most:
             raise Conflict(
                 f"The org's settings allow {most} open "
@@ -145,7 +145,7 @@ class Sessions(Splits):
             team = store.team(request.node_id)
             if team is None:
                 raise NotFound(f"Unknown team: {request.node_id}")
-        elif self.settings.route_requests and store.sub_teams(root.id):
+        elif self.org_settings.settings.route_requests and store.sub_teams(root.id):
             choice = await self.request_routing.choose_team(text, root)
             chosen_by, reason = choice.by, choice.reason
             team = store.team(choice.node_id) or root
@@ -187,7 +187,7 @@ class Sessions(Splits):
                 request=text[:ASKED_KEPT],
                 opened_at=datetime.now(UTC).isoformat(),
                 branch="" if branch == "HEAD" else branch,
-                cost_allowance=self.settings.session_cost_limit,
+                cost_allowance=self.org_settings.settings.session_cost_limit,
                 shape=shape_of(shape),
             ),
             [

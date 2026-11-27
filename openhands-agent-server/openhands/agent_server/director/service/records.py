@@ -644,7 +644,9 @@ class Records(ServiceState):
                 if place.review
                 else None
             ),
-            "agent_profiles_a_sub_team_may_run_on": self.settings.allowed_profiles,
+            "agent_profiles_a_sub_team_may_run_on": (
+                self.org_settings.settings.allowed_profiles
+            ),
             "types_a_sub_team_may_be": {
                 kind.name: kind.description
                 + (
@@ -653,9 +655,9 @@ class Records(ServiceState):
                     if kind.sas_profile
                     else ""
                 )
-                for kind in self.types_allowed()
+                for kind in self.org_settings.types_allowed()
             },
-            "type_of_a_sub_team_that_names_none": self.default_type(),
+            "type_of_a_sub_team_that_names_none": self.org_settings.default_type(),
             # The proposal itself is in the message that made it.
             "pending_split": (
                 None

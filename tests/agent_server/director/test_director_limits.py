@@ -59,7 +59,7 @@ async def accepted(service: DirectorService) -> None:
 async def test_a_split_that_makes_too_many_teams_is_refused_and_says_what_fits(
     service: DirectorService,
 ):
-    service.update_settings(DirectorSettingsUpdate(max_teams=4))
+    service.org_settings.update_settings(DirectorSettingsUpdate(max_teams=4))
 
     refused = await use(service, ic(service), ProposeTeamsTool, split("a", 4))
 
@@ -76,7 +76,7 @@ async def test_a_split_that_makes_too_many_teams_is_refused_and_says_what_fits(
 
 async def test_the_teams_above_count_too(service: DirectorService):
     await split_root(service)
-    service.update_settings(DirectorSettingsUpdate(max_teams=4))
+    service.org_settings.update_settings(DirectorSettingsUpdate(max_teams=4))
 
     refused = await use(
         service,
@@ -90,7 +90,7 @@ async def test_the_teams_above_count_too(service: DirectorService):
 
 
 async def test_teams_cannot_go_deeper_than_the_limit(service: DirectorService):
-    service.update_settings(DirectorSettingsUpdate(max_depth=2))
+    service.org_settings.update_settings(DirectorSettingsUpdate(max_depth=2))
     await split_root(service)
 
     refused = await use(
@@ -110,7 +110,9 @@ async def test_a_lowered_limit_removes_nothing_and_stops_the_next_split(
     await split_root(service)
     await accepted(service)
 
-    state = service.update_settings(DirectorSettingsUpdate(max_teams=1, max_depth=1))
+    state = service.org_settings.update_settings(
+        DirectorSettingsUpdate(max_teams=1, max_depth=1)
+    )
 
     assert (state.teams, state.depth) == (3, 2)
     assert len(service.org) == 3
@@ -122,7 +124,7 @@ async def test_sub_teams_approved_after_the_limits_were_lowered_go_back_to_the_i
     service: DirectorService, launcher: FakeLauncher
 ):
     await use(service, ic(service), ProposeTeamsTool, split("a", 3))
-    service.update_settings(DirectorSettingsUpdate(max_teams=2))
+    service.org_settings.update_settings(DirectorSettingsUpdate(max_teams=2))
 
     told_the_manager = launcher.messages_to(manager(service))
 
@@ -154,7 +156,7 @@ async def test_settings_are_kept_for_the_next_start_beside_the_repository(
     repo: Path, launcher: FakeLauncher
 ):
     first = await started(repo, launcher)
-    first.update_settings(DirectorSettingsUpdate(max_depth=3))
+    first.org_settings.update_settings(DirectorSettingsUpdate(max_depth=3))
     await first.aclose()
     kept = json.loads((repo.parent / "state" / "director.json").read_text())
 
@@ -178,7 +180,7 @@ async def test_settings_are_kept_for_the_next_start_beside_the_repository(
         "max_open_sessions": 0,
     }
     assert kept["repo_path"] == str(repo)
-    assert again.settings.max_depth == 3 and again.org.root_id == "root"
+    assert again.org_settings.settings.max_depth == 3 and again.org.root_id == "root"
 
 
 async def test_a_limit_kept_as_agents_is_no_longer_read(
@@ -190,7 +192,7 @@ async def test_a_limit_kept_as_agents_is_no_longer_read(
 
     service = DirectorService(repo, remembered=remembered)
 
-    assert service.settings.max_teams == 32
+    assert service.org_settings.settings.max_teams == 32
 
 
 async def test_a_team_is_found_by_words_of_its_title_or_directory(

@@ -44,7 +44,7 @@ class Watch(Reviews):
         return StallWatchService(
             org=lambda: self.org,
             has_org=lambda: self._store is not None,
-            settings=lambda: self.settings,
+            settings=lambda: self.org_settings.settings,
             run_state=self._runs,
             clock=self._clock,
             paused=lambda: self._paused is not None,
@@ -185,7 +185,9 @@ class Watch(Reviews):
             )
             if session is None:
                 continue
-            limit = session.cost_allowance or self.settings.session_cost_limit
+            limit = (
+                session.cost_allowance or self.org_settings.settings.session_cost_limit
+            )
             kept = store.set_session_use(session.id, session.usage.plus(added), limit)
             if kept is not None:
                 self._hold_at_limit(kept)
@@ -245,7 +247,7 @@ class Watch(Reviews):
         session = store.session_of(top) if top else None
         if top is None or session is None:
             return
-        limit = self.settings.session_cost_limit
+        limit = self.org_settings.settings.session_cost_limit
         store.set_session_use(
             session.id, session.usage, session.usage.cost + limit if limit else 0.0
         )

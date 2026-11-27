@@ -688,7 +688,10 @@ class Sync(Sessions):
         of. A server that ended without stopping its org leaves it paused."""
         await asyncio.to_thread(self._look_at_what_was_left)
         await self._resync()
-        if self._paused in ("shutdown", "crash") and self.settings.resume_on_start:
+        if (
+            self._paused in ("shutdown", "crash")
+            and self.org_settings.settings.resume_on_start
+        ):
             await self.resume()
 
     def _look_at_what_was_left(self) -> None:

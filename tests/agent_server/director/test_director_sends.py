@@ -128,7 +128,7 @@ async def test_an_open_org_passes_a_document_anywhere(
     root, api, web = (node(service, name) for name in ("root", API, WEB))
     ref = _write_spec(service, API, "# API")
 
-    service.update_settings(DirectorSettingsUpdate(org_kind="open"))
+    service.org_settings.update_settings(DirectorSettingsUpdate(org_kind="open"))
     service.send_ref(api.id, "ic", root.id, "ic", ref)
     service.send_ref(api.id, "ic", web.id, "ic", ref)
 
@@ -137,7 +137,7 @@ async def test_an_open_org_passes_a_document_anywhere(
         for passed in service.context_of(web, "ic")["documents_passed_to_you"]
     ] == ["services/api"]
     with pytest.raises(Invalid, match="no kind of org named 'flat'"):
-        service.update_settings(DirectorSettingsUpdate(org_kind="flat"))
+        service.org_settings.update_settings(DirectorSettingsUpdate(org_kind="flat"))
     await service.aclose()
 
 
@@ -155,7 +155,7 @@ async def test_the_kind_of_an_org_may_refuse_a_message(
     await split_root(service)
     root, api = node(service, "root"), node(service, API)
     monkeypatch.setitem(ORG_KINDS, "silent", _Silent)
-    service.update_settings(DirectorSettingsUpdate(org_kind="silent"))
+    service.org_settings.update_settings(DirectorSettingsUpdate(org_kind="silent"))
 
     service.send_msg(root.id, "manager", root.id, "ic", "Go on.")
     with pytest.raises(Invalid, match="does not let"):
