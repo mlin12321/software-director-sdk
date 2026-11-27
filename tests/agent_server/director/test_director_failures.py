@@ -57,7 +57,7 @@ async def fails(
     if said is not None:
         launcher.failures[UUID(conversation)] = said
     launcher.report(conversation, status)
-    await service.settled()
+    await service.work_queue.settled()
 
 
 def notices(service: DirectorService, launcher: FakeLauncher) -> list[str]:
@@ -106,7 +106,7 @@ async def test_it_is_told_once_and_the_reason_goes_when_the_agent_runs_again(
     )
     assert api is not None
     launcher.report(api, ConversationExecutionStatus.RUNNING)
-    await service.settled()
+    await service.work_queue.settled()
 
     [agent] = [a for a in node(service, API).agents if a.role == "ic"]
     assert (agent.status, agent.reason) == ("working", None)
@@ -141,8 +141,10 @@ async def test_the_human_is_asked_when_no_ic_works_above_the_one_that_failed(
     )
     assert NO_KEY in asked.detail and "run it again" in asked.detail
 
-    service.answer_escalation(node(service, "root").id, asked.id, "The key is set.")
-    await service.settled()
+    service.org_run.answer_escalation(
+        node(service, "root").id, asked.id, "The key is set."
+    )
+    await service.work_queue.settled()
 
     assert (
         "your conversation failed, and says:\nThe key is set."
@@ -159,7 +161,7 @@ async def test_an_agent_that_runs_again_by_itself_is_no_longer_asked_about(
     assert top is not None
 
     launcher.report(top, ConversationExecutionStatus.RUNNING)
-    await service.settled()
+    await service.work_queue.settled()
 
     assert node(service, "root").escalations == []
 
@@ -174,7 +176,7 @@ async def test_an_agent_that_uses_a_tool_after_it_failed_is_no_longer_asked_abou
     assert [e.id for e in node(service, "root").escalations] == [failure_waits("ic")]
 
     await use(service, top, MsgTeamTool, MsgTeamAction(team=API, text="Go on."))
-    await service.settled()
+    await service.work_queue.settled()
 
     assert node(service, "root").escalations == []
     [agent] = [a for a in node(service, "root").agents if a.role == "ic"]
@@ -196,7 +198,7 @@ async def test_an_agent_that_cannot_be_started_is_lost_with_the_reason(
 ):
     launcher.derive_error = RuntimeError("npx is not installed")
     service.team_messaging.tell_manager(node(service, API).id, "Look in on your team.")
-    await service.settled()
+    await service.work_queue.settled()
 
     [agent] = [a for a in node(service, API).agents if a.role == "manager"]
     assert agent.status == "lost"
@@ -213,7 +215,7 @@ async def test_a_step_of_the_director_that_fails_is_kept_in_the_record(
 
     monkeypatch.setitem(service.resumable_work.steps, "launch_member", breaks)
     service.team_messaging.tell_manager(node(service, API).id, "Look in on your team.")
-    await service.settled()
+    await service.work_queue.settled()
 
     [event] = [e for e in record_of(service, "root") if e.kind == "failed"]
     assert event.team == "API"
@@ -231,18 +233,18 @@ async def test_the_human_is_asked_of_a_stalled_team_with_no_ic_above(
     )
     try:
         await service.stall_watch.check_stalls()
-        await service.settled()
+        await service.work_queue.settled()
         now[0] += timedelta(minutes=120)
         await service.stall_watch.check_stalls()
-        await service.settled()
+        await service.work_queue.settled()
 
         top = node(service, "root")
         [asked] = top.escalations
         assert (asked.id, asked.held_by) == (STALL_WAITS, None)
         assert "has shown no progress for 120 min" in asked.title
 
-        service.answer_escalation(top.id, STALL_WAITS, "Start with the tests.")
-        await service.settled()
+        service.org_run.answer_escalation(top.id, STALL_WAITS, "Start with the tests.")
+        await service.work_queue.settled()
 
         assert (
             "shows no progress, and says:\nStart with the tests."
@@ -265,12 +267,12 @@ async def test_a_team_whose_removal_failed_is_still_told_things(
 
     launcher.before = fail_to_stop
     await use(service, manager(service), PruneTeamTool, PRUNE_API)
-    await service.settled()
+    await service.work_queue.settled()
     launcher.before = lambda _: None
     told = len(launcher.messages_to(api_ic))
 
     service.message_delivery.notify(api_ic, "Go on with the orders endpoint.")
-    await service.settled()
+    await service.work_queue.settled()
 
     assert launcher.messages_to(api_ic)[told:] == [
         "[director] Go on with the orders endpoint."
@@ -293,7 +295,7 @@ async def test_a_message_that_could_not_be_sent_is_sent_again_before_the_next(
 
     service.message_delivery.notify(top_ic, "first")
     service.message_delivery.notify(top_ic, "second")
-    await service.settled()
+    await service.work_queue.settled()
 
     sent = [text.splitlines()[0] for text in launcher.messages_to(top_ic)[told:]]
     assert sent == ["[director] first", "[director] second"]
@@ -320,7 +322,7 @@ async def test_an_answer_about_a_lost_ic_waits_until_the_team_has_started_again(
 ):
     await fails(service, launcher, ic(service))
     top = node(service, "root").id
-    service.org.set_agent(top, "ic", status=AGENT_LOST)
+    service.org_load.org.set_agent(top, "ic", status=AGENT_LOST)
     heard: list[str | None] = []
 
     async def start_again(_place: str, _request: object, said: str | None = None):
@@ -330,12 +332,12 @@ async def test_an_answer_about_a_lost_ic_waits_until_the_team_has_started_again(
 
     monkeypatch.setattr(service.org_run, "start_again", start_again)
 
-    service.answer_escalation(top, failure_waits("ic"), "The key is set.")
-    await service.settled()
+    service.org_run.answer_escalation(top, failure_waits("ic"), "The key is set.")
+    await service.work_queue.settled()
     # It could not be started: the human is still asked.
     assert [e.id for e in node(service, "root").escalations] == [failure_waits("ic")]
 
-    service.answer_escalation(top, failure_waits("ic"), "The key is set.")
-    await service.settled()
+    service.org_run.answer_escalation(top, failure_waits("ic"), "The key is set.")
+    await service.work_queue.settled()
     assert node(service, "root").escalations == []
     assert heard == ["The key is set.", "The key is set."]

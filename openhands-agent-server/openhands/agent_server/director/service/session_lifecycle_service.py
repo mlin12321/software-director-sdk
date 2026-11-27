@@ -3,23 +3,29 @@ to the team it is for."""
 
 import asyncio
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from itertools import count
 from pathlib import Path
 from uuid import UUID, uuid4
 
+from openhands.agent_server.director.boundary import nearest_team
 from openhands.agent_server.director.environment import EnvironmentFailed
 from openhands.agent_server.director.environment.checkouts import Checkouts, time_stamp
-from openhands.agent_server.director.headline import provisional_summary
+from openhands.agent_server.director.headline import provisional_summary, summary_of
 from openhands.agent_server.director.intents import Brief, CloseSession
 from openhands.agent_server.director.launch import TeamLauncher
 from openhands.agent_server.director.models import (
+    Boundary,
     ChosenBy,
+    CreateOrgRequest,
     OpenedSession,
     OpenSessionRequest,
     OrgNode,
+    OrgNodeInput,
+    RoutedMessage,
     RoutedRequest,
+    RouteMessageRequest,
     SessionInput,
     SessionTeam,
     SessionTeamInput,
@@ -29,6 +35,7 @@ from openhands.agent_server.director.org_store import (
     OrgStoreError,
     conversations_of,
     division_lead_id,
+    instant,
     is_division_lead,
     new_agents,
     session_team_id,
@@ -55,6 +62,8 @@ from openhands.agent_server.director.service.message_delivery_service import (
     MessageDeliveryService,
 )
 from openhands.agent_server.director.service.model_call_service import ModelCallService
+from openhands.agent_server.director.service.org_load_service import OrgLoadService
+from openhands.agent_server.director.service.org_run_service import OrgRunService
 from openhands.agent_server.director.service.org_save_service import OrgSaveService
 from openhands.agent_server.director.service.org_settings_service import (
     OrgSettingsService,
@@ -104,6 +113,8 @@ from openhands.sdk.conversation.request import (
 from openhands.sdk.errors import (
     Conflict,
     NotFound,
+    Unavailable,
+    Unprocessable,
 )
 from openhands.sdk.logger import get_logger
 from openhands.sdk.tool.spec import Tool
@@ -115,6 +126,10 @@ logger = get_logger(__name__)
 # with work that was not merged.
 SESSION_REFS = "refs/agents/sessions"
 _TITLE_LENGTH = 60
+
+
+# The id of the org's top team.
+ROOT_ID = "root"
 
 
 @dataclass
@@ -159,6 +174,12 @@ class SessionLifecycleService:
     """What reaches the conversations; raises where there is none."""
     reviews: ReviewService
     session_merges: SessionMergeService
+    org_load: OrgLoadService
+    """Where the org is, and how one that is saved is taken up."""
+    org_run: OrgRunService
+    """Takes up what an org that is joined had begun."""
+    _create_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False)
+    _first_message_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False)
 
     async def open_session(
         self,
@@ -746,3 +767,242 @@ class SessionLifecycleService:
             logger.exception("Could not keep the work of session %s", top.session)
             return None
         return ref
+
+    async def create_org(self, request: CreateOrgRequest) -> OpenedSession:
+        """Start a new org: its top team, and the session that works on
+        the task, whose IC is the conversation the task came in.
+
+        Raises:
+            Conflict: The director already has an org.
+            Unavailable: The director is not running, or the conversation's
+                workspace is not in a git repository.
+            Unprocessable: The conversation cannot lead an org.
+        """
+        self.launcher()
+        store = await asyncio.to_thread(lambda: self.org())
+        conversation = request.conversation
+        workspace = await asyncio.to_thread(
+            Path(conversation.workspace.working_dir).resolve
+        )
+        owns_git = await asyncio.to_thread(lambda: (workspace / ".git").exists())
+        if request.at_workspace:
+            if not owns_git:
+                raise Unavailable(
+                    f"An org needs a git repository; {workspace} is not one"
+                )
+        elif not await asyncio.to_thread(self.checkouts.is_repository, workspace):
+            raise Unavailable(f"An org needs a git repository; {workspace} is not one")
+        repository = await asyncio.to_thread(self.checkouts.root_of, workspace)
+        if conversation.conversation_runtime == "docker":
+            raise Unprocessable(
+                "An org's agents run in the server's own process, not in Docker"
+            )
+        root_type = request.agent_type or self.org_settings.settings.default_agent_type
+        allowed = self.org_settings.settings.allowed_agent_types
+        if root_type not in await asyncio.to_thread(
+            lambda: self.team_types.agent_types
+        ):
+            raise Unprocessable(
+                f"The director finds no agent type named {root_type!r} for the "
+                "org's top team"
+            )
+        if allowed and root_type not in allowed:
+            raise Unprocessable(
+                f"The org's top team cannot be of the type {root_type!r}. "
+                f"The settings allow: {', '.join(allowed)}."
+            )
+        named = provisional_summary(request.task)
+        title = request.title or named.title
+        async with self._create_lock:
+            if store.root_id is not None:
+                raise Conflict("The director already has an org")
+            if await asyncio.to_thread(
+                self.org_load.join, workspace, not request.at_workspace
+            ):
+                # The repository holds an org already, which this server
+                # was not pointed at: it is taken up, never written over.
+                await self.org_run.came_back()
+                return await self.open_session(
+                    OpenSessionRequest(text=request.task, title=request.title or ""),
+                    conversation,
+                )
+            configured = self.org_load.move_to(repository)
+            # The top team as the org keeps it: what it is for and where.
+            # Nobody works at it but in a session.
+            store.upsert(
+                OrgNodeInput(
+                    id=ROOT_ID,
+                    parent_id=None,
+                    title=title,
+                    boundary=Boundary(path="", writable=["**"]),
+                    isolation="shared",
+                    agent_type=root_type,
+                    headline=named.headline,
+                    summary=summary_of(request.task),
+                    since=instant(),
+                )
+            )
+            try:
+                opened = await self.open_session(
+                    OpenSessionRequest(
+                        text=request.task, title=request.title or "", node_id=ROOT_ID
+                    ),
+                    conversation,
+                    # An org without a name is named after its first task.
+                    rename=request.title is None,
+                )
+            except BaseException:
+                store.remove(ROOT_ID)
+                self.org_load.move_to(configured)
+                raise
+            await asyncio.to_thread(
+                self.org_load.remembered.keep,
+                repo_path=str(self.org_load.repo_dir_now()),
+            )
+            await asyncio.to_thread(self.org_load.working)
+        if request.title is None:
+            # The org is named after what its first session is for.
+            top = opened.session.teams[0].id
+            # In the lane of that team, after the model that names it.
+            self.work_queue.enqueue(
+                lambda: self.work_queue.run_in(
+                    BASE_LANE, lambda: self.team_summaries.name_org(top)
+                ),
+                top,
+            )
+        return opened
+
+    async def _say_in_session(self, session_id: str, text: str) -> RoutedMessage:
+        """Give what the human says in a session's conversation to the IC
+        of one of the session's teams: the one it was opened at, unless the
+        director is sure of one below.
+
+        Raises:
+            NotFound: The session is not open.
+        """
+        store = self.org()
+        places = [
+            place for place in store.session(session_id) if not is_division_lead(place)
+        ]
+        if not places:
+            raise NotFound(f"Unknown session: {session_id}")
+        top = place = places[0]
+        chosen_by: ChosenBy = "path"
+        reason = ""
+        if self.org_settings.settings.route_requests and len(places) > 1:
+            choice = await self.request_routing().choose_team(
+                text, top, within=session_id
+            )
+            chosen_by, reason = choice.by, choice.reason
+            place = store.instance(choice.node_id, session_id) or top
+        conversation_id = await asyncio.to_thread(
+            lambda: self.team_messaging.tell_writer(place.id, text, human=True)
+        )
+        if place.id != top.id:
+            # Its IC may say it is not the team's own: the IC above has it then.
+            await asyncio.to_thread(
+                self.team_history.keep_routed, "asked", place, text, chosen_by, reason
+            )
+        return RoutedMessage(
+            node_id=place.id,
+            team=place.title,
+            conversation_id=conversation_id or "",
+            started_org=False,
+            chosen_by=chosen_by,
+            reason=reason,
+        )
+
+    async def route_message(self, request: RouteMessageRequest) -> RoutedMessage:
+        """Open a session for what the human asks, or with ``session_id``
+        say it in the session that is open.
+
+        With ``auto`` the director chooses the team the request belongs to.
+        Without it the request goes to the team nearest to where the human
+        said it, and no further: the human wrote to that team.
+
+        Without an org, the message joins the one saved in the repository of
+        the conversation it comes with (or above it, unless ``at_workspace``),
+        and failing that starts one there and becomes its task.
+
+        Raises:
+            Unprocessable: The path is outside the org's repository, or there
+                is no org and the request does not say how to start one.
+            Conflict: No session can be opened for the message.
+            Unavailable: The director is not running.
+        """
+        self.launcher()
+        store = await asyncio.to_thread(lambda: self.org())
+        if request.session_id is not None:
+            return await self._say_in_session(request.session_id, request.text)
+        async with self._first_message_lock:
+            conversation = request.conversation
+            if store.root_id is None and conversation is None:
+                raise Unprocessable(
+                    "There is no org yet. Send `conversation` with the message "
+                    "so that it can start one."
+                )
+            if store.root_id is None and conversation is not None:
+                joined = await asyncio.to_thread(
+                    self.org_load.join,
+                    Path(conversation.workspace.working_dir),
+                    not request.at_workspace,
+                )
+                if not joined:
+                    opened = await self.create_org(
+                        CreateOrgRequest(
+                            task=request.text,
+                            agent_type=request.agent_type,
+                            conversation=conversation,
+                            at_workspace=request.at_workspace,
+                        )
+                    )
+                    return RoutedMessage(
+                        node_id=opened.session.teams[0].id,
+                        team=opened.session.team,
+                        conversation_id=opened.conversation_id,
+                        started_org=True,
+                    )
+                await self.org_run.came_back()
+        path = await asyncio.to_thread(
+            lambda: (
+                self.org_load.home()
+                if request.path is None
+                else self.org_load.repo_relative(request.path)
+            )
+        )
+        node = nearest_team(store.teams(), path)
+        if node is None:
+            raise Conflict(
+                "No team of the org can take a message about "
+                f"{path or 'the repository'!r}"
+            )
+        text = request.text
+        chosen_by: ChosenBy = "path"
+        reason = ""
+        if request.auto and self.org_settings.settings.route_requests:
+            choice = await self.request_routing().choose_team(text, node)
+            chosen_by, reason = choice.by, choice.reason
+            node = store.team(choice.node_id) or node
+        elif path != node.boundary.path:
+            text = f"{text}\n\n(The human sent this from {path}.)"
+        opened = await self.open_session(
+            OpenSessionRequest(text=text, node_id=node.id), request.conversation
+        )
+        top = opened.session.teams[0]
+        if chosen_by not in ("path", "top"):
+            await asyncio.to_thread(
+                self.team_history.keep_routed,
+                "asked",
+                top,
+                request.text,
+                chosen_by,
+                reason,
+            )
+        return RoutedMessage(
+            node_id=top.id,
+            team=top.title,
+            conversation_id=opened.conversation_id,
+            started_org=False,
+            chosen_by=chosen_by,
+            reason=reason,
+        )

@@ -97,7 +97,7 @@ async def test_the_org_has_a_sessions_sub_teams_once_its_work_is_accepted(
 ):
     await split_root(service)
 
-    assert [team.id for team in service.org.teams()] == ["root"]
+    assert [team.id for team in service.org_load.org.teams()] == ["root"]
     assert division_lead_ic(service) is None
 
     await use(service, ic(service), SubmitReviewTool, DONE)
@@ -116,14 +116,14 @@ async def test_the_org_has_a_sessions_sub_teams_once_its_work_is_accepted(
 
     await use(service, asked, ReviewTeamTool, accept(node(service, "root").id))
 
-    assert [team.id for team in service.org.teams()] == [
+    assert [team.id for team in service.org_load.org.teams()] == [
         "root",
         "services.api",
         "apps.web",
     ]
     review = node(service, "root").review
     assert review is not None and review.state == "accepted"
-    assert service.org.place(division_lead_of(service)) is not None
+    assert service.org_load.org.place(division_lead_of(service)) is not None
 
 
 async def test_what_a_session_drafts_is_the_teams_once_its_work_is_accepted(
@@ -134,11 +134,13 @@ async def test_what_a_session_drafts_is_the_teams_once_its_work_is_accepted(
     assert [r.text for r in service.team_reports.reports_of(node(service, "root"))] == [
         "Chose REST."
     ]
-    assert service.team_memory.reports("", "ic") == []
+    assert service.org_load.team_memory.reports("", "ic") == []
 
     await landed(service)
 
-    assert [r.text for r in service.team_memory.reports("", "ic")] == ["Chose REST."]
+    assert [r.text for r in service.org_load.team_memory.reports("", "ic")] == [
+        "Chose REST."
+    ]
     assert service.session_drafts.reports(node(service, "root").id) == []
 
 
@@ -162,14 +164,14 @@ async def test_what_is_recorded_while_work_lands_is_not_lost(
     monkeypatch.setattr(service.org_save, "commit_landing", a_report_comes)
 
     await landed(service)
-    await service.settled()
+    await service.work_queue.settled()
     for writer in late:
         writer.join()
 
     assert late
-    kept = service.team_memory.reports("", "ic") + service.session_drafts.reports(
-        root.id
-    )
+    kept = service.org_load.team_memory.reports(
+        "", "ic"
+    ) + service.session_drafts.reports(root.id)
     assert sorted(report.text for report in kept) == ["Chose JSON.", "Chose REST."]
 
 
@@ -182,11 +184,11 @@ async def test_what_became_of_a_sessions_teams_is_on_record_once_it_is_accepted(
     own = service.team_history.history_of(top.id)
     assert "set_up" in [event.kind for event in own]
     assert all(event.unaccepted for event in own)
-    assert service.team_memory.history("root") == []
+    assert service.org_load.team_memory.history("root") == []
 
     await landed(service)
 
-    kept = service.team_memory.history("root")
+    kept = service.org_load.team_memory.history("root")
     assert {"set_up", "accepted"} <= {event.kind for event in kept}
     assert not any(event.unaccepted for event in kept)
     assert service.session_drafts.events(top.session, "root") == []
@@ -200,11 +202,11 @@ async def test_what_a_reviewer_records_is_the_teams_once_the_work_is_accepted(
     assert asked is not None
     await use(service, asked, ReportTool, ReportAction(text="Read the diff twice."))
 
-    assert service.team_memory.reports("", "ic") == []
+    assert service.org_load.team_memory.reports("", "ic") == []
 
     await use(service, asked, ReviewTeamTool, accept(node(service, "root").id))
 
-    assert [r.text for r in service.team_memory.reports("", "ic")] == [
+    assert [r.text for r in service.org_load.team_memory.reports("", "ic")] == [
         "Read the diff twice."
     ]
 
@@ -229,9 +231,9 @@ async def test_the_end_of_a_session_the_org_knows_is_on_its_record(
     await landed(service)
 
     service.session_lifecycle.close_session(node(service, "root").session)
-    await service.settled()
+    await service.work_queue.settled()
 
-    kinds = [event.kind for event in service.team_memory.history("root")]
+    kinds = [event.kind for event in service.org_load.team_memory.history("root")]
     assert kinds.count("session_opened") == kinds.count("session_closed") == 1
 
 
@@ -240,9 +242,9 @@ def own_worktree(service: DirectorService, repo: Path, tmp_path: Path) -> Path:
     have made."""
     worktree = tmp_path / "session"
     run_git(repo, "worktree", "add", "--quiet", "-b", "session", str(worktree))
-    for place in service.org.session(session_id_of(node(service, "root"))):
+    for place in service.org_load.org.session(session_id_of(node(service, "root"))):
         if not place.division_lead:
-            service.org.update_place(
+            service.org_load.org.update_place(
                 place.id, worktree_path=str(worktree), branch="session"
             )
     return worktree
@@ -273,7 +275,7 @@ async def test_an_accept_on_record_says_which_commits_it_took_the_work_between(
 
     [session_accepted] = [
         event
-        for event in service.team_memory.history("root")
+        for event in service.org_load.team_memory.history("root")
         if event.kind == "accepted"
     ]
     assert (session_accepted.base, session_accepted.head) == (started_at, accepted_at)
@@ -303,8 +305,8 @@ async def test_the_human_is_asked_when_their_uncommitted_work_is_in_the_way(
     assert (repo / "app.py").read_text() == "refunds = None\n"
 
     run_git(repo, "checkout", "--", "app.py")
-    service.answer_escalation(top.id, MERGE_WAITS, "Cleared.")
-    await service.settled()
+    service.org_run.answer_escalation(top.id, MERGE_WAITS, "Cleared.")
+    await service.work_queue.settled()
 
     assert (repo / "app.py").read_text() == "refunds = True\n"
     review = node(service, "root").review
@@ -328,8 +330,8 @@ async def test_work_is_not_merged_into_another_branch_than_the_session_started_f
     assert not (repo / "app.py").exists()
 
     run_git(repo, "checkout", "--quiet", "-")
-    service.answer_escalation(top.id, MERGE_WAITS, "Switched back.")
-    await service.settled()
+    service.org_run.answer_escalation(top.id, MERGE_WAITS, "Switched back.")
+    await service.work_queue.settled()
 
     assert (repo / "app.py").read_text() == "refunds = True\n"
     review = node(service, "root").review
@@ -347,7 +349,7 @@ async def test_what_a_team_needs_of_another_goes_to_the_ic_above_both(
     )
 
     await use(service, ic(service, "services.api"), RaiseEscalationTool, need)
-    await service.settled()
+    await service.work_queue.settled()
 
     [raised] = node(service, "services.api").escalations
     assert raised.held_by == node(service, "root").id
@@ -369,8 +371,8 @@ async def test_a_new_request_cannot_go_to_a_team_only_a_session_has(
     launcher.answers[USAGE_ID] = "Teams: apps.web\nReason: The cart page is Web's."
 
     # The org does not have Web yet; the session that set it up does.
-    assert service.org.team("apps.web") is None
-    sent = await service.route_message(
+    assert service.org_load.org.team("apps.web") is None
+    sent = await service.session_lifecycle.route_message(
         RouteMessageRequest(text="Make the cart page faster.", auto=True)
     )
     assert team_id_of(node(service, sent.node_id)) == "root"
@@ -381,15 +383,15 @@ async def test_what_the_human_says_in_a_session_is_routed_among_its_own_teams(
 ):
     await split_root(service)
     launcher.answers[USAGE_ID] = "Teams: apps.web\nReason: The cart page is Web's."
-    [session] = service.org.sessions()
+    [session] = service.org_load.org.sessions()
 
-    said = await service.route_message(
+    said = await service.session_lifecycle.route_message(
         RouteMessageRequest(text="Make the cart page faster.", session_id=session.id)
     )
-    await service.settled()
+    await service.work_queue.settled()
 
     # Web is a team only this session has. No session was opened for it.
-    assert [open_now.id for open_now in service.org.sessions()] == [session.id]
+    assert [open_now.id for open_now in service.org_load.org.sessions()] == [session.id]
     assert (said.node_id, said.chosen_by) == (node(service, "apps.web").id, "model")
     assert said.conversation_id == ic(service, "apps.web")
     assert launcher.messages_to(said.conversation_id)[-1] == (
@@ -406,7 +408,7 @@ async def test_what_the_human_says_in_a_session_is_routed_among_its_own_teams(
     assert "Make the cart page faster." in launcher.messages_to(ic(service))[-1]
 
     service.org_settings.update_settings(DirectorSettingsUpdate(route_requests=False))
-    kept = await service.route_message(
+    kept = await service.session_lifecycle.route_message(
         RouteMessageRequest(text="Make the cart page lighter.", session_id=session.id)
     )
     assert (kept.node_id, kept.conversation_id) == (
@@ -414,7 +416,7 @@ async def test_what_the_human_says_in_a_session_is_routed_among_its_own_teams(
         ic(service),
     )
     with pytest.raises(NotFound):
-        await service.route_message(
+        await service.session_lifecycle.route_message(
             RouteMessageRequest(text="Anyone?", session_id="s000000")
         )
 
@@ -429,7 +431,7 @@ async def test_work_is_accepted_and_a_team_the_org_lost_meanwhile_stays_gone(
         ReportTool,
         ReportAction(text="Refunds are in."),
     )
-    service.org.remove("services.api")
+    service.org_load.org.remove("services.api")
 
     await use(service, conversation, SubmitReviewTool, DONE)
     session_accepted = await use(
@@ -439,17 +441,17 @@ async def test_work_is_accepted_and_a_team_the_org_lost_meanwhile_stays_gone(
     # The session set up no teams of its own, so nothing is asked and the
     # team stays gone; its code is merged all the same.
     assert "Accepting the work of 'API'" in session_accepted.text
-    assert service.org.team("services.api") is None
-    place = service.org.place(top)
+    assert service.org_load.org.team("services.api") is None
+    place = service.org_load.org.place(top)
     assert place is not None and place.review is not None
     assert place.review.state == "accepted"
     assert service.session_drafts.reports(place.id) == []
     # What it recorded is not dropped with the team: it is that team's
     # record, with the nearest team that holds its directory.
-    [left] = service.team_memory.former("services.api")
+    [left] = service.org_load.team_memory.former("services.api")
     assert (left.ended, left.above) == ("not_taken", "root")
     assert [report.text for report in left.reports] == ["Refunds are in."]
-    assert service.team_memory.reports("services/api", "ic") == []
+    assert service.org_load.team_memory.reports("services/api", "ic") == []
     assert "not_taken" in [e.kind for e in record_of(service, "root")]
 
 
@@ -470,12 +472,12 @@ async def test_a_stale_session_adds_its_team_and_keeps_what_the_org_gained(
     assert division_lead_manager(service, top) is None
 
     # What the session did not change is not brought up again either.
-    service.org.remove("services.api.cache")
+    service.org_load.org.remove("services.api.cache")
     await use(service, conversation, SubmitReviewTool, DONE)
     await use(service, division_lead_ic(service, top), ReviewTeamTool, accept(top))
-    await service.settled()
+    await service.work_queue.settled()
     assert path_of(service, JOBS) == "services/api/jobs"
-    assert service.org.team("services.api.cache") is None
+    assert service.org_load.org.team("services.api.cache") is None
 
 
 @pytest.mark.parametrize("org_holds", [True, False])
@@ -486,7 +488,7 @@ async def test_a_team_both_made_something_else_of_waits_for_the_manager_above(
     sets_up_jobs(service, top)
     org_gains(service, JOBS, "services/api/workers")
     commit(repo, "services/api/refunds.py", "refunds = True\n")
-    place = service.org.place(f"{JOBS}@{top.split('@')[1]}")
+    place = service.org_load.org.place(f"{JOBS}@{top.split('@')[1]}")
     assert place is not None
     service.documents.write(
         place.session, team_ref(place).keeps("spec"), "Run the refund jobs."
@@ -509,7 +511,9 @@ async def test_a_team_both_made_something_else_of_waits_for_the_manager_above(
     assert "the session: 'API' in services/api/jobs, under services.api" in told
     assert "the org now: 'API' in services/api/workers, under services.api" in told
     # What the session wrote for it waits with it.
-    assert service.team_documents.draft(team_ref(place), "spec") is not None
+    assert (
+        service.org_settings.team_documents().draft(team_ref(place), "spec") is not None
+    )
 
     by_ic = await use(
         service, division_lead_ic(service, top), SettleTeamsTool, SettleTeamsAction()
@@ -538,16 +542,16 @@ async def test_a_team_both_made_something_else_of_waits_for_the_manager_above(
     assert path_of(service, JOBS) == (
         "services/api/workers" if org_holds else "services/api/jobs"
     )
-    assert service.team_documents.draft(team_ref(place), "spec") is None
+    assert service.org_settings.team_documents().draft(team_ref(place), "spec") is None
     said = launcher.messages_to(conversation)[-1]
     assert "One queue." in said
     assert ("The org's teams stay" in said) is org_holds
     # What the session wrote for the team is never dropped: it is the
     # team's spec where the org took the team, and that team's record with
     # the team above where it did not.
-    written = service.team_memory.read("services/api/jobs/spec.md")
+    written = service.org_load.team_memory.read("services/api/jobs/spec.md")
     assert written == (None if org_holds else "Run the refund jobs.")
-    kept = service.team_memory.former(JOBS)
+    kept = service.org_load.team_memory.former(JOBS)
     assert [
         (left.ended, left.above, left.documents.get("spec", "")) for left in kept
     ] == ([("not_taken", "services.api", "Run the refund jobs.")] if org_holds else [])
@@ -559,12 +563,12 @@ async def test_a_team_set_up_under_one_the_org_lost_goes_under_the_nearest_team(
     top, conversation = await at_api(service)
     sets_up_jobs(service, top)
     session_contracts(service, api_place(service, top), IDEMPOTENT)
-    service.org.remove("services.api")
+    service.org_load.org.remove("services.api")
 
     answer = await session_accepted(service, top, conversation)
 
     assert "Accepting the work of 'API'" in answer
-    assert service.org.team("services.api") is None
+    assert service.org_load.org.team("services.api") is None
     assert waiting(service, top) == [JOBS]
     asked = division_lead_manager(service, top)
     assert asked is not None
@@ -573,19 +577,19 @@ async def test_a_team_set_up_under_one_the_org_lost_goes_under_the_nearest_team(
     # The contracts the lost team set for it come with it, and nothing of
     # them is the org's before it is settled.
     assert f"it comes with team {JOBS}" in told and IDEMPOTENT in told
-    before = service.team_memory.read("contracts.md")
+    before = service.org_load.team_memory.read("contracts.md")
     assert before is not None and IDEMPOTENT not in before
 
     await use(service, asked, SettleTeamsTool, SettleTeamsAction())
 
     # The team the org removed stays removed.
-    assert service.org.team("services.api") is None
-    jobs = service.org.team(JOBS)
+    assert service.org_load.org.team("services.api") is None
+    jobs = service.org_load.org.team(JOBS)
     assert jobs is not None and jobs.parent_id == "root"
     assert path_of(service, JOBS) == "services/api/jobs"
     assert "moved" in [event.kind for event in record_of(service, "root")]
     # They are added to the contracts of the team it went under.
-    assert service.team_memory.read("contracts.md") == (
+    assert service.org_load.team_memory.read("contracts.md") == (
         f"{before.rstrip()}\n\n{IDEMPOTENT}\n"
     )
 
@@ -596,7 +600,7 @@ IDEMPOTENT = "Jobs are idempotent."
 
 
 def api_place(service: DirectorService, top: str) -> SessionTeam:
-    place = service.org.place(top)
+    place = service.org_load.org.place(top)
     assert isinstance(place, SessionTeam)
     return place
 
@@ -611,8 +615,8 @@ async def test_contracts_and_reports_a_session_writes_are_the_orgs_on_accept(
     session_contracts(service, place, "Jobs are idempotent.")
 
     # Until its work is accepted they are the session's alone.
-    assert service.team_memory.read(API_CONTRACTS) is None
-    assert service.team_memory.reports("services/api", "ic") == []
+    assert service.org_load.team_memory.read(API_CONTRACTS) is None
+    assert service.org_load.team_memory.reports("services/api", "ic") == []
     assert own_contracts(service, place) == "Jobs are idempotent.\n"
     assert [r.text for r in service.team_reports.reports_of(place)] == [
         "The old jobs team retried forever."
@@ -620,8 +624,8 @@ async def test_contracts_and_reports_a_session_writes_are_the_orgs_on_accept(
 
     await session_accepted(service, top, conversation)
 
-    assert service.team_memory.read(API_CONTRACTS) == "Jobs are idempotent.\n"
-    [note] = service.team_memory.reports("services/api", "ic")
+    assert service.org_load.team_memory.read(API_CONTRACTS) == "Jobs are idempotent.\n"
+    [note] = service.org_load.team_memory.reports("services/api", "ic")
     assert note.text == "The old jobs team retried forever."
     assert waiting(service, top) == []
 
@@ -640,7 +644,7 @@ async def test_contracts_both_changed_wait_for_the_manager_above(
     top, conversation = await at_api(service)
     session_contracts(service, api_place(service, top), "Refunds go through Jobs.")
     # Other accepted work set the contracts of the same directory meanwhile.
-    service.team_memory.write(
+    service.org_load.team_memory.write(
         "services/api", "contracts.md", "Orders go through Jobs.\n"
     )
 
@@ -649,7 +653,9 @@ async def test_contracts_both_changed_wait_for_the_manager_above(
     # The code is merged; of the contracts the org's stay until they are
     # settled, and nothing is overwritten.
     assert "Accepting the work of 'API'" in answer
-    assert service.team_memory.read(API_CONTRACTS) == "Orders go through Jobs.\n"
+    assert (
+        service.org_load.team_memory.read(API_CONTRACTS) == "Orders go through Jobs.\n"
+    )
     asked = division_lead_manager(service, top)
     assert asked is not None
     told = launcher.messages_to(asked)[-1]
@@ -675,7 +681,7 @@ async def test_contracts_both_changed_wait_for_the_manager_above(
     assert "Refunds go through Jobs." in request
 
     # What the Manager decided on is held to what it was shown.
-    service.team_memory.write(
+    service.org_load.team_memory.write(
         "services/api", "contracts.md", "Orders and carts go through Jobs.\n"
     )
     choice = DocumentChoice.model_validate(
@@ -702,7 +708,7 @@ async def test_contracts_both_changed_wait_for_the_manager_above(
     assert unknown.is_error and "services/api" in unknown.text
     assert stale.is_error and "changed since you were shown" in stale.text
     assert "Orders and carts go through Jobs." in stale.text
-    assert service.team_memory.read(API_CONTRACTS) == (
+    assert service.org_load.team_memory.read(API_CONTRACTS) == (
         "Orders and carts go through Jobs.\n"
     )
 
@@ -711,13 +717,13 @@ async def test_contracts_both_changed_wait_for_the_manager_above(
     )
 
     assert not settled.is_error
-    assert service.team_memory.read(API_CONTRACTS) == holds
-    place = service.org.place(division_lead_of(service, top))
+    assert service.org_load.team_memory.read(API_CONTRACTS) == holds
+    place = service.org_load.org.place(division_lead_of(service, top))
     assert place is not None and place.merge is None
     # The session reads what holds now, not what it wrote.
     contracts = [
         shown
-        for shown in service.team_documents.shown(
+        for shown in service.org_settings.team_documents().shown(
             service.team_types.reader_of(api_place(service, top))
         )
         if shown.name == "contracts"
@@ -749,7 +755,7 @@ async def test_what_a_reviewer_reconciled_holds_only_for_what_it_was_shown(
     await use(
         service, conversation, WriteSpecTool, WriteSpecAction(file_text="# Refunds")
     )
-    service.team_memory.write("services/api", "spec.md", "# Orders")
+    service.org_load.team_memory.write("services/api", "spec.md", "# Orders")
     await use(service, conversation, SubmitReviewTool, DONE)
     decided = ReviewTeamAction(team=top, decision="accept", reconciled="Refunds.")
 
@@ -758,19 +764,19 @@ async def test_what_a_reviewer_reconciled_holds_only_for_what_it_was_shown(
     assert unseen.is_error and "# Orders" in unseen.text
 
     # The org's spec changes again before the reviewer answers.
-    service.team_memory.write("services/api", "spec.md", "# Orders and carts")
+    service.org_load.team_memory.write("services/api", "spec.md", "# Orders and carts")
     stale = await use(service, division_lead_ic(service, top), ReviewTeamTool, decided)
 
     assert stale.is_error
     assert "changed since you were shown it" in stale.text
     assert "# Orders and carts" in stale.text
-    assert service.team_memory.read(API_SPEC) == "# Orders and carts"
+    assert service.org_load.team_memory.read(API_SPEC) == "# Orders and carts"
 
     again = await use(service, division_lead_ic(service, top), ReviewTeamTool, decided)
-    await service.settled()
+    await service.work_queue.settled()
 
     assert not again.is_error
-    assert service.team_memory.read(API_SPEC) == "# Refunds"
+    assert service.org_load.team_memory.read(API_SPEC) == "# Refunds"
 
 
 async def test_what_a_session_wrote_for_a_team_that_was_replaced_is_not_the_new_teams(
@@ -783,13 +789,13 @@ async def test_what_a_session_wrote_for_a_team_that_was_replaced_is_not_the_new_
     await use(service, conversation, ReportTool, ReportAction(text="Chose a ledger."))
     # Other accepted work put another team in the same directory, which has
     # the same id.
-    service.org.update_team("services.api", since="set up by other work")
+    service.org_load.org.update_team("services.api", since="set up by other work")
 
     await session_accepted(service, top, conversation)
 
-    assert service.team_memory.read(API_SPEC) is None
-    assert service.team_memory.reports("services/api", "ic") == []
-    [left] = service.team_memory.former("services.api")
+    assert service.org_load.team_memory.read(API_SPEC) is None
+    assert service.org_load.team_memory.reports("services/api", "ic") == []
+    [left] = service.org_load.team_memory.former("services.api")
     # It is kept for the team that has its directory now.
     assert (left.ended, left.above) == ("not_taken", "services.api")
     assert left.documents == {"spec": "# Refunds"}
@@ -802,11 +808,11 @@ async def test_a_team_only_the_session_renamed_is_renamed_in_the_org(
     service: DirectorService,
 ):
     top, conversation = await at_api(service)
-    service.org.update_place(top, title="Payments API")
+    service.org_load.org.update_place(top, title="Payments API")
 
     await session_accepted(service, top, conversation)
 
-    team = service.org.team("services.api")
+    team = service.org_load.org.team("services.api")
     assert team is not None and team.title == "Payments API"
     assert waiting(service, top) == []
 
@@ -822,10 +828,10 @@ async def test_closing_a_session_leaves_the_org_nothing_it_never_had_accepted(
     place = api_place(service, top)
 
     service.session_lifecycle.close_session(place.session)
-    await service.settled()
+    await service.work_queue.settled()
 
-    assert service.team_memory.read(API_SPEC) is None
-    assert service.team_memory.reports("services/api", "ic") == []
+    assert service.org_load.team_memory.read(API_SPEC) is None
+    assert service.org_load.team_memory.reports("services/api", "ic") == []
     # Nor is it on the org's record that it was closed.
     assert "session_closed" not in [e.kind for e in record_of(service, "root")]
     assert service.session_documents.drafts(place.session) == {}
@@ -837,7 +843,7 @@ async def test_closing_a_session_keeps_what_waited_of_its_accepted_work(
     top, conversation = await at_api(service)
     sets_up_jobs(service, top)
     org_gains(service, JOBS, "services/api/workers")
-    jobs = service.org.place(f"{JOBS}@{api_place(service, top).session}")
+    jobs = service.org_load.org.place(f"{JOBS}@{api_place(service, top).session}")
     assert jobs is not None
     service.documents.write(
         jobs.session, team_ref(jobs).keeps("spec"), "Run the refund jobs."
@@ -846,12 +852,12 @@ async def test_closing_a_session_keeps_what_waited_of_its_accepted_work(
     assert waiting(service, top) == [JOBS]
 
     service.session_lifecycle.close_session(jobs.session)
-    await service.settled()
+    await service.work_queue.settled()
 
     # Nobody settled it, so the org's team stays and what the session wrote
     # for its own is that team's record.
     assert path_of(service, JOBS) == "services/api/workers"
-    [left] = service.team_memory.former(JOBS)
+    [left] = service.org_load.team_memory.former(JOBS)
     assert (left.ended, left.documents) == (
         "not_taken",
         {"spec": "Run the refund jobs."},
@@ -863,25 +869,25 @@ async def test_a_team_a_session_prunes_is_the_orgs_until_its_work_is_accepted(
 ):
     await split_root(service)
     await landed(service)
-    await service.settled()
+    await service.work_queue.settled()
     kept = Report(at="2026-11-01T00:00:00+00:00", role="ic", text="Chose REST.")
-    take_in(service.team_memory, reports={"services/api": [kept]})
+    take_in(service.org_load.team_memory, reports={"services/api": [kept]})
 
     await use(service, manager(service), PruneTeamTool, PRUNE_API)
-    await service.settled()
+    await service.work_queue.settled()
 
     # Other sessions still have the team and all it recorded.
-    assert service.org.team("services.api") is not None
-    assert service.team_memory.reports("services/api", "ic") == [kept]
-    assert service.team_memory.former("services.api") == []
+    assert service.org_load.org.team("services.api") is not None
+    assert service.org_load.team_memory.reports("services/api", "ic") == [kept]
+    assert service.org_load.team_memory.former("services.api") == []
 
     await landed(service)
-    await service.settled()
+    await service.work_queue.settled()
 
-    assert service.org.team("services.api") is None
-    [record] = service.team_memory.former("services.api")
+    assert service.org_load.org.team("services.api") is None
+    [record] = service.org_load.team_memory.former("services.api")
     assert (record.ended, record.reports) == ("pruned", [kept])
-    assert service.team_memory.reports("services/api", "ic") == []
+    assert service.org_load.team_memory.reports("services/api", "ic") == []
 
 
 async def test_an_ic_is_told_once_that_the_org_lacks_what_changed_after_an_accept(
@@ -889,7 +895,7 @@ async def test_an_ic_is_told_once_that_the_org_lacks_what_changed_after_an_accep
 ):
     await split_root(service)
     await landed(service)
-    await service.settled()
+    await service.work_queue.settled()
     root_ic, root_manager = ic(service), manager(service)
     assert root_ic is not None and root_manager is not None
 
@@ -902,33 +908,33 @@ async def test_an_ic_is_told_once_that_the_org_lacks_what_changed_after_an_accep
 
     # A turn that ends with nothing changed since the accept says nothing.
     launcher.report(root_manager, ConversationExecutionStatus.FINISHED)
-    await service.settled()
+    await service.work_queue.settled()
     assert reminders() == []
 
     await use(service, root_manager, PruneTeamTool, PRUNE_API)
-    await service.settled()
+    await service.work_queue.settled()
     for conversation, status in list(launcher.known.items()):
         if status == ConversationExecutionStatus.RUNNING:
             launcher.report(str(conversation), ConversationExecutionStatus.FINISHED)
     launcher.report(root_manager, ConversationExecutionStatus.FINISHED)
-    await service.settled()
+    await service.work_queue.settled()
     assert len(reminders()) == 1
 
     # Not with every turn that ends.
     launcher.report(root_ic, ConversationExecutionStatus.FINISHED)
-    await service.settled()
+    await service.work_queue.settled()
     assert len(reminders()) == 1
 
     # Accepted again, the org has it, and a later change is said again.
     await landed(service)
-    await service.settled()
+    await service.work_queue.settled()
     launcher.report(root_ic, ConversationExecutionStatus.FINISHED)
-    await service.settled()
+    await service.work_queue.settled()
     assert len(reminders()) == 1
 
 
 def merge_of(service: DirectorService, top: str):
-    place = service.org.place(division_lead_of(service, top))
+    place = service.org_load.org.place(division_lead_of(service, top))
     assert isinstance(place, SessionTeam)
     return place.merge
 
@@ -951,7 +957,7 @@ async def test_what_later_work_makes_of_the_org_waits_for_earlier_work(
     opened = await service.session_lifecycle.open_session(
         OpenSessionRequest(text="Add workers.", node_id="services.api")
     )
-    await service.settled()
+    await service.work_queue.settled()
     second, other = opened.session.teams[0].id, opened.conversation_id
     sets_up_jobs(service, first)
     org_gains(service, JOBS, "services/api/queue")
@@ -972,7 +978,7 @@ async def test_what_later_work_makes_of_the_org_waits_for_earlier_work(
     await use(
         service, division_lead_ic(service, second), ReviewTeamTool, accept(second)
     )
-    await service.settled()
+    await service.work_queue.settled()
 
     # The code of the later work is in although the Manager of the earlier
     # has not decided; the team it set up waits for that.
@@ -981,7 +987,7 @@ async def test_what_later_work_makes_of_the_org_waits_for_earlier_work(
         assert review is not None and review.state == "accepted"
     waits = merge_of(service, second)
     assert waits is not None and waits.code_landed and waits.org_queued
-    assert service.org.team(WORKERS) is None
+    assert service.org_load.org.team(WORKERS) is None
     assert division_lead_manager(service, second) is None
     late = await use(
         service, division_lead_ic(service, second), SettleTeamsTool, SettleTeamsAction()
@@ -1022,11 +1028,11 @@ async def test_settled_before_the_code_is_accepted_it_all_lands_in_one_step(
     settled = await use(service, asked, SettleTeamsTool, SettleTeamsAction())
     assert not settled.is_error and "when the IC" in settled.text
     assert path_of(service, JOBS) == "services/api/workers"
-    assert service.team_memory.reports("services/api", "ic") == []
+    assert service.org_load.team_memory.reports("services/api", "ic") == []
     before = refs(repo)
 
     await use(service, division_lead_ic(service, top), ReviewTeamTool, accept(top))
-    await service.settled()
+    await service.work_queue.settled()
 
     assert path_of(service, JOBS) == "services/api/jobs"
     assert merge_of(service, top) is None
@@ -1050,7 +1056,7 @@ async def test_a_save_that_comes_in_the_middle_of_a_landing_waits_for_it(
     asked = division_lead_manager(service, top)
     await use(service, asked, SettleTeamsTool, SettleTeamsAction())
     before = refs(repo)
-    store = service.org
+    store = service.org_load.org
     set_shape = store.set_shape
     saves: list[threading.Thread] = []
 
@@ -1065,7 +1071,7 @@ async def test_a_save_that_comes_in_the_middle_of_a_landing_waits_for_it(
     monkeypatch.setattr(store, "set_shape", a_save_begins)
 
     await use(service, division_lead_ic(service, top), ReviewTeamTool, accept(top))
-    await service.settled()
+    await service.work_queue.settled()
     for save in saves:
         save.join()
 
@@ -1130,7 +1136,7 @@ async def test_work_that_is_sent_back_joins_the_end_and_keeps_what_was_decided(
     back = launcher.messages_to(conversation)[-1]
     heard = len(launcher.messages_to(asked))
     await use(service, conversation, SubmitReviewTool, DONE)
-    await service.settled()
+    await service.work_queue.settled()
 
     assert "joins the end of the line again" in back
     again = merge_of(service, top)
@@ -1171,7 +1177,7 @@ async def test_a_reviewer_writes_the_spec_that_holds(service: DirectorService):
     await use(
         service, conversation, WriteSpecTool, WriteSpecAction(file_text="# Refunds")
     )
-    service.team_memory.write("services/api", "spec.md", "# Orders")
+    service.org_load.team_memory.write("services/api", "spec.md", "# Orders")
     await use(service, conversation, SubmitReviewTool, DONE)
     shown = await use(
         service, division_lead_ic(service, top), ReviewTeamTool, accept(top)
@@ -1232,12 +1238,15 @@ async def test_a_reviewer_writes_the_spec_that_holds(service: DirectorService):
         ReviewTeamTool,
         decided("services/api", "replacement", "# Orders and refunds"),
     )
-    await service.settled()
+    await service.work_queue.settled()
 
     assert not written.is_error
-    assert service.team_memory.read(API_SPEC) == "# Orders and refunds"
+    assert service.org_load.team_memory.read(API_SPEC) == "# Orders and refunds"
     assert (
-        service.team_documents.draft(team_ref(api_place(service, top)), "spec") is None
+        service.org_settings.team_documents().draft(
+            team_ref(api_place(service, top)), "spec"
+        )
+        is None
     )
 
 
@@ -1246,7 +1255,7 @@ async def test_a_reviewer_keeps_the_orgs_spec(service: DirectorService):
     await use(
         service, conversation, WriteSpecTool, WriteSpecAction(file_text="# Refunds")
     )
-    service.team_memory.write("services/api", "spec.md", "# Orders")
+    service.org_load.team_memory.write("services/api", "spec.md", "# Orders")
     await use(service, conversation, SubmitReviewTool, DONE)
     await use(service, division_lead_ic(service, top), ReviewTeamTool, accept(top))
 
@@ -1263,11 +1272,14 @@ async def test_a_reviewer_keeps_the_orgs_spec(service: DirectorService):
             ],
         ),
     )
-    await service.settled()
+    await service.work_queue.settled()
 
-    assert service.team_memory.read(API_SPEC) == "# Orders"
+    assert service.org_load.team_memory.read(API_SPEC) == "# Orders"
     assert (
-        service.team_documents.draft(team_ref(api_place(service, top)), "spec") is None
+        service.org_settings.team_documents().draft(
+            team_ref(api_place(service, top)), "spec"
+        )
+        is None
     )
 
 
@@ -1318,9 +1330,9 @@ async def test_a_manager_puts_a_team_it_takes_where_it_fits_the_org(
     assert path_of(service, JOBS) == "services/api/workers"
 
     await use(service, division_lead_ic(service, top), ReviewTeamTool, accept(top))
-    await service.settled()
+    await service.work_queue.settled()
 
-    jobs = service.org.team(JOBS)
+    jobs = service.org_load.org.team(JOBS)
     assert jobs is not None
     assert (jobs.parent_id, jobs.title, jobs.boundary.path) == (
         "services.api",
@@ -1337,7 +1349,7 @@ async def test_a_spec_written_for_a_team_the_org_lost_is_left_to_the_team_that_h
     await use(
         service, conversation, WriteSpecTool, WriteSpecAction(file_text="# Refunds")
     )
-    service.org.remove("services.api")
+    service.org_load.org.remove("services.api")
     await use(service, conversation, SubmitReviewTool, DONE)
 
     # Its reviewer is shown it with the spec of the team that holds the
@@ -1367,20 +1379,22 @@ async def test_a_spec_written_for_a_team_the_org_lost_is_left_to_the_team_that_h
             else [],
         ),
     )
-    await service.settled()
+    await service.work_queue.settled()
 
-    root = service.org.team("root")
+    root = service.org_load.org.team("root")
     assert root is not None
-    assert service.team_memory.read(API_SPEC) == "# Refunds"
+    assert service.org_load.team_memory.read(API_SPEC) == "# Refunds"
     if rewritten:
-        assert service.team_memory.read("spec.md") == "# Checkout, with refunds"
+        assert (
+            service.org_load.team_memory.read("spec.md") == "# Checkout, with refunds"
+        )
         assert root.leftover_documents == []
     else:
         # Left alone, it is an old spec the next session there is told of.
         assert [(old.path, old.team) for old in root.leftover_documents] == [
             ("services/api", "API")
         ]
-    [left] = service.team_memory.former("services.api")
+    [left] = service.org_load.team_memory.former("services.api")
     assert (left.ended, left.documents) == ("not_taken", {"spec": "# Refunds"})
 
 
@@ -1402,7 +1416,7 @@ async def test_a_manager_that_does_not_answer_is_asked_again_and_then_the_human(
     async def later(minutes: int) -> None:
         now[0] += timedelta(minutes=minutes)
         await service.stall_watch.check_stalls()
-        await service.settled()
+        await service.work_queue.settled()
 
     await later(30)
     assert len(launcher.messages_to(asked)) == told
@@ -1420,12 +1434,12 @@ async def test_a_manager_that_does_not_answer_is_asked_again_and_then_the_human(
     assert path_of(service, JOBS) == "services/api/workers"
 
     # Their answer goes on without the Manager: the org's stay.
-    service.answer_escalation(top, waits.id, "Go on.")
-    await service.settled()
+    service.org_run.answer_escalation(top, waits.id, "Go on.")
+    await service.work_queue.settled()
 
     assert merge_of(service, top) is None
     assert path_of(service, JOBS) == "services/api/workers"
-    assert [left.ended for left in service.team_memory.former(JOBS)] == []
+    assert [left.ended for left in service.org_load.team_memory.former(JOBS)] == []
     assert node(service, top).escalations == []
     await service.aclose()
 
@@ -1433,16 +1447,16 @@ async def test_a_manager_that_does_not_answer_is_asked_again_and_then_the_human(
 async def test_what_a_session_has_is_kept_at_once(repo: Path, launcher: FakeLauncher):
     service = DirectorService(repo, save_delay=3600)
     await service.start(launcher)
-    await service.create_org(
+    await service.session_lifecycle.create_org(
         CreateOrgRequest(
             title="Checkout", task="Build", conversation=root_conversation(repo)
         )
     )
-    await service.settled()
+    await service.work_queue.settled()
     opened = await service.session_lifecycle.open_session(
         OpenSessionRequest(text="Add refunds.", node_id="root")
     )
-    await service.settled()
+    await service.work_queue.settled()
 
     # The tree waits to be saved; what the session has does not.
     kept = service.org_state.run_state().marked(SESSION)
@@ -1455,17 +1469,19 @@ async def test_closing_a_session_leaves_the_humans_own_checkout_as_it_is(
     service: DirectorService, repo: Path, tmp_path: Path
 ):
     await landed(service)
-    await service.settled()
+    await service.work_queue.settled()
     top = node(service, "root")
     # The session works apart; its Division Lead place is in the repository.
     worktree = tmp_path / "apart"
     run_git(repo, "worktree", "add", "--quiet", "-b", "apart", str(worktree))
-    service.org.update_place(top.id, worktree_path=str(worktree), isolation="worktree")
+    service.org_load.org.update_place(
+        top.id, worktree_path=str(worktree), isolation="worktree"
+    )
     assert node(service, division_lead_of(service)).agents
     (repo / "notes.txt").write_text("the human's, not committed\n")
 
     service.session_lifecycle.close_session(top.session)
-    await service.settled()
+    await service.work_queue.settled()
 
     assert (repo / "notes.txt").read_text() == "the human's, not committed\n"
 
@@ -1483,7 +1499,7 @@ async def test_work_that_goes_up_by_itself_is_not_merged_into_another_branch(
 
     for team in ("services.api", "apps.web"):
         await use(service, ic(service), ReviewTeamTool, accept(team))
-    await service.settled()
+    await service.work_queue.settled()
 
     # The human's checkout is where they left it; the session's IC submits,
     # and the human is asked when that is accepted.
@@ -1497,7 +1513,7 @@ async def test_a_division_lead_ic_is_not_told_to_submit_work(
     await split_root(service)
     commit(repo, "README.md", "the team's own change\n")
     await landed(service)
-    await service.settled()
+    await service.work_queue.settled()
     lead = division_lead_ic(service)
     assert lead is not None
     told = len(launcher.messages_to(lead))
@@ -1507,7 +1523,7 @@ async def test_a_division_lead_ic_is_not_told_to_submit_work(
 
     for team in ("services.api", "apps.web"):
         await use(service, ic(service), ReviewTeamTool, accept(team))
-    await service.settled()
+    await service.work_queue.settled()
 
     assert not any(
         "submit_review" in message for message in launcher.messages_to(lead)[told:]
@@ -1527,14 +1543,14 @@ async def test_an_acceptance_cut_off_before_its_landing_lands_when_it_is_run_aga
 
     monkeypatch.setattr(service.session_merges, "land_accepted", cut_off)
     await use(service, division_lead_ic(service), ReviewTeamTool, accept(top.id))
-    await service.settled()
+    await service.work_queue.settled()
     monkeypatch.setattr(service.session_merges, "land_accepted", land)
 
     # What a restart does with the step that was still open.
     service.resumable_work.begin(top.id, Accept(needed_above="", base=True))
-    await service.settled()
+    await service.work_queue.settled()
 
-    assert service.team_memory.read("spec.md") == "# Spec"
+    assert service.org_load.team_memory.read("spec.md") == "# Spec"
     assert service.session_merges._in_order() == []
 
 
@@ -1567,11 +1583,11 @@ async def test_work_that_waited_for_the_human_is_merged_as_its_reviewer_decided(
     assert [e.id for e in node(service, "root").escalations] == [MERGE_WAITS]
     run_git(repo, "checkout", "--", "app.py")
 
-    service.answer_escalation(top.id, MERGE_WAITS, "Cleared.")
-    await service.settled()
+    service.org_run.answer_escalation(top.id, MERGE_WAITS, "Cleared.")
+    await service.work_queue.settled()
 
     assert (repo / "app.py").read_text() == "refunds = True\n"
-    assert service.team_memory.read("spec.md") == "# Reviewer"
+    assert service.org_load.team_memory.read("spec.md") == "# Reviewer"
 
 
 async def test_contracts_the_org_did_not_take_are_on_record_when_the_session_closes(
@@ -1579,13 +1595,13 @@ async def test_contracts_the_org_did_not_take_are_on_record_when_the_session_clo
 ):
     top, conversation = await at_api(service)
     session_contracts(service, api_place(service, top), "Refunds go through Jobs.")
-    service.team_memory.write(
+    service.org_load.team_memory.write(
         "services/api", "contracts.md", "Orders go through Jobs.\n"
     )
     await session_accepted(service, top, conversation)
 
     service.session_lifecycle.close_session(api_place(service, top).session)
-    await service.settled()
+    await service.work_queue.settled()
 
     assert any(
         event.kind == "not_taken" and "the contracts it wrote" in event.detail
@@ -1602,20 +1618,20 @@ async def test_contracts_for_a_team_the_org_lost_wait_with_the_rest_of_the_landi
     web = await service.session_lifecycle.open_session(
         OpenSessionRequest(text="Web work.", node_id="apps.web")
     )
-    await service.settled()
+    await service.work_queue.settled()
     ahead = web.session.teams[0].id
     session_contracts(service, node(service, ahead), "The web session's contracts.")
-    service.team_memory.write("apps/web", "contracts.md", "The org's.\n")
+    service.org_load.team_memory.write("apps/web", "contracts.md", "The org's.\n")
     await session_accepted(service, ahead, web.conversation_id)
     opened = await service.session_lifecycle.open_session(
         OpenSessionRequest(text="Add refunds.", node_id="services.api")
     )
-    await service.settled()
+    await service.work_queue.settled()
     top = opened.session.teams[0].id
     place = api_place(service, top)
     session_contracts(service, place, "Refunds go through Jobs.")
     # Other accepted work set the team at that directory up anew meanwhile.
-    service.org.update_team("services.api", since="set up anew")
+    service.org_load.org.update_team("services.api", since="set up anew")
 
     await session_accepted(service, top, opened.conversation_id)
 
@@ -1636,7 +1652,7 @@ async def test_a_team_beside_one_inside_its_directory_waits_for_the_manager_abov
     await session_accepted(service, top, conversation)
 
     # Side by side, one would hold the other's directory: not the org's yet.
-    assert service.org.team(JOBS) is None
+    assert service.org_load.org.team(JOBS) is None
     assert waiting(service, top) == [JOBS]
 
 
@@ -1646,16 +1662,16 @@ async def test_work_that_went_up_without_a_review_counts_as_an_accept_for_remind
     await split_root(service)
     session = node(service, "root").session
     # The IC was reminded once of what changed since an earlier accept.
-    service._changed_since_accept[session] = True
+    service.session_merges.changed_since_accept[session] = True
 
     for team in ("services.api", "apps.web"):
         await use(service, ic(service, team), SubmitReviewTool, DONE)
         await use(service, ic(service), ReviewTeamTool, accept(node(service, team).id))
-    await service.settled()
+    await service.work_queue.settled()
 
     review = node(service, "root").review
     assert review is not None and review.passed_up
-    assert session not in service._changed_since_accept
+    assert session not in service.session_merges.changed_since_accept
 
 
 async def test_a_landing_that_cannot_be_committed_leaves_the_tree_as_it_was(
@@ -1674,17 +1690,17 @@ async def test_a_landing_that_cannot_be_committed_leaves_the_tree_as_it_was(
     await use(service, ic(service), SubmitReviewTool, DONE)
     top = node(service, "root").id
     await use(service, division_lead_ic(service), ReviewTeamTool, accept(top))
-    await service.settled()
+    await service.work_queue.settled()
     service.org_save.commit_landing = real  # type: ignore[method-assign]
     await service.org_save.save()
 
     # Neither the tree nor what decides how it lands moved without the
     # team memory that goes with it.
-    assert [team.id for team in service.org.teams()] == ["root"]
+    assert [team.id for team in service.org_load.org.teams()] == ["root"]
     saved = OrgStore(shipped_type)
     load_org(GitCodingEnvironment().org_tree(repo), saved)
     assert [team.id for team in saved.teams()] == ["root"]
-    lead = service.org.place(division_lead_of(service))
+    lead = service.org_load.org.place(division_lead_of(service))
     assert lead is not None and lead.merge is not None
     await service.aclose()
 
@@ -1698,16 +1714,16 @@ async def test_a_team_set_up_in_place_of_one_whose_folder_it_holds_is_the_orgs(
     opened = await service.session_lifecycle.open_session(
         OpenSessionRequest(text="Widen it.", node_id="services.api")
     )
-    await service.settled()
+    await service.work_queue.settled()
     top, conversation = opened.session.teams[0].id, opened.conversation_id
     session = api_place(service, top).session
     # The session replaces the team with one that owns the folder above.
-    service.org.remove(f"services.api.workers.fast@{session}")
+    service.org_load.org.remove(f"services.api.workers.fast@{session}")
     sets_up_jobs(service, top, "services/api/workers", "services.api.workers")
 
     await session_accepted(service, top, conversation)
 
-    assert service.org.team("services.api.workers.fast") is None
-    wider = service.org.team("services.api.workers")
+    assert service.org_load.org.team("services.api.workers.fast") is None
+    wider = service.org_load.org.team("services.api.workers")
     assert wider is not None and wider.parent_id == "services.api"
     assert waiting(service, top) == []

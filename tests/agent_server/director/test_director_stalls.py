@@ -90,7 +90,7 @@ async def service(repo: Path, launcher: FakeLauncher, clock: Clock):
 async def looked(service: DirectorService) -> None:
     """The director looks for teams that show no progress, as its timer does."""
     await service.stall_watch.check_stalls()
-    await service.settled()
+    await service.work_queue.settled()
 
 
 def notices(service: DirectorService, launcher: FakeLauncher) -> list[str]:
@@ -254,7 +254,7 @@ async def test_the_time_an_org_is_paused_does_not_count(
     clock.passes(500)
     await looked(service)
     await service.org_run.resume()
-    await service.settled()
+    await service.work_queue.settled()
     clock.passes(100)
     await looked(service)
 
@@ -339,7 +339,7 @@ async def test_a_stopped_team_rests_with_all_below_it_and_is_sent_nothing(
     twice = await use(service, ic(service), StopTeamTool, STOP_API)
     by_manager = await use(service, manager(service), StopTeamTool, STOP_API)
     service.message_delivery.notify(db_ic, "Something for later.")
-    await service.settled()
+    await service.work_queue.settled()
 
     assert not stopped.is_error and twice.is_error and by_manager.is_error
     assert set(launcher.paused) == {UUID(api_ic), UUID(db_ic)}
@@ -354,7 +354,7 @@ async def test_a_stopped_team_rests_with_all_below_it_and_is_sent_nothing(
     again = await use(
         service, ic(service), MsgTeamTool, MsgTeamAction(team=API, text="Try v2.")
     )
-    await service.settled()
+    await service.work_queue.settled()
 
     assert "goes on now" in again.text and node(service, API).stopped is None
     assert node(service, API).status != "blocked"
@@ -371,7 +371,7 @@ async def test_a_stopped_team_does_not_stall_or_hold_back_reviews_and_is_pruned(
     await looked(service)
     await use(service, ic(service, WEB), SubmitReviewTool, DONE)
     await use(service, ic(service), StopTeamTool, STOP_API)
-    await service.settled()
+    await service.work_queue.settled()
 
     # Stopped counts as blocked: the work beside it goes to its reviewer.
     [request] = requests(service, launcher)
@@ -386,9 +386,9 @@ async def test_a_stopped_team_does_not_stall_or_hold_back_reviews_and_is_pruned(
         PruneTeamTool,
         PruneTeamAction(team=API, reason="It is not coming back."),
     )
-    await service.settled()
+    await service.work_queue.settled()
 
-    assert not pruned.is_error and service.org.place(API) is None
+    assert not pruned.is_error and service.org_load.org.place(API) is None
     assert "pruned the team 'API'" in launcher.messages_to(ic(service))[-1]
 
 
@@ -396,15 +396,15 @@ async def test_teams_that_take_a_stopped_teams_place_replace_it(
     service: DirectorService, launcher: FakeLauncher
 ):
     await use(service, ic(service), StopTeamTool, STOP_API)
-    await service.settled()
+    await service.work_queue.settled()
     services = [SplitChild(title="Services", path="services", task="Serve")]
 
     await use(service, ic(service), ProposeTeamsTool, proposing(services, keep=["Web"]))
     await use(service, manager(service), ApproveTeamsTool, APPROVE)
     await tasked(service)
-    await service.settled()
+    await service.work_queue.settled()
 
-    assert service.org.place(API) is None
+    assert service.org_load.org.place(API) is None
     replacement = node(service, "services")
     assert replacement.stopped is None and replacement.status != "blocked"
 
@@ -436,7 +436,7 @@ async def test_a_stopped_team_is_still_stopped_after_a_restart(
     api_ic = str(ic(first, API))
     heard = len(launcher.messages_to(api_ic))
     first.message_delivery.notify(api_ic, "Something for later.")
-    await first.settled()
+    await first.work_queue.settled()
     await first.aclose()
 
     launcher.listeners.clear()
@@ -448,17 +448,17 @@ async def test_a_stopped_team_is_still_stopped_after_a_restart(
         stall_poll=3600,
     )
     await second.start(launcher)
-    await second.settled()
-    if second.summary().paused is not None:
+    await second.work_queue.settled()
+    if second.org_load.summary().paused is not None:
         await second.org_run.resume()
-        await second.settled()
+        await second.work_queue.settled()
 
     stopped = node(second, API).stopped
     assert stopped is not None and stopped.reason == STOP_API.reason
     assert len(launcher.messages_to(api_ic)) == heard
 
     await use(second, ic(second), MsgTeamTool, MsgTeamAction(team=API, text="Go on."))
-    await second.settled()
+    await second.work_queue.settled()
 
     after = launcher.messages_to(api_ic)[heard:]
     assert len(after) == 2 and "Something for later." in after[0]
@@ -473,7 +473,7 @@ async def test_a_team_set_up_and_given_no_task_is_told_to_the_ic_above(
     await use(service, ic(service), ProposeTeamsTool, SPLIT)
     await use(service, manager(service), ApproveTeamsTool, APPROVE)
     service.team_messaging.tell_writer(node(service, WEB).id, "Begin.")
-    await service.settled()
+    await service.work_queue.settled()
 
     await looked(service)
     clock.passes(120)
@@ -502,7 +502,7 @@ async def test_a_team_set_up_and_given_no_task_is_told_to_the_ic_above(
     clock.passes(240)
     await looked(service)
     service.team_messaging.tell_writer(api, "Begin.")
-    await service.settled()
+    await service.work_queue.settled()
     clock.passes(120)
     await looked(service)
     again = [
@@ -524,7 +524,7 @@ async def test_the_time_a_team_was_stopped_is_not_time_without_progress(
     api_ic = str(ic(service, API))
     await looked(service)
     await use(service, ic(service), StopTeamTool, STOP_API)
-    await service.settled()
+    await service.work_queue.settled()
     clock.passes(300)
     await looked(service)
 
@@ -536,7 +536,7 @@ async def test_the_time_a_team_was_stopped_is_not_time_without_progress(
     await use(
         service, ic(service), MsgTeamTool, MsgTeamAction(team=API, text="Try v2.")
     )
-    await service.settled()
+    await service.work_queue.settled()
     clock.passes(1)
     await looked(service)
 

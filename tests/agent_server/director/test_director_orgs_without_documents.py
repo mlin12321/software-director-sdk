@@ -68,7 +68,10 @@ async def test_an_org_whose_teams_keep_no_documents_splits_and_lands_its_work(
     (config.parent / "types" / "bare.yaml").write_text(_a_type_that_keeps_nothing())
     service = await an_org(repo, launcher, config, agent_type="bare")
     root = node(service, "root")
-    assert service.team_documents.listed(service.team_types.reader_of(root)) == []
+    assert (
+        service.org_settings.team_documents().listed(service.team_types.reader_of(root))
+        == []
+    )
     context = service.team_context.context_of(root, "ic")
     assert "spec" not in context and "reports_of_your_team" not in context
 
@@ -82,7 +85,10 @@ async def test_an_org_whose_teams_keep_no_documents_splits_and_lands_its_work(
     await tasked(service)
     api = node(service, API)
     assert service.team_types.type_of(api).name == "bare"
-    assert service.team_documents.listed(service.team_types.reader_of(api)) == []
+    assert (
+        service.org_settings.team_documents().listed(service.team_types.reader_of(api))
+        == []
+    )
     checkout = Path(root.worktree_path)
     (checkout / "README.md").write_text("# Checkout\n")
     git(checkout, ["add", "-A"])
@@ -118,7 +124,7 @@ async def test_a_team_reads_the_contracts_of_whichever_team_is_above_it_now(
         place = node(service, jobs.id)
         return [
             shown.text.strip()
-            for shown in service.team_documents.shown(
+            for shown in service.org_settings.team_documents().shown(
                 service.team_types.reader_of(place)
             )
             if shown.name == "contracts" and shown.folder != team_ref(place).folder
@@ -127,7 +133,7 @@ async def test_a_team_reads_the_contracts_of_whichever_team_is_above_it_now(
     assert read_from_above() == ["Jobs take an order id."]
 
     # Under another team it reads that team's, with nothing sent or stored.
-    service.org.move_place(jobs.id, node(service, "root").id)
+    service.org_load.org.move_place(jobs.id, node(service, "root").id)
 
     assert read_from_above() == ["POST /checkout returns {order_id}"]
     await service.aclose()
@@ -186,7 +192,7 @@ async def test_a_document_of_an_orgs_own_stays_when_its_team_is_removed(
     )
 
     await use(service, manager(service), PruneTeamTool, PRUNE_API)
-    await service.settled()
+    await service.work_queue.settled()
 
     # The director knows no document by name: the runbook stays because
     # its protocol says so, as the spec does.
@@ -194,7 +200,9 @@ async def test_a_document_of_an_orgs_own_stays_when_its_team_is_removed(
     assert root.leftover_documents == [
         LeftoverDocument(name="runbook", path="services/api", team="API")
     ]
-    [left] = service.team_documents.left_to(service.team_types.reader_of(root))
+    [left] = service.org_settings.team_documents().left_to(
+        service.team_types.reader_of(root)
+    )
     assert (left.name, left.text) == ("runbook", "Restart the queue first.\n")
     context = service.team_context.context_of(root, "ic")
     assert context["documents_left_by_teams_before_you"] == [
@@ -221,20 +229,25 @@ async def test_a_document_of_an_orgs_own_is_settled_with_the_teams(
     opened = await service.session_lifecycle.open_session(
         OpenSessionRequest(text="Add refunds.", node_id="services.api")
     )
-    await service.settled()
+    await service.work_queue.settled()
     top, conversation = opened.session.teams[0].id, opened.conversation_id
     place = node(service, top)
     service.documents.write(
         place.session, team_ref(place).keeps("ledger"), "Refunds owe Jobs a retry."
     )
     # Other accepted work wrote the ledger of the same folder meanwhile.
-    service.team_memory.write("services/api", "ledger.md", "Orders owe Jobs.\n")
+    service.org_load.team_memory.write(
+        "services/api", "ledger.md", "Orders owe Jobs.\n"
+    )
 
     await session_accepted(service, top, conversation)
 
     # The code is merged, and the ledger waits for the Manager above as
     # contracts do.
-    assert service.team_memory.read("services/api/ledger.md") == "Orders owe Jobs.\n"
+    assert (
+        service.org_load.team_memory.read("services/api/ledger.md")
+        == "Orders owe Jobs.\n"
+    )
     merge = node(service, division_lead_of(service, top)).merge
     assert merge is not None
     assert [(item.document, item.key, item.gate) for item in merge.items] == [
@@ -261,7 +274,7 @@ async def test_a_document_of_an_orgs_own_is_settled_with_the_teams(
     )
 
     assert not settled.is_error
-    assert service.team_memory.read("services/api/ledger.md") == (
+    assert service.org_load.team_memory.read("services/api/ledger.md") == (
         "Orders and refunds owe Jobs.\n"
     )
     told = launcher.messages_to(conversation)[-1]

@@ -64,6 +64,7 @@ class Messaging(Starts):
                 remembered=RememberedFile(None),
                 team_types=self.team_types,
                 tree=RootAboveApi(),
+                documents=self.documents,
                 org=lambda: self.store,
                 repo_dir=lambda: repo,
                 max_concurrent_runs=None,

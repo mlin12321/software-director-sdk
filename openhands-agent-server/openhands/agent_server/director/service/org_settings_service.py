@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import Any
 
 from openhands.agent_server.director.agent_types import TeamTemplate
+from openhands.agent_server.director.documents.store import DocumentStore
+from openhands.agent_server.director.documents.team_documents import TeamDocuments
 from openhands.agent_server.director.documents.tree import TeamTree
 from openhands.agent_server.director.environment import CodingEnvironment
 from openhands.agent_server.director.models import (
@@ -67,6 +69,8 @@ class OrgSettingsService:
     team_types: TeamTypeService
     """The types there are, for what may be allowed."""
     tree: TeamTree
+    documents: DocumentStore
+    """The store the org's documents are kept in."""
     """Where a team stands among the others, for the kind of org."""
     org: Callable[[], OrgStore]
     """The org whose settings these are."""
@@ -275,3 +279,8 @@ class OrgSettingsService:
             }
         )
         return self.settings_state()
+
+    def team_documents(self) -> TeamDocuments:
+        """The documents of the org as each team reads, writes and leaves
+        them."""
+        return TeamDocuments(self.documents, self.team_types.protocols, self.org_kind)

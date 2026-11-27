@@ -154,7 +154,7 @@ async def test_each_member_is_told_of_the_org_in_the_names_its_type_gives(
         SubmitReviewTool,
         SubmitReviewAction(summary="The rig stands."),
     )
-    await service.settled()
+    await service.work_queue.settled()
 
     [to_bench, *_] = launcher.messages_to(member(service, "bench"))
     assert "You are the bench of" in to_bench

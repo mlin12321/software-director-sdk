@@ -188,7 +188,7 @@ async def test_an_escalation_passed_up_counts_for_the_team_it_came_through(
                 text="Not mine to decide.",
             ),
         )
-    await service.settled()
+    await service.work_queue.settled()
 
     [above] = looks(service, launcher)
     assert "the IC of 'API' has escalated 3 times" in above
@@ -210,10 +210,10 @@ async def test_what_was_counted_is_kept_over_a_restart(
         stall_poll=3600,
     )
     await second.start(launcher)
-    await second.settled()
-    if second.summary().paused is not None:
+    await second.work_queue.settled()
+    if second.org_load.summary().paused is not None:
         await second.org_run.resume()
-        await second.settled()
+        await second.work_queue.settled()
     await escalates(second, API)
 
     assert len(looks(second, launcher)) == 1
@@ -234,7 +234,7 @@ async def test_work_that_goes_up_without_a_review_is_not_counted(
     await use(service, ic(service, "services.api.db"), SubmitReviewTool, DONE)
 
     await use(service, ic(service, API), ReviewTeamTool, accept("services.api.db"))
-    await service.settled()
+    await service.work_queue.settled()
 
     api = node(service, API).review
     assert api is not None and api.passed_up
@@ -253,12 +253,12 @@ async def test_a_new_team_in_a_removed_teams_place_starts_from_nothing(
         PruneTeamTool,
         PruneTeamAction(team=API, reason="Going nowhere."),
     )
-    await service.settled()
+    await service.work_queue.settled()
     again = [SplitChild(title="Orders", path="services/api", task="Take orders")]
     await use(service, ic(service), ProposeTeamsTool, proposing(again, keep=["Web"]))
     await use(service, manager(service), ApproveTeamsTool, APPROVE)
     await tasked(service)
-    await service.settled()
+    await service.work_queue.settled()
 
     # The new team has the removed one's node id, and none of its count.
     assert node(service, API).title == "Orders"
@@ -294,7 +294,7 @@ async def test_what_became_of_its_teams_is_kept_for_a_teams_two_agents(
     # The IC reads a team's record with the next work it submits.
     commit(repo, "services/api/more.txt", "more\n")
     await use(service, ic(service, API), SubmitReviewTool, DONE)
-    await service.settled()
+    await service.work_queue.settled()
     asked = launcher.messages_to(ic(service))[-1]
     assert "Its work so far: 1 accepted, 1 sent back." in asked
 
@@ -312,7 +312,7 @@ async def test_a_manager_is_shown_what_became_of_teams_that_are_gone(
         PruneTeamTool,
         PruneTeamAction(team=API, reason="It never got it right."),
     )
-    await service.settled()
+    await service.work_queue.settled()
 
     await team_accepted(service, repo, WEB)
 

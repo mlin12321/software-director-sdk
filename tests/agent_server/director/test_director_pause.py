@@ -110,17 +110,17 @@ async def test_a_paused_org_holds_messages_and_delivers_them_in_order_on_resume(
     paused = await service.org_run.pause()
     service.team_messaging.tell_writer(place(service), "First", human=True)
     service.message_delivery.notify(ic(service), "Second")
-    await service.settled()
+    await service.work_queue.settled()
 
-    assert paused.paused == "human" and service.summary().paused == "human"
+    assert paused.paused == "human" and service.org_load.summary().paused == "human"
     assert len(launcher.sent) == before
     held = await service.org_run.recovery()
     assert held.messages_held == 2 and (place(service), "message") in kinds(held)
 
     resumed = await service.org_run.resume()
-    await service.settled()
+    await service.work_queue.settled()
 
-    assert resumed.paused is None and service.summary().paused is None
+    assert resumed.paused is None and service.org_load.summary().paused is None
     first, second = launcher.messages_to(ic(service))[-2:]
     assert first == "First" and "Second" in second
     assert (await service.org_run.recovery()).items == []
@@ -136,7 +136,7 @@ async def test_pausing_stops_the_agents_that_run_and_resuming_runs_only_those(
     launcher.report(root_ic, ConversationExecutionStatus.RUNNING)
 
     await service.org_run.pause()
-    await service.settled()
+    await service.work_queue.settled()
 
     assert launcher.paused == [UUID(root_ic)]
     statuses = {agent.role: agent.status for agent in node(service, "root").agents}
@@ -144,7 +144,7 @@ async def test_pausing_stops_the_agents_that_run_and_resuming_runs_only_those(
     assert (place(service), "run_again") in kinds(await service.org_run.recovery())
 
     await service.org_run.resume()
-    await service.settled()
+    await service.work_queue.settled()
 
     assert launcher.resumed == [(UUID(root_ic), None)]
     assert node(service, "root").status == "working"
@@ -164,7 +164,7 @@ async def test_what_an_agent_decides_while_the_org_is_paused_is_done_after_resum
     assert (place(service), "continue") in kinds(await service.org_run.recovery())
 
     await service.org_run.resume()
-    await service.settled()
+    await service.work_queue.settled()
     assert len(launcher.derived) == 1
     await tasked(service)
 
@@ -186,10 +186,12 @@ async def test_a_server_stopped_while_teams_wait_starts_them_in_order_once_resum
     await use(first, ic(first), ProposeTeamsTool, split("a", 3))
     await use(first, manager(first), ApproveTeamsTool, APPROVE)
     top = place(first)
-    for team in first.org.below(top):
+    for team in first.org_load.org.below(top):
         first.team_messaging.tell_writer(team.id, "Begin.")
     await eventually(
-        lambda: sum(team.waiting_to_start for team in first.org.below(top)) == 3
+        lambda: (
+            sum(team.waiting_to_start for team in first.org_load.org.below(top)) == 3
+        )
     )
     await first.aclose()
 
@@ -197,7 +199,7 @@ async def test_a_server_stopped_while_teams_wait_starts_them_in_order_once_resum
     second = await again(repo, launcher)
     left = await second.org_run.recovery()
 
-    assert second.summary().paused == "shutdown" and len(launcher.derived) == 1
+    assert second.org_load.summary().paused == "shutdown" and len(launcher.derived) == 1
     waited = [node_id for node_id, kind in kinds(left) if kind == "start"]
     assert sorted(team_id_of(node(second, node_id)) for node_id in waited) == [
         "a.t0",
@@ -207,13 +209,13 @@ async def test_a_server_stopped_while_teams_wait_starts_them_in_order_once_resum
     # A team that has not been started yet has lost nothing.
     assert {kind for _, kind in kinds(left)} == {"start"}
     assert {
-        agent.status for team in second.org.below(top) for agent in team.agents
+        agent.status for team in second.org_load.org.below(top) for agent in team.agents
     } == {"idle"}
 
     await second.org_run.resume()
-    await second.settled()
+    await second.work_queue.settled()
 
-    teams = second.org.below(top)
+    teams = second.org_load.org.below(top)
     assert [team_id_of(team) for team in teams] == ["a.t0", "a.t1", "a.t2"]
     assert node(second, "root").pending_split is None
     starts = [str(start.conversation_id) for start in launcher.derived[1:]]
@@ -239,11 +241,11 @@ async def test_a_team_start_cut_off_by_a_crash_is_finished_without_a_second_of_a
 
     second = await again(repo, launcher)
 
-    assert second.summary().paused == "crash"
+    assert second.org_load.summary().paused == "crash"
     assert (api, "start") in kinds(await second.org_run.recovery())
 
     await second.org_run.resume()
-    await second.settled()
+    await second.work_queue.settled()
     await tasked(second)
 
     assert node(second, "root").child_ids == [api, place(second, "apps.web")]
@@ -280,9 +282,9 @@ async def test_a_prune_cut_off_by_a_crash_is_finished_and_recorded_once(
     second = await again(repo, launcher)
     assert (api, "continue") in kinds(await second.org_run.recovery())
     await second.org_run.resume()
-    await second.settled()
+    await second.work_queue.settled()
 
-    assert second.org.place(api) is None
+    assert second.org_load.org.place(api) is None
     assert len(set(launcher.deleted)) == 2
     kept = run_git(repo, "for-each-ref", "--format=%(refname)", "refs/agents/pruned")
     assert len(kept.split()) == 1
@@ -311,9 +313,9 @@ async def test_a_prune_cut_off_after_it_is_recorded_is_recorded_once(
 
     second = await again(repo, launcher)
     await second.org_run.resume()
-    await second.settled()
+    await second.work_queue.settled()
 
-    assert second.org.place(api) is None
+    assert second.org_load.org.place(api) is None
     pruned = [event for event in record_of(second, "root") if event.kind == "pruned"]
     assert len(pruned) == 1
     await second.aclose()
@@ -345,7 +347,7 @@ async def test_the_end_of_a_split_cut_off_by_a_crash_is_told_once(
     second = await again(repo, launcher)
     assert (place(second), "message") in kinds(await second.org_run.recovery())
     await second.org_run.resume()
-    await second.settled()
+    await second.work_queue.settled()
 
     assert node(second, "root").pending_split is None
     assert len(launcher.derived) == 1
@@ -367,7 +369,9 @@ async def test_the_end_of_a_split_cut_off_before_it_is_told_is_told(
 
     def server_ends(*_: object) -> None:
         # The session is kept as it is now, before the IC is told.
-        first.org_state.run_state().replace_marks(SESSION, kept_sessions(first.org))
+        first.org_state.run_state().replace_marks(
+            SESSION, kept_sessions(first.org_load.org)
+        )
         ended.set()
         raise ServerEnded
 
@@ -378,7 +382,7 @@ async def test_the_end_of_a_split_cut_off_before_it_is_told_is_told(
 
     second = await again(repo, launcher)
     await second.org_run.resume()
-    await second.settled()
+    await second.work_queue.settled()
 
     assert node(second, "root").pending_split is None
     told = [
@@ -430,7 +434,7 @@ async def test_a_review_request_cut_off_by_a_crash_reaches_the_reviewer_once(
         await second.org_run.recovery()
     )
     await second.org_run.resume()
-    await second.settled()
+    await second.work_queue.settled()
 
     review = node(second, "services.api").review
     assert review is not None and review.state == "pending"
@@ -473,7 +477,7 @@ async def test_an_acceptance_the_server_ended_before_saving_is_not_lost(
         await second.org_run.recovery()
     )
     await second.org_run.resume()
-    await second.settled()
+    await second.work_queue.settled()
 
     review = node(second, "services.api").review
     assert review is not None and review.state == "accepted"
@@ -516,7 +520,7 @@ async def test_accepted_work_the_server_ended_before_passing_up_still_goes_up(
     assert saved is not None and saved.state == "accepted"
     assert node(second, "services.api").review is None
     await second.org_run.resume()
-    await second.settled()
+    await second.work_queue.settled()
 
     api = node(second, "services.api")
     assert api.review is not None and api.review.state == "accepted"
@@ -536,13 +540,13 @@ async def test_an_agent_cut_off_in_a_step_shows_paused_is_told_and_runs_again(
 
     second = await again(repo, launcher)
 
-    assert second.summary().paused == "crash"
+    assert second.org_load.summary().paused == "crash"
     root = node(second, "root")
     assert root.agents[0].status == AGENT_PAUSED and root.status != "blocked"
     assert (place(second), "run_again") in kinds(await second.org_run.recovery())
 
     await second.org_run.resume()
-    await second.settled()
+    await second.work_queue.settled()
 
     assert launcher.resumed == [(UUID(root_ic), RESTART_NOTE)]
     await second.aclose()
@@ -566,7 +570,7 @@ async def test_an_agent_cut_off_in_a_step_is_not_a_failure_when_it_is_run_again(
     monkeypatch.setattr(launcher, "resume", told_before_it_runs)
 
     await second.org_run.resume()
-    await second.settled()
+    await second.work_queue.settled()
 
     root = node(second, "root")
     assert root.agents[0].status == AGENT_PAUSED and root.escalations == []
@@ -576,7 +580,7 @@ async def test_an_agent_cut_off_in_a_step_is_not_a_failure_when_it_is_run_again(
     assert node(second, "root").agents[0].status == "working"
     # From here on an error is its own.
     launcher.report(root_ic, ConversationExecutionStatus.ERROR)
-    await second.settled()
+    await second.work_queue.settled()
     assert node(second, "root").agents[0].status == "blocked"
     await second.aclose()
 
@@ -589,7 +593,7 @@ async def test_a_server_stopped_with_nothing_under_way_comes_back_running(
 
     second = await again(repo, launcher)
 
-    assert second.summary().paused is None
+    assert second.org_load.summary().paused is None
     assert (await second.org_run.recovery()).items == []
     await second.aclose()
 
@@ -601,16 +605,16 @@ async def test_an_org_set_to_resume_on_start_takes_its_work_up_unasked(
     first.org_settings.update_settings(DirectorSettingsUpdate(resume_on_start=True))
     await first.org_run.pause()
     first.message_delivery.notify(ic(first), "Carry on")
-    await first.settled()
+    await first.work_queue.settled()
     await first.aclose()
     before = len(launcher.sent)
 
     second = await again(repo, launcher)
 
     # A human's pause holds across restarts; only a stop or a crash does not.
-    assert second.summary().paused == "human" and len(launcher.sent) == before
+    assert second.org_load.summary().paused == "human" and len(launcher.sent) == before
     await second.org_run.resume()
-    await second.settled()
+    await second.work_queue.settled()
     assert "Carry on" in launcher.messages_to(ic(second))[-1]
 
     launcher.report(str(ic(second)), ConversationExecutionStatus.RUNNING)
@@ -618,7 +622,7 @@ async def test_an_org_set_to_resume_on_start_takes_its_work_up_unasked(
     launcher.known[UUID(str(ic(second)))] = ConversationExecutionStatus.PAUSED
     third = await again(repo, launcher)
 
-    assert third.summary().paused is None
+    assert third.org_load.summary().paused is None
     assert launcher.resumed[-1] == (UUID(str(ic(third))), None)
     await third.aclose()
 
@@ -635,11 +639,11 @@ async def test_a_session_stays_when_the_org_no_longer_has_its_team(
     at_web = await first.session_lifecycle.open_session(
         OpenSessionRequest(text="Restyle it", node_id="apps.web")
     )
-    await first.settled()
+    await first.work_queue.settled()
     await first.org_run.pause()
     first.message_delivery.notify(at_api.conversation_id, "Rename the endpoint")
     first.message_delivery.notify(at_web.conversation_id, "Carry on")
-    await first.settled()
+    await first.work_queue.settled()
     await first.aclose()
     # The tree moves under the run state, as a pull does.
     board, pulled = GitCodingEnvironment().org_tree(repo), OrgStore(shipped_type)
@@ -653,14 +657,14 @@ async def test_a_session_stays_when_the_org_no_longer_has_its_team(
 
     # A session is not dropped with its team: what becomes of the team is
     # decided when the session's work is reviewed.
-    assert second.org.team("services.api") is None
-    open_now = [session.id for session in second.org.sessions()]
+    assert second.org_load.org.team("services.api") is None
+    open_now = [session.id for session in second.org_load.org.sessions()]
     assert at_api.session.id in open_now and at_web.session.id in open_now
     assert [item for item in left.items if item.kind == "dropped"] == []
     assert left.messages_held == 2
 
     await second.org_run.resume()
-    await second.settled()
+    await second.work_queue.settled()
 
     assert "Rename the endpoint" in launcher.messages_to(at_api.conversation_id)[-1]
     assert "Carry on" in launcher.messages_to(at_web.conversation_id)[-1]
@@ -674,7 +678,7 @@ async def test_a_sessions_run_state_is_kept_when_its_team_changed_in_the_org(
     first = await started(repo, launcher)
     await first.org_run.pause()
     first.message_delivery.notify(ic(first), "Carry on")
-    await first.settled()
+    await first.work_queue.settled()
     await first.aclose()
     board, pulled = GitCodingEnvironment().org_tree(repo), OrgStore(shipped_type)
     load_org(board, pulled)
@@ -684,7 +688,7 @@ async def test_a_sessions_run_state_is_kept_when_its_team_changed_in_the_org(
 
     second = await again(repo, launcher)
     resumed = await second.org_run.resume()
-    await second.settled()
+    await second.work_queue.settled()
 
     # What a session has at a team is this machine's, whatever the org's
     # team became elsewhere.
@@ -700,7 +704,7 @@ async def test_run_state_written_by_another_server_is_not_used(
     first = await started(repo, launcher)
     await first.org_run.pause()
     first.message_delivery.notify(ic(first), "Carry on")
-    await first.settled()
+    await first.work_queue.settled()
     await first.aclose()
     before = len(launcher.sent)
 
@@ -710,12 +714,12 @@ async def test_run_state_written_by_another_server_is_not_used(
         repo, save_delay=0, remembered=repo.parent / "elsewhere" / "director.json"
     )
     await other.start(launcher)
-    assert other.org.root_id == "root"
-    await other.settled()
+    assert other.org_load.org.root_id == "root"
+    await other.work_queue.settled()
 
-    assert other.summary().paused is None
+    assert other.org_load.summary().paused is None
     await other.org_run.resume()
-    await other.settled()
+    await other.work_queue.settled()
     assert len(launcher.sent) == before
     await other.aclose()
 
@@ -791,9 +795,9 @@ def test_run_state_of_a_newer_director_is_refused(tmp_path: Path):
 
 def test_run_state_stays_out_of_the_repository(repo: Path):
     service = DirectorService(repo)
-    service.org.replace_all([make_team("root", None)])
+    service.org_load.org.replace_all([make_team("root", None)])
 
-    assert service.summary().paused is None
+    assert service.org_load.summary().paused is None
     assert run_git(repo, "status", "--porcelain") == ""
     assert (repo / ".git" / "director" / "state.db").is_file()
 
@@ -830,10 +834,10 @@ async def test_another_servers_run_state_brings_back_none_of_its_sessions(
     )
 
     await other.start(launcher)
-    await other.settled()
+    await other.work_queue.settled()
 
     # Their drafts, reports and place in the order are not used either.
-    assert other.org.sessions() == []
+    assert other.org_load.org.sessions() == []
     await other.aclose()
 
 
@@ -867,7 +871,7 @@ async def test_resuming_waits_for_a_pause_that_is_still_stopping_agents(
     waits = not resumed.done()
     stopped.set()
     await resumed
-    await service.settled()
+    await service.work_queue.settled()
 
     # Or the pause would stop the agent after it was set going again.
     assert waits
@@ -924,10 +928,10 @@ async def test_two_resumes_at_once_run_an_agent_again_once(
     assert root_ic is not None
     launcher.report(root_ic, ConversationExecutionStatus.RUNNING)
     await service.org_run.pause()
-    await service.settled()
+    await service.work_queue.settled()
 
     await asyncio.gather(service.org_run.resume(), service.org_run.resume())
-    await service.settled()
+    await service.work_queue.settled()
 
     assert launcher.resumed == [(UUID(root_ic), None)]
     await service.aclose()

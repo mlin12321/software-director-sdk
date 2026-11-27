@@ -63,8 +63,8 @@ def uses(launcher: FakeLauncher, conversation: str | None, *used: float) -> None
 async def counted(service: DirectorService) -> Session:
     """The director adds up what was used, as its timer does."""
     await service.session_limits.count_use()
-    await service.settled()
-    [session] = service.org.sessions()
+    await service.work_queue.settled()
+    [session] = service.org_load.org.sessions()
     return session
 
 
@@ -128,12 +128,12 @@ async def test_a_session_at_its_limit_rests_until_the_human_lets_it_go_on(
     await counted(service)
     assert len(node(service, "root").escalations) == 1
 
-    service.answer_escalation(top.id, LIMIT_WAITS, "Go on, but finish the API.")
-    await service.settled()
+    service.org_run.answer_escalation(top.id, LIMIT_WAITS, "Go on, but finish the API.")
+    await service.work_queue.settled()
 
     top = node(service, "root")
     assert top.stopped is None and top.escalations == []
-    [session] = service.org.sessions()
+    [session] = service.org_load.org.sessions()
     assert session.cost_allowance == 4.25
     assert (UUID(api), None) in launcher.resumed
     assert (
@@ -177,7 +177,7 @@ async def test_a_closed_sessions_count_goes_with_it(
     assert session.id in service.org_state.run_state().marked(USE)
 
     service.session_lifecycle.close_session(session.id)
-    await service.settled()
+    await service.work_queue.settled()
 
     assert service.org_state.run_state().marked(USE) == {}
 
@@ -196,9 +196,9 @@ async def test_no_more_sessions_are_opened_than_the_settings_allow(
     opened = await service.session_lifecycle.open_session(
         OpenSessionRequest(text="Add refunds", node_id="root")
     )
-    await service.settled()
+    await service.work_queue.settled()
 
-    assert len(service.org.sessions()) == 2
+    assert len(service.org_load.org.sessions()) == 2
     assert opened.session.cost_allowance == 0
 
 
@@ -483,12 +483,12 @@ async def test_a_session_set_going_while_the_org_is_paused_goes_on_when_it_resum
     top = node(service, "root")
     assert top.stopped is not None and top.stopped.running == [api]
     await service.org_run.pause()
-    await service.settled()
+    await service.work_queue.settled()
 
-    service.answer_escalation(top.id, LIMIT_WAITS, "Go on.")
-    await service.settled()
+    service.org_run.answer_escalation(top.id, LIMIT_WAITS, "Go on.")
+    await service.work_queue.settled()
     await service.org_run.resume()
-    await service.settled()
+    await service.work_queue.settled()
 
     # The agent that was cut off in its turn runs again.
     assert (UUID(api), None) in launcher.resumed

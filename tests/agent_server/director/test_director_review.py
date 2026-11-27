@@ -80,14 +80,14 @@ async def service(repo: Path, launcher: FakeLauncher) -> AsyncIterator[DirectorS
         find_review_instructions=lambda: INSTRUCTIONS,
     )
     await service.start(launcher)
-    await service.create_org(
+    await service.session_lifecycle.create_org(
         CreateOrgRequest(
             title="Checkout",
             task="Build the checkout flow",
             conversation=root_conversation(repo),
         )
     )
-    await service.settled()
+    await service.work_queue.settled()
     yield service
     await service.aclose()
 
@@ -166,18 +166,18 @@ async def test_review_instructions_are_never_fetched_on_the_event_loop(
     )
     await service.start(launcher)
     try:
-        await service.create_org(
+        await service.session_lifecycle.create_org(
             CreateOrgRequest(
                 title="Checkout",
                 task="Build the checkout flow",
                 conversation=root_conversation(repo),
             )
         )
-        await service.settled()
+        await service.work_queue.settled()
         await split_root(service)
         commit(repo, "services/api/app.py", "print('hi')\n")
         await use(service, ic(service, "services.api"), SubmitReviewTool, DONE)
-        await service.settled()
+        await service.work_queue.settled()
 
         assert INSTRUCTIONS in launcher.messages_to(ic(service))[-1]
         assert fetched_on and loop_thread not in fetched_on
@@ -191,12 +191,12 @@ async def test_without_review_instructions_the_team_is_only_asked_for_its_accoun
     service = DirectorService(repo, save_delay=0, run_limit_retry=0)
     await service.start(launcher)
     try:
-        await service.create_org(
+        await service.session_lifecycle.create_org(
             CreateOrgRequest(
                 title="Checkout", task="Build", conversation=root_conversation(repo)
             )
         )
-        await service.settled()
+        await service.work_queue.settled()
         await split_root(service)
 
         await api_submits(service, repo)
@@ -340,7 +340,7 @@ async def test_a_blocked_sub_team_is_not_waited_for(
     await api_submits(service, repo)
 
     launcher.report(web, ConversationExecutionStatus.ERROR)
-    await service.settled()
+    await service.work_queue.settled()
 
     assert node(service, "apps.web").status == "blocked"
     [request] = requests(service, launcher)
@@ -390,7 +390,7 @@ async def test_reviews_that_waited_through_a_pause_go_out_after_it(
     assert requests(service, launcher) == []
 
     await service.org_run.resume()
-    await service.settled()
+    await service.work_queue.settled()
 
     asked = "\n".join(requests(service, launcher))
     assert asked.count("Team 'API' (id") == 1 and asked.count("Team 'Web' (id") == 1
@@ -509,7 +509,7 @@ async def test_work_that_does_not_merge_is_merged_by_its_reviewer(
     await use(service, ic(service), ReviewTeamTool, accept("apps.web"))
 
     # The team is not sent back: the merge is laid out for its reviewer.
-    merge = service.merge_checkout(web.id)
+    merge = service.confinement.merge_checkout(web.id)
     assert merge is not None and merge.files == [PAGE]
     review = node(service, "apps.web").review
     assert review is not None and review.state == "pending"
@@ -533,7 +533,7 @@ async def test_work_that_does_not_merge_is_merged_by_its_reviewer(
         event = cast(
             ActionEvent, SimpleNamespace(tool_name="file_editor", action=action)
         )
-        return service.guard_action(UUID(conversation or ""), event)
+        return service.confinement.guard_action(UUID(conversation or ""), event)
 
     assert writing(ic(service), laid_out / PAGE) is None
     refused = writing(ic(service), laid_out / "apps/web/cart.tsx")
@@ -560,7 +560,7 @@ async def test_work_that_does_not_merge_is_merged_by_its_reviewer(
     assert run_git(repo, "status", "--porcelain") == ""
     parents = run_git(repo, "log", "-1", "--format=%P").split()
     assert parents == [head.strip(), run_git(worktree, "rev-parse", "HEAD").strip()]
-    assert service.merge_checkout(web.id) is None and not laid_out.exists()
+    assert service.confinement.merge_checkout(web.id) is None and not laid_out.exists()
     said = [
         text
         for text in launcher.messages_to(ic(service, "apps.web"))
@@ -579,7 +579,7 @@ async def test_a_merge_laid_out_goes_with_work_that_is_sent_back(
     web = node(service, "apps.web")
     await use(service, ic(service, "apps.web"), SubmitReviewTool, DONE)
     await use(service, ic(service), ReviewTeamTool, accept("apps.web"))
-    merge = service.merge_checkout(web.id)
+    merge = service.confinement.merge_checkout(web.id)
     assert merge is not None
 
     await use(
@@ -589,7 +589,7 @@ async def test_a_merge_laid_out_goes_with_work_that_is_sent_back(
         ReviewTeamAction(team="apps.web", decision="reject", findings=[FINDING]),
     )
 
-    assert service.merge_checkout(web.id) is None
+    assert service.confinement.merge_checkout(web.id) is None
     assert not Path(merge.where).exists()
     assert merge.where not in run_git(repo, "worktree", "list")
 
@@ -678,7 +678,7 @@ async def test_a_top_team_that_changed_nothing_is_accepted_when_all_below_is(
     assert root.review.passed_up and root.status == "done"
     # Each change was reviewed once already: nobody is asked again.
     assert division_lead_ic(service) is None
-    assert [team.id for team in service.org.teams()] == [
+    assert [team.id for team in service.org_load.org.teams()] == [
         "root",
         "services.api",
         "apps.web",
@@ -707,7 +707,7 @@ async def test_a_file_in_the_folder_of_a_team_never_given_work_is_not_the_ics_ow
     await use(service, manager(service, "services.api"), ApproveTeamsTool, APPROVE)
     # Only one of the two is given work.
     service.team_messaging.tell_writer(node(service, SCHEMA).id, "Begin.")
-    await service.settled()
+    await service.work_queue.settled()
     # What a run of the tests leaves in the other's folder.
     (repo / "services" / "api" / "jobs").mkdir(parents=True)
     (repo / "services" / "api" / "jobs" / "cache.pyc").write_text("")
@@ -846,7 +846,7 @@ async def test_work_accepted_twice_before_it_is_carried_out_goes_up_once(
 
     await asyncio.to_thread(executor, accept(SCHEMA))
     again = await asyncio.to_thread(executor, accept(SCHEMA))
-    await service.settled()
+    await service.work_queue.settled()
 
     assert again.is_error and "being accepted already" in again.text
     went_up = [
@@ -864,7 +864,7 @@ async def test_work_goes_up_only_when_every_sub_team_below_is_finished(
     web = ic(service, "apps.web")
     assert web is not None
     launcher.report(web, ConversationExecutionStatus.RUNNING)
-    await service.settled()
+    await service.work_queue.settled()
 
     # One sub-team still works.
     working = await use(service, ic(service), SubmitReviewTool, DONE)
@@ -882,7 +882,7 @@ async def test_work_goes_up_only_when_every_sub_team_below_is_finished(
     launcher.report(
         str(ic(service, "services.api")), ConversationExecutionStatus.FINISHED
     )
-    await service.settled()
+    await service.work_queue.settled()
     sent_back = await use(service, ic(service), SubmitReviewTool, DONE)
     assert sent_back.is_error and "was sent back" in sent_back.text
 
@@ -894,7 +894,7 @@ async def test_work_goes_up_only_when_every_sub_team_below_is_finished(
     launcher.report(
         str(ic(service, "services.api")), ConversationExecutionStatus.RUNNING
     )
-    await service.settled()
+    await service.work_queue.settled()
     done = await use(service, ic(service), SubmitReviewTool, DONE)
     assert not done.is_error, done.text
 
@@ -906,7 +906,7 @@ async def test_a_blocked_sub_team_does_not_keep_work_from_going_up(
     web = ic(service, "apps.web")
     assert web is not None
     launcher.report(web, ConversationExecutionStatus.ERROR)
-    await service.settled()
+    await service.work_queue.settled()
     assert node(service, "apps.web").status == "blocked"
 
     done = await use(service, ic(service), SubmitReviewTool, DONE)
@@ -970,7 +970,7 @@ async def test_work_is_not_accepted_once_part_of_it_is_no_longer_in_its_checkout
     run_git(repo, "checkout", "-q", "-b", "stray", "HEAD~2")
 
     await use(service, ic(service), ReviewTeamTool, accept(API))
-    await service.settled()
+    await service.work_queue.settled()
 
     review = node(service, API).review
     assert review is not None and review.state == "pending"

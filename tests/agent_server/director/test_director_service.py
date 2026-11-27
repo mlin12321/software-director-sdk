@@ -79,10 +79,10 @@ def org_request(repo: Path, **conversation) -> CreateOrgRequest:
 async def test_starting_an_org_runs_a_root_team_briefed_with_the_task(
     service: DirectorService, launcher: FakeLauncher, repo: Path
 ):
-    opened = await service.create_org(org_request(repo))
-    await service.settled()
+    opened = await service.session_lifecycle.create_org(org_request(repo))
+    await service.work_queue.settled()
 
-    root = service.org.team("root")
+    root = service.org_load.org.team("root")
     assert root is not None
     assert (root.parent_id, root.title) == (None, "Checkout")
     assert root.boundary.path == ""
@@ -123,7 +123,7 @@ async def test_starting_an_org_runs_a_root_team_briefed_with_the_task(
 async def test_what_the_caller_appends_to_the_system_prompt_is_left_as_it_is(
     service: DirectorService, launcher: FakeLauncher, repo: Path
 ):
-    await service.create_org(
+    await service.session_lifecycle.create_org(
         org_request(
             repo,
             agent_launch_additions=AgentLaunchAdditions(
@@ -137,7 +137,7 @@ async def test_what_the_caller_appends_to_the_system_prompt_is_left_as_it_is(
     # The org adds nothing to an agent's system prompt: how the org works
     # is said in the briefing.
     assert suffix == "Prefer small commits."
-    await service.settled()
+    await service.work_queue.settled()
     briefing = launcher.messages_to(str(launcher.root.conversation_id))[0]
     assert ORG_PROTOCOL in briefing
 
@@ -157,8 +157,8 @@ def test_every_tool_a_shipped_type_gives_a_member_can_be_started_and_called():
 async def test_a_manager_derived_from_its_ic_gets_its_own_tools_in_their_place(
     service: DirectorService, launcher: FakeLauncher, repo: Path
 ):
-    await service.create_org(org_request(repo))
-    await service.settled()
+    await service.session_lifecycle.create_org(org_request(repo))
+    await service.work_queue.settled()
     await woken_manager(service)
     [manager_start] = launcher.derived
     assert manager_start.adapt_agent is not None
@@ -190,8 +190,8 @@ def test_an_ic_is_not_told_what_only_a_manager_does():
 async def test_a_team_started_again_is_briefed_with_what_it_reported(
     service: DirectorService, launcher: FakeLauncher, repo: Path
 ):
-    await service.create_org(org_request(repo))
-    await service.settled()
+    await service.session_lifecycle.create_org(org_request(repo))
+    await service.work_queue.settled()
     await woken_manager(service)
     root = node(service, "root")
     report(service, root, "manager", "The API team needs a schema first.")
@@ -205,10 +205,10 @@ async def test_a_team_started_again_is_briefed_with_what_it_reported(
 
 
 async def test_a_director_has_one_org(service: DirectorService, repo: Path):
-    await service.create_org(org_request(repo))
+    await service.session_lifecycle.create_org(org_request(repo))
 
     with pytest.raises(Conflict):
-        await service.create_org(org_request(repo))
+        await service.session_lifecycle.create_org(org_request(repo))
 
 
 def other_repository(tmp_path: Path) -> Path:
@@ -229,16 +229,16 @@ async def test_an_org_lives_in_the_repository_its_first_conversation_is_opened_i
     remembered = tmp_path / "state" / "director.json"
     first = DirectorService(repo, save_delay=0, remembered=remembered)
     await first.start(launcher)
-    before = first.summary().repo_path
-    routed = await first.route_message(
+    before = first.org_load.summary().repo_path
+    routed = await first.session_lifecycle.route_message(
         RouteMessageRequest(
             text="Build it", conversation=root_conversation(other / "src")
         )
     )
-    await first.settled()
+    await first.work_queue.settled()
     await first.aclose()
 
-    assert (before, first.summary().repo_path) == (str(repo), str(other))
+    assert (before, first.org_load.summary().repo_path) == (str(repo), str(other))
     assert routed.started_org
     assert run_git(other, "rev-parse", ORG_REF).strip()
     with pytest.raises(subprocess.CalledProcessError):
@@ -248,14 +248,14 @@ async def test_an_org_lives_in_the_repository_its_first_conversation_is_opened_i
     second = DirectorService(repo, save_delay=0, remembered=remembered)
     await second.start(launcher)
     try:
-        again = await second.route_message(
+        again = await second.session_lifecycle.route_message(
             RouteMessageRequest(text="And tests", path=str(other / "src"))
         )
-        await second.settled()
+        await second.work_queue.settled()
     finally:
         await second.aclose()
 
-    assert second.summary().repo_path == str(other)
+    assert second.org_load.summary().repo_path == str(other)
     assert again.conversation_id != routed.conversation_id
     assert "And tests\n\n(The human sent this from src.)" in (launcher.derived[-1].task)
 
@@ -266,19 +266,19 @@ async def test_a_first_message_takes_up_the_org_saved_where_it_is_sent_from(
     other = other_repository(tmp_path)
     there = DirectorService(other, save_delay=0)
     await there.start(launcher)
-    opened = await there.create_org(org_request(other))
-    await there.settled()
+    opened = await there.session_lifecycle.create_org(org_request(other))
+    await there.work_queue.settled()
     await there.aclose()
 
     service = DirectorService(repo, save_delay=0)
     await service.start(launcher)
     try:
-        routed = await service.route_message(
+        routed = await service.session_lifecycle.route_message(
             RouteMessageRequest(
                 text="Add refunds", conversation=root_conversation(other)
             )
         )
-        await service.settled()
+        await service.work_queue.settled()
     finally:
         await service.aclose()
 
@@ -297,18 +297,18 @@ async def test_an_org_started_where_one_is_saved_takes_that_org_up(
     other = other_repository(tmp_path)
     there = DirectorService(other, save_delay=0)
     await there.start(launcher)
-    first = await there.create_org(org_request(other))
-    there.org.update_team("root", title="Shop")
-    await there.settled()
+    first = await there.session_lifecycle.create_org(org_request(other))
+    there.org_load.org.update_team("root", title="Shop")
+    await there.work_queue.settled()
     await there.aclose()
 
     service = DirectorService(repo, save_delay=0)
     await service.start(launcher)
     try:
-        opened = await service.create_org(org_request(other))
-        await service.settled()
-        root = service.org.team("root")
-        sessions = [session.id for session in service.org.sessions()]
+        opened = await service.session_lifecycle.create_org(org_request(other))
+        await service.work_queue.settled()
+        root = service.org_load.org.team("root")
+        sessions = [session.id for session in service.org_load.org.sessions()]
     finally:
         await service.aclose()
 
@@ -324,15 +324,17 @@ async def test_an_org_is_not_started_outside_a_git_repository(
     elsewhere.mkdir()
 
     with pytest.raises(Unavailable, match="elsewhere"):
-        await service.create_org(org_request(elsewhere))
+        await service.session_lifecycle.create_org(org_request(elsewhere))
 
-    assert service.org.root_id is None
-    assert service.summary().repo_path == str(repo)
+    assert service.org_load.org.root_id is None
+    assert service.org_load.summary().repo_path == str(repo)
 
 
 async def test_an_org_cannot_run_in_docker(service: DirectorService, repo: Path):
     with pytest.raises(Unprocessable):
-        await service.create_org(org_request(repo, conversation_runtime="docker"))
+        await service.session_lifecycle.create_org(
+            org_request(repo, conversation_runtime="docker")
+        )
 
 
 async def test_an_org_needs_a_git_repository(tmp_path: Path, launcher: FakeLauncher):
@@ -340,14 +342,14 @@ async def test_an_org_needs_a_git_repository(tmp_path: Path, launcher: FakeLaunc
     await service.start(launcher)
     try:
         with pytest.raises(Unavailable):
-            await service.create_org(org_request(tmp_path))
+            await service.session_lifecycle.create_org(org_request(tmp_path))
     finally:
         await service.aclose()
 
 
 async def test_an_org_cannot_be_started_before_the_director_runs(repo: Path):
     with pytest.raises(Unavailable):
-        await DirectorService(repo).create_org(org_request(repo))
+        await DirectorService(repo).session_lifecycle.create_org(org_request(repo))
 
 
 async def test_no_org_is_left_when_its_root_agent_cannot_start(
@@ -356,17 +358,17 @@ async def test_no_org_is_left_when_its_root_agent_cannot_start(
     launcher.root_error = Unprocessable("An org cannot be led by an ACP agent")
 
     with pytest.raises(Unprocessable):
-        await service.create_org(org_request(repo))
+        await service.session_lifecycle.create_org(org_request(repo))
 
-    assert service.org.root_id is None
-    assert service.summary().node_count == 0
+    assert service.org_load.org.root_id is None
+    assert service.org_load.summary().node_count == 0
 
 
 async def test_a_team_works_while_an_agent_runs_and_is_blocked_by_a_failed_one(
     service: DirectorService, launcher: FakeLauncher, repo: Path
 ):
-    opened = await service.create_org(org_request(repo))
-    await service.settled()
+    opened = await service.session_lifecycle.create_org(org_request(repo))
+    await service.work_queue.settled()
     ic = opened.conversation_id
 
     def state() -> tuple[str, list[str]]:
@@ -386,8 +388,8 @@ async def test_the_manager_starts_once_the_server_has_room(
 ):
     launcher.full_for = 2
 
-    await service.create_org(org_request(repo))
-    await service.settled()
+    await service.session_lifecycle.create_org(org_request(repo))
+    await service.work_queue.settled()
     manager = await woken_manager(service)
 
     assert [str(start.conversation_id) for start in launcher.derived] == [manager]
@@ -398,8 +400,8 @@ async def test_the_org_is_saved_and_comes_back_with_its_conversations(
 ):
     first = DirectorService(repo, save_delay=0)
     await first.start(launcher)
-    opened = await first.create_org(org_request(repo))
-    await first.settled()
+    opened = await first.session_lifecycle.create_org(org_request(repo))
+    await first.work_queue.settled()
     manager = await woken_manager(first)
     await first.aclose()
     ic = opened.conversation_id
@@ -413,7 +415,7 @@ async def test_the_org_is_saved_and_comes_back_with_its_conversations(
     await second.start(launcher)
     try:
         loaded = node(second, "root")
-        await second.settled()
+        await second.work_queue.settled()
         resynced = node(second, "root")
     finally:
         await second.aclose()
@@ -427,17 +429,17 @@ async def test_the_org_is_saved_and_comes_back_with_its_conversations(
 async def test_the_humans_answer_reaches_the_team_that_raised_the_escalation(
     service: DirectorService, launcher: FakeLauncher, repo: Path
 ):
-    opened = await service.create_org(org_request(repo))
+    opened = await service.session_lifecycle.create_org(org_request(repo))
     top = opened.session.teams[0].id
-    service.org.raise_escalation(
+    service.org_load.org.raise_escalation(
         top, "jwt", kind="design_decision", title="JWT or opaque tokens?"
     )
 
-    answered = service.answer_escalation(top, "jwt", "Opaque tokens.")
-    await service.settled()
+    answered = service.org_run.answer_escalation(top, "jwt", "Opaque tokens.")
+    await service.work_queue.settled()
 
     assert answered.escalations == []
-    assert service.org.escalations() == []
+    assert service.org_load.org.escalations() == []
     answer = launcher.messages_to(opened.conversation_id)[-1]
     assert "JWT or opaque tokens?" in answer and "Opaque tokens." in answer
 
@@ -445,18 +447,18 @@ async def test_the_humans_answer_reaches_the_team_that_raised_the_escalation(
 async def test_an_escalation_a_team_still_holds_cannot_be_answered_by_the_human(
     service: DirectorService, repo: Path
 ):
-    await service.create_org(org_request(repo))
-    await service.settled()
+    await service.session_lifecycle.create_org(org_request(repo))
+    await service.work_queue.settled()
     await split_root(service, API)
     api = node(service, "services.api").id
-    service.org.raise_escalation(
+    service.org_load.org.raise_escalation(
         api, "schema", kind="design_decision", title="Which schema?"
     )
 
     with pytest.raises(Conflict):
-        service.answer_escalation(api, "schema", "v2")
+        service.org_run.answer_escalation(api, "schema", "v2")
     with pytest.raises(NotFound):
-        service.answer_escalation(api, "nothing", "v2")
+        service.org_run.answer_escalation(api, "nothing", "v2")
 
     assert len(node(service, api).escalations) == 1
 
@@ -466,7 +468,7 @@ async def woken_manager(service: DirectorService, node_id: str = "root") -> str:
     service.team_messaging.tell_manager(
         node(service, node_id).id, "Look in on your team."
     )
-    await service.settled()
+    await service.work_queue.settled()
     manager = agent_conversation(node(service, node_id), "manager")
     assert manager is not None
     return manager
@@ -485,7 +487,7 @@ async def split_root(service: DirectorService, *children: SplitChild) -> None:
         service, caller("ic"), as_proposed(list(children)), [], ""
     )
     agent_actions.approve_teams(service, caller("manager"))
-    await service.settled()
+    await service.work_queue.settled()
     await tasked(service)
 
 
@@ -499,7 +501,7 @@ async def test_an_org_without_a_title_is_named_by_a_model_from_its_task(
     launcher.summary = TeamSummary("Checkout Flow", "Builds the shop's checkout.")
     request = org_request(repo).model_copy(update={"title": None})
 
-    opened = await service.create_org(request)
+    opened = await service.session_lifecycle.create_org(request)
 
     top = opened.session.teams[0]
     assert (top.title, top.headline) == (
@@ -508,10 +510,10 @@ async def test_an_org_without_a_title_is_named_by_a_model_from_its_task(
     )
     assert launcher.root_title == "Build the checkout flow (IC)"
 
-    await service.settled()
+    await service.work_queue.settled()
 
     named = ("Checkout Flow", "Builds the shop's checkout.")
-    root = service.org.team("root")
+    root = service.org_load.org.team("root")
     assert root is not None and (root.title, root.headline) == named
     top = node(service, "root")
     assert (top.title, top.headline) == named
@@ -530,8 +532,10 @@ async def test_a_model_that_takes_too_long_does_not_hold_the_org_up(
     launcher.summary_delay = 60
     await service.start(launcher)
 
-    await service.create_org(org_request(repo).model_copy(update={"title": None}))
-    await service.settled()
+    await service.session_lifecycle.create_org(
+        org_request(repo).model_copy(update={"title": None})
+    )
+    await service.work_queue.settled()
     root = node(service, "root")
     await service.aclose()
 
@@ -544,8 +548,8 @@ async def test_a_given_title_is_kept_and_only_the_headline_is_written(
 ):
     launcher.summary = TeamSummary("Checkout Flow", "Builds the shop's checkout.")
 
-    await service.create_org(org_request(repo))
-    await service.settled()
+    await service.session_lifecycle.create_org(org_request(repo))
+    await service.work_queue.settled()
 
     root = node(service, "root")
     assert (root.title, root.headline) == ("Checkout", "Builds the shop's checkout.")
@@ -557,8 +561,10 @@ async def test_a_given_title_is_kept_and_only_the_headline_is_written(
 async def test_a_team_keeps_its_first_name_when_the_model_gives_nothing(
     service: DirectorService, repo: Path
 ):
-    await service.create_org(org_request(repo).model_copy(update={"title": None}))
-    await service.settled()
+    await service.session_lifecycle.create_org(
+        org_request(repo).model_copy(update={"title": None})
+    )
+    await service.work_queue.settled()
 
     root = node(service, "root")
     assert (root.title, root.headline) == (
@@ -570,8 +576,8 @@ async def test_a_team_keeps_its_first_name_when_the_model_gives_nothing(
 async def test_every_sub_team_gets_a_headline_and_keeps_the_title_its_ic_gave(
     service: DirectorService, launcher: FakeLauncher, repo: Path
 ):
-    await service.create_org(org_request(repo))
-    await service.settled()
+    await service.session_lifecycle.create_org(org_request(repo))
+    await service.work_queue.settled()
     launcher.summary = TeamSummary("Something Else", "Serves the checkout over HTTP.")
 
     await split_root(service, API, WEB)
@@ -584,12 +590,12 @@ async def test_every_sub_team_gets_a_headline_and_keeps_the_title_its_ic_gave(
 async def test_a_report_made_before_the_first_summary_is_not_overwritten_by_it(
     service: DirectorService, launcher: FakeLauncher, repo: Path
 ):
-    await service.create_org(org_request(repo))
-    await service.settled()
+    await service.session_lifecycle.create_org(org_request(repo))
+    await service.work_queue.settled()
     launcher.summary = TeamSummary("API", "Blocked on the session store.")
 
     def report_at_once(conversation_id: UUID) -> None:
-        found = service.org.find_by_conversation(str(conversation_id))
+        found = service.org_load.org.find_by_conversation(str(conversation_id))
         if found is not None and found[1] == "ic":
             service.team_summaries.refresh_headline(found[0].id, "it is blocked.")
 
@@ -605,14 +611,14 @@ async def test_a_report_made_before_the_first_summary_is_not_overwritten_by_it(
 async def test_a_report_rewrites_the_headline(
     service: DirectorService, launcher: FakeLauncher, repo: Path
 ):
-    await service.create_org(org_request(repo))
-    await service.settled()
+    await service.session_lifecycle.create_org(org_request(repo))
+    await service.work_queue.settled()
     launcher.summary = TeamSummary("Ignored", "Checkout is done; tax is left out.")
 
     service.team_summaries.refresh_headline(
         node(service, "root").id, "it is done. Tax is left out."
     )
-    await service.settled()
+    await service.work_queue.settled()
 
     assert node(service, "root").headline == "Checkout is done; tax is left out."
     assert launcher.summarized[-1][1] == (
@@ -624,8 +630,8 @@ async def test_a_report_rewrites_the_headline(
 async def test_a_file_tool_is_refused_a_write_outside_the_teams_boundary(
     service: DirectorService, repo: Path
 ):
-    await service.create_org(org_request(repo))
-    await service.settled()
+    await service.session_lifecycle.create_org(org_request(repo))
+    await service.work_queue.settled()
     await split_root(service, API, WEB)
     api_ic = agent_conversation(node(service, "services.api"), "ic")
 
@@ -648,8 +654,8 @@ async def test_a_file_tool_neither_reads_nor_writes_what_the_director_keeps(
     kept = tmp_path / "director.json"
     kept.write_text("{}")
     service.remembered.path = kept
-    await service.create_org(org_request(repo))
-    await service.settled()
+    await service.session_lifecycle.create_org(org_request(repo))
+    await service.work_queue.settled()
     root_ic = agent_conversation(node(service, "root"), "ic")
     view = FileEditorAction(command="view", path=str(kept))
 
@@ -691,8 +697,8 @@ async def test_a_git_directory_outside_its_checkout_is_not_a_file_tools_to_write
 ):
     service = DirectorService(submodule, save_delay=0)
     await service.start(launcher)
-    await service.create_org(org_request(submodule))
-    await service.settled()
+    await service.session_lifecycle.create_org(org_request(submodule))
+    await service.work_queue.settled()
     root_ic = agent_conversation(node(service, "root"), "ic")
     git_dir = common_dir(submodule)
     assert not git_dir.is_relative_to(submodule)
@@ -708,8 +714,8 @@ async def test_a_git_directory_outside_its_checkout_is_not_a_file_tools_to_write
 async def test_a_link_out_of_the_boundary_does_not_carry_a_write_out(
     service: DirectorService, repo: Path
 ):
-    await service.create_org(org_request(repo))
-    await service.settled()
+    await service.session_lifecycle.create_org(org_request(repo))
+    await service.work_queue.settled()
     await split_root(service, API)
     (repo / "services" / "api").mkdir(parents=True)
     (repo / "services" / "api" / "up").symlink_to(repo)
@@ -728,8 +734,8 @@ async def test_a_link_out_of_the_boundary_does_not_carry_a_write_out(
 async def test_reading_and_tools_that_name_no_file_are_never_refused(
     service: DirectorService, repo: Path
 ):
-    await service.create_org(org_request(repo))
-    await service.settled()
+    await service.session_lifecycle.create_org(org_request(repo))
+    await service.work_queue.settled()
     await split_root(service, API)
     api_ic = agent_conversation(node(service, "services.api"), "ic")
 
@@ -742,8 +748,8 @@ async def test_reading_and_tools_that_name_no_file_are_never_refused(
 async def test_an_ic_is_refused_what_it_handed_to_a_sub_team_and_a_manager_all(
     service: DirectorService, repo: Path
 ):
-    await service.create_org(org_request(repo))
-    await service.settled()
+    await service.session_lifecycle.create_org(org_request(repo))
+    await service.work_queue.settled()
     root = node(service, "root")
     root_ic = agent_conversation(root, "ic")
     inside_api = create(repo / "services" / "api" / "pay.py")
@@ -764,8 +770,8 @@ async def test_an_ic_is_refused_what_it_handed_to_a_sub_team_and_a_manager_all(
 async def test_every_file_of_a_patch_must_be_in_the_boundary(
     service: DirectorService, repo: Path
 ):
-    await service.create_org(org_request(repo))
-    await service.settled()
+    await service.session_lifecycle.create_org(org_request(repo))
+    await service.work_queue.settled()
     await split_root(service, API)
     api_ic = agent_conversation(node(service, "services.api"), "ic")
 
@@ -783,8 +789,8 @@ async def test_every_file_of_a_patch_must_be_in_the_boundary(
 async def test_files_outside_the_org_and_other_conversations_are_left_alone(
     service: DirectorService, repo: Path, tmp_path: Path
 ):
-    await service.create_org(org_request(repo))
-    await service.settled()
+    await service.session_lifecycle.create_org(org_request(repo))
+    await service.work_queue.settled()
     await split_root(service, API)
     api_ic = agent_conversation(node(service, "services.api"), "ic")
 
@@ -802,8 +808,8 @@ async def test_a_checkout_of_another_team_is_closed(
         repo, save_delay=0, run_limit_retry=0, worktree_root=worktrees
     )
     await service.start(launcher)
-    await service.create_org(org_request(repo))
-    await service.settled()
+    await service.session_lifecycle.create_org(org_request(repo))
+    await service.work_queue.settled()
     root_ic = agent_conversation(node(service, "root"), "ic")
 
     refused = attempt(
@@ -822,12 +828,12 @@ async def test_the_first_message_starts_the_org_when_there_is_none(
 ):
     launcher.summary = TeamSummary("Checkout Flow", "Builds the shop's checkout.")
 
-    routed = await service.route_message(
+    routed = await service.session_lifecycle.route_message(
         RouteMessageRequest(
             text="Build the checkout flow", conversation=root_conversation(repo)
         )
     )
-    await service.settled()
+    await service.work_queue.settled()
 
     root = node(service, "root")
     assert (routed.node_id, routed.started_org) == (root.id, True)
@@ -841,25 +847,27 @@ async def test_the_first_message_cannot_start_an_org_without_a_conversation(
     service: DirectorService,
 ):
     with pytest.raises(Unprocessable, match="no org yet"):
-        await service.route_message(RouteMessageRequest(text="Build it"))
+        await service.session_lifecycle.route_message(
+            RouteMessageRequest(text="Build it")
+        )
 
-    assert service.org.root_id is None
+    assert service.org_load.org.root_id is None
 
 
 async def test_a_message_opens_a_session_at_the_nearest_team_above_where_it_was_sent(
     service: DirectorService, launcher: FakeLauncher, repo: Path
 ):
-    await service.create_org(org_request(repo))
-    await service.settled()
+    await service.session_lifecycle.create_org(org_request(repo))
+    await service.work_queue.settled()
     await split_root(service, API, WEB)
     await landed(service)
-    first = {place.id for place in service.org.places()}
+    first = {place.id for place in service.org_load.org.places()}
 
     async def send(path: str | None) -> tuple[str, bool, str]:
-        routed = await service.route_message(
+        routed = await service.session_lifecycle.route_message(
             RouteMessageRequest(text="Add a refund endpoint", path=path)
         )
-        await service.settled()
+        await service.work_queue.settled()
         place = node(service, routed.node_id)
         assert place.id not in first and place.parent_id == division_lead_of(
             service, place.id
@@ -884,19 +892,21 @@ async def test_a_message_opens_a_session_at_the_nearest_team_above_where_it_was_
         sent_from.format("services/billing"),
     )
     assert (await send(None))[:2] == ("root", False)
-    assert len(service.org.sessions()) == 5
+    assert len(service.org_load.org.sessions()) == 5
 
 
 async def test_a_message_opens_a_session_at_a_team_whose_ic_in_another_is_gone(
     service: DirectorService, launcher: FakeLauncher, repo: Path
 ):
-    await service.create_org(org_request(repo))
-    await service.settled()
+    await service.session_lifecycle.create_org(org_request(repo))
+    await service.work_queue.settled()
     await split_root(service, API)
     await landed(service)
-    service.org.set_agent(node(service, "services.api").id, "ic", status=AGENT_LOST)
+    service.org_load.org.set_agent(
+        node(service, "services.api").id, "ic", status=AGENT_LOST
+    )
 
-    routed = await service.route_message(
+    routed = await service.session_lifecycle.route_message(
         RouteMessageRequest(text="Add a refund endpoint", path="services/api")
     )
 
@@ -908,11 +918,13 @@ async def test_a_message_opens_a_session_at_a_team_whose_ic_in_another_is_gone(
 async def test_a_message_from_outside_the_repository_is_refused(
     service: DirectorService, repo: Path, path: str
 ):
-    await service.create_org(org_request(repo))
-    await service.settled()
+    await service.session_lifecycle.create_org(org_request(repo))
+    await service.work_queue.settled()
 
     with pytest.raises(Unprocessable):
-        await service.route_message(RouteMessageRequest(text="Hello", path=path))
+        await service.session_lifecycle.route_message(
+            RouteMessageRequest(text="Hello", path=path)
+        )
 
 
 async def test_a_server_in_a_submodule_joins_the_org_of_the_repository_above(
@@ -920,8 +932,8 @@ async def test_a_server_in_a_submodule_joins_the_org_of_the_repository_above(
 ):
     above = DirectorService(repo, save_delay=0)
     await above.start(launcher)
-    await above.create_org(org_request(repo))
-    await above.settled()
+    await above.session_lifecycle.create_org(org_request(repo))
+    await above.work_queue.settled()
     await split_root(above, SplitChild(title="Libraries", path="libs", task="Libs"))
     await landed(above)
     await above.aclose()
@@ -929,15 +941,17 @@ async def test_a_server_in_a_submodule_joins_the_org_of_the_repository_above(
     service = DirectorService(submodule, save_delay=0)
     await service.start(launcher)
     try:
-        summary = service.summary()
-        from_here = await service.route_message(RouteMessageRequest(text="Refunds"))
-        by_path = await service.route_message(
+        summary = service.org_load.summary()
+        from_here = await service.session_lifecycle.route_message(
+            RouteMessageRequest(text="Refunds")
+        )
+        by_path = await service.session_lifecycle.route_message(
             RouteMessageRequest(text="Refunds", path=str(submodule / "src"))
         )
-        further_up = await service.route_message(
+        further_up = await service.session_lifecycle.route_message(
             RouteMessageRequest(text="Refunds", path="docs")
         )
-        await service.settled()
+        await service.work_queue.settled()
     finally:
         await service.aclose()
 
@@ -965,13 +979,16 @@ async def test_a_submodule_with_an_org_of_its_own_keeps_it(
     for directory in (submodule, repo):
         service = DirectorService(directory, save_delay=0)
         await service.start(launcher)
-        await service.create_org(org_request(directory))
-        await service.settled()
+        await service.session_lifecycle.create_org(org_request(directory))
+        await service.work_queue.settled()
         await service.aclose()
 
     service = DirectorService(submodule, save_delay=0)
 
-    assert (service.summary().repo_path, service.summary().directory) == (
+    assert (
+        service.org_load.summary().repo_path,
+        service.org_load.summary().directory,
+    ) == (
         str(submodule),
         "",
     )
@@ -984,17 +1001,17 @@ async def test_the_first_message_in_a_submodule_starts_its_org_there_when_none_i
     service = DirectorService(submodule, save_delay=0)
     await service.start(launcher)
     try:
-        routed = await service.route_message(
+        routed = await service.session_lifecycle.route_message(
             RouteMessageRequest(
                 text="Add refunds", conversation=root_conversation(submodule)
             )
         )
-        await service.settled()
+        await service.work_queue.settled()
     finally:
         await service.aclose()
 
     assert routed.started_org
-    assert service.summary().repo_path == str(submodule)
+    assert service.org_load.summary().repo_path == str(submodule)
     assert run_git(submodule, "rev-parse", ORG_REF).strip()
     with pytest.raises(subprocess.CalledProcessError):
         run_git(repo, "rev-parse", "--verify", "--quiet", ORG_REF)
@@ -1009,14 +1026,14 @@ async def test_a_chat_folder_without_its_own_git_does_not_use_the_repository_abo
     await service.start(launcher)
     try:
         with pytest.raises(Unavailable, match="app"):
-            await service.route_message(
+            await service.session_lifecycle.route_message(
                 RouteMessageRequest(
                     text="Add refunds",
                     conversation=root_conversation(nested),
                     at_workspace=True,
                 )
             )
-        assert service.org.root_id is None
+        assert service.org_load.org.root_id is None
     finally:
         await service.aclose()
 
@@ -1029,17 +1046,17 @@ async def test_a_message_from_a_subdirectory_still_starts_the_org_above(
     service = DirectorService(tmp_path, save_delay=0)
     await service.start(launcher)
     try:
-        routed = await service.route_message(
+        routed = await service.session_lifecycle.route_message(
             RouteMessageRequest(
                 text="Add refunds", conversation=root_conversation(nested)
             )
         )
-        await service.settled()
+        await service.work_queue.settled()
     finally:
         await service.aclose()
 
     assert routed.started_org
-    assert service.summary().repo_path == str(repo)
+    assert service.org_load.summary().repo_path == str(repo)
 
 
 async def test_a_chat_folder_that_is_its_own_repository_does_not_join_the_one_above(
@@ -1047,26 +1064,26 @@ async def test_a_chat_folder_that_is_its_own_repository_does_not_join_the_one_ab
 ):
     above = DirectorService(repo, save_delay=0)
     await above.start(launcher)
-    await above.create_org(org_request(repo))
-    await above.settled()
+    await above.session_lifecycle.create_org(org_request(repo))
+    await above.work_queue.settled()
     await above.aclose()
 
     service = DirectorService(tmp_path, save_delay=0)
     await service.start(launcher)
     try:
-        routed = await service.route_message(
+        routed = await service.session_lifecycle.route_message(
             RouteMessageRequest(
                 text="Add refunds",
                 conversation=root_conversation(submodule),
                 at_workspace=True,
             )
         )
-        await service.settled()
+        await service.work_queue.settled()
     finally:
         await service.aclose()
 
     assert routed.started_org
-    assert service.summary().repo_path == str(submodule)
+    assert service.org_load.summary().repo_path == str(submodule)
     assert run_git(submodule, "rev-parse", ORG_REF).strip()
     assert run_git(repo, "rev-parse", ORG_REF).strip()
 
@@ -1076,24 +1093,24 @@ async def test_a_message_from_a_submodule_still_joins_the_org_above(
 ):
     above = DirectorService(repo, save_delay=0)
     await above.start(launcher)
-    await above.create_org(org_request(repo))
-    await above.settled()
+    await above.session_lifecycle.create_org(org_request(repo))
+    await above.work_queue.settled()
     await above.aclose()
 
     service = DirectorService(tmp_path, save_delay=0)
     await service.start(launcher)
     try:
-        routed = await service.route_message(
+        routed = await service.session_lifecycle.route_message(
             RouteMessageRequest(
                 text="Add refunds", conversation=root_conversation(submodule)
             )
         )
-        await service.settled()
+        await service.work_queue.settled()
     finally:
         await service.aclose()
 
     assert not routed.started_org
-    assert service.summary().repo_path == str(repo)
+    assert service.org_load.summary().repo_path == str(repo)
 
 
 @pytest.fixture
@@ -1120,11 +1137,11 @@ def shell_of(params: object) -> str:
 async def test_every_agent_starts_its_terminal_in_a_shell_held_to_its_boundary(
     confining: DirectorService, launcher: FakeLauncher, repo: Path
 ):
-    assert confining.summary().boundary_enforcement == "sandbox"
+    assert confining.org_load.summary().boundary_enforcement == "sandbox"
     # Missing, the hooks folder would be left for an agent to make.
     shutil.rmtree(repo / ".git" / "hooks")
-    await confining.create_org(org_request(repo))
-    await confining.settled()
+    await confining.session_lifecycle.create_org(org_request(repo))
+    await confining.work_queue.settled()
     await split_root(confining, API)
 
     root_shell = shell_of(launcher.root_tool_params)
@@ -1169,9 +1186,9 @@ def run_in_shell(params: object, command: str, home: Path) -> str:
 async def test_an_ic_commits_from_its_own_index_where_shells_are_not_confined(
     service: DirectorService, launcher: FakeLauncher, repo: Path, tmp_path: Path
 ):
-    assert service.summary().boundary_enforcement == "checks"
-    await service.create_org(org_request(repo))
-    await service.settled()
+    assert service.org_load.summary().boundary_enforcement == "checks"
+    await service.session_lifecycle.create_org(org_request(repo))
+    await service.work_queue.settled()
     await split_root(service, API)
     manager, api_ic = launcher.derived
     (repo / "README.md").write_text("root v2\n")
@@ -1203,8 +1220,8 @@ async def test_an_ic_commits_from_its_own_index_where_shells_are_not_confined(
 async def test_a_pruned_agents_shell_and_index_are_removed(
     service: DirectorService, launcher: FakeLauncher, repo: Path, tmp_path: Path
 ):
-    await service.create_org(org_request(repo))
-    await service.settled()
+    await service.session_lifecycle.create_org(org_request(repo))
+    await service.work_queue.settled()
     await split_root(service, API)
     api_ic = launcher.derived[1]
     run_in_shell(api_ic.tool_params, f"cd {repo} && git status", tmp_path / "home")
@@ -1217,6 +1234,6 @@ async def test_a_pruned_agents_shell_and_index_are_removed(
     assert len(left) == 7
 
     service.team_splits.prune(node(service, "services.api").id, "x")
-    await service.settled()
+    await service.work_queue.settled()
 
     assert not [path for path in left if path.exists()]

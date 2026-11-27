@@ -172,7 +172,7 @@ async def test_work_is_written_up_and_reviewed_as_the_reviewed_teams_type_says(
         SubmitReviewAction(summary="Harness runs."),
     )
     launcher.report(str(ic(service)), ConversationExecutionStatus.RUNNING)
-    await service.settled()
+    await service.work_queue.settled()
 
     asked = dict((str(who), text) for who, text in launcher.agents_asked)
     assert "account of your tables" in asked[str(ic(service, "tables"))]
@@ -195,7 +195,7 @@ async def test_the_top_team_is_of_the_type_the_request_or_the_settings_name(
     service = await an_org(repo, launcher, config)
     try:
         assert node(service, "root").agent_type == "analyst"
-        kept = service.org.team("root")
+        kept = service.org_load.org.team("root")
         assert kept is not None and kept.agent_type == "analyst"
     finally:
         await service.aclose()
@@ -208,14 +208,14 @@ async def test_an_org_is_not_made_with_a_top_team_of_an_unknown_type(
     await service.start(launcher)
     try:
         with pytest.raises(Unprocessable):
-            await service.create_org(
+            await service.session_lifecycle.create_org(
                 CreateOrgRequest(
                     task="Read the stars",
                     agent_type="astrologer",
                     conversation=root_conversation(repo),
                 )
             )
-        assert service.org.root_id is None
+        assert service.org_load.org.root_id is None
     finally:
         await service.aclose()
 
@@ -374,17 +374,17 @@ async def test_every_org_starts_with_what_director_yaml_says_of_types(
     await service.start(launcher)
     try:
         with pytest.raises(Unprocessable, match="software-engineer"):
-            await service.create_org(
+            await service.session_lifecycle.create_org(
                 CreateOrgRequest(
                     task="Build it",
                     agent_type="software-engineer",
                     conversation=root_conversation(repo),
                 )
             )
-        await service.create_org(
+        await service.session_lifecycle.create_org(
             CreateOrgRequest(task="Tabulate", conversation=root_conversation(repo))
         )
-        await service.settled()
+        await service.work_queue.settled()
         assert node(service, "root").agent_type == "analyst"
         state = service.org_settings.org_settings_state()
         assert state.allowed_agent_types == ["analyst"]

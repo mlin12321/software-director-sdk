@@ -14,9 +14,6 @@ from pydantic import TypeAdapter
 
 from openhands.agent_server.director.documents.store import DocumentRef
 from openhands.agent_server.director.documents.team_documents import TeamDocuments
-from openhands.agent_server.director.environment.checkouts import (
-    MergeCheckout,
-)
 from openhands.agent_server.director.environment.records import (
     RecordStore,
     normalize_store_path,
@@ -46,6 +43,9 @@ from openhands.agent_server.director.prompts import (
 from openhands.agent_server.director.run_state import (
     DECIDED,
     Intent,
+)
+from openhands.agent_server.director.service.agent_confinement_service import (
+    AgentConfinementService,
 )
 from openhands.agent_server.director.service.message_delivery_service import (
     MessageDeliveryService,
@@ -187,13 +187,27 @@ class SessionMergeService:
     resumable_work: ResumableWorkService
     session_documents: SessionDocumentService
     session_landing: SessionLandingService
-    merge_checkout: Callable[[str], MergeCheckout | None]
-    """The merge of a team's work that its reviewer finishes."""
-    next_submission: Callable[[], int]
-    """The place in the order of the work that is submitted now."""
+    confinement: AgentConfinementService
+    """Keeps the merges that are laid out for reviewers to finish."""
+    changed_since_accept: dict[str, bool] = field(default_factory=dict, init=False)
+    """The sessions that changed something of the org's after their work
+    was accepted, and whether their IC was told to submit it."""
     _weighing: threading.RLock = field(default_factory=threading.RLock, init=False)
     """Held while what waits of a session is read and decided, so that two
     answers are not given for the same thing."""
+
+    def next_submission(self) -> int:
+        """The place in the order of the work that is submitted now."""
+        return self.org_state.run_state().count("submitted")
+
+    def note_change(self, session: str) -> None:
+        """Remember that a session whose work is accepted has changed
+        something since: the org takes it only when it is submitted again."""
+        store = self.org()
+        top = next(iter(store.session(session)), None)
+        if top is not None and top.review is not None:
+            if top.review.state == "accepted" and store.opens_session(top):
+                self.changed_since_accept.setdefault(session, False)
 
     def document_choices(
         self, place_id: str, choices: Sequence[DocumentChoice]
@@ -1218,7 +1232,7 @@ class SessionMergeService:
             merge = self.merge_of(top)
             if merge is None:
                 return
-            laid_out = self.merge_checkout(top.id)
+            laid_out = self.confinement.merge_checkout(top.id)
             listed = {item.key for item in (meets.items if meets else [])}
             items = [
                 *(meets.items if meets else []),

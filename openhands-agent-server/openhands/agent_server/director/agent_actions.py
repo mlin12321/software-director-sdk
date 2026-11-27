@@ -61,10 +61,10 @@ def caller_of(service: DirectorService, conversation_id: UUID) -> Caller:
     Raises:
         NotFound: The conversation is not an agent of the org.
     """
-    found = service.org.find_by_conversation(str(conversation_id))
+    found = service.org_load.org.find_by_conversation(str(conversation_id))
     if found is not None:
         return Caller(node=found[0], role=found[1])
-    node = service.org.find_hand_over(str(conversation_id))
+    node = service.org_load.org.find_hand_over(str(conversation_id))
     if node is None:
         raise NotFound("This conversation is not an agent of the org")
     return Caller(node=node, role=service.team_types.team(node).writer, hand_over=True)
@@ -187,7 +187,7 @@ def write_document(
     if written.summary is not None:
         # With a document of its own that says what the team is for, what
         # teams before it left is no longer its guide.
-        service.org.update_place(
+        service.org_load.org.update_place(
             node.id, summary=written.summary, leftover_documents=[]
         )
     if caller.hand_over:
@@ -201,7 +201,7 @@ def _checked(
     service: DirectorService, place: SessionTeam, proposed: Proposed
 ) -> SplitProposal:
     """Proposed sub-teams, held to what the org allows."""
-    store = service.org
+    store = service.org_load.org
     allowed = service.org_settings.settings.allowed_profiles
     for child in proposed.children:
         if child.agent_profile and child.agent_profile not in allowed:
@@ -227,7 +227,7 @@ def _checked(
         # choice holds over it. It need not be among the profiles an IC
         # may choose: whoever runs the server wrote the type.
         if not child.agent_profile and kind.sas_profile:
-            if not service.profile_exists(kind.sas_profile):
+            if not service.org_run.profile_exists(kind.sas_profile):
                 raise Invalid(
                     f"Sub-team {child.title!r} cannot be of the type "
                     f"{kind.name!r}: that type runs on the agent profile "
@@ -278,7 +278,7 @@ def msg_manager(service: DirectorService, caller: Caller, text: str) -> str:
     text = text.strip()
     if not text:
         raise Invalid("A message cannot be empty")
-    if not service.org.below(node.id):
+    if not service.org_load.org.below(node.id):
         raise Invalid(
             f"A team without sub-teams has nothing to tell its {names.manager} but a "
             "proposal: use propose_teams. Raise anything else with "
@@ -305,12 +305,12 @@ def propose_teams(
         raise Conflict(
             f"The sub-teams your {names.manager} approved are still being set up"
         )
-    service.team_documents.before_sub_teams_are_proposed(
+    service.org_settings.team_documents().before_sub_teams_are_proposed(
         service.team_types.reader_of(node)
     )
     proposed = proposed_teams(teams, keep, text, service.org_settings.default_type())
     proposal = _checked(service, node, proposed)
-    store = service.org
+    store = service.org_load.org
     store.update_place(node.id, pending_split=proposal)
     service.message_delivery.knows(node.id, caller.role, "pending_split")
     replaced = [team.title for team in map(store.place, proposal.replaces) if team]
@@ -330,7 +330,9 @@ def propose_teams(
     facts = service.team_context.facts_of_proposal(node, proposal)
     if facts:
         note += f"\n\n{facts}"
-    read = service.team_documents.read_by_sub_teams(service.team_types.reader_of(node))
+    read = service.org_settings.team_documents().read_by_sub_teams(
+        service.team_types.reader_of(node)
+    )
     service.team_history.record_event(
         node.id, "proposed", None, _named(proposal, replaced), _paths(proposal)
     )
@@ -400,14 +402,14 @@ def approve_teams(service: DirectorService, caller: Caller) -> str:
     if proposal is None:
         raise Conflict(f"Your {names.writer} has no proposed sub-teams waiting for you")
     # The org may have changed since they were proposed.
-    split = normalize_split(service.org, node, proposal.children)
+    split = normalize_split(service.org_load.org, node, proposal.children)
     check_limits(
-        service.org,
+        service.org_load.org,
         node,
         len(split.children) - len(split.replaces),
         service.org_settings.settings,
     )
-    service.org.update_place(
+    service.org_load.org.update_place(
         node.id,
         pending_split=proposal.model_copy(
             update={
@@ -451,7 +453,7 @@ def decline_teams(service: DirectorService, caller: Caller, reason: str) -> str:
     proposal = _waiting(node)
     if proposal is None:
         raise Conflict(f"Your {names.writer} has no proposed sub-teams waiting for you")
-    store = service.org
+    store = service.org_load.org
     replaced = [team.title for team in map(store.place, proposal.replaces) if team]
     named = _named(proposal, replaced)
     store.update_place(node.id, pending_split=None)
@@ -493,7 +495,7 @@ def raise_escalation(
         return service.request_routing.not_ours(
             caller.node, ": ".join(filter(None, (title.strip(), detail.strip())))
         )
-    store = service.org
+    store = service.org_load.org
     node = caller.node
     escalation = store.raise_escalation(
         node.id,
@@ -534,7 +536,7 @@ def resolve_escalation(
     _not_aside(caller)
     if not text.strip():
         raise Invalid("Say what you decided, or why you cannot")
-    store = service.org
+    store = service.org_load.org
     raiser = _team_named(service, caller, node_id)
     escalation = next(
         (e for e in raiser.escalations if e.id == escalation_id)
@@ -581,7 +583,7 @@ def submit_review(service: DirectorService, caller: Caller, summary: str) -> str
     review."""
     names = service.team_types.team(caller.node).names
     _has(service, caller, "submit_review", "submit its team's work")
-    store = service.org
+    store = service.org_load.org
     node = caller.node
     summary = summary.strip()
     if not summary:
@@ -645,7 +647,9 @@ def submit_review(service: DirectorService, caller: Caller, summary: str) -> str
             f"committed: {', '.join(left[:10])}"
             + (f" and {len(left) - 10} more" if len(left) > 10 else "")
         )
-    astray = service.checkouts.astray(node, store.below(node.id), service.repo_dir)
+    astray = service.checkouts.astray(
+        node, store.below(node.id), service.org_load.repo_dir
+    )
     if astray is not None:
         raise Conflict(astray)
     again = review is not None and review.state == "changes_requested"
@@ -656,7 +660,7 @@ def submit_review(service: DirectorService, caller: Caller, summary: str) -> str
             round=review.round + 1 if review is not None and again else 1,
             summary=summary,
             at=utc_now(),
-            seq=service.next_submission(),
+            seq=service.session_merges.next_submission(),
             commit=service.checkouts.version(Path(node.worktree_path)) or "",
         ),
     )
@@ -750,7 +754,7 @@ def _team_named(
     session, or by the team's id in the org, which is then its place in
     that session."""
     name = name.strip()
-    store = service.org
+    store = service.org_load.org
     if "@" in name:
         return store.place(name)
     return store.instance(name, caller.node.session)
