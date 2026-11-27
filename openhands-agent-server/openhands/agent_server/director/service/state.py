@@ -601,7 +601,6 @@ class ServiceState:
         with self._lock:
             if self._store is None:
                 self._store = self._load_store()
-                self._migrate_reports(self._store)
             return self._store
 
     @property
@@ -635,22 +634,6 @@ class ServiceState:
     def append(self, team: TeamRef, name: str, entry: Report) -> None:
         """Add to a log of a team; the records keep it."""
         raise NotImplementedError
-
-    def _migrate_reports(self, store: OrgStore) -> None:
-        """Move the reports of an org that kept them by team id into each
-        team's folder. For orgs made before reports were kept there; to be
-        removed once none is left."""
-        if not is_git_repository(self._repo_dir):
-            return
-        try:
-            moved = self._memory().migrate_reports(
-                {team.id: team.boundary.path for team in store.teams()}
-            )
-        except GitError:
-            logger.exception("The org's reports could not be moved")
-            return
-        if moved:
-            logger.info("Moved %d files of reports into their teams' folders", moved)
 
     def state(self) -> OrgStateEvent:
         """Whether the org is paused or in the middle of a merge."""
