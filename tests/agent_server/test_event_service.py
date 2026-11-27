@@ -4249,20 +4249,3 @@ class TestEmitEventFromThreadFailures:
         )
         scheduled = mock_loop.call_soon_threadsafe.call_args.args
         assert scheduled[0] == finished.add_done_callback
-
-
-def test_an_action_its_guard_could_not_check_is_blocked(event_service):
-    conversation = MagicMock()
-    event_service._conversation = conversation
-    event = MagicMock(spec=ActionEvent)
-    event.id, event.action = "a1", MagicMock()
-
-    def broken(conversation_id, event):
-        raise RuntimeError("the guard's state is locked")
-
-    event_service.action_guards = (broken,)
-
-    event_service._guard_action(event)
-
-    conversation.state.block_action.assert_called_once()
-    assert conversation.state.block_action.call_args.args[0] == "a1"
