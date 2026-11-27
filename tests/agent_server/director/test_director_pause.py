@@ -107,7 +107,7 @@ async def test_a_paused_org_holds_messages_and_delivers_them_in_order_on_resume(
 
     paused = await service.pause()
     service.tell_writer(place(service), "First", human=True)
-    service.notify(ic(service), "Second")
+    service.message_delivery.notify(ic(service), "Second")
     await service.settled()
 
     assert paused.paused == "human" and service.summary().paused == "human"
@@ -594,7 +594,7 @@ async def test_an_org_set_to_resume_on_start_takes_its_work_up_unasked(
     first = await started(repo, launcher)
     first.org_settings.update_settings(DirectorSettingsUpdate(resume_on_start=True))
     await first.pause()
-    first.notify(ic(first), "Carry on")
+    first.message_delivery.notify(ic(first), "Carry on")
     await first.settled()
     await first.aclose()
     before = len(launcher.sent)
@@ -631,8 +631,8 @@ async def test_a_session_stays_when_the_org_no_longer_has_its_team(
     )
     await first.settled()
     await first.pause()
-    first.notify(at_api.conversation_id, "Rename the endpoint")
-    first.notify(at_web.conversation_id, "Carry on")
+    first.message_delivery.notify(at_api.conversation_id, "Rename the endpoint")
+    first.message_delivery.notify(at_web.conversation_id, "Carry on")
     await first.settled()
     await first.aclose()
     # The tree moves under the run state, as a pull does.
@@ -667,7 +667,7 @@ async def test_a_sessions_run_state_is_kept_when_its_team_changed_in_the_org(
 ):
     first = await started(repo, launcher)
     await first.pause()
-    first.notify(ic(first), "Carry on")
+    first.message_delivery.notify(ic(first), "Carry on")
     await first.settled()
     await first.aclose()
     board, pulled = create_org_board(repo), OrgStore(shipped_type)
@@ -693,7 +693,7 @@ async def test_run_state_written_by_another_server_is_not_used(
 ):
     first = await started(repo, launcher)
     await first.pause()
-    first.notify(ic(first), "Carry on")
+    first.message_delivery.notify(ic(first), "Carry on")
     await first.settled()
     await first.aclose()
     before = len(launcher.sent)

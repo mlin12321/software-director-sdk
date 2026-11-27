@@ -194,7 +194,7 @@ def write_document(
     if caller.hand_over:
         service.note_hand_over(node.id, wrote=name)
     else:
-        service.knows(node.id, caller.role, name)
+        service.message_delivery.knows(node.id, caller.role, name)
     return written.answer
 
 
@@ -313,7 +313,7 @@ def propose_teams(
     proposal = _checked(service, node, proposed)
     store = service.org
     store.update_place(node.id, pending_split=proposal)
-    service.knows(node.id, caller.role, "pending_split")
+    service.message_delivery.knows(node.id, caller.role, "pending_split")
     replaced = [team.title for team in map(store.place, proposal.replaces) if team]
     kept = [team.title for team in map(store.place, proposal.keeps) if team]
     note = (
@@ -556,7 +556,7 @@ def resolve_escalation(
     if action == "settle":
         store.settle_escalation(raiser.id, escalation_id)
         service.progressed(raiser.id)
-        service.notify(
+        service.message_delivery.notify(
             service.team_types.team(raiser).conversation(escalation.raised_by),
             f"The {mine} of {caller.node.title!r} settled "
             f"your escalation {escalation.title!r}:\n{text.strip()}",

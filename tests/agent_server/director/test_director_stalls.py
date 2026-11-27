@@ -332,7 +332,7 @@ async def test_a_stopped_team_rests_with_all_below_it_and_is_sent_nothing(
     stopped = await use(service, ic(service), StopTeamTool, STOP_API)
     twice = await use(service, ic(service), StopTeamTool, STOP_API)
     by_manager = await use(service, manager(service), StopTeamTool, STOP_API)
-    service.notify(db_ic, "Something for later.")
+    service.message_delivery.notify(db_ic, "Something for later.")
     await service.settled()
 
     assert not stopped.is_error and twice.is_error and by_manager.is_error
@@ -429,7 +429,7 @@ async def test_a_stopped_team_is_still_stopped_after_a_restart(
     await use(first, ic(first), StopTeamTool, STOP_API)
     api_ic = str(ic(first, API))
     heard = len(launcher.messages_to(api_ic))
-    first.notify(api_ic, "Something for later.")
+    first.message_delivery.notify(api_ic, "Something for later.")
     await first.settled()
     await first.aclose()
 

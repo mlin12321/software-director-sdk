@@ -302,7 +302,7 @@ class Teams(Delivery):
                     place_id, LaunchMember(task=task, role=member)
                 )
         conversation_id = self.team_types.team(place).conversation(member)
-        self.notify(conversation_id, text)
+        self.message_delivery.notify(conversation_id, text)
         return conversation_id
 
     def tell_above(
@@ -444,10 +444,10 @@ class Teams(Delivery):
                     self.joined(ic.conversation_id)
                 return ic.conversation_id
         if human:
-            self._post(conversation_id, text, at_once=True)
+            self.message_delivery.post(conversation_id, text, at_once=True)
             self.joined(conversation_id)
         else:
-            self.notify(conversation_id, text)
+            self.message_delivery.notify(conversation_id, text)
         return conversation_id
 
     def _in_place(self, place: SessionTeam) -> bool:
@@ -636,8 +636,9 @@ class Teams(Delivery):
         # team going, which waits behind this in the team's lane.
         for held in self.org_state.run_state().held():
             if held.conversation_id in conversations:
-                self._at_once.add(held.seq)
-                await self._deliver(held.seq, held.conversation_id, held.text)
+                await self.message_delivery.deliver(
+                    held.seq, held.conversation_id, held.text, at_once=True
+                )
         for conversation_id in conversations:
             # The team's own IC is run by the message that set it going.
             if conversation_id in running and conversation_id != own:
@@ -779,7 +780,7 @@ class Teams(Delivery):
 
             await self.start_line.when_there_is_room(place.id, start)
             if self.org_state.paused is not None:
-                self._note_running(conversation_id, place.id, True)
+                self.message_delivery.note_running(conversation_id, place.id, True)
                 await launcher.pause(UUID(conversation_id))
         except Held:
             raise
@@ -796,7 +797,7 @@ class Teams(Delivery):
         if conversation_id is not None:
             text, told = await asyncio.to_thread(self._briefing, place, role, task)
             self.org_state.run_state().mark(TOLD, conversation_id, told)
-            await self._send(conversation_id, text)
+            await self.message_delivery.send(conversation_id, text)
 
     async def _start_agent(
         self,
@@ -830,7 +831,7 @@ class Teams(Delivery):
                     place, role, conversation_id, parent_conversation, task, checkout
                 )
                 if self.org_state.paused is not None:
-                    self._note_running(conversation_id, place_id, True)
+                    self.message_delivery.note_running(conversation_id, place_id, True)
                     await launcher.pause(UUID(conversation_id))
         except Held:
             raise
@@ -878,7 +879,7 @@ class Teams(Delivery):
         """
         place_id = place.id
         launcher = self._require_launcher()
-        if any(place_id in teams for teams, _ in self._settling.values()):
+        if self.message_delivery.is_settling(place_id):
             # The step fixed which conversations it stops before this one.
             raise Conflict(
                 f"Team {place.title!r} is being replaced or removed, so its "

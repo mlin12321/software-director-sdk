@@ -101,7 +101,7 @@ class Splits(Watch):
             f"approved, and the runtime could not set them up: {reason}",
             [child.path for child in proposal.children] if proposal else [],
         )
-        self.notify(
+        self.message_delivery.notify(
             self.team_types.writer_conversation(place),
             f"The sub-teams your {names.manager} approved could not be set up: "
             f"{reason} "
@@ -178,7 +178,7 @@ class Splits(Watch):
         if place is None or proposal is None or proposal.status != "approved":
             return
         if "planned" not in intent.steps:
-            if any(place_id in teams for teams, _ in self._settling.values()):
+            if self.message_delivery.is_settling(place_id):
                 # What is closing or pruning it fixed what it removes first.
                 self._decline(place, "The team is being closed or removed.")
                 return
@@ -257,12 +257,12 @@ class Splits(Watch):
             watched = [team.id for team in replaced]
             for team_id in list(watched):
                 watched.extend(below.id for below in store.below(team_id))
-            self._wait_until_quiet(intent, watched)
+            self.message_delivery.wait_until_quiet(intent, watched)
             refusal = await asyncio.to_thread(
                 self._take_in, place, replaced, plan.stamp
             )
             if refusal is not None:
-                self._let_go(intent)
+                self.message_delivery.let_go(intent)
                 self._decline(place, refusal)
                 return
             launcher = self._require_launcher()
@@ -293,7 +293,7 @@ class Splits(Watch):
         for below_id, home in moves.items():
             if store.place(below_id) is not None and store.place(home) is not None:
                 store.move_place(below_id, home)
-        self._let_go(intent)
+        self.message_delivery.let_go(intent)
         await self.org_save.save()
         if "handed_over" not in intent.steps:
             # A new team starts nothing by being set up. What it is for is
@@ -362,7 +362,7 @@ class Splits(Watch):
                 unfinished[child.path] = await asyncio.to_thread(
                     uncommitted, Path(place.worktree_path), child.path
                 )
-        self.notify(
+        self.message_delivery.notify(
             self.team_types.writer_conversation(place),
             approved_notice(
                 proposal.children,
@@ -425,7 +425,7 @@ class Splits(Watch):
         if "stopped" not in intent.steps:
             # A team is removed only once it and the teams below it are at
             # rest, so nothing is cut off in the middle.
-            self._wait_until_quiet(intent, plan.teams)
+            self.message_delivery.wait_until_quiet(intent, plan.teams)
             for conversation_id in conversations:
                 await launcher.stop(conversation_id)
             intent = run.step_done(intent, "stopped")
@@ -472,7 +472,7 @@ class Splits(Watch):
                 await asyncio.to_thread(self.confinement.confine, plan.parent)
             await self.org_save.save()
             intent = run.step_done(intent, "removed")
-        self._settling.pop(intent.id, None)
+        self.message_delivery.stop_waiting(intent.id)
         if "told" in intent.steps:
             return
         former = [
@@ -480,7 +480,7 @@ class Splits(Watch):
             for record in self.session_drafts.former(above.session if above else "")
             if record.id == team_key(place_id) and record.at == plan.stamp
         ]
-        self.notify(
+        self.message_delivery.notify(
             parent_ic,
             pruned_notice(
                 plan.title,
@@ -586,7 +586,9 @@ class Splits(Watch):
         store.set_hand_over(
             place.id, HandOverMode(conversation_id=conversation, status=AGENT_LOST)
         )
-        self.notify(self.team_types.writer_conversation(place), HAND_OVER_FAILED)
+        self.message_delivery.notify(
+            self.team_types.writer_conversation(place), HAND_OVER_FAILED
+        )
 
     def _hand_over_ended(self, place_id: str) -> None:
         """Tell a team's IC, in its main conversation, what its hand-over
@@ -598,7 +600,7 @@ class Splits(Watch):
             return
         run.unmark(HANDING, place_id)
         done = json.loads(kept)
-        self.notify(
+        self.message_delivery.notify(
             self.team_types.writer_conversation(place),
             handed_over_notice(
                 done["given"],

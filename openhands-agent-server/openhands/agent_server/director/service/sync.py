@@ -171,7 +171,7 @@ class Sync(Sessions):
             self.resumable_work.take_up(intent.id, lane_for(intent))
         for held in run.held():
             self.work_queue.enqueue(
-                lambda held=held: self._deliver(
+                lambda held=held: self.message_delivery.deliver(
                     held.seq, held.conversation_id, held.text
                 ),
                 held.node_id or ORG_LANE,
@@ -379,7 +379,7 @@ class Sync(Sessions):
         edit = await asyncio.to_thread(write_by_hand, place, sub_teams, path, content)
         ic = self.team_types.writer_conversation(place)
         if edit.commit is not None and ic is not None and self._loop is not None:
-            self.notify(
+            self.message_delivery.notify(
                 ic,
                 f"The human changed {edit.path} in your team's checkout by hand "
                 f"and committed it as {edit.commit[:12]}. Read the file again "
@@ -773,7 +773,7 @@ class Sync(Sessions):
         if status == ConversationExecutionStatus.RUNNING:
             self._resuming.discard(agent)
         if self.org_state.paused is None:
-            self._note_running(
+            self.message_delivery.note_running(
                 agent, node.id, status == ConversationExecutionStatus.RUNNING
             )
         was = node.status
@@ -864,7 +864,7 @@ class Sync(Sessions):
         if status == ConversationExecutionStatus.RUNNING:
             self._resuming.discard(conversation_id)
         if self.org_state.paused is None:
-            self._note_running(
+            self.message_delivery.note_running(
                 conversation_id, node.id, status == ConversationExecutionStatus.RUNNING
             )
         shown = self._shown(conversation_id, status)
@@ -896,7 +896,7 @@ class Sync(Sessions):
         top = places[0] if places else None
         if top is None or top.review is None or top.review.state != "accepted":
             return
-        self.notify(
+        self.message_delivery.notify(
             self.team_types.writer_conversation(top),
             changed_since_accept(self.team_types.kept_documents(top)),
         )
@@ -927,7 +927,7 @@ class Sync(Sessions):
             status = statuses.get(conversation_id)
             agent = str(conversation_id)
             if self.org_state.paused is None:
-                self._note_running(
+                self.message_delivery.note_running(
                     agent, place_id, status == ConversationExecutionStatus.RUNNING
                 )
             if status is not None:

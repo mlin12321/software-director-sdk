@@ -325,18 +325,9 @@ class ServiceState:
         self._review_instructions: dict[str, str] = {}
         self._review_instructions_ready: asyncio.Task[None] | None = None
         self._loading_review_instructions = threading.Lock()
-        # The messages being delivered right now, so that resuming does
-        # not deliver one a second time.
-        self._delivering: set[int] = set()
-        # Messages that do not wait for their agent's turn to end: what the
-        # human said, and what waited for a turn that has now ended.
-        self._at_once: set[int] = set()
         # The sessions that changed something of the org's after their
         # work was accepted, and whether their IC was told to submit it.
         self._changed_since_accept: dict[str, bool] = {}
-        # The teams each step waits for the agents of to stop, by the id of
-        # its intent, and the lane the step is carried out in.
-        self._settling: dict[int, tuple[set[str], str]] = {}
         # The conversations a resume is about to run again.
         self._resuming: set[str] = set()
         self._stop_guard: Callable[[], None] | None = None

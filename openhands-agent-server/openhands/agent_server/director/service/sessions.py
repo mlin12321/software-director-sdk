@@ -574,7 +574,7 @@ class Sessions(Splits):
         plan = intent.of(CloseSession)
         conversations = [UUID(agent) for agent in plan.conversations]
         if "stopped" not in intent.steps:
-            self._wait_until_quiet(intent, plan.teams)
+            self.message_delivery.wait_until_quiet(intent, plan.teams)
             for conversation_id in conversations:
                 await launcher.stop(conversation_id)
             intent = run.step_done(intent, "stopped")
@@ -645,7 +645,7 @@ class Sessions(Splits):
             self._tell_turns()
             await self.org_save.save()
             intent = run.step_done(intent, "removed")
-        self._settling.pop(intent.id, None)
+        self.message_delivery.stop_waiting(intent.id)
 
     def _keep_unmerged(
         self, top: SessionTeam, above: SessionTeam, stamp: str

@@ -277,7 +277,7 @@ class Reviews(Teams):
                 counted,
                 team=place,
             )
-        self.notify(
+        self.message_delivery.notify(
             self.team_types.writer_conversation(place),
             changes_requested(
                 above or place,
@@ -1263,7 +1263,7 @@ class Reviews(Teams):
             self.org.settle_escalation(top.id, ORG_WAITS)
         review = self._review_of(top)
         if review is not None and landed.records.left:
-            self.notify(
+            self.message_delivery.notify(
                 self.team_types.reviewer_conversation(review),
                 files_not_written(top.title, landed.records.left),
             )
@@ -1559,7 +1559,7 @@ class Reviews(Teams):
             if self._before(place) is not None:
                 continue
             run.unmark(TURN, place_id)
-            self.notify(
+            self.message_delivery.notify(
                 self.team_types.reviewer_conversation(above),
                 f"It is your turn: the work submitted before that of "
                 f"{place.title!r} (id {place.id}) is decided on. Accept it "
@@ -1820,7 +1820,7 @@ class Reviews(Teams):
             # The acceptance of work submitted earlier was carried out
             # since this one was checked, and left that work waiting.
             self.org_state.run_state().mark(TURN, place.id)
-            self.notify(
+            self.message_delivery.notify(
                 reviewer,
                 accept_in_order(place, first, store.session_title(first), names=names),
             )
@@ -1837,12 +1837,12 @@ class Reviews(Teams):
         refusal = self._not_reconciled(place, meets, reconciled)
         if refusal is not None:
             # Something came into the checkout between the review and now.
-            self.notify(reviewer, refusal)
+            self.message_delivery.notify(reviewer, refusal)
             return
         astray = await asyncio.to_thread(self.work_astray, place)
         if astray is not None:
             # Accepted, part of the work would not be in what is merged.
-            self.notify(
+            self.message_delivery.notify(
                 reviewer,
                 f"The work of {place.title!r} is not accepted yet. {astray} "
                 "Send it back with `review_team` and that as what to change.",
@@ -1862,7 +1862,7 @@ class Reviews(Teams):
                     reconciled,
                     choices or [],
                 )
-                self.notify(
+                self.message_delivery.notify(
                     reviewer,
                     f"The work of {place.title!r} is accepted and waits for "
                     "the human, whose checkout is on another branch than the "
@@ -1883,7 +1883,7 @@ class Reviews(Teams):
                     self._merged_as(place),
                 )
             except (GitError, OSError) as error:
-                self.notify(
+                self.message_delivery.notify(
                     reviewer,
                     f"The work of {place.title!r} could not be merged into your "
                     f"checkout, and still waits for your review: {error}",
@@ -1896,7 +1896,7 @@ class Reviews(Teams):
                 if isinstance(finished, str):
                     if opens:
                         self._show_reviewer_items(place, meets)
-                    self.notify(reviewer, finished)
+                    self.message_delivery.notify(reviewer, finished)
                     return
                 result = finished
                 resolved = result.files if result.outcome == "merged" else ()
@@ -1913,7 +1913,7 @@ class Reviews(Teams):
                     reconciled,
                     choices or [],
                 )
-                self.notify(
+                self.message_delivery.notify(
                     reviewer,
                     f"The work of {place.title!r} is accepted and waits for "
                     "the human, whose uncommitted changes are in the way of "
@@ -1921,7 +1921,7 @@ class Reviews(Teams):
                 )
                 return
             if result.outcome == "refused":
-                self.notify(
+                self.message_delivery.notify(
                     reviewer,
                     f"git would not merge the work of {place.title!r} into your "
                     f"checkout as it is:\n{result.detail}\n"
@@ -1944,7 +1944,7 @@ class Reviews(Teams):
                     place_id,
                     [ReviewFinding(path=", ".join(result.files), issue=issue)],
                 )
-                self.notify(
+                self.message_delivery.notify(
                     reviewer,
                     f"The work of {place.title!r} was not taken into your "
                     f"checkout: {issue} ({', '.join(result.files)}) "
@@ -1953,7 +1953,7 @@ class Reviews(Teams):
                 return
             merged = result.outcome == "merged"
             if resolved:
-                self.notify(
+                self.message_delivery.notify(
                     self.team_types.writer_conversation(place),
                     f"Your team's work did not merge by itself. The {names.reviewer} "
                     "that "
@@ -1996,19 +1996,19 @@ class Reviews(Teams):
         self._tell_turns()
         if not is_division_lead(above):
             self.count_accepted_review(above.id)
-        self.notify(
+        self.message_delivery.notify(
             self.team_types.writer_conversation(place),
             f"The {names.reviewer} of {above.title!r} accepted your team's work"
             + (" and it is merged into that team's checkout." if merged else "."),
         )
         if merged:
-            self.notify(
+            self.message_delivery.notify(
                 reviewer, f"The work of {place.title!r} is merged into your checkout."
             )
         await self._pass_up(above.id, acted=True)
         further = store.place(above.parent_id) if above.parent_id else None
         if needed_above and further is not None:
-            self.notify(
+            self.message_delivery.notify(
                 self.team_types.writer_conversation(further),
                 f"Team {above.title!r} (id {above.id}) below you accepted the "
                 f"work of its sub-team {place.title!r} in {where} and says a team "
@@ -2180,7 +2180,7 @@ class Reviews(Teams):
                 meets = True
         if own or above is None or meets:
             if not acted:
-                self.notify(
+                self.message_delivery.notify(
                     ic,
                     "The work of all your sub-teams is accepted and in your "
                     "checkout. "
@@ -2207,7 +2207,7 @@ class Reviews(Teams):
             except (GitError, OSError) as error:
                 problem = str(error)
             if problem is not None:
-                self.notify(
+                self.message_delivery.notify(
                     ic,
                     "The work of all your sub-teams is accepted, but your "
                     "team's checkout does not merge into the checkout of "
@@ -2241,7 +2241,7 @@ class Reviews(Teams):
             self._changed_since_accept.pop(place.session, None)
         self._tell_turns()
         if acted:
-            self.notify(
+            self.message_delivery.notify(
                 ic,
                 f"Your team changed nothing itself, so its work went up to "
                 f"{above.title!r} without another review.",
@@ -2262,7 +2262,7 @@ class Reviews(Teams):
         except (GitError, OSError):
             logger.exception("Could not put aside what is in %s", path)
             return
-        self.notify(
+        self.message_delivery.notify(
             self.team_types.writer_conversation(above),
             put_aside_notice(team, files, ref),
         )

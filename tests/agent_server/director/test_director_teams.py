@@ -653,7 +653,7 @@ async def test_sub_teams_that_fail_to_be_set_up_are_put_aside_and_told(
     def fails(*_: object) -> None:
         raise OSError("disk full")
 
-    monkeypatch.setattr(service, "_let_go", fails)
+    monkeypatch.setattr(service.message_delivery, "let_go", fails)
     await use(
         service,
         ic(service, "apps.web"),
@@ -701,7 +701,7 @@ async def test_what_was_held_for_a_pruned_team_does_not_pause_the_org_on_a_resta
     await split_root(first)
     await woken(first, "root")
     await use(first, ic(first), StopTeamTool, StopTeamAction(team=API, reason="Stuck."))
-    first.notify(ic(first, API), "A notice for the stopped team.")
+    first.message_delivery.notify(ic(first, API), "A notice for the stopped team.")
     await first.settled()
     assert first.org_state.run_state().held()
     await use(first, manager(first), PruneTeamTool, PRUNE_API)

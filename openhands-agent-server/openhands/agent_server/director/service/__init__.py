@@ -550,7 +550,7 @@ class DirectorService(Sync):
             if escalation_id == LIMIT_WAITS
             else f"The human answered your escalation {escalation.title!r}"
         )
-        self.notify(
+        self.message_delivery.notify(
             self.team_types.team(place).conversation(role),
             f"{told}:\n{answer}",
             at_once=True,

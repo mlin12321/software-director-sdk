@@ -500,7 +500,7 @@ async def test_a_session_goes_on_with_a_team_the_pull_removed(
     there.org.remove(API)
     await there.push_org("origin")
     await here.pause()
-    here.notify(ic(here, API), "Use idempotency keys")
+    here.message_delivery.notify(ic(here, API), "Use idempotency keys")
     await here.settled()
 
     pulled = await here.pull_org("origin")

@@ -269,7 +269,7 @@ async def test_a_team_whose_removal_failed_is_still_told_things(
     launcher.before = lambda _: None
     told = len(launcher.messages_to(api_ic))
 
-    service.notify(api_ic, "Go on with the orders endpoint.")
+    service.message_delivery.notify(api_ic, "Go on with the orders endpoint.")
     await service.settled()
 
     assert launcher.messages_to(api_ic)[told:] == [
@@ -291,8 +291,8 @@ async def test_a_message_that_could_not_be_sent_is_sent_again_before_the_next(
     launcher.before = fail_once
     told = len(launcher.messages_to(top_ic))
 
-    service.notify(top_ic, "first")
-    service.notify(top_ic, "second")
+    service.message_delivery.notify(top_ic, "first")
+    service.message_delivery.notify(top_ic, "second")
     await service.settled()
 
     sent = [text.splitlines()[0] for text in launcher.messages_to(top_ic)[told:]]
@@ -304,7 +304,7 @@ async def test_no_agent_is_started_in_a_team_that_is_being_removed(
 ):
     api = node(service, API)
     # A step that removes the team waits for its agents to stop.
-    service._settling[0] = ({api.id}, api.id)
+    service.message_delivery._settling[0] = ({api.id}, api.id)
     starts = len(launcher.derived)
 
     with pytest.raises(Conflict, match="being replaced or removed"):
