@@ -1395,7 +1395,7 @@ class Reviews(Requests):
     def _waits_for_team_changes(self, file: str) -> bool:
         """Whether what a session wrote in a file of team memory becomes
         the org's only with its changes to the teams: its document says."""
-        protocol = self.protocol_at(file)
+        protocol = self.team_documents.at(file)
         return protocol is not None and protocol.waits_for_team_changes
 
     def _documents_waiting(self, top: SessionTeam) -> list[tuple[str, str, str]]:
@@ -1447,7 +1447,7 @@ class Reviews(Requests):
             if not unmergeable:
                 files = [path for path in changes.both if owns(place, path)]
         opens = self.org.opens_session(place)
-        changed = self.documents_to_reconcile(place) if opens else []
+        changed = self.team_documents.changed_elsewhere(place.session) if opens else []
         inherited = self.documents_inherited(place) if opens else []
         if not files and not changed and not inherited:
             return None

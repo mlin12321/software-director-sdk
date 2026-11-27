@@ -508,7 +508,7 @@ async def test_a_team_both_made_something_else_of_waits_for_the_manager_above(
     assert "the session: 'API' in services/api/jobs, under services.api" in told
     assert "the org now: 'API' in services/api/workers, under services.api" in told
     # What the session wrote for it waits with it.
-    assert service.document_draft(place, "spec") is not None
+    assert service.team_documents.draft(team_ref(place), "spec") is not None
 
     by_ic = await use(
         service, division_lead_ic(service, top), SettleTeamsTool, SettleTeamsAction()
@@ -537,7 +537,7 @@ async def test_a_team_both_made_something_else_of_waits_for_the_manager_above(
     assert path_of(service, JOBS) == (
         "services/api/workers" if org_holds else "services/api/jobs"
     )
-    assert service.document_draft(place, "spec") is None
+    assert service.team_documents.draft(team_ref(place), "spec") is None
     said = launcher.messages_to(conversation)[-1]
     assert "One queue." in said
     assert ("The org's teams stay" in said) is org_holds
@@ -716,7 +716,9 @@ async def test_contracts_both_changed_wait_for_the_manager_above(
     # The session reads what holds now, not what it wrote.
     contracts = [
         shown
-        for shown in service.documents_shown(api_place(service, top))
+        for shown in service.team_documents.shown(
+            service.reader_of(api_place(service, top))
+        )
         if shown.name == "contracts"
     ]
     assert [shown.text for shown in contracts if shown.own] == [holds]
@@ -1233,7 +1235,9 @@ async def test_a_reviewer_writes_the_spec_that_holds(service: DirectorService):
 
     assert not written.is_error
     assert service.team_memory.read(API_SPEC) == "# Orders and refunds"
-    assert service.document_draft(api_place(service, top), "spec") is None
+    assert (
+        service.team_documents.draft(team_ref(api_place(service, top)), "spec") is None
+    )
 
 
 async def test_a_reviewer_keeps_the_orgs_spec(service: DirectorService):
@@ -1261,7 +1265,9 @@ async def test_a_reviewer_keeps_the_orgs_spec(service: DirectorService):
     await service.settled()
 
     assert service.team_memory.read(API_SPEC) == "# Orders"
-    assert service.document_draft(api_place(service, top), "spec") is None
+    assert (
+        service.team_documents.draft(team_ref(api_place(service, top)), "spec") is None
+    )
 
 
 async def test_a_manager_puts_a_team_it_takes_where_it_fits_the_org(

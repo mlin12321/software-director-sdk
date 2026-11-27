@@ -569,7 +569,9 @@ async def test_an_approved_split_sets_up_each_sub_team(
     assert "API (services/api)" in launcher.messages_to(ic(service))[-1]
     [contracts] = [
         shown
-        for shown in service.documents_shown(node(service, "services.api"))
+        for shown in service.team_documents.shown(
+            service.reader_of(node(service, "services.api"))
+        )
         if shown.name == "contracts"
     ]
     assert not contracts.own and "POST /checkout" in contracts.text

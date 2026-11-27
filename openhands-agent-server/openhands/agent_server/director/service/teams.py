@@ -694,8 +694,8 @@ class Teams(Delivery):
             place,
             role,
             task,
-            self.documents_briefed(place),
-            briefing_block(context, self.documents_told(place)),
+            self.team_documents.briefed(self.reader_of(place)),
+            briefing_block(context, self.team_documents.told(self.reader_of(place))),
             self.type_of(place).text_for(role),
             works=role == self.team(place).writer,
             titles=self.type_of(place).titles,
@@ -709,10 +709,10 @@ class Teams(Delivery):
         return hand_over_brief(
             place,
             job,
-            self.documents_briefed(place),
+            self.team_documents.briefed(self.reader_of(place)),
             briefing_block(
                 self.context_of(place, self.team(place).writer),
-                self.documents_told(place),
+                self.team_documents.told(self.reader_of(place)),
             ),
             role=role_text(
                 self.team(place).names,

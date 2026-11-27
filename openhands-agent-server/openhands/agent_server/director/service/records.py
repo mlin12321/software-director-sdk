@@ -12,16 +12,11 @@ from pydantic import TypeAdapter
 from openhands.agent_server.director.boundary import (
     owns,
 )
-from openhands.agent_server.director.documents.events import (
-    SubTeamsProposed,
-    TeamRemoved,
-)
-from openhands.agent_server.director.documents.protocol import DocumentProtocolBase
 from openhands.agent_server.director.documents.schema import (
-    DocumentsBriefed,
     ShownDocument,
 )
 from openhands.agent_server.director.documents.store import DocumentRef, TeamRef
+from openhands.agent_server.director.documents.team_documents import RemovedTeam
 from openhands.agent_server.director.git import (
     changed_together,
     tracked_files,
@@ -46,7 +41,6 @@ from openhands.agent_server.director.models import (
     RoutedRequest,
     SessionTeam,
     SplitProposal,
-    TeamDocument,
     TeamEvent,
     TeamEventKind,
     Thread,
@@ -60,7 +54,6 @@ from openhands.agent_server.director.org_store import (
 from openhands.agent_server.director.prompts import (
     NEEDED_WORTH_SAYING,
     event_line,
-    left_document,
     need_words,
     needs_between,
     proposal_facts,
@@ -98,7 +91,6 @@ from openhands.agent_server.director.service.state import (
 )
 from openhands.agent_server.director.split import (
     home_of_lost,
-    is_inside,
 )
 from openhands.sdk.errors import NotFound, NotSupported
 from openhands.sdk.logger import get_logger
@@ -142,16 +134,6 @@ class Inherited(NamedTuple):
     now: str
     # What the lost team was called.
     lost: str
-    written: str
-
-
-class Changed(NamedTuple):
-    """A document a session wrote while the org's was changed too."""
-
-    name: str
-    folder: str
-    # The org's now, and the session's.
-    now: str
     written: str
 
 
@@ -688,7 +670,7 @@ class Records(ServiceState):
                 "branch": place.branch,
                 "isolation": place.isolation,
             },
-            **self.documents_told(place),
+            **self.team_documents.told(self.reader_of(place)),
             "documents_passed_to_you": [
                 {
                     "document": passed.name,
@@ -704,7 +686,7 @@ class Records(ServiceState):
                     "team": old.left_by,
                     "text": old.text,
                 }
-                for old in self.documents_left_to(place)
+                for old in self.team_documents.left_to(self.reader_of(place))
             ],
             "sub_teams": [
                 {
@@ -975,58 +957,6 @@ class Records(ServiceState):
         their session wrote there, else the org's."""
         return self.documents.read(session_of(node), DocumentRef.at(file))
 
-    def documents_told(self, node: OrgNode) -> dict[str, Any]:
-        """What the context of a team's agents says of the documents it
-        reads, as each document has it said: the ones its type keeps, in
-        the order the type lists them, and any other it is shown one of."""
-        shown = self.documents_shown(node)
-        kept = self.protocols_of(node)
-        told: dict[str, Any] = {}
-        for protocol in self._protocols_for(node):
-            name = protocol.document.name
-            of_it = [found for found in shown if found.name == name]
-            if of_it or protocol in kept:
-                told |= protocol.told_to_reader(team_ref(node), of_it)
-        return told
-
-    def documents_briefed(self, place: SessionTeam) -> list[tuple[str, str]]:
-        """What the first message of a team's agents says of the documents
-        it reads, as each document has it said, and after each what teams
-        before it left of that document in its folder."""
-        shown = self.documents_shown(place)
-        kept = self.protocols_of(place)
-        team = self.team(place)
-        briefed = [
-            DocumentsBriefed(
-                reader=team_ref(place),
-                shown=[found for found in shown if found.name == name],
-                titles=team.kind.titles,
-            )
-            for name in (
-                protocol.document.name for protocol in self._protocols_for(place)
-            )
-        ]
-        left = self.documents_left_to(place)
-        parts: list[tuple[str, str]] = []
-        for protocol, told in zip(self._protocols_for(place), briefed):
-            document = protocol.document
-            if told.shown or protocol in kept:
-                parts += [
-                    (part.heading, part.text)
-                    for part in protocol.told_in_briefing(told)
-                ]
-            parts += [
-                (
-                    left_document(
-                        document.name, old.path, old.left_by, document.written_with
-                    ),
-                    old.text,
-                )
-                for old in left
-                if old.name == document.name
-            ]
-        return parts
-
     def handed_over_to(self, node: OrgNode) -> list[dict[str, str]]:
         """What the team above said to this team of the teams that were
         there before it: who said it, when, and the text."""
@@ -1046,115 +976,19 @@ class Records(ServiceState):
                 )
         return found
 
-    def _protocols_for(self, node: OrgNode) -> list[DocumentProtocolBase]:
-        """What every document of the org does: first the ones the team's
-        type keeps, in the order the type lists them."""
-        kept = self.protocols_of(node)
-        return [
-            *kept,
-            *(found for found in self.protocols.values() if found not in kept),
-        ]
-
-    def documents_of(self, node: OrgNode) -> list[TeamDocument]:
-        """The documents a team reads, for whoever looks at the team: the
-        ones it is shown, and with them what teams before it left in its
-        folder."""
-        by_type = self.type_of(node).documents
-        shown = self.documents_shown(node)
-        left = self.documents_left_to(node)
-        found: list[TeamDocument] = []
-        for protocol in self._protocols_for(node):
-            document = protocol.document
-            said = by_type.get(document.name) or document.description
-            found += [
-                TeamDocument(
-                    name=one.name,
-                    description=said,
-                    path=one.folder,
-                    text=one.text,
-                    own=one.own,
-                )
-                for one in shown
-                if one.name == document.name
-            ]
-            found += [old for old in left if old.name == document.name]
-        return found
-
-    def documents_left_to(self, node: OrgNode) -> list[TeamDocument]:
-        """What teams before this one left in its folder: each is old, and
-        none is the team's own until it writes one itself."""
-        by_type = self.type_of(node).documents
-        found = []
-        for old in node.leftover_documents:
-            protocol = self.protocols.get(old.name)
-            path = normalize_store_path(old.path)
-            text = self.read_file(node, DocumentRef(path, old.name).path)
-            if protocol is None or not text:
-                continue
-            found.append(
-                TeamDocument(
-                    name=old.name,
-                    description=by_type.get(old.name) or protocol.document.description,
-                    path=path,
-                    text=text,
-                    own=False,
-                    left=True,
-                    left_by=old.team,
-                )
-            )
-        return found
-
-    def _stays_when_team_is_removed(self, name: str) -> bool:
-        """Whether the document named ``name`` is one a removed team
-        leaves in its folder: its protocol says."""
-        protocol = self.protocols.get(name)
-        return protocol is not None and protocol.stays_when_team_is_removed
-
-    def documents_shown(self, node: OrgNode) -> list[ShownDocument]:
-        """Every document a team reads, as its session has it: of each
-        kind of document, the ones of the teams its protocol names, where
-        the org allows it."""
-        reader = team_ref(node)
-        left = {
-            (old.name, normalize_store_path(old.path))
-            for old in node.leftover_documents
-        }
-        found: dict[DocumentRef, ShownDocument] = {}
-        for protocol in self._protocols_for(node):
-            name = protocol.document.name
-            for owner in protocol.read_from(reader):
-                ref = owner.keeps(name)
-                # A session opened at the top team has that team's own
-                # place above it: one folder, shown once.
-                if ref in found or not self.org_kind.allows_read(reader, owner, name):
-                    continue
-                # What a team before this one left in the folder is not
-                # this team's own until it writes one itself.
-                if (name, ref.folder) in left:
-                    continue
-                text = self.documents.read(reader.session, ref)
-                if text:
-                    found[ref] = ShownDocument(
-                        folder=ref.folder,
-                        name=name,
-                        text=text,
-                        own=ref.folder == reader.folder,
-                    )
-        return list(found.values())
-
-    def document_draft(self, node: OrgNode, name: str) -> tuple[str, str | None] | None:
-        """The document named ``name`` a session wrote for one of its
-        teams, which is its own until its work is accepted.
-
-        Returns:
-            The text and the team's text it was written over, None when
-            the team had none; None when the session wrote none there.
-        """
-        file = DocumentRef(normalize_store_path(node.boundary.path), name).path
-        draft = self.drafts(session_of(node)).get(file)
-        if draft is None or draft[0] is None:
-            return None
-        return draft[0], draft[1]
+    def _documents_left_in(
+        self, place: SessionTeam, path: str, removed: list[SessionTeam]
+    ) -> list[LeftoverDocument]:
+        """The documents a team that is given ``path`` in the session of
+        ``place`` finds there, with the ``removed`` teams gone."""
+        return self.team_documents.left_in(
+            place.session,
+            path,
+            [
+                RemovedTeam(team.boundary.path, team.title, team.leftover_documents)
+                for team in removed
+            ],
+        )
 
     def documents_inherited(self, top: SessionTeam) -> list[Inherited]:
         """The documents a session wrote for teams the org had when it
@@ -1178,31 +1012,13 @@ class Records(ServiceState):
             if home is None:
                 continue
             path = normalize_store_path(home.boundary.path)
-            for name, protocol in self.protocols.items():
-                draft = self.document_draft(place, name)
+            documents = self.team_documents
+            for name, protocol in documents.protocols.items():
+                draft = documents.draft(team_ref(place), name)
                 if draft is None or not protocol.stays_when_team_is_removed:
                     continue
                 now = memory.read(DocumentRef(path, name).path) or ""
                 found.append(Inherited(name, path, now, place.title, draft[0]))
-        return found
-
-    def documents_to_reconcile(self, top: SessionTeam) -> list[Changed]:
-        """The documents a session wrote while the team's document in the
-        same folder was changed by someone else: the ones that land with
-        its work, and not those that wait with its teams."""
-        team_memory = self._memory()
-        found = []
-        for file, (text, over) in sorted(self.drafts(top.session).items()):
-            protocol = self.protocol_at(file)
-            if protocol is None or protocol.waits_for_team_changes or text is None:
-                continue
-            now = team_memory.read(file)
-            if now != over and now != text:
-                found.append(
-                    Changed(
-                        protocol.document.name, _directory_of(file), now or "", text
-                    )
-                )
         return found
 
     def _home_of(self, top: SessionTeam, path: str) -> str:
@@ -1300,7 +1116,7 @@ class Records(ServiceState):
                 if text:
                     kept_of_it[kind] = text
                 if (
-                    self._stays_when_team_is_removed(kind)
+                    self.team_documents.stays_when_team_is_removed(kind)
                     and text
                     and store.team(owner.team_id) is None
                     and all(
@@ -1461,7 +1277,7 @@ class Records(ServiceState):
             name = DocumentRef.at(file).name
             if (
                 owner is not None
-                and self._stays_when_team_is_removed(name)
+                and self.team_documents.stays_when_team_is_removed(name)
                 and files[file][0] is not None
             ):
                 # The team has one of its own now: what teams before it
@@ -1534,74 +1350,6 @@ class Records(ServiceState):
             if said
         )
 
-    def _documents_left_in(
-        self, place: SessionTeam, path: str, removed: list[SessionTeam]
-    ) -> list[LeftoverDocument]:
-        """The documents a team that is given ``path`` in the session of
-        ``place`` finds there, of the kind that stays when a team is
-        removed: the ones of the folder itself and those of the
-        ``removed`` teams whose folders hold it or lie in it. None of
-        them is its own."""
-        own = normalize_store_path(path)
-        staying = [
-            name
-            for name, protocol in self.protocols.items()
-            if protocol.stays_when_team_is_removed
-        ]
-        left: dict[tuple[str, str], str | None] = {}
-
-        def concerns(directory: str) -> bool:
-            return (
-                directory == own
-                or is_inside(own, directory)
-                or is_inside(directory, own)
-            )
-
-        for team in removed:
-            # What a removed team was left and never rewrote is passed on.
-            for old in team.leftover_documents:
-                if concerns(old.path):
-                    left.setdefault((old.name, old.path), old.team)
-            theirs = normalize_store_path(team.boundary.path)
-            if concerns(theirs):
-                for name in staying:
-                    left[(name, theirs)] = team.title
-        # One in the folder itself that no team here is known to have
-        # left: a team pruned long ago, or one written by hand.
-        for name in staying:
-            left.setdefault((name, own), None)
-        return [
-            LeftoverDocument(name=name, path=directory, team=team)
-            for (name, directory), team in left.items()
-            if self.read_file(place, DocumentRef(directory, name).path)
-        ]
-
-    def documents_sub_teams_read(self, place: SessionTeam) -> list[tuple[str, str]]:
-        """The documents of ``place`` that every team directly below it
-        reads, as its session has them: the name and the text of each
-        that says something."""
-        team = team_ref(place)
-        found = []
-        for protocol in self.protocols_of(place):
-            if not protocol.read_by_sub_teams:
-                continue
-            name = protocol.document.name
-            text = self.documents.read(team.session, team.keeps(name))
-            if text and text.strip():
-                found.append((name, text.strip()))
-        return found
-
-    def before_sub_teams_are_proposed(self, place: SessionTeam) -> None:
-        """Ask the documents of ``place`` whether its writer may propose
-        sub-teams now.
-
-        Raises:
-            Invalid: One of them is not ready, with what to do first.
-        """
-        proposed = SubTeamsProposed(team_ref(place))
-        for protocol in self.protocols_of(place):
-            protocol.before_sub_teams_are_proposed(proposed)
-
     def removed_team_handed_over(
         self, place: SessionTeam, above: SessionTeam, member: str, text: str
     ) -> None:
@@ -1619,16 +1367,3 @@ class Records(ServiceState):
                 "text": text,
             }
             run.mark(HANDED, place.id, json.dumps([*said, entry]))
-
-    def team_removed(self, place: SessionTeam) -> dict[str, str]:
-        """Tell the documents of ``place`` that it is gone.
-
-        Returns:
-            What is kept of each in the team's record, by its name.
-        """
-        removed = TeamRemoved(team_ref(place))
-        kept = {
-            protocol.document.name: protocol.when_team_is_removed(removed)
-            for protocol in self.protocols_of(place)
-        }
-        return {name: text for name, text in kept.items() if text}

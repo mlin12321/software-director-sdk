@@ -706,7 +706,7 @@ def get_node_memory(
     ones a team above keeps for it, and what its agents reported."""
     node = _require_any(service, node_id)
     return NodeMemory(
-        documents=service.documents_of(node),
+        documents=service.team_documents.listed(service.reader_of(node)),
         reports=service.reports_of(node),
         former_teams=[
             FormerTeamSummary.model_validate(former.model_dump())

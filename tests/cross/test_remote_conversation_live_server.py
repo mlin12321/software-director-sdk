@@ -4132,7 +4132,13 @@ def _scripted_org_llm(
             # One call a turn: the teams of the request, in its order.
             request = text_of(messages[asked[-1]])
             waiting = re.findall(r"`review_team` for team (\S+):", request)
-            reviewed = sum(m.role == "tool" for m in messages[asked[-1] :])
+            # Only its own answers count: a request may arrive in the
+            # middle of a turn, before the answer to another tool.
+            reviewed = sum(
+                call.name == "review_team"
+                for m in messages[asked[-1] :]
+                for call in m.tool_calls or []
+            )
             if reviewed < len(waiting):
                 return tool_call(
                     "review_team", {"team": waiting[reviewed], "decision": "accept"}

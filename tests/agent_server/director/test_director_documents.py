@@ -249,11 +249,11 @@ def test_the_director_asks_a_files_document_what_it_does(repo: Path):
     service = DirectorService(repo)
 
     assert set(service.protocols) == {"spec", "contracts", "report"}
-    contracts = service.protocol_at("services/api/contracts.md")
+    contracts = service.team_documents.at("services/api/contracts.md")
     assert contracts is not None and contracts.waits_for_team_changes
-    spec = service.protocol_at("spec.md")
+    spec = service.team_documents.at("spec.md")
     assert spec is not None and not spec.waits_for_team_changes
-    assert service.protocol_at("services/api/README.md") is None
+    assert service.team_documents.at("services/api/README.md") is None
 
 
 TEAM = TeamRef(id="services.api@one", session="one", folder="services/api")

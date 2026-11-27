@@ -298,7 +298,7 @@ def propose_teams(
         raise Conflict(
             f"The sub-teams your {names.manager} approved are still being set up"
         )
-    service.before_sub_teams_are_proposed(node)
+    service.team_documents.before_sub_teams_are_proposed(service.reader_of(node))
     proposed = proposed_teams(teams, keep, text, service.default_type())
     proposal = _checked(service, node, proposed)
     store = service.org
@@ -321,7 +321,7 @@ def propose_teams(
     facts = service.facts_of_proposal(node, proposal)
     if facts:
         note += f"\n\n{facts}"
-    read = service.documents_sub_teams_read(node)
+    read = service.team_documents.read_by_sub_teams(service.reader_of(node))
     service.record_event(
         node.id, "proposed", None, _named(proposal, replaced), _paths(proposal)
     )

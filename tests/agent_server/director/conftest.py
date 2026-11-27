@@ -841,7 +841,7 @@ def own_document(service: DirectorService, place: SessionTeam, name: str) -> str
     return next(
         (
             shown.text
-            for shown in service.documents_shown(place)
+            for shown in service.team_documents.shown(service.reader_of(place))
             if shown.name == name and shown.own
         ),
         None,
