@@ -748,13 +748,15 @@ class Teams(Delivery):
                 raise NotFound(f"Team {place.id} has no {names.writer} to hand over")
             text = await asyncio.to_thread(self._hand_over_briefing, place, job)
             tool_params = await asyncio.to_thread(
-                self._confine,
+                self.confinement.confine,
                 place.id,
                 self.team_types.team(place).writer,
                 conversation_id,
             )
             adapt = await asyncio.to_thread(
-                self._adapter, conversation_id, self.team_types.hand_over_tools
+                self.confinement.adapter,
+                conversation_id,
+                self.team_types.hand_over_tools,
             )
 
             async def start() -> StartedAgent:
@@ -847,7 +849,7 @@ class Teams(Delivery):
                 branch=await asyncio.to_thread(_branch_of, started.workspace),
                 base_commit=place.base_commit
                 or await asyncio.to_thread(_base_of, started.workspace),
-                boundary_enforcement=self._enforcement(started.kind),
+                boundary_enforcement=self.confinement.enforcement(started.kind),
             )
         return True
 
@@ -876,7 +878,7 @@ class Teams(Delivery):
                 f"{role} was not started"
             )
         text, told = await asyncio.to_thread(self._briefing, place, role, task)
-        tool_params = await asyncio.to_thread(self._confine, place_id, role)
+        tool_params = await asyncio.to_thread(self.confinement.confine, place_id, role)
         if parent_conversation is None:
             raise NotFound(f"Team {place_id} has nobody to derive its {role} from")
         parent_id = UUID(parent_conversation)
@@ -891,12 +893,14 @@ class Teams(Delivery):
         )
         isolation = place.isolation if works else "shared"
         leads = is_division_lead(place)
-        if kind == "acp" and works and self._bwrap is None:
+        if kind == "acp" and works and not self.confinement.is_sandboxed:
             # Nothing holds its process to the team's directory, so its
             # work is kept apart and checked when it is merged.
             isolation = "worktree"
         tools = self.team_types.tools_for(place, role)
-        adapt = await asyncio.to_thread(self._adapter, conversation_id, tools)
+        adapt = await asyncio.to_thread(
+            self.confinement.adapter, conversation_id, tools
+        )
         # A session starts from where the repository's checkout is.
         base = (
             await asyncio.to_thread(head_of, self._repo_dir)
@@ -1066,7 +1070,7 @@ class Teams(Delivery):
             return
         with suppress(GitError, OSError):
             # The shell the IC above starts next cannot write there.
-            self._confine(above.id, self.team_types.team(above).writer)
+            self.confinement.confine(above.id, self.team_types.team(above).writer)
         source, target = Path(above.worktree_path), Path(team.worktree_path)
         if checkout_root(str(source)) == checkout_root(str(target)):
             # In one checkout the team finds the files where they are.

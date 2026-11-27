@@ -147,7 +147,7 @@ class Splits(Watch):
                     git(checkout, ["reset", "--merge", "--quiet", before])
                 return f"the work {team.title!r} committed {refusal}"
         for team in teams:
-            self._forget_shells(team)
+            self.confinement.forget_shells(team)
         for team in apart:
             self._discard_work([team], stamp)
         return None
@@ -346,7 +346,7 @@ class Splits(Watch):
             return
         # The shell the IC starts next can no longer write what it gave away.
         with suppress(GitError, OSError):
-            await asyncio.to_thread(self._confine, place_id)
+            await asyncio.to_thread(self.confinement.confine, place_id)
         # The record each replaced team left last: the one just made.
         kept = self.session_drafts.former(place.session)
         former = [
@@ -465,7 +465,7 @@ class Splits(Watch):
             store.remove(place_id)
             # The shell the IC above starts next can write there again.
             with suppress(GitError, OSError):
-                await asyncio.to_thread(self._confine, plan.parent)
+                await asyncio.to_thread(self.confinement.confine, plan.parent)
             await self.org_save.save()
             intent = run.step_done(intent, "removed")
         self._settling.pop(intent.id, None)
@@ -662,7 +662,7 @@ class Splits(Watch):
         store = self.org
         kept: str | None = None
         for index, team in enumerate(teams):
-            self._forget_shells(team)
+            self.confinement.forget_shells(team)
             above = store.place(team.parent_id) if team.parent_id else None
             # A team in the checkout of the one above is covered by it.
             if index and above and above.worktree_path == team.worktree_path:

@@ -505,8 +505,12 @@ class Sync(Sessions):
                     self.team_types.team(place).title(writer),
                     store.session_title(place),
                 ),
-                tool_params=await asyncio.to_thread(self._confine, node_id, writer),
-                adapt_agent=await asyncio.to_thread(self._adapter, str(ic_id), tools),
+                tool_params=await asyncio.to_thread(
+                    self.confinement.confine, node_id, writer
+                ),
+                adapt_agent=await asyncio.to_thread(
+                    self.confinement.adapter, str(ic_id), tools
+                ),
             )
         except BaseException:
             store.update_place(node_id, agents=place.agents, status=place.status)
@@ -904,7 +908,7 @@ class Sync(Sessions):
             return
         # Shells that were lost with the git directory come back for the
         # agents that still start theirs.
-        await asyncio.to_thread(self._confine_all)
+        await asyncio.to_thread(self.confinement.confine_all)
         statuses = await self._require_launcher().statuses(
             [conversation_id for _, _, conversation_id in agents]
         )

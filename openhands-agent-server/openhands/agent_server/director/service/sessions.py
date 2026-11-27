@@ -299,7 +299,7 @@ class Sessions(Splits):
         store.update_place(top.id, agents=_new_agents(ic_id, writer))
         apart = top.isolation == "worktree"
         tools = self.team_types.tools_for(top, writer)
-        tool_params = await asyncio.to_thread(self._confine, top.id, writer)
+        tool_params = await asyncio.to_thread(self.confinement.confine, top.id, writer)
         started = await launcher.start_root(
             conversation.model_copy(
                 update={
@@ -326,7 +326,9 @@ class Sessions(Splits):
                 store.session_title(top),
             ),
             tool_params=tool_params,
-            adapt_agent=await asyncio.to_thread(self._adapter, str(ic_id), tools),
+            adapt_agent=await asyncio.to_thread(
+                self.confinement.adapter, str(ic_id), tools
+            ),
         )
         store.set_agent(
             top.id,
@@ -341,7 +343,7 @@ class Sessions(Splits):
             isolation=started.isolation if apart else "shared",
             branch=await asyncio.to_thread(_branch_of, started.workspace),
             base_commit=await asyncio.to_thread(_base_of, started.workspace),
-            boundary_enforcement=self._enforcement(started.kind),
+            boundary_enforcement=self.confinement.enforcement(started.kind),
         )
         self._checkout_for_session(top.id)
         self.progressed(top.id)

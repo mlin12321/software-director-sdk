@@ -127,13 +127,8 @@ class DirectorService(Sync):
         await self.org_save.__aenter__()
         self._stop_status = launcher.on_status(self._on_status)
         self._stop_guard = launcher.on_action(self.guard_action)
-        self._stop_resume = launcher.on_resume(self.with_tools_again)
-        self._bwrap = await asyncio.to_thread(self._find_sandbox)
-        if self._bwrap is None:
-            logger.warning(
-                "Director cannot confine shells here (no bubblewrap): it checks "
-                "file tools, and nothing holds the process of an ACP agent"
-            )
+        self._stop_resume = launcher.on_resume(self.confinement.with_tools_again)
+        await asyncio.to_thread(self.confinement.look_for_sandbox)
         bind_director(self)
         # What reviewers check work by is fetched now, off the loop, so
         # that no review request is the first to wait for it.
@@ -444,17 +439,17 @@ class DirectorService(Sync):
             return None
         found = store.find_by_conversation(str(conversation_id))
         if found is not None:
-            scope = self.scope_of(*found)
+            scope = self.confinement.scope_of(*found)
         else:
             aside = store.find_hand_over(str(conversation_id))
             scope = (
-                self.scope_of(
+                self.confinement.scope_of(
                     aside, self.team_types.team(aside).writer, str(conversation_id)
                 )
                 if aside
                 else None
             )
-        denied = self._confinement().check(scope, event.tool_name, action)
+        denied = self.confinement.check(scope, event.tool_name, action)
         if denied is None:
             return None
         works = found is not None and found[1] == self.team_types.team(found[0]).writer

@@ -115,7 +115,7 @@ def _calling_agent(
 ) -> UUID:
     """The conversation of the agent that shows its token."""
     try:
-        return service.agent_of(token or "")
+        return service.confinement.agent_of(token or "")
     except NotFound as error:
         raise Unauthenticated(str(error)) from error
 

@@ -369,7 +369,7 @@ async def test_the_end_of_a_split_cut_off_before_it_is_told_is_told(
         ended.set()
         raise ServerEnded
 
-    monkeypatch.setattr(first, "_confine", server_ends)
+    monkeypatch.setattr(first.confinement, "confine", server_ends)
     await cut_off(
         launcher, ended, use(first, manager(first), ApproveTeamsTool, APPROVE)
     )

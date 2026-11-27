@@ -81,6 +81,7 @@ def test_the_directors_own_parts_do_not_know_the_shipped_orgs_or_the_service(
 
 
 SERVICES_THE_DIRECTOR_HOLDS = [
+    "service/agent_confinement_service.py",
     "service/org_save_service.py",
     "service/org_settings_service.py",
     "service/resumable_work_service.py",
