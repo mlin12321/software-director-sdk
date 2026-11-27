@@ -46,11 +46,9 @@ from openhands.agent_server.director.launch import TeamLauncher
 from openhands.agent_server.director.merge_checkout import MergeCheckout, discard
 from openhands.agent_server.director.models import (
     AgentRef,
-    FormerTeam,
     HandOverMode,
     OrgSummary,
     Report,
-    RoutedRequest,
     SessionTeam,
     SessionTeamInput,
     SplitChild,
@@ -121,8 +119,6 @@ _STARTED_WITH = "\n\nWhat your team is started with:\n"
 # How many of the latest events of its sub-teams an agent reads at once.
 # How many of the human's direct requests to the teams below an IC is told.
 ASKED_TOLD = 10
-# How much of such a request is kept in the record of the team above.
-ASKED_KEPT = 1000
 HISTORY_TOLD = 30
 # How long tree changes are gathered before they are saved as one commit.
 SAVE_DELAY_SECONDS = 2.0
@@ -343,16 +339,9 @@ class ServiceState:
         self._settling: dict[int, tuple[set[str], str]] = {}
         # The conversations a resume is about to run again.
         self._resuming: set[str] = set()
-        # The records of removed teams by the team they were below, as read
-        # at one state of team memory.
-        self._former_read: tuple[str | None, dict[str, list[FormerTeam]]] | None = None
-        self._routed_read: tuple[str | None, list[RoutedRequest]] | None = None
         self._stop_guard: Callable[[], None] | None = None
         self._stop_resume: Callable[[], None] | None = None
         self._lock = threading.Lock()
-        # Held from looking a need up in the record to keeping it, so that
-        # an agent that tries the same file again is counted once.
-        self._keeping_needs = threading.Lock()
         self._clock = clock
         self._run_limit_retry = run_limit_retry
         self.org_state = OrgStateService(repo_dir=lambda: self.repo_dir, clock=clock)

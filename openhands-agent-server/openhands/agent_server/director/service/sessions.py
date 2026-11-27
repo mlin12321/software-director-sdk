@@ -45,7 +45,6 @@ from openhands.agent_server.director.service.request_routing_service import (
 )
 from openhands.agent_server.director.service.splits import Splits
 from openhands.agent_server.director.service.state import (
-    ASKED_KEPT,
     BASE_LANE,
     _agent_title,
     _base_of,
@@ -54,6 +53,7 @@ from openhands.agent_server.director.service.state import (
     apart,
     conversations_of,
 )
+from openhands.agent_server.director.service.team_history_service import ASKED_KEPT
 from openhands.agent_server.director.split import shape_of
 from openhands.sdk.conversation.request import (
     ConversationWorktreeOptions,
@@ -87,8 +87,8 @@ class Sessions(Splits):
             model_calls=self.model_calls,
             checkout=lambda: self._repo_dir,
             purpose=self._purpose,
-            routed_requests=self.routed_requests,
-            keep_routed=self.keep_routed,
+            routed_requests=self.team_history.routed_requests,
+            keep_routed=self.team_history.keep_routed,
             hand_on=self._hand_on,
             paused=lambda: self.org_state.paused is not None,
         )
@@ -245,7 +245,11 @@ class Sessions(Splits):
         for current in shape:
             run.mark(TASK, ids[current.id], self._purpose(current))
         await asyncio.to_thread(
-            self.record_event, above.id, "session_opened", top, text[:ASKED_KEPT]
+            self.team_history.record_event,
+            above.id,
+            "session_opened",
+            top,
+            text[:ASKED_KEPT],
         )
         brief = session_brief(
             top,
@@ -384,7 +388,7 @@ class Sessions(Splits):
                 "Wait for the answer."
             )
         # It may say the same, and the session then goes up once more.
-        self.keep_routed("asked", top, request.text, "top", why)
+        self.team_history.keep_routed("asked", top, request.text, "top", why)
         self.tell_writer(
             top.id,
             handed_up(place, request.text, why, names=names)
@@ -615,9 +619,9 @@ class Sessions(Splits):
                 # Once: a step cut off after it would record it again.
                 if plan.known and "told" not in intent.steps:
                     await asyncio.to_thread(
-                        self._land_event,
+                        self.team_history.land_event,
                         plan.parent,
-                        self._event(
+                        self.team_history.event(
                             "session_closed",
                             top,
                             "; ".join(

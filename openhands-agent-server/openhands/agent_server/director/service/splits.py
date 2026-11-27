@@ -94,7 +94,7 @@ class Splits(Watch):
         names = self.team_types.team(place).names
         proposal = place.pending_split
         self.org.update_place(place.id, pending_split=None)
-        self.record_event(
+        self.team_history.record_event(
             place.id,
             "declined",
             None,
@@ -283,7 +283,7 @@ class Splits(Watch):
                     store.move_place(below_id, place_id)
             for team in replaced:
                 await self._archive(team, "replaced", plan.stamp)
-                self.record_event(place_id, "replaced", team)
+                self.team_history.record_event(place_id, "replaced", team)
                 store.remove(team.id)
 
         teams = plan.teams
@@ -303,7 +303,9 @@ class Splits(Watch):
                 made = store.place(team.id)
                 if made is not None:
                     self._work_accepted(made)
-                    self.record_event(place_id, "set_up", made, child.task[:200])
+                    self.team_history.record_event(
+                        place_id, "set_up", made, child.task[:200]
+                    )
             # What a sub-team that stayed had waiting for review is now for
             # the IC of the team it reports to, which this starts if it is
             # a new team.
@@ -446,7 +448,9 @@ class Splits(Watch):
                 if team is not None:
                     await self._archive(team, "pruned", plan.stamp)
             if "recorded" not in intent.steps:
-                self.record_event(plan.parent, "pruned", pruned, plan.reason)
+                self.team_history.record_event(
+                    plan.parent, "pruned", pruned, plan.reason
+                )
                 intent = run.step_done(intent, "recorded")
             if pruned is not None and above is not None:
                 # The directory is the team above's again, with what the

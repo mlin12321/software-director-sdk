@@ -332,7 +332,7 @@ def propose_teams(
     if facts:
         note += f"\n\n{facts}"
     read = service.team_documents.read_by_sub_teams(service.team_types.reader_of(node))
-    service.record_event(
+    service.team_history.record_event(
         node.id, "proposed", None, _named(proposal, replaced), _paths(proposal)
     )
     said = proposed.reason or "I propose these sub-teams."
@@ -417,7 +417,7 @@ def approve_teams(service: DirectorService, caller: Caller) -> str:
             }
         ),
     )
-    service.record_event(
+    service.team_history.record_event(
         node.id,
         "approved",
         None,
@@ -456,7 +456,7 @@ def decline_teams(service: DirectorService, caller: Caller, reason: str) -> str:
     replaced = [team.title for team in map(store.place, proposal.replaces) if team]
     named = _named(proposal, replaced)
     store.update_place(node.id, pending_split=None)
-    service.record_event(
+    service.team_history.record_event(
         node.id, "declined", None, f"{named}. Reason: {reason}", _paths(proposal)
     )
     service.send_msg(

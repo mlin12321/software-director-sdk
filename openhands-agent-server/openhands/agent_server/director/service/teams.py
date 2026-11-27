@@ -353,7 +353,9 @@ class Teams(Delivery):
         if team is None:
             return
         name = self.team_types.team(team).title(role)
-        self.record_event(team.parent_id, "failed", team, f"{name}: {reason}")
+        self.team_history.record_event(
+            team.parent_id, "failed", team, f"{name}: {reason}"
+        )
         lost = any(a.role == role and a.status == AGENT_LOST for a in team.agents)
         self.tell_above(
             team,
@@ -575,7 +577,7 @@ class Teams(Delivery):
             if raised:
                 since = now - datetime.fromisoformat(min(raised))
                 waiting[below.id] = int(since.total_seconds() // 60)
-        self.record_event(place_id, "woken", team, reason)
+        self.team_history.record_event(place_id, "woken", team, reason)
         self.tell_manager(
             place_id,
             manager_check(
@@ -584,7 +586,7 @@ class Teams(Delivery):
                 quiet,
                 waiting,
                 counted["escalations"],
-                self.history_of(place_id),
+                self.team_history.history_of(place_id),
                 after_successes=after_successes,
                 escalation_limit=self.org_settings.settings.manager_check_ic_setbacks,
                 names=self.team_types.names_at(place_id),

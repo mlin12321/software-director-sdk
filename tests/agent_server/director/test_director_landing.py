@@ -180,7 +180,7 @@ async def test_what_became_of_a_sessions_teams_is_on_record_once_it_is_accepted(
     await split_root(service)
     top = node(service, "root")
 
-    own = service.history_of(top.id)
+    own = service.team_history.history_of(top.id)
     assert "set_up" in [event.kind for event in own]
     assert all(event.unaccepted for event in own)
     assert service.team_memory.history("root") == []
@@ -731,7 +731,7 @@ async def test_contracts_both_changed_wait_for_the_manager_above(
     last = launcher.messages_to(conversation)[-1]
     on_record = [
         event
-        for event in service.org_history(50).events
+        for event in service.team_history.org_history(50).events
         if event.kind == "not_taken" and "the contracts it wrote" in event.detail
     ]
     if which == "session":
@@ -1590,7 +1590,7 @@ async def test_contracts_the_org_did_not_take_are_on_record_when_the_session_clo
 
     assert any(
         event.kind == "not_taken" and "the contracts it wrote" in event.detail
-        for event in service.org_history(100).events
+        for event in service.team_history.org_history(100).events
     )
 
 

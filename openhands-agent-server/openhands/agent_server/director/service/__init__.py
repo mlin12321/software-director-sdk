@@ -310,7 +310,7 @@ class DirectorService(Sync):
         if place.id != top.id:
             # Its IC may say it is not the team's own: the IC above has it then.
             await asyncio.to_thread(
-                self.keep_routed, "asked", place, text, chosen_by, reason
+                self.team_history.keep_routed, "asked", place, text, chosen_by, reason
             )
         return RoutedMessage(
             node_id=place.id,
@@ -400,7 +400,12 @@ class DirectorService(Sync):
         top = opened.session.teams[0]
         if chosen_by not in ("path", "top"):
             await asyncio.to_thread(
-                self.keep_routed, "asked", top, request.text, chosen_by, reason
+                self.team_history.keep_routed,
+                "asked",
+                top,
+                request.text,
+                chosen_by,
+                reason,
             )
         return RoutedMessage(
             node_id=top.id,
@@ -454,7 +459,9 @@ class DirectorService(Sync):
         if found is not None and works and denied.relative is not None:
             # The refusal stands whether or not it could be kept.
             with suppress(Exception):
-                self.record_need(found[0], denied.relative or ".", NEED_WRITE)
+                self.team_history.record_need(
+                    found[0], denied.relative or ".", NEED_WRITE
+                )
         return worded(
             denied,
             scope or Scope(checkout="", directory=""),

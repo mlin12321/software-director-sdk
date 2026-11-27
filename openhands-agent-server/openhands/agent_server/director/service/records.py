@@ -2,15 +2,10 @@
 records and what they needed of each other."""
 
 import json
-from collections.abc import Sequence
 from functools import cached_property
 from pathlib import Path
 from typing import Any, NamedTuple
-from uuid import uuid4
 
-from openhands.agent_server.director.boundary import (
-    owns,
-)
 from openhands.agent_server.director.documents.schema import (
     ShownDocument,
 )
@@ -21,8 +16,6 @@ from openhands.agent_server.director.git import (
     tracked_files,
 )
 from openhands.agent_server.director.git_store import (
-    GitStore,
-    Landing,
     normalize_store_path,
     team_key,
 )
@@ -30,22 +23,16 @@ from openhands.agent_server.director.models import (
     ConversationLink,
     ConversationPlace,
     ConversationRelation,
-    FormerTeam,
-    HistoryEvent,
     LeftoverDocument,
-    OrgHistory,
     OrgNode,
     Report,
-    RoutedRequest,
     SessionTeam,
     SplitProposal,
-    TeamEvent,
-    TeamEventKind,
     Thread,
 )
 from openhands.agent_server.director.org_store import (
     is_division_lead,
-    team_id_of,
+    session_of,
     team_ref,
     utc_now,
 )
@@ -74,7 +61,6 @@ from openhands.agent_server.director.service.session_landing_service import (
 )
 from openhands.agent_server.director.service.state import (
     _REASON_KEPT,
-    ASKED_KEPT,
     ASKED_TOLD,
     DECLINED_TOLD,
     HISTORY_TOLD,
@@ -82,6 +68,9 @@ from openhands.agent_server.director.service.state import (
     TOGETHER_WORTH_SAYING,
     ServiceState,
     _instant,
+)
+from openhands.agent_server.director.service.team_history_service import (
+    TeamHistoryService,
 )
 from openhands.sdk.errors import NotFound, NotSupported
 from openhands.sdk.logger import get_logger
@@ -95,17 +84,6 @@ def _directory_of(file: str) -> str:
     return file.rpartition("/")[0]
 
 
-def session_of(node: OrgNode) -> str:
-    """The session a place belongs to; '' for a team of the org."""
-    return node.session if isinstance(node, SessionTeam) else ""
-
-
-def session_in(node_id: str) -> str:
-    """The session the id of a place names; '' for the id of a team of the
-    org."""
-    return node_id.split("@")[1] if "@" in node_id else ""
-
-
 class Inherited(NamedTuple):
     """A document a session wrote for a team the org no longer has."""
 
@@ -117,12 +95,6 @@ class Inherited(NamedTuple):
     # What the lost team was called.
     lost: str
     written: str
-
-
-# The events of a session that change what the org has of its teams.
-_CHANGES_THE_ORG: frozenset[TeamEventKind] = frozenset(
-    {"set_up", "replaced", "pruned", "moved"}
-)
 
 
 class Records(ServiceState):
@@ -140,7 +112,18 @@ class Records(ServiceState):
             team_types=self.team_types,
             session_drafts=self.session_drafts,
             org_save=self.org_save,
-            event=self._event,
+            event=self.team_history.event,
+        )
+
+    @cached_property
+    def team_history(self) -> TeamHistoryService:
+        """The history of the org's teams."""
+        return TeamHistoryService(
+            org=lambda: self.org,
+            team_memory=self._memory,
+            require_team_memory=lambda: self.team_memory,
+            session_drafts=self.session_drafts,
+            org_changed=self._note_change,
         )
 
     def _keep_failure(self, intent: Intent, error: Exception) -> None:
@@ -150,47 +133,12 @@ class Records(ServiceState):
         if team is None:
             return
         what = STEP_NAMES.get(intent.kind, intent.kind)
-        self.record_event(
+        self.team_history.record_event(
             team.parent_id or team.id,
             "failed",
             team,
             f"{what}: not done. {type(error).__name__}: {error}"[:_REASON_KEPT],
         )
-
-    def record_event(
-        self,
-        above_id: str | None,
-        kind: TeamEventKind,
-        team: SessionTeam | None = None,
-        detail: str = "",
-        paths: Sequence[str] = (),
-        other: SessionTeam | None = None,
-        *,
-        other_gone: tuple[str, str] | None = None,
-        between: tuple[str, str] = ("", ""),
-    ) -> None:
-        """Keep, for the IC and the Manager of a team, what became of a team
-        directly below it. It is its session's alone until the session's
-        work is accepted. Safe from any thread.
-
-        Args:
-            above_id: The team whose record it is; nothing is kept for None.
-            team: The team it is about, or None when it is about none.
-            paths: The directories a proposal was for.
-            other: The team beside it whose directory it needed, or the
-                team it asked directly.
-            other_gone: The id and the title of that team when it is no
-                longer in the org.
-            between: The two commits an accept took the team's work between.
-        """
-        session = session_in(above_id or "") or (team.session if team else "")
-        if above_id is None or not session:
-            return
-        event = self._event(kind, team, detail, paths, other, other_gone)
-        event = event.model_copy(update={"base": between[0], "head": between[1]})
-        self.session_drafts.keep_event(session, team_key(above_id), event)
-        if kind in _CHANGES_THE_ORG:
-            self._note_change(session)
 
     def _note_change(self, session: str) -> None:
         """Remember that a session whose work is accepted has changed
@@ -199,141 +147,6 @@ class Records(ServiceState):
         if top is not None and top.review is not None:
             if top.review.state == "accepted" and self.org.opens_session(top):
                 self._changed_since_accept.setdefault(session, False)
-
-    def _event(
-        self,
-        kind: TeamEventKind,
-        team: SessionTeam | None,
-        detail: str = "",
-        paths: Sequence[str] = (),
-        other: SessionTeam | None = None,
-        other_gone: tuple[str, str] | None = None,
-    ) -> TeamEvent:
-        return TeamEvent(
-            at=utc_now(),
-            kind=kind,
-            # The team of the org, whatever session it was the work of.
-            team_id=team.team_id if team else "",
-            team=team.title if team else "",
-            session=self.org.session_title(team) if team else "",
-            detail=detail,
-            paths=list(paths),
-            other_id=other.team_id if other else (other_gone or ("", ""))[0],
-            other=other.title if other else (other_gone or ("", ""))[1],
-            id=uuid4().hex,
-            unaccepted=True,
-        )
-
-    def _land_event(self, team_id: str, event: TeamEvent) -> None:
-        """Add to the org's record of a team what is no session's to keep."""
-        self._memory().take_in(
-            Landing(
-                files={},
-                seen={},
-                reports={},
-                former=[],
-                forget=[],
-                forget_reports=[],
-                events={team_id: [event.model_copy(update={"unaccepted": False})]},
-                routed=[],
-            ),
-            f"memory: history of {team_id}",
-        )
-
-    def history_of(self, node_id: str) -> list[TeamEvent]:
-        """What became of the teams directly below a team, oldest first:
-        the org's record, and for a place what its session kept since."""
-        node = self.org.get(node_id)
-        org = (
-            self._memory().history(node_id)
-            if node is None or self.org.is_orgs(node)
-            else []
-        )
-        session = session_in(node_id)
-        own = self.session_drafts.events(session, team_key(node_id)) if session else []
-        return [*org, *own]
-
-    def record_need(self, team: SessionTeam, path: str, how: str) -> None:
-        """Keep that a team needed a file of a team beside it; nothing is
-        kept when ``path`` is no such team's. The same file needed the same
-        way is kept once. Safe from any thread.
-
-        Args:
-            path: Relative to the repository.
-            how: `NEED_WRITE` or `NEED_FINDING`.
-        """
-        if team.parent_id is None:
-            return
-        beside = next(
-            (
-                other
-                for other in self.org.below(team.parent_id)
-                if other.id != team.id and owns(other, path)
-            ),
-            None,
-        )
-        if beside is None:
-            return
-        with self._keeping_needs:
-            kept = False
-            for event in self.history_of(team.parent_id):
-                if event.kind == "set_up" and event.team_id in (
-                    team.team_id,
-                    beside.team_id,
-                ):
-                    # A new team in that place is counted from its start.
-                    kept = False
-                elif event.kind == "needed":
-                    kept = kept or (
-                        event.team_id,
-                        event.other_id,
-                        event.paths,
-                        event.detail,
-                    ) == (team.team_id, beside.team_id, [path], how)
-            if not kept:
-                self.record_event(team.parent_id, "needed", team, how, [path], beside)
-
-    def routed_requests(self) -> list[RoutedRequest]:
-        """What the human said that went straight to a team, oldest first:
-        what the org has on record, and what the sessions open here kept
-        since their work was last accepted. Safe from any thread."""
-        team_memory = self._memory()
-        head = team_memory.head()
-        with self._lock:
-            read = self._routed_read
-        if read is None or read[0] != head:
-            read = (head, team_memory.routed())
-            with self._lock:
-                self._routed_read = read
-        own = self.session_drafts.routed()
-        return sorted([*read[1], *own], key=lambda request: request.at)
-
-    def keep_routed(
-        self, kind: str, team: SessionTeam, text: str, chosen_by: str, reason: str
-    ) -> None:
-        """Keep a request that went straight to a team, or that the team
-        said was not its own, and as an event in the record of the team
-        above. Both are its session's alone until the session's work is
-        accepted. Safe from any thread."""
-        request = RoutedRequest.model_validate(
-            {
-                "at": utc_now(),
-                "kind": kind,
-                "team_id": team.id,
-                "team": team.title,
-                "text": text,
-                "chosen_by": chosen_by,
-                "reason": reason,
-                "id": uuid4().hex,
-            }
-        )
-        self.session_drafts.keep_routed(team.session, request)
-        self.record_event(
-            team.parent_id,
-            "asked" if kind == "asked" else "misrouted",
-            team,
-            text[:ASKED_KEPT],
-        )
 
     def asked_below(self, place: SessionTeam) -> list[dict[str, str]]:
         """The latest of what the human asked directly of the teams below
@@ -351,7 +164,7 @@ class Records(ServiceState):
                 "at": request.at,
                 "text": request.text,
             }
-            for request in self.routed_requests()
+            for request in self.team_history.routed_requests()
             if request.kind == "asked" and request.team_id in below
         ][-ASKED_TOLD:]
 
@@ -361,7 +174,7 @@ class Records(ServiceState):
         if team.parent_id is None:
             return []
         asked: list[str] = []
-        for event in self.history_of(team.parent_id):
+        for event in self.team_history.history_of(team.parent_id):
             if event.team_id != team.team_id:
                 continue
             if event.kind in ("accepted", "set_up"):
@@ -375,7 +188,7 @@ class Records(ServiceState):
         other's directory often enough to say so."""
         return [
             pair
-            for pair in needs_between(self.history_of(node_id))
+            for pair in needs_between(self.team_history.history_of(node_id))
             if pair["writes_refused"] + pair["review_findings"] >= NEEDED_WORTH_SAYING
         ]
 
@@ -384,7 +197,7 @@ class Records(ServiceState):
         has it on record."""
         if team.parent_id is None:
             return ""
-        records = track_records(self.history_of(team.parent_id))
+        records = track_records(self.team_history.history_of(team.parent_id))
         own = team.team_id
         counted = next((record_line(r) for r in records if r["team_id"] == own), "")
         needed = [
@@ -409,7 +222,7 @@ class Records(ServiceState):
             if (count := changed_together(checkout, one.path, other.path))
             >= TOGETHER_WORTH_SAYING
         ]
-        history = self.history_of(place.id)
+        history = self.team_history.history_of(place.id)
         why = {
             (event.team_id, event.at): event.detail
             for event in history
@@ -417,7 +230,7 @@ class Records(ServiceState):
         }
         paths = {child.path for child in children}
         before = []
-        for former in self.former_teams_of(place):
+        for former in self.team_history.former_teams_of(place):
             if former.path not in paths:
                 continue
             reason = next(
@@ -737,12 +550,12 @@ class Records(ServiceState):
                     if in_full
                     else {}
                 )
-                for former in self.former_teams_of(place)
+                for former in self.team_history.former_teams_of(place)
             ]
         if in_full:
             # What became of the teams below so far, also of the ones that
             # are gone: for both agents to weigh what they do next by.
-            events = self.history_of(place.id)
+            events = self.team_history.history_of(place.id)
             context["track_record_of_the_teams_below"] = track_records(events)
             needed = [need_words(pair) for pair in self.needs_below(place.id)]
             if needed:
@@ -751,68 +564,6 @@ class Records(ServiceState):
                 event_line(event) for event in events[-HISTORY_TOLD:]
             ]
         return context
-
-    def _former_below(self, team_memory: GitStore, node_id: str) -> list[FormerTeam]:
-        """The records of the teams removed from below a team. They are
-        read once for each state of team memory, since a context is built
-        for every message."""
-        head = team_memory.head()
-        with self._lock:
-            if self._former_read is None or self._former_read[0] != head:
-                self._former_read = (head, {})
-            read = self._former_read[1]
-        if node_id not in read:
-            read[node_id] = team_memory.former_below(node_id)
-        return read[node_id]
-
-    def former_teams_of(self, node: OrgNode) -> list[FormerTeam]:
-        """What the teams removed from directly below a team left, with
-        the ones its own session removed and the org does not know of yet."""
-        own = [
-            former
-            for former in self.session_drafts.former(session_of(node))
-            if former.above == team_key(node.id)
-        ]
-        return [*self._former_below(self.team_memory, node.id), *own]
-
-    def org_history(self, limit: int, before: str | None = None) -> OrgHistory:
-        """What became of every team of the org, newest first.
-
-        Teams needing each other's files are left out: they are counted
-        for an IC and are no event of the org.
-
-        Args:
-            before: Only events before this time (ISO 8601).
-        """
-        team_memory = self.team_memory
-        # A record is the team's, whichever sessions have a place at it.
-        teams: dict[str, str] = {}
-        for node in (*self.org.teams(), *self.org.places()):
-            teams.setdefault(team_id_of(node), node.title)
-        events = [
-            HistoryEvent(**event.model_dump(), above_id=team_id, above=title)
-            for team_id, title in teams.items()
-            for event in team_memory.history(team_id)
-            if event.kind != "needed" and (before is None or event.at < before)
-        ]
-        # Times are kept to the second: of events in one second the later
-        # recorded comes first, and a page never ends inside a second, so
-        # that reading on from its last time misses none.
-        for (_, team_id), kept in self.session_drafts.events_by_team().items():
-            events += [
-                HistoryEvent(
-                    **event.model_dump(),
-                    above_id=team_id,
-                    above=teams.get(team_id, ""),
-                )
-                for event in kept
-                if event.kind != "needed" and (before is None or event.at < before)
-            ]
-        events.reverse()
-        events.sort(key=lambda event: event.at, reverse=True)
-        while limit < len(events) and events[limit].at == events[limit - 1].at:
-            limit += 1
-        return OrgHistory(events=events[:limit], earlier=len(events) > limit)
 
     def reports_of(self, node: OrgNode) -> list[Report]:
         """What the two agents of a team recorded, oldest first. Reports

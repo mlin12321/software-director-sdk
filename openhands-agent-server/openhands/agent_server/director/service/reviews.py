@@ -90,13 +90,13 @@ from openhands.agent_server.director.service.state import (
     _REST_CHECK_SECONDS,
     _REST_CHECKS,
     ASIDE_REFS,
-    ASKED_KEPT,
     BASE_LANE,
     MERGE_WAITS,
     ORG_WAITS,
     _branch_of,
     checkout_root,
 )
+from openhands.agent_server.director.service.team_history_service import ASKED_KEPT
 from openhands.agent_server.director.service.teams import Teams
 from openhands.agent_server.director.split import (
     Shape,
@@ -255,7 +255,7 @@ class Reviews(Teams):
         self._drop_merge_checkout(place_id)
         self._tell_turns()
         self.progressed(place_id, by_above=True)
-        self.record_event(
+        self.team_history.record_event(
             place.parent_id,
             "sent_back",
             place,
@@ -265,7 +265,7 @@ class Reviews(Teams):
             # A finding of the runtime names several files in one.
             for path in finding.path.split(", "):
                 if path.strip():
-                    self.record_need(place, path.strip(), NEED_FINDING)
+                    self.team_history.record_need(place, path.strip(), NEED_FINDING)
         limit = self.org_settings.settings.manager_check_ic_setbacks
         if limit and place.parent_id is not None and review.round % limit == 0:
             with self._counting:
@@ -585,7 +585,7 @@ class Reviews(Teams):
             for other in store.sub_teams(above_id):
                 if other.id != team_id and is_inside(other.boundary.path, path):
                     store.move(other.id, team_id)
-            self.record_event(
+            self.team_history.record_event(
                 above_id,
                 "moved",
                 place,
@@ -1290,9 +1290,9 @@ class Reviews(Teams):
         """Keep on record what a session wrote of a document that the org
         did not take, also when the session is closed and nobody is told."""
         for name, directory, _ in landed.others:
-            self._land_event(
+            self.team_history.land_event(
                 self.session_landing.home_of(top, directory),
-                self._event(
+                self.team_history.event(
                     "not_taken",
                     top,
                     f"the {name} it wrote for "
@@ -1969,13 +1969,13 @@ class Reviews(Teams):
         self.progressed(above.id)
         self._work_accepted(place)
         if meets is not None or resolved:
-            self.record_event(
+            self.team_history.record_event(
                 above.id,
                 "reconciled",
                 place,
                 (reconciled or f"merged {', '.join(resolved)}")[:ASKED_KEPT],
             )
-        self.record_event(
+        self.team_history.record_event(
             above.id,
             "accepted",
             place,

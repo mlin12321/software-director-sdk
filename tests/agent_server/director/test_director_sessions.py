@@ -989,7 +989,7 @@ async def test_a_session_whose_ic_could_not_be_started_leaves_nothing_in_the_his
     repo: Path, launcher: FakeLauncher
 ):
     service = await started(repo, launcher)
-    before = {event.id for event in service.org_history(100).events}
+    before = {event.id for event in service.team_history.org_history(100).events}
     tasks = service.org_state.run_state().marked(TASK)
     launcher.root_error = Unprocessable("cannot start")
 
@@ -1002,7 +1002,9 @@ async def test_a_session_whose_ic_could_not_be_started_leaves_nothing_in_the_his
     launcher.root_error = None
 
     assert [
-        event for event in service.org_history(100).events if event.id not in before
+        event
+        for event in service.team_history.org_history(100).events
+        if event.id not in before
     ] == []
     assert service.org_state.run_state().marked(TASK) == tasks
     await service.aclose()

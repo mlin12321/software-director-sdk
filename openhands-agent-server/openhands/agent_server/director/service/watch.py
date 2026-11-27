@@ -54,7 +54,7 @@ class Watch(Reviews):
             work_queue=self.work_queue,
             progressed=self.progressed,
             release_reviews=self._release_reviews,
-            record_event=self.record_event,
+            record_event=self.team_history.record_event,
             tell_writer=self.tell_writer,
             tell_above=self.tell_above,
         )
@@ -121,7 +121,7 @@ class Watch(Reviews):
         if self._loop is not None:
             self.work_queue.enqueue(lambda: self._stop(place_id), place_id)
         self.org_save.save_soon()
-        self.record_event(team.parent_id, "stopped", team, reason)
+        self.team_history.record_event(team.parent_id, "stopped", team, reason)
         # A stopped team is waited for no longer by the reviews beside it.
         self.release_reviews(team.parent_id)
         if team.parent_id is not None:

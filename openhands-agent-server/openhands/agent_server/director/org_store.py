@@ -111,6 +111,17 @@ def session_id_of(node: OrgNodeInput) -> str:
     return node.session if isinstance(node, SessionTeamInput) else ""
 
 
+def session_of(node: OrgNodeInput) -> str:
+    """The session a place belongs to; '' for a team of the org."""
+    return node.session if isinstance(node, SessionTeam) else ""
+
+
+def session_in(node_id: str) -> str:
+    """The session the id of a place names; '' for the id of a team of the
+    org."""
+    return node_id.split("@")[1] if "@" in node_id else ""
+
+
 def team_ref(node: OrgNodeInput) -> TeamRef:
     """A team, or the work of one in a session, as its documents and its
     org are told of it."""

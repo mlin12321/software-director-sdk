@@ -691,7 +691,7 @@ def get_org_history(
     """Get what became of the teams of the whole org, newest first: set up,
     work accepted or sent back, stalled, stopped, replaced, pruned, and what
     was proposed, approved and declined."""
-    return service.org_history(limit, before)
+    return service.team_history.org_history(limit, before)
 
 
 @director_router.get(
@@ -710,9 +710,9 @@ def get_node_memory(
         reports=service.reports_of(node),
         former_teams=[
             FormerTeamSummary.model_validate(former.model_dump())
-            for former in service.former_teams_of(node)
+            for former in service.team_history.former_teams_of(node)
         ],
-        history=service.history_of(node.id),
+        history=service.team_history.history_of(node.id),
     )
 
 

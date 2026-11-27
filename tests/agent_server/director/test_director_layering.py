@@ -93,6 +93,7 @@ SERVICES_THE_DIRECTOR_HOLDS = [
     "service/session_landing_service.py",
     "service/stall_watch_service.py",
     "service/start_line_service.py",
+    "service/team_history_service.py",
     "service/team_type_service.py",
 ]
 
