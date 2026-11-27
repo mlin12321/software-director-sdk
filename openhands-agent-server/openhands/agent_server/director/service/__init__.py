@@ -38,25 +38,79 @@ from openhands.agent_server.director.recovery import (
 from openhands.agent_server.director.run_state import CLEARING
 from openhands.agent_server.director.runtime import bind_director
 from openhands.agent_server.director.scope import Scope, named_paths, searched_folder
+from openhands.agent_server.director.service.check_count_service import (
+    CheckCountService,
+)
+from openhands.agent_server.director.service.message_delivery_service import (
+    MessageDeliveryService,
+)
 from openhands.agent_server.director.service.org_run_service import (
     AGENT_PAUSED,
     RESTART_NOTE,
+    OrgRunService,
 )
-from openhands.agent_server.director.service.review_service import MERGE_WAITS
-from openhands.agent_server.director.service.session_merge_service import ORG_WAITS
+from openhands.agent_server.director.service.org_sync_service import OrgSyncService
+from openhands.agent_server.director.service.request_routing_service import (
+    RequestRoutingService,
+)
+from openhands.agent_server.director.service.resumable_work_service import (
+    ResumableWorkService,
+)
+from openhands.agent_server.director.service.review_service import (
+    MERGE_WAITS,
+    ReviewService,
+)
+from openhands.agent_server.director.service.session_document_service import (
+    SessionDocumentService,
+)
+from openhands.agent_server.director.service.session_landing_service import (
+    SessionLandingService,
+)
+from openhands.agent_server.director.service.session_lifecycle_service import (
+    SessionLifecycleService,
+)
+from openhands.agent_server.director.service.session_limit_service import (
+    LIMIT_WAITS,
+    SessionLimitService,
+)
+from openhands.agent_server.director.service.session_merge_service import (
+    ORG_WAITS,
+    SessionMergeService,
+)
 from openhands.agent_server.director.service.stall_watch_service import (
     STALL_WAITS,
+    StallWatchService,
 )
 from openhands.agent_server.director.service.state import (
-    LIMIT_WAITS,
     ROOT_ID,
+    SAVED_BEFORE_FORGOTTEN,
+    ServiceState,
+    lane_for,
 )
-from openhands.agent_server.director.service.sync import Sync
-from openhands.agent_server.director.service.team_messaging_service import failure_waits
+from openhands.agent_server.director.service.team_context_service import (
+    TeamContextService,
+)
+from openhands.agent_server.director.service.team_history_service import (
+    TeamHistoryService,
+)
+from openhands.agent_server.director.service.team_member_start_service import (
+    TeamMemberStartService,
+)
+from openhands.agent_server.director.service.team_messaging_service import (
+    TeamMessagingService,
+    failure_waits,
+)
+from openhands.agent_server.director.service.team_split_service import TeamSplitService
+from openhands.agent_server.director.service.team_summary_service import (
+    TeamSummaryService,
+)
 from openhands.agent_server.director.service.team_type_service import (
     DIRECTOR_TOOL_NAMES,
 )
-from openhands.agent_server.director.service.work_queue_service import BASE_LANE
+from openhands.agent_server.director.service.work_queue_service import (
+    BASE_LANE,
+    ORG_LANE,
+)
 from openhands.sdk.errors import (
     Conflict,
     NotFound,
@@ -79,7 +133,7 @@ __all__ = [
 ]
 
 
-class DirectorService(Sync):
+class DirectorService(ServiceState):
     """Owns the org tree and the team memory of one repository.
 
     An org lives in the repository its first conversation was opened in,
@@ -103,11 +157,12 @@ class DirectorService(Sync):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         """Takes what :class:`ServiceState` takes."""
         super().__init__(*args, **kwargs)
+        self._build_services()
         for kind, step in {
-            "brief": self._do_brief,
-            "launch_member": self._do_launch_member,
+            "brief": self.member_start.do_brief,
+            "launch_member": self.member_start.do_launch_member,
             "split": self.team_splits.do_split,
-            "start_team": self._do_start_team,
+            "start_team": self.member_start.do_start_team,
             "finish_split": self.team_splits.do_finish_split,
             "hand_over": self.team_splits.do_hand_over,
             "request_review": self.reviews.do_request_review,
@@ -117,6 +172,330 @@ class DirectorService(Sync):
             "close_session": self.session_lifecycle.do_close_session,
         }.items():
             self.resumable_work.register(kind, step)
+
+    def _build_services(self) -> None:
+        """Build what the director holds, each service after the ones it
+        is given. :class:`ServiceState` has built the ones that need
+        nothing of these.
+
+        A service is given another, never the director. Where two need
+        each other, the one built first is given a function that asks
+        for the other when it is called.
+        """
+        self.team_history = TeamHistoryService(
+            org=lambda: self.org,
+            team_memory=self._memory,
+            require_team_memory=lambda: self.team_memory,
+            session_drafts=self.session_drafts,
+            org_changed=self._note_change,
+        )
+        self.session_landing = SessionLandingService(
+            org=lambda: self.org,
+            run_state=self.org_state.run_state,
+            team_memory=self._memory,
+            documents=self.documents,
+            team_types=self.team_types,
+            session_drafts=self.session_drafts,
+            org_save=self.org_save,
+            event=self.team_history.event,
+        )
+        self.team_context = TeamContextService(
+            checkouts=self.checkouts,
+            org=lambda: self.org,
+            org_state=self.org_state,
+            org_settings=self.org_settings,
+            team_types=self.team_types,
+            team_history=self.team_history,
+            session_drafts=self.session_drafts,
+            documents=self.documents,
+            team_documents=lambda: self.team_documents,
+        )
+        self.check_counts = CheckCountService(
+            org=lambda: self.org, run_state=self.org_state.run_state
+        )
+        self.session_documents = SessionDocumentService(
+            org=lambda: self.org,
+            team_memory=self._memory,
+            require_team_memory=lambda: self.team_memory,
+            run_state=self.org_state.run_state,
+            documents=self.documents,
+            team_documents=lambda: self.team_documents,
+            team_types=self.team_types,
+            session_drafts=self.session_drafts,
+            home_of=self.session_landing.home_of,
+            drop_merge_checkout=self._drop_merge_checkout,
+        )
+        # Takes work up through a function: what is begun is built next and
+        # is given this.
+        self.message_delivery = MessageDeliveryService(
+            org=lambda: self.org,
+            org_state=self.org_state,
+            org_save=self.org_save,
+            work_queue=self.work_queue,
+            team_types=self.team_types,
+            launcher=self._require_launcher,
+            is_running=lambda: self._loop is not None,
+            context_of=self.team_context.context_of,
+            is_stopped=lambda conversation_id: self.org.is_stopped(conversation_id),
+            lane_of=lane_for,
+            take_up=lambda intent_id, lane: self.resumable_work.take_up(
+                intent_id, lane
+            ),
+            default_lane=ORG_LANE,
+            retry=self._run_limit_retry,
+        )
+        self.resumable_work = ResumableWorkService(
+            run_state=self.org_state.run_state,
+            work_queue=self.work_queue,
+            lane_of=lane_for,
+            is_paused=lambda: self.org_state.paused is not None,
+            save=self.org_save.save,
+            save_soon=self.org_save.save_soon,
+            let_go=self.message_delivery.let_go,
+            keep_failure=self.team_history.keep_failure,
+            left=self.start_line.leave,
+            saved_before_forgotten=SAVED_BEFORE_FORGOTTEN,
+        )
+        self.team_summaries = TeamSummaryService(
+            org=lambda: self.org,
+            team_memory=self._memory,
+            org_state=self.org_state,
+            org_settings=self.org_settings,
+            team_types=self.team_types,
+            model_calls=self.model_calls,
+            work_queue=self.work_queue,
+            launcher=self._require_launcher,
+        )
+        # Tells of a failure and notes progress through functions: what
+        # carries messages is built next and is given this.
+        self.member_start = TeamMemberStartService(
+            checkouts=self.checkouts,
+            org=lambda: self.org,
+            repo_dir=lambda: self._repo_dir,
+            org_state=self.org_state,
+            start_line=self.start_line,
+            message_delivery=self.message_delivery,
+            confinement=self.confinement,
+            team_types=self.team_types,
+            team_documents=lambda: self.team_documents,
+            launcher=self._require_launcher,
+            context_of=self.team_context.context_of,
+            tell_of_failure=lambda place_id, role, reason: (
+                self.team_messaging.tell_of_failure(place_id, role, reason)
+            ),
+            check_counts=self.check_counts,
+            team_summaries=self.team_summaries,
+            work_queue=self.work_queue,
+            progressed=lambda *args, **kwargs: self.team_messaging.progressed(
+                *args, **kwargs
+            ),
+        )
+        # Releases reviews through a function: reviews are built further
+        # down and are given this.
+        self.team_messaging = TeamMessagingService(
+            org=lambda: self.org,
+            org_state=self.org_state,
+            org_settings=self.org_settings,
+            org_save=self.org_save,
+            team_types=self.team_types,
+            team_history=self.team_history,
+            session_drafts=self.session_drafts,
+            documents=self.documents,
+            check_counts=self.check_counts,
+            message_delivery=self.message_delivery,
+            member_start=self.member_start,
+            resumable_work=self.resumable_work,
+            work_queue=self.work_queue,
+            launcher=self._require_launcher,
+            joined=self.message_delivery.joined,
+            clock=self._clock,
+            release_reviews=lambda place_id: self.reviews.release_reviews(place_id),
+        )
+        self.session_merges = SessionMergeService(
+            org=lambda: self.org,
+            team_memory=self._memory,
+            team_documents=lambda: self.team_documents,
+            clock=self._clock,
+            org_state=self.org_state,
+            org_save=self.org_save,
+            org_settings=self.org_settings,
+            team_types=self.team_types,
+            team_history=self.team_history,
+            team_summaries=self.team_summaries,
+            team_messaging=self.team_messaging,
+            message_delivery=self.message_delivery,
+            resumable_work=self.resumable_work,
+            session_documents=self.session_documents,
+            session_landing=self.session_landing,
+            merge_checkout=self.merge_checkout,
+            next_submission=self.next_submission,
+        )
+        self.reviews = ReviewService(
+            org=lambda: self.org,
+            repo_dir=lambda: self._repo_dir,
+            checkouts=self.checkouts,
+            team_documents=lambda: self.team_documents,
+            launcher=self._require_launcher,
+            find_review_instructions=self.find_review_instructions,
+            org_state=self.org_state,
+            org_save=self.org_save,
+            org_settings=self.org_settings,
+            team_types=self.team_types,
+            team_history=self.team_history,
+            team_context=self.team_context,
+            team_messaging=self.team_messaging,
+            message_delivery=self.message_delivery,
+            resumable_work=self.resumable_work,
+            work_queue=self.work_queue,
+            check_counts=self.check_counts,
+            confinement=self.confinement,
+            model_calls=self.model_calls,
+            session_documents=self.session_documents,
+            session_merges=self.session_merges,
+            merge_checkout=self.merge_checkout,
+            drop_merge_checkout=self._drop_merge_checkout,
+            next_submission=self.next_submission,
+            changed_since_accept=self._changed_since_accept,
+        )
+        self.session_limits = SessionLimitService(
+            org=lambda: self.org,
+            has_org=lambda: self._store is not None,
+            launcher=self._require_launcher,
+            org_state=self.org_state,
+            org_settings=self.org_settings,
+            org_save=self.org_save,
+            team_types=self.team_types,
+            team_messaging=self.team_messaging,
+            work_queue=self.work_queue,
+        )
+        self.stall_watch = StallWatchService(
+            checkouts=self.checkouts,
+            org=lambda: self.org,
+            has_org=lambda: self._store is not None,
+            settings=lambda: self.org_settings.settings,
+            run_state=self.org_state.run_state,
+            clock=self._clock,
+            paused=lambda: self.org_state.paused is not None,
+            running=lambda: self.org_state.running,
+            model_calls=self.model_calls,
+            count_use=self.session_limits.count_use,
+            poll_seconds=self._stall_poll,
+            check_managers=self.session_merges.check_managers,
+            work_queue=self.work_queue,
+            progressed=self.team_messaging.progressed,
+            release_reviews=self.reviews.release_held,
+            record_event=self.team_history.record_event,
+            tell_writer=self.team_messaging.tell_writer,
+            tell_above=self.team_messaging.tell_above,
+        )
+        self.team_splits = TeamSplitService(
+            checkouts=self.checkouts,
+            org=lambda: self.org,
+            org_state=self.org_state,
+            org_save=self.org_save,
+            org_settings=self.org_settings,
+            team_types=self.team_types,
+            team_history=self.team_history,
+            team_context=self.team_context,
+            team_reports=self.team_reports,
+            team_summaries=self.team_summaries,
+            team_messaging=self.team_messaging,
+            message_delivery=self.message_delivery,
+            member_start=self.member_start,
+            check_counts=self.check_counts,
+            confinement=self.confinement,
+            session_documents=self.session_documents,
+            session_drafts=self.session_drafts,
+            resumable_work=self.resumable_work,
+            work_queue=self.work_queue,
+            team_documents=lambda: self.team_documents,
+            launcher=self._require_launcher,
+            is_running=lambda: self._loop is not None,
+            reviews=self.reviews,
+            retry=self._run_limit_retry,
+        )
+        # Asks for what routes requests when it hands one on: that is built
+        # next and is given this.
+        self.session_lifecycle = SessionLifecycleService(
+            checkouts=self.checkouts,
+            org=lambda: self.org,
+            repo_dir=lambda: self._repo_dir,
+            org_state=self.org_state,
+            org_save=self.org_save,
+            org_settings=self.org_settings,
+            team_types=self.team_types,
+            team_history=self.team_history,
+            team_summaries=self.team_summaries,
+            team_messaging=self.team_messaging,
+            message_delivery=self.message_delivery,
+            member_start=self.member_start,
+            check_counts=self.check_counts,
+            confinement=self.confinement,
+            session_documents=self.session_documents,
+            session_drafts=self.session_drafts,
+            team_splits=self.team_splits,
+            model_calls=self.model_calls,
+            resumable_work=self.resumable_work,
+            work_queue=self.work_queue,
+            request_routing=lambda: self.request_routing,
+            launcher=self._require_launcher,
+            reviews=self.reviews,
+            session_merges=self.session_merges,
+        )
+        self.request_routing = RequestRoutingService(
+            checkouts=self.checkouts,
+            org=lambda: self.org,
+            model_calls=self.model_calls,
+            checkout=lambda: self._repo_dir,
+            purpose=self.team_messaging.purpose,
+            routed_requests=self.team_history.routed_requests,
+            keep_routed=self.team_history.keep_routed,
+            hand_on=self.session_lifecycle.hand_on,
+            paused=lambda: self.org_state.paused is not None,
+        )
+        self.org_run = OrgRunService(
+            checkouts=self.checkouts,
+            org=lambda: self.org,
+            find_org=lambda: self._store,
+            repo_dir=lambda: self._repo_dir,
+            org_state=self.org_state,
+            org_save=self.org_save,
+            org_settings=self.org_settings,
+            start_line=self.start_line,
+            message_delivery=self.message_delivery,
+            team_messaging=self.team_messaging,
+            team_types=self.team_types,
+            member_start=self.member_start,
+            confinement=self.confinement,
+            resumable_work=self.resumable_work,
+            work_queue=self.work_queue,
+            team_splits=self.team_splits,
+            launcher=self._require_launcher,
+            find_launcher=lambda: self._launcher,
+            loop=lambda: self._loop,
+            home=self._home,
+            instance=self._instance,
+            working=self._working,
+            lane_of=lane_for,
+            reviews=self.reviews,
+            changed_since_accept=self._changed_since_accept,
+        )
+        self.org_sync = OrgSyncService(
+            environment=self.environment,
+            org=lambda: self.org,
+            repo_dir=lambda: self._repo_dir,
+            repository=self._repository,
+            org_state=self.org_state,
+            org_save=self.org_save,
+            work_queue=self.work_queue,
+            org_run=self.org_run,
+            launcher=self._require_launcher,
+            join=self._join,
+            working=self._working,
+        )
+
+    async def _came_back(self) -> None:
+        await self.org_run.came_back()
 
     async def start(self, launcher: TeamLauncher) -> None:
         """Begin running agents through ``launcher``, on the running loop."""
@@ -136,7 +515,7 @@ class DirectorService(Sync):
             name="director-review-instructions",
         )
         self._stall_timer = asyncio.create_task(
-            self._watch_for_stalls(), name="director-stall-watch"
+            self.stall_watch.watch(), name="director-stall-watch"
         )
         if self._store is not None:
             self.work_queue.enqueue(self._came_back)
@@ -533,7 +912,7 @@ class DirectorService(Sync):
             self.resumable_work.begin(place_id, LandOrg(org_holds=True))
             return store.place(place_id) or place
         if escalation_id == LIMIT_WAITS:
-            self.go_on_past_limit(place_id)
+            self.session_limits.go_on_past_limit(place_id)
         if lost:
             # A new Manager starts with the answer; the IC goes on as it was.
             self.team_messaging.tell_manager(

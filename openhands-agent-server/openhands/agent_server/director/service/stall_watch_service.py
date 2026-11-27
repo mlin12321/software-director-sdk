@@ -2,7 +2,7 @@
 
 import asyncio
 import json
-from collections.abc import Callable, Collection
+from collections.abc import Awaitable, Callable, Collection
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -29,6 +29,8 @@ from openhands.agent_server.director.team import Team
 # The id of the escalation that asks the human what a team that shows no
 # progress is to do, when no IC stands above it.
 STALL_WAITS = "stalled"
+# The lane the director's timer does its work in.
+STALL_LANE = "stalls"
 
 
 def progress_of(kept: str | None) -> dict[str, Any]:
@@ -72,6 +74,10 @@ class StallWatchService:
     """The conversations that are in a turn."""
     model_calls: ModelCallService
     """Asks the IC of a team that shows no progress what it is doing."""
+    count_use: Callable[[], Awaitable[None]]
+    """Adds up what the sessions' agents used since it was last looked at."""
+    poll_seconds: float
+    """How often the timer looks."""
     check_managers: Callable[[], None]
     """Looks at the Managers that were asked to settle teams and did not."""
     work_queue: WorkQueueService
@@ -81,12 +87,13 @@ class StallWatchService:
     release_reviews: Callable[[str | None], None]
     """Sends a team's IC the reviews that wait for it."""
     record_event: Callable[..., None]
-    """Keeps an event in the record of a team (``Records.record_event``)."""
+    """Keeps an event in the record of a team
+    (:meth:`TeamHistoryService.record_event`)."""
     tell_writer: Callable[[str, str], object]
     """Sends a message to the IC of the team with this id."""
     tell_above: Callable[..., None]
     """Tells the IC above a team, or the human when none stands above it
-    (``Teams.tell_above``)."""
+    (:meth:`TeamMessagingService.tell_above`)."""
 
     def _writer_conversation(self, team: SessionTeam) -> str | None:
         of_team = Team(self.org(), team)
@@ -145,6 +152,15 @@ class StallWatchService:
             and team.stopped is None
             and not any(each.stopped for each in store.above(team.id))
         )
+
+    async def watch(self) -> None:
+        """The director's one timer: has what the sessions use counted
+        and the teams looked at, for as long as it is not cancelled."""
+        while True:
+            await asyncio.sleep(self.poll_seconds)
+            if self.work_queue.is_open:
+                self.work_queue.enqueue(self.count_use, STALL_LANE)
+                self.work_queue.enqueue(self.check_stalls, STALL_LANE)
 
     async def check_stalls(self) -> None:
         """Tell the IC above of each team that has shown no progress for

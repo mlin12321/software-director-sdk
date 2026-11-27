@@ -30,6 +30,8 @@ from openhands.agent_server.director.org_store import (
     team_id_of,
     utc_now,
 )
+from openhands.agent_server.director.recovery import STEP_NAMES
+from openhands.agent_server.director.run_state import Intent
 from openhands.agent_server.director.service.session_draft_service import (
     SessionDraftService,
 )
@@ -41,6 +43,10 @@ ASKED_KEPT = 1000
 CHANGES_THE_ORG: frozenset[TeamEventKind] = frozenset(
     {"set_up", "replaced", "pruned", "moved"}
 )
+
+
+# How much of the reason a step failed is kept.
+REASON_KEPT = 600
 
 
 @dataclass
@@ -307,3 +313,17 @@ class TeamHistoryService:
         while limit < len(events) and events[limit].at == events[limit - 1].at:
             limit += 1
         return OrgHistory(events=events[:limit], earlier=len(events) > limit)
+
+    def keep_failure(self, intent: Intent, error: Exception) -> None:
+        """Keep a step that failed where the team above and the human read
+        what became of a team."""
+        team = self.org().place(intent.node_id)
+        if team is None:
+            return
+        what = STEP_NAMES.get(intent.kind, intent.kind)
+        self.record_event(
+            team.parent_id or team.id,
+            "failed",
+            team,
+            f"{what}: not done. {type(error).__name__}: {error}"[:REASON_KEPT],
+        )

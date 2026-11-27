@@ -46,6 +46,8 @@ def watch(looked: list[str], **given: Any) -> StallWatchService:
         paused=lambda: given.get("paused", False),
         running=lambda: set(),
         model_calls=cast(ModelCallService, None),
+        count_use=cast(Any, never),
+        poll_seconds=60,
         check_managers=lambda: looked.append("managers"),
         work_queue=WorkQueueService(default_lane="org"),
         progressed=never,

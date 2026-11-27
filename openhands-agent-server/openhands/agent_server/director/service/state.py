@@ -107,15 +107,10 @@ MODEL_CALL_TIMEOUT_SECONDS = 120.0
 # Where what an IC left uncommitted in the directory of a sub-team with a
 # checkout of its own is kept: under `left`, what went to the team as it
 # started; under `aside`, what was in the way of the team's accepted work.
-LEFT_REFS = "refs/agents/left"
 # After a conversation id: the script an ACP agent's process is started by.
 _REMEMBERED_FILE = "director.json"
-STALL_LANE = "stalls"
 # The steps the director takes for a team's review, in its own lane.
 _REVIEW_STEPS = ("request_review", "accept")
-# The escalation that asks the human whether a session that reached its
-# token limit goes on.
-LIMIT_WAITS = "limit-reached"
 
 
 class _TeamsOfTheOrg:
@@ -251,8 +246,6 @@ class ServiceState:
             repo_dir=lambda: self.repo_dir,
             max_concurrent_runs=max_concurrent_runs,
         )
-        # Held while what waits of a session's work is read and changed.
-        self._weighing = threading.RLock()
         self._stall_poll = stall_poll
         self._stall_timer: asyncio.Task[None] | None = None
         self._store: OrgStore | None = None

@@ -308,7 +308,7 @@ async def test_no_agent_is_started_in_a_team_that_is_being_removed(
     starts = len(launcher.derived)
 
     with pytest.raises(Conflict, match="being replaced or removed"):
-        await service.agent_start._start_new(
+        await service.member_start._start_new(
             api, "ic", str(uuid4()), ic(service), "Build it."
         )
 

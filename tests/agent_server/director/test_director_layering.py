@@ -82,7 +82,7 @@ def test_the_directors_own_parts_do_not_know_the_shipped_orgs_or_the_service(
 
 SERVICES_THE_DIRECTOR_HOLDS = [
     "service/agent_confinement_service.py",
-    "service/agent_start_service.py",
+    "service/team_member_start_service.py",
     "service/check_count_service.py",
     "service/org_run_service.py",
     "service/org_save_service.py",
@@ -98,6 +98,7 @@ SERVICES_THE_DIRECTOR_HOLDS = [
     "service/session_document_service.py",
     "service/session_draft_service.py",
     "service/session_landing_service.py",
+    "service/session_limit_service.py",
     "service/session_merge_service.py",
     "service/session_lifecycle_service.py",
     "service/stall_watch_service.py",
@@ -115,7 +116,7 @@ SERVICES_THE_DIRECTOR_HOLDS = [
 @pytest.mark.parametrize("module", SERVICES_THE_DIRECTOR_HOLDS)
 def test_a_service_the_director_holds_is_not_given_the_director(module: str):
     # A part of the service is given what it needs and is held by the
-    # service; it does not reach back into the mixins that hold it.
+    # service; it does not reach back into what holds it.
     reached = {
         name
         for name in _imports(module)
@@ -166,7 +167,7 @@ def test_what_a_document_does_reaches_the_director_only_through_documents(
 
 
 @pytest.mark.parametrize(
-    "module", ["tools/catalog.py", "agent_actions.py", "service/records.py"]
+    "module", ["tools/catalog.py", "agent_actions.py", "service/__init__.py"]
 )
 def test_the_director_has_no_tool_for_any_one_document(module: str):
     # A document's tool is made of its YAML and its protocol.
@@ -270,4 +271,17 @@ def test_the_environment_is_said_without_git(module: str):
         "environment.errors",
         "environment.records",
         "environment.remote",
+    }
+
+
+def test_the_director_is_one_class_over_its_state():
+    # Everything else it does is done by a service it holds.
+    from openhands.agent_server.director.service import DirectorService
+    from openhands.agent_server.director.service.state import ServiceState
+
+    assert DirectorService.__mro__ == (DirectorService, ServiceState, object)
+    modules = {path.name for path in (DIRECTOR / "service").glob("*.py")}
+    assert {name for name in modules if not name.endswith("_service.py")} == {
+        "__init__.py",
+        "state.py",
     }

@@ -5,6 +5,7 @@ its team's folder and started when the server has room."""
 import asyncio
 import json
 from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -12,7 +13,9 @@ from uuid import UUID
 
 from openhands.agent_server.director.context import briefing_block, steady
 from openhands.agent_server.director.documents.team_documents import TeamDocuments
+from openhands.agent_server.director.environment import EnvironmentFailed
 from openhands.agent_server.director.environment.checkouts import Checkouts
+from openhands.agent_server.director.intents import Brief, LaunchMember, StartTeam
 from openhands.agent_server.director.launch import StartedAgent, TeamLauncher
 from openhands.agent_server.director.models import SessionTeam
 from openhands.agent_server.director.org_store import (
@@ -24,11 +27,15 @@ from openhands.agent_server.director.org_store import (
 from openhands.agent_server.director.prompts import (
     brief as first_message,
     hand_over_brief,
+    left_for_team,
     role_text,
 )
-from openhands.agent_server.director.run_state import TOLD
+from openhands.agent_server.director.run_state import TASK, TOLD, Intent
 from openhands.agent_server.director.service.agent_confinement_service import (
     AgentConfinementService,
+)
+from openhands.agent_server.director.service.check_count_service import (
+    CheckCountService,
 )
 from openhands.agent_server.director.service.message_delivery_service import (
     MessageDeliveryService,
@@ -36,9 +43,15 @@ from openhands.agent_server.director.service.message_delivery_service import (
 from openhands.agent_server.director.service.org_state_service import OrgStateService
 from openhands.agent_server.director.service.resumable_work_service import Held
 from openhands.agent_server.director.service.start_line_service import StartLineService
+from openhands.agent_server.director.service.team_history_service import REASON_KEPT
+from openhands.agent_server.director.service.team_summary_service import (
+    TeamSummaryService,
+    agent_title,
+)
 from openhands.agent_server.director.service.team_type_service import (
     TeamTypeService,
 )
+from openhands.agent_server.director.service.work_queue_service import WorkQueueService
 from openhands.sdk.errors import Conflict, NotFound
 from openhands.sdk.logger import get_logger
 from openhands.sdk.tool.spec import Tool
@@ -46,26 +59,13 @@ from openhands.sdk.tool.spec import Tool
 
 logger = get_logger(__name__)
 
-# How much of an error is kept as the reason an agent failed.
-REASON_KEPT = 600
-
-
-def agent_title(
-    team: str, name: str, session: str = "", *, division_lead: bool = False
-) -> str:
-    """What an agent's conversation is called. The session is named unless
-    it is called what its team is, and the agents a session's work is
-    reviewed by are called its Division Leads.
-
-    Args:
-        name: What the agent's member is called.
-    """
-    where = f"{team} · {session}" if session and session != team else team
-    return f"{where} ({'Division Lead ' + name if division_lead else name})"
+# Where what an IC left uncommitted in the directory of a sub-team with a
+# checkout of its own is kept, as it went to the team when it started.
+LEFT_REFS = "refs/agents/left"
 
 
 @dataclass
-class AgentStartService:
+class TeamMemberStartService:
     """Starts the agents of a team.
 
     An agent is derived from a conversation that has started already (the
@@ -99,6 +99,15 @@ class AgentStartService:
     context_of: Callable[[SessionTeam, str], dict[str, Any]]
     """What a member of a team reads of its place."""
     tell_of_failure: Callable[[str, str, str], None]
+    check_counts: CheckCountService
+    """Forgets what a team of the same name before counted."""
+    team_summaries: TeamSummaryService
+    """Writes the first headline of a team that starts."""
+    work_queue: WorkQueueService
+    progressed: Callable[..., None]
+    """Notes that a team was given something to do
+    (:meth:`TeamMessagingService.progressed`); a function, because that
+    service holds this one."""
     """Tells the team above that a member of a team could not be started:
     the place, the member and the reason."""
 
@@ -443,3 +452,108 @@ class AgentStartService:
                 task,
                 place.worktree_path if reviews_here else None,
             )
+
+    def task_of(self, place: SessionTeam) -> str:
+        """What a team that is started again is to do, from what the org
+        kept of it. What its documents say comes with its briefing."""
+        task = place.summary
+        if place.headline and place.headline not in task:
+            task = f"{task}\n\nWhere the team last was: {place.headline}"
+        return (
+            f"{task}\n\nThis team was worked on before. "
+            "What it committed is in your checkout: look at it first and "
+            "carry on from there."
+        )
+
+    async def do_brief(self, intent: Intent) -> None:
+        brief = intent.of(Brief)
+        place = self.org().place(intent.node_id)
+        if place and brief.role == self.team_types.team(place).writer:
+            self.org_state.run_state().mark(TASK, intent.node_id, brief.task)
+        await self.brief(intent.node_id, brief.role, brief.task)
+
+    async def do_launch_member(self, intent: Intent) -> None:
+        launch = intent.of(LaunchMember)
+        await self.launch_member(intent.node_id, launch.task, launch.role)
+
+    async def do_start_team(self, intent: Intent) -> None:
+        start = intent.of(StartTeam)
+        place_id, task = intent.node_id, start.task
+        above = self.org().place(start.parent or "")
+        parent_ic = await self.started_ic(above) or await self.template()
+        checkout = start.checkout
+        self.org_state.run_state().mark(TASK, place_id, task)
+        self.progressed(place_id, by_above=True)
+        started = self.org().place(place_id)
+        left: list[str] = []
+        # A session starts beside the team's own work: what is uncommitted
+        # in the team's directory is not the session's.
+        opens = started is not None and (
+            self.org().opens_session(started) or is_division_lead(started)
+        )
+        if started is not None:
+            # A team of the same name before it left nothing to count on.
+            self.check_counts.work_accepted(started)
+            if above is not None and not opens:
+                with suppress(EnvironmentFailed, OSError):
+                    left = await asyncio.to_thread(
+                        self.checkouts.uncommitted,
+                        Path(above.worktree_path),
+                        started.boundary.path,
+                    )
+        if started is None:
+            return
+        await self.start_agent(
+            place_id,
+            self.team_types.team(started).writer,
+            parent_ic,
+            f"{task}\n\n{left_for_team(left, names=self.team_types.names_at(place_id))}"
+            if left
+            else task,
+            checkout,
+        )
+        if above is not None and not opens:
+            await asyncio.to_thread(self._pass_down, above, place_id)
+        if opens and not is_division_lead(started):
+            self.checkout_for_session(place_id)
+        purpose = start.purpose or task
+        self.work_queue.enqueue(
+            lambda: self.team_summaries.summarize(place_id, purpose, first=True),
+            place_id,
+        )
+
+    def checkout_for_session(self, place_id: str) -> None:
+        """Give the teams of a session that have not started the checkout
+        of the team the session was opened at, as a team that is set up
+        has the checkout of the team above."""
+        store = self.org()
+        top = store.place(place_id)
+        if top is None or not top.agents:
+            return
+        teams = store.below(place_id)
+        for team in teams:
+            if not team.agents:
+                store.update_place(
+                    team.id, worktree_path=top.worktree_path, branch=top.branch
+                )
+                teams.extend(store.below(team.id))
+
+    def _pass_down(self, above: SessionTeam, place_id: str) -> None:
+        """Close a started team's directory to the IC above, and bring what
+        that IC left uncommitted there into the team's own checkout."""
+        team = self.org().place(place_id)
+        if team is None or not team.worktree_path:
+            return
+        with suppress(EnvironmentFailed, OSError):
+            # The shell the IC above starts next cannot write there.
+            self.confinement.confine(above.id, self.team_types.team(above).writer)
+        source, target = Path(above.worktree_path), Path(team.worktree_path)
+        if self.checkouts.root_of(str(source)) == self.checkouts.root_of(str(target)):
+            # In one checkout the team finds the files where they are.
+            return
+        try:
+            self.checkouts.bring_over(
+                source, target, team.boundary.path, f"{LEFT_REFS}/{team.id}"
+            )
+        except (EnvironmentFailed, OSError):
+            logger.exception("Could not pass what was left to team %s", team.id)

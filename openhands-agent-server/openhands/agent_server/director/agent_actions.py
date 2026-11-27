@@ -509,7 +509,9 @@ def raise_escalation(
             f"Raised as {escalation.id}. Nobody is above your team: it waits "
             "on the human."
         )
-    service.hand_escalation(escalation.held_by, node, node, escalation, [])
+    service.team_messaging.hand_escalation(
+        escalation.held_by, node, node, escalation, []
+    )
     mine = _title(service, caller, caller.role)
     return (
         f"Raised as {escalation.id}. It is with the {mine} of the team above; "
@@ -564,7 +566,7 @@ def resolve_escalation(
     passed = store.pass_up_escalation(raiser.id, escalation_id, reason=text)
     if passed.held_by is None:
         return "Passed up. Nobody is above your team: it now waits on the human."
-    service.hand_escalation(
+    service.team_messaging.hand_escalation(
         passed.held_by,
         raiser,
         caller.node,
@@ -866,7 +868,7 @@ def stop_team(service: DirectorService, caller: Caller, team: str, reason: str) 
     if not reason.strip():
         raise Invalid(f"Say why the team is stopped; your {names.manager} is told")
     target = _team_below(service, caller, team)
-    service.stop_team(target.id, reason.strip())
+    service.team_messaging.stop_team(target.id, reason.strip())
     return (
         f"Stopped {target.title!r} and every team below it: their agents "
         f"end the step they are in and are sent nothing. Your {names.manager} is "
