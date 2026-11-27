@@ -23,7 +23,7 @@ class SpecProtocol(DocumentProtocolBase):
         text = self.store.read(call.team.session, ref) or ""
         first = text.strip().splitlines()[0] if text.strip() else ""
         return DocumentToolResult(
-            written.answer, purpose=first.lstrip("# ").strip()[:200]
+            written.answer, summary=first.lstrip("# ").strip()[:200]
         )
 
 

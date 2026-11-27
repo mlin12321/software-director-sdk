@@ -85,7 +85,7 @@ async def test_starting_an_org_runs_a_root_team_briefed_with_the_task(
     assert root is not None
     assert (root.parent_id, root.title) == (None, "Checkout")
     assert root.boundary.path == ""
-    assert root.purpose == "Build the checkout flow"
+    assert root.summary == "Build the checkout flow"
     # Its agents are at its place in the session the task opened.
     top = node(service, "root")
     assert top.id == f"root@{opened.session.id}" == opened.session.teams[0].id

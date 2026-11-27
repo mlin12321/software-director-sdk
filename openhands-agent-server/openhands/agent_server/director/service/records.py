@@ -701,7 +701,7 @@ class Records(ServiceState):
                     "path": child.boundary.path,
                     "status": child.status if child.agents else NOT_STARTED,
                     "headline": child.headline,
-                    "summary": child.purpose,
+                    "summary": child.summary,
                     "review": child.review.state if child.review else None,
                     "stopped": child.stopped.reason if child.stopped else None,
                 }
@@ -1300,7 +1300,7 @@ class Records(ServiceState):
                 title=place.title,
                 above=self._home_of(top, place.boundary.path),
                 path=place.boundary.path,
-                purpose=run.marked(TASK).get(place.id, place.purpose),
+                purpose=run.marked(TASK).get(place.id, place.summary),
                 ended="not_taken",
                 at=stamp,
                 review=place.review.state if place.review else None,
@@ -1417,7 +1417,7 @@ class Records(ServiceState):
                 and files[file][0] is not None
             ):
                 store.update_team(
-                    owner.team_id, purpose=owner.purpose, leftover_documents=[]
+                    owner.team_id, summary=owner.summary, leftover_documents=[]
                 )
         for place in left.values():
             for file in self.drafts(session):

@@ -293,7 +293,7 @@ class Teams(Delivery):
                 )
                 kept = [agent for agent in place.agents if agent not in lost]
                 place = store.update_place(place_id, agents=[*kept, added])
-                task = self._runs().marked(TASK).get(place_id) or place.purpose
+                task = self._runs().marked(TASK).get(place_id) or place.summary
                 self._begin(place_id, LaunchMember(task=task, role=member))
         conversation_id = self.team(place).conversation(member)
         self.notify(conversation_id, text)
@@ -483,7 +483,7 @@ class Teams(Delivery):
 
     def _purpose(self, node: OrgNode) -> str:
         """What a team is for, without the message it was started with."""
-        task = self._runs().marked(TASK).get(node.id) or node.purpose
+        task = self._runs().marked(TASK).get(node.id) or node.summary
         return task.split(_STARTED_WITH)[0]
 
     def count_accepted_review(self, place_id: str) -> None:
@@ -665,7 +665,7 @@ class Teams(Delivery):
         """What a team that is started again is to do, from what the org
         kept of it."""
         specs = [spec for spec in self.specs_of(place) if not spec.old]
-        task = specs[0].spec if specs else place.purpose
+        task = specs[0].spec if specs else place.summary
         if place.headline and place.headline not in task:
             task = f"{task}\n\nWhere the team last was: {place.headline}"
         return (

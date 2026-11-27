@@ -75,12 +75,12 @@ class DocumentToolResult:
 
     Attributes:
         answer: What the member that called is answered.
-        purpose: What the team is for, in a line, where the document now
+        summary: What the team is for, in a line, where the document now
             says so; None where it says nothing of it.
     """
 
     answer: str
-    purpose: str | None = None
+    summary: str | None = None
 
 
 OLD_STR = (
