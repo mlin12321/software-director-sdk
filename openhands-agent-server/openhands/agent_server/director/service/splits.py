@@ -644,7 +644,7 @@ class Splits(Watch):
                 at=at,
                 review=team.review.state if team.review else None,
                 reports=reports,
-                compacted_report=await self._as_one_report(reports),
+                compacted_report=await self.team_summaries.as_one_report(reports),
                 documents={name: text for name, text in kept.items() if text},
                 session=self.org.session_title(team),
                 since=team.since,

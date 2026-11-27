@@ -81,7 +81,7 @@ class Teams(Delivery):
             resumable_work=self.resumable_work,
             work_queue=self.work_queue,
             launcher=self._require_launcher,
-            joined=self.joined,
+            joined=self.message_delivery.joined,
             clock=self._clock,
         )
 
@@ -153,7 +153,8 @@ class Teams(Delivery):
             self._checkout_for_session(place_id)
         purpose = start.purpose or task
         self.work_queue.enqueue(
-            lambda: self._summarize(place_id, purpose, first=True), place_id
+            lambda: self.team_summaries.summarize(place_id, purpose, first=True),
+            place_id,
         )
 
     def _checkout_for_session(self, place_id: str) -> None:

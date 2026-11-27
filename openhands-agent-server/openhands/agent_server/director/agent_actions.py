@@ -662,7 +662,9 @@ def submit_review(service: DirectorService, caller: Caller, summary: str) -> str
     service.team_messaging.progressed(node.id)
     service.rest(node.id)
     service.request_review(node.id)
-    service.refresh_headline(node.id, f"it submitted its work. {summary}")
+    service.team_summaries.refresh_headline(
+        node.id, f"it submitted its work. {summary}"
+    )
     return (
         f"Submitted. The {names.above_reviewer} of the team above reviews it. "
         "Your turn ends "

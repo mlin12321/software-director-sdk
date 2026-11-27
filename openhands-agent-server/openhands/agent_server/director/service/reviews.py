@@ -91,13 +91,13 @@ from openhands.agent_server.director.service.state import (
     _REST_CHECK_SECONDS,
     _REST_CHECKS,
     ASIDE_REFS,
-    BASE_LANE,
     MERGE_WAITS,
     ORG_WAITS,
     checkout_root,
 )
 from openhands.agent_server.director.service.team_history_service import ASKED_KEPT
 from openhands.agent_server.director.service.teams import Teams
+from openhands.agent_server.director.service.work_queue_service import BASE_LANE
 from openhands.agent_server.director.split import (
     Shape,
     Side,
@@ -1252,7 +1252,7 @@ class Reviews(Teams):
 
     def _after_landing(self, top: SessionTeam, landed: Landed, note: str) -> None:
         for folder, role in landed.records.grown:
-            self.reports_grew(folder, role)
+            self.team_summaries.reports_grew(folder, role)
         now = self.org.place(top.id)
         if (
             self._merge_of(top) is None
@@ -1367,7 +1367,7 @@ class Reviews(Teams):
                 ),
             )
         for folder, role in landed.records.grown:
-            self.reports_grew(folder, role)
+            self.team_summaries.reports_grew(folder, role)
         self._record_not_taken(top, landed)
 
     def _sent_back(self, top: SessionTeam) -> None:

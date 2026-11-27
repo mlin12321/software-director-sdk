@@ -5,7 +5,7 @@ import asyncio
 import os
 import re
 import threading
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Self
@@ -88,6 +88,8 @@ from openhands.agent_server.director.service.team_type_service import (
     TeamTypeService,
 )
 from openhands.agent_server.director.service.work_queue_service import (
+    BASE_LANE,
+    ORG_LANE,
     WorkQueueService,
 )
 from openhands.agent_server.director.session_state import (
@@ -143,13 +145,6 @@ RESTART_NOTE = (
 _MERGE_ATTEMPTS = 4
 # After a conversation id: the script an ACP agent's process is started by.
 _REMEMBERED_FILE = "director.json"
-# The lane of what concerns the org as a whole, such as saving its tree.
-ORG_LANE = "org"
-# The lane of everything that changes what the org shares: the repository's
-# checkout, the tree and team memory. One thing at a time, in order.
-BASE_LANE = "base"
-# The lane reports are rewritten shorter in.
-MODELS_LANE = "models"
 # The lane agents are paused in, so that nothing waits for their last step.
 PAUSE_LANE = "pause"
 STALL_LANE = "stalls"
@@ -627,17 +622,6 @@ class ServiceState:
     def next_submission(self) -> int:
         """The place in the order of the work that is submitted now."""
         return self.org_state.run_state().count("submitted")
-
-    async def _base[T](self, work: Callable[[], Awaitable[T]]) -> T:
-        """What ``work`` returns, carried out in the lane of what the org
-        shares."""
-        results: list[T] = []
-
-        async def effect() -> None:
-            results.append(await work())
-
-        await self.work_queue.run_in(BASE_LANE, effect)
-        return results[0]
 
     def _shown(self, conversation_id: str, status: ConversationExecutionStatus) -> str:
         """An agent's status as the org shows it. One that was running when

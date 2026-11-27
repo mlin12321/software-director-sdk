@@ -70,7 +70,6 @@ from openhands.agent_server.director.service.stall_watch_service import (
 from openhands.agent_server.director.service.state import (
     _MERGE_ATTEMPTS,
     AGENT_PAUSED,
-    ORG_LANE,
     PAUSE_LANE,
     RESTART_NOTE,
     apart,
@@ -80,6 +79,10 @@ from openhands.agent_server.director.service.state import (
 from openhands.agent_server.director.service.team_messaging_service import (
     STARTED_WITH,
     failure_waits,
+)
+from openhands.agent_server.director.service.work_queue_service import (
+    BASE_LANE,
+    ORG_LANE,
 )
 from openhands.sdk.conversation.state import ConversationExecutionStatus
 from openhands.sdk.errors import (
@@ -249,7 +252,9 @@ class Sync(Sessions):
                 org_sync.commit_at, repo, org_sync.remote_org(remote)
             )
             if store.root_id is None:
-                return await self._base(lambda: self._take_org(repo, remote, theirs))
+                return await self.work_queue.result_in(
+                    BASE_LANE, lambda: self._take_org(repo, remote, theirs)
+                )
             resume = self.org_state.paused is None
             if resume:
                 await self.pause()
@@ -261,7 +266,9 @@ class Sync(Sessions):
                 "resume": resume,
             }
             # What it takes in changes what the org shares.
-            return await self._base(lambda: self._merge(state))
+            return await self.work_queue.result_in(
+                BASE_LANE, lambda: self._merge(state)
+            )
 
     async def push_org(self, remote: str) -> OrgSync:
         """Give a remote of the repository the org tree and the team
@@ -330,7 +337,9 @@ class Sync(Sessions):
             choices: dict[str, str] = {**state["choices"], **request.choices}
             if request.rest is not None:
                 choices = {each: request.rest for each in known} | choices
-            return await self._base(lambda: self._merge({**state, "choices": choices}))
+            return await self.work_queue.result_in(
+                BASE_LANE, lambda: self._merge({**state, "choices": choices})
+            )
 
     async def abort_merge(self) -> OrgSync:
         """Abandon the merge that waits; the org stays as it was.

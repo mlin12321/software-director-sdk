@@ -546,7 +546,7 @@ def join_conversation(
     an agent's conversation directly calls this. Calling it again changes
     nothing.
     """
-    service.joined(conversation_id)
+    service.message_delivery.joined(conversation_id)
     return service.team_context.place_of(conversation_id)
 
 

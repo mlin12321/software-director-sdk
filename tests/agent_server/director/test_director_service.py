@@ -591,7 +591,7 @@ async def test_a_report_made_before_the_first_summary_is_not_overwritten_by_it(
     def report_at_once(conversation_id: UUID) -> None:
         found = service.org.find_by_conversation(str(conversation_id))
         if found is not None and found[1] == "ic":
-            service.refresh_headline(found[0].id, "it is blocked.")
+            service.team_summaries.refresh_headline(found[0].id, "it is blocked.")
 
     launcher.on_derived = report_at_once
     await split_root(service, API)
@@ -609,7 +609,9 @@ async def test_a_report_rewrites_the_headline(
     await service.settled()
     launcher.summary = TeamSummary("Ignored", "Checkout is done; tax is left out.")
 
-    service.refresh_headline(node(service, "root").id, "it is done. Tax is left out.")
+    service.team_summaries.refresh_headline(
+        node(service, "root").id, "it is done. Tax is left out."
+    )
     await service.settled()
 
     assert node(service, "root").headline == "Checkout is done; tax is left out."

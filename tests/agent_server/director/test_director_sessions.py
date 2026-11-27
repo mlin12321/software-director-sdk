@@ -192,7 +192,7 @@ async def test_a_conversation_the_human_writes_in_is_marked_and_named(
         RouteMessageRequest(text="Tidy the handlers.", path="services/api")
     )
     await service.settled()
-    service.joined(top)
+    service.message_delivery.joined(top)
     await service.settled()
 
     # The IC of each session the human's words opened, once each; not one
@@ -206,7 +206,7 @@ async def test_a_conversation_the_human_writes_in_is_marked_and_named(
     assert service.team_context.place_of(top).human_joined
     assert not service.team_context.place_of(ic(service, API) or "").human_joined
     with pytest.raises(NotFound):
-        service.joined(str(uuid4()))
+        service.message_delivery.joined(str(uuid4()))
 
 
 async def test_a_session_the_human_gave_no_name_is_called_what_it_is_for(

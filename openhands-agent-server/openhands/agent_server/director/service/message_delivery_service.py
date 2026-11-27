@@ -20,7 +20,13 @@ from openhands.agent_server.director.launch import TeamLauncher
 from openhands.agent_server.director.models import SessionTeam
 from openhands.agent_server.director.org_store import AGENT_LOST, OrgStore
 from openhands.agent_server.director.prompts import from_director
-from openhands.agent_server.director.run_state import CONDENSED, RUNNING, TOLD, Intent
+from openhands.agent_server.director.run_state import (
+    CONDENSED,
+    JOINED,
+    RUNNING,
+    TOLD,
+    Intent,
+)
 from openhands.agent_server.director.service.org_save_service import OrgSaveService
 from openhands.agent_server.director.service.org_state_service import OrgStateService
 from openhands.agent_server.director.service.resumable_work_service import Held
@@ -96,6 +102,31 @@ class MessageDeliveryService:
         """
         if conversation_id is not None:
             self.post(conversation_id, from_director(text), at_once=at_once)
+
+    def joined(self, conversation_id: str) -> None:
+        """Note that the human has written in an agent's conversation, so
+        that it is listed with the conversations the human started. Safe
+        from any thread, and to call again.
+
+        Raises:
+            NotFound: No agent of the org has this conversation.
+        """
+        found = self.org().find_by_conversation(conversation_id)
+        if found is None:
+            raise NotFound(f"No agent of the org has conversation {conversation_id}")
+        run = self.org_state.run_state()
+        if conversation_id in run.marked(JOINED):
+            return
+        run.mark(JOINED, conversation_id)
+        # After what starts the conversation, when it is not there yet.
+        self.work_queue.enqueue(lambda: self._mark_joined(conversation_id), found[0].id)
+
+    async def _mark_joined(self, conversation_id: str) -> None:
+        try:
+            await self.launcher().mark_joined(UUID(conversation_id))
+        except NotFound:
+            # Not started yet, or gone: asked for again when it is written to.
+            self.org_state.run_state().unmark(JOINED, conversation_id)
 
     def post(self, conversation_id: str, text: str, *, at_once: bool = False) -> None:
         """Record a message to an agent, then deliver it. Safe from any

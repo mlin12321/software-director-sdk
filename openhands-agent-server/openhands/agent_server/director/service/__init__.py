@@ -43,7 +43,6 @@ from openhands.agent_server.director.service.stall_watch_service import (
 )
 from openhands.agent_server.director.service.state import (
     AGENT_PAUSED,
-    BASE_LANE,
     LIMIT_WAITS,
     MERGE_WAITS,
     ORG_WAITS,
@@ -58,6 +57,7 @@ from openhands.agent_server.director.service.team_messaging_service import failu
 from openhands.agent_server.director.service.team_type_service import (
     DIRECTOR_TOOL_NAMES,
 )
+from openhands.agent_server.director.service.work_queue_service import BASE_LANE
 from openhands.sdk.errors import (
     Conflict,
     NotFound,
@@ -276,7 +276,9 @@ class DirectorService(Sync):
             top = opened.session.teams[0].id
             # In the lane of that team, after the model that names it.
             self.work_queue.enqueue(
-                lambda: self.work_queue.run_in(BASE_LANE, lambda: self._name_org(top)),
+                lambda: self.work_queue.run_in(
+                    BASE_LANE, lambda: self.team_summaries.name_org(top)
+                ),
                 top,
             )
         return opened

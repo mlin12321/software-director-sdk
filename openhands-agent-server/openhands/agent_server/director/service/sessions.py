@@ -52,10 +52,10 @@ from openhands.agent_server.director.service.request_routing_service import (
 )
 from openhands.agent_server.director.service.splits import Splits
 from openhands.agent_server.director.service.state import (
-    BASE_LANE,
     apart,
 )
 from openhands.agent_server.director.service.team_history_service import ASKED_KEPT
+from openhands.agent_server.director.service.work_queue_service import BASE_LANE
 from openhands.agent_server.director.split import shape_of
 from openhands.sdk.conversation.request import (
     ConversationWorktreeOptions,
@@ -277,7 +277,9 @@ class Sessions(Splits):
                 store.close_session(session_id)
                 raise
         if not rename and not request.title.strip():
-            self.work_queue.enqueue(lambda: self._name_session(top.id, text), top.id)
+            self.work_queue.enqueue(
+                lambda: self.team_summaries.name_session(top.id, text), top.id
+            )
         self.org_save.save_soon()
         return OpenedSession(
             session=next(found for found in store.sessions() if found.id == session_id),
@@ -355,9 +357,12 @@ class Sessions(Splits):
         )
         self._checkout_for_session(top.id)
         self.team_messaging.progressed(top.id)
-        self.joined(str(ic_id))
+        self.message_delivery.joined(str(ic_id))
         self.work_queue.enqueue(
-            lambda: self._summarize(top.id, text, first=True, rename=rename), top.id
+            lambda: self.team_summaries.summarize(
+                top.id, text, first=True, rename=rename
+            ),
+            top.id,
         )
         self.resumable_work.begin(top.id, Brief(role=writer, task=text + brief))
         return str(ic_id)

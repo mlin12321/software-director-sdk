@@ -13,6 +13,14 @@ from openhands.sdk.logger import get_logger
 
 logger = get_logger(__name__)
 
+# The lane of what concerns the org as a whole, such as saving its tree.
+ORG_LANE = "org"
+# The lane of everything that changes what the org shares: the repository's
+# checkout, the tree and team memory. One thing at a time, in order.
+BASE_LANE = "base"
+# The lane reports are rewritten shorter in.
+MODELS_LANE = "models"
+
 type Effect = Callable[[], Awaitable[None]]
 
 # The lane the running effect is carried out in; '' outside the lanes.
@@ -106,6 +114,17 @@ class WorkQueueService:
                         self._quiet.set()
         finally:
             del self._waiting[lane]
+
+    async def result_in[T](self, lane: str, work: Callable[[], Awaitable[T]]) -> T:
+        """What ``work`` returns, carried out in ``lane`` as :meth:`run_in`
+        carries an effect out."""
+        results: list[T] = []
+
+        async def effect() -> None:
+            results.append(await work())
+
+        await self.run_in(lane, effect)
+        return results[0]
 
     async def run_in(self, lane: str, effect: Effect) -> None:
         """Carry ``effect`` out in ``lane`` and wait for it: after
