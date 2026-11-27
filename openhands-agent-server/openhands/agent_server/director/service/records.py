@@ -20,6 +20,7 @@ from openhands.agent_server.director.documents.events import (
 )
 from openhands.agent_server.director.documents.protocol import (
     DocumentProtocolBase,
+    DocumentsBriefed,
     ShownDocument,
 )
 from openhands.agent_server.director.documents.store import DocumentRef, TeamRef
@@ -64,6 +65,7 @@ from openhands.agent_server.director.org_store import (
 from openhands.agent_server.director.prompts import (
     NEEDED_WORTH_SAYING,
     event_line,
+    left_document,
     need_words,
     needs_between,
     proposal_facts,
@@ -980,6 +982,45 @@ class Records(ServiceState):
             if of_it or protocol in kept:
                 told |= protocol.told_to_reader(team_ref(node), of_it)
         return told
+
+    def documents_briefed(self, place: SessionTeam) -> list[tuple[str, str]]:
+        """What the first message of a team's agents says of the documents
+        it reads, as each document has it said, and after each what teams
+        before it left of that document in its folder."""
+        shown = self.documents_shown(place)
+        kept = self.protocols_of(place)
+        team = self.team(place)
+        briefed = [
+            DocumentsBriefed(
+                reader=team_ref(place),
+                shown=[found for found in shown if found.name == name],
+                titles=team.kind.titles,
+                above_writer=team.names.above_writer,
+            )
+            for name in (
+                protocol.document.name for protocol in self._protocols_for(place)
+            )
+        ]
+        left = [found for found in self.documents_of(place) if found.left]
+        parts: list[tuple[str, str]] = []
+        for protocol, told in zip(self._protocols_for(place), briefed):
+            document = protocol.document
+            if told.shown or protocol in kept:
+                parts += [
+                    (part.heading, part.text)
+                    for part in protocol.told_in_briefing(told)
+                ]
+            parts += [
+                (
+                    left_document(
+                        document.name, old.path, old.left_by, document.written_with
+                    ),
+                    old.text,
+                )
+                for old in left
+                if old.name == document.name
+            ]
+        return parts
 
     def documents_passed_to(self, node: OrgNode) -> list[ShownDocument]:
         """The documents another team passed to this one to read, as they

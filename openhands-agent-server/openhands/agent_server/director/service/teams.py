@@ -690,15 +690,12 @@ class Teams(Delivery):
     def _briefing(self, place: SessionTeam, role: str, task: str) -> tuple[str, str]:
         """An agent's first message, and the context it tells, as kept to
         find later what changed."""
-        contracts = self.contracts_of(place)
         context = self.context_of(place, role)
         text = brief(
             place,
             role,
             task,
-            self.specs_of(place),
-            contracts,
-            self.reports_of(place),
+            self.documents_briefed(place),
             briefing_block(context),
             self.type_of(place).text_for(role),
             works=role == self.team(place).writer,
@@ -710,15 +707,11 @@ class Teams(Delivery):
 
     def _hand_over_briefing(self, place: SessionTeam, job: str) -> str:
         """The first message of an IC's hand-over conversation."""
-        contracts = self.contracts_of(place)
         return hand_over_brief(
             place,
             job,
-            self.specs_of(place),
-            contracts,
-            self.reports_of(place),
+            self.documents_briefed(place),
             briefing_block(self.context_of(place, self.team(place).writer)),
-            titles=self.type_of(place).titles,
             role=role_text(
                 self.team(place).names,
                 works=True,

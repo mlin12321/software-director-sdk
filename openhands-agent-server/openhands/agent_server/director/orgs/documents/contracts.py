@@ -17,8 +17,10 @@ from openhands.agent_server.director.documents.protocol import (
     INSERT_LINE,
     NEW_STR,
     OLD_STR,
+    BriefedPart,
     DocumentArgument,
     DocumentProtocolBase,
+    DocumentsBriefed,
     DocumentToolCall,
     DocumentToolResult,
     ShownDocument,
@@ -135,6 +137,18 @@ class ContractsProtocol(DocumentProtocolBase):
                 found.text for found in shown if found.own
             ],
         }
+
+    def told_in_briefing(self, briefed: DocumentsBriefed) -> Sequence[BriefedPart]:
+        return [
+            BriefedPart(
+                "Contracts between your sub-teams:"
+                if found.own
+                else "Contracts your team must keep with the teams beside it "
+                "(set by the team above; read-only):",
+                found.text,
+            )
+            for found in briefed.shown
+        ]
 
     def read_from(self, reader: TeamRef) -> list[TeamRef]:
         # A team keeps to the contracts the team above set between it and

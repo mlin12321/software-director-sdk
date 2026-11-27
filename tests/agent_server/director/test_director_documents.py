@@ -19,6 +19,8 @@ from openhands.agent_server.director.documents.events import (
 )
 from openhands.agent_server.director.documents.protocol import (
     DocumentProtocolBase,
+    DocumentsBriefed,
+    ShownDocument,
     UnknownProtocol,
     protocol_of,
 )
@@ -417,3 +419,29 @@ def test_a_document_says_what_the_members_of_its_team_are_told_of_it(tmp_path: P
     assert "glossary" not in without
     assert "spec" not in without.lower() and "contracts" not in without
     assert "`report`" not in without
+
+
+def test_a_document_says_its_own_part_of_a_briefing(
+    store: GitDocumentStore, tmp_path: Path
+):
+    (tmp_path / "notes.yaml").write_text("description: Notes.\n")
+    plain = protocol_of(read_document(tmp_path / "notes.yaml"), store, TREE)
+    contracts = protocol_of(
+        load_documents([SHIPPED_DOCUMENTS])["contracts"], store, TREE
+    )
+
+    api = TREE.ref("services.api")
+
+    def briefed(*shown: ShownDocument) -> DocumentsBriefed:
+        return DocumentsBriefed(api, shown, {"ic": "IC"}, "IC")
+
+    own = ShownDocument(api.folder, "notes", "# Notes", own=True)
+    above = ShownDocument("services", "contracts", "# Agreed", own=False)
+
+    assert list(plain.told_in_briefing(briefed(own))) == [
+        ("Your team's notes:", "# Notes")
+    ]
+    assert list(plain.told_in_briefing(briefed())) == []
+    [(heading, text)] = contracts.told_in_briefing(briefed(above))
+    assert heading.startswith("Contracts your team must keep")
+    assert text == "# Agreed"

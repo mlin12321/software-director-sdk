@@ -1,6 +1,6 @@
 """What the members of a team record for themselves as they work."""
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -8,8 +8,10 @@ from pydantic import BaseModel, Field
 from openhands.agent_server.director.documents.declared import Document
 from openhands.agent_server.director.documents.events import RemovedTeamHandedOver
 from openhands.agent_server.director.documents.protocol import (
+    BriefedPart,
     DocumentArgument,
     DocumentProtocolBase,
+    DocumentsBriefed,
     DocumentToolCall,
     DocumentToolResult,
     ShownDocument,
@@ -71,6 +73,20 @@ class ReportProtocol(DocumentProtocolBase):
             ]
         }
 
+    def told_in_briefing(self, briefed: DocumentsBriefed) -> Sequence[BriefedPart]:
+        entries = self.store.entries(briefed.reader, self.document.name)
+        if not entries:
+            return []
+        return [
+            BriefedPart(
+                "What your team has reported so far:",
+                "\n".join(
+                    f"- {entry_line(entry, briefed.titles, briefed.above_writer)}"
+                    for entry in entries
+                ),
+            )
+        ]
+
     def when_removed_team_is_handed_over(self, handed: RemovedTeamHandedOver) -> None:
         # The notes of the team above on what the teams before left.
         notes = handed.given.get(self.document.name, "").strip()
@@ -80,6 +96,24 @@ class ReportProtocol(DocumentProtocolBase):
                 self.document.name,
                 LogEntry(at="", role=handed.writer, text=notes, handed_over=True),
             )
+
+
+def entry_line(entry: LogEntry, titles: Mapping[str, str], above_writer: str) -> str:
+    """One report, with which agent of the team wrote it.
+
+    Args:
+        titles: What each member of the team is called.
+        above_writer: What the member that works in the folder of the team
+            above is called.
+    """
+    if entry.handed_over:
+        return (
+            f"Handed over by the {above_writer} of the team above, from the "
+            "teams that "
+            f"were here before yours, {entry.at}: {entry.text}"
+        )
+    writer = titles.get(entry.role, entry.role)
+    return f"{writer}, {entry.at}: {entry.text}"
 
 
 def _written_by(entry: LogEntry, reader: TeamRef) -> str:

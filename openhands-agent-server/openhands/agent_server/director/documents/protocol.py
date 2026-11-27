@@ -9,7 +9,7 @@ from abc import ABC
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from functools import cache
-from typing import Any, ClassVar, Literal
+from typing import Any, ClassVar, Literal, NamedTuple
 
 from pydantic import BaseModel, Field, create_model
 
@@ -67,6 +67,34 @@ class ShownDocument:
     name: str
     text: str
     own: bool
+
+
+@dataclass(frozen=True)
+class DocumentsBriefed:
+    """An agent is given its first message, which tells it what its team
+    works to.
+
+    Attributes:
+        reader: The team whose agent is told.
+        shown: The documents of this kind the team reads, as ``read_from``
+            names them; none that is empty.
+        titles: What each member of the team is called.
+        above_writer: What the member that works in the folder of the team
+            above is called.
+    """
+
+    reader: TeamRef
+    shown: Sequence[ShownDocument]
+    titles: Mapping[str, str]
+    above_writer: str
+
+
+class BriefedPart(NamedTuple):
+    """One part of an agent's first message: a line that says what it is,
+    and the text."""
+
+    heading: str
+    text: str
 
 
 @dataclass(frozen=True)
@@ -230,6 +258,17 @@ class DocumentProtocolBase(ABC):
         """
         own = next((found.text for found in shown if found.own), None)
         return {self.document.name: own}
+
+    def told_in_briefing(self, briefed: DocumentsBriefed) -> Sequence[BriefedPart]:
+        """What an agent's first message says of this document.
+
+        The plain answer: its team's own, when it has one.
+        """
+        return [
+            BriefedPart(f"Your team's {self.document.name}:", found.text)
+            for found in briefed.shown
+            if found.own
+        ]
 
     def edited(self, text: str, arguments: BaseModel) -> str:
         """``text`` after the command of the file editor that ``arguments``

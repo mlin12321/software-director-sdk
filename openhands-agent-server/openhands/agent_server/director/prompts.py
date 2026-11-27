@@ -7,11 +7,8 @@ from typing import Any, Literal
 from openhands.agent_server.director.agent_types import Names
 from openhands.agent_server.director.git_store import team_key
 from openhands.agent_server.director.models import (
-    BoundaryContracts,
     FormerTeam,
-    InheritedSpec,
     MergeItem,
-    Report,
     Review,
     ReviewFinding,
     SessionTeam,
@@ -243,22 +240,6 @@ run commands that change the repository. Only `read_team_context`,
 </ORG_ROLE>"""
 
 DIRECTOR_PREFIX = "[director]"
-
-
-def report_line(report: Report, titles: Mapping[str, str], *, names: Names) -> str:
-    """One report, with which agent of the team wrote it.
-
-    Args:
-        titles: What each member of the team is called.
-    """
-    if report.handed_over:
-        return (
-            f"Handed over by the {names.above_writer} of the team above, from the "
-            "teams that "
-            f"were here before yours, {report.at}: {report.text}"
-        )
-    writer = titles.get(report.role, report.role)
-    return f"{writer}, {report.at}: {report.text}"
 
 
 def _now_with(team: FormerTeam, children: list[SplitChild]) -> str:
@@ -607,41 +588,32 @@ def pruned_notice(
     return "\n".join([pruned, "", "What is now yours to do:", _REWRITE_SPEC])
 
 
-def _of_the_team(
-    specs: list[InheritedSpec],
-    contracts: list[BoundaryContracts],
-    reports: list[Report],
-    context: str,
-    titles: Mapping[str, str],
-    *,
-    names: Names,
-) -> list[str]:
-    """The specs, contracts, reports and context a briefing gives."""
+def left_document(name: str, path: str, left_by: str | None, tool: str) -> str:
+    """What is said over a document a team before the reader's left in its
+    folder.
+
+    Args:
+        tool: The tool the reader's team writes its own with.
+    """
+    by = f" ({left_by})" if left_by else ""
+    return (
+        f"A {name} left by a team before you{by}, in "
+        f"{path or 'the repository'}. It is old: it says how that "
+        "team worked. Take from it what still holds and write your "
+        f"team's own with `{tool}`."
+    )
+
+
+def _of_the_team(documents: Sequence[tuple[str, str]], context: str) -> list[str]:
+    """The documents and context a briefing gives.
+
+    Args:
+        documents: Each part its documents add: a line that says what it
+            is, and the text.
+    """
     lines: list[str] = []
-    for spec in specs:
-        if spec.old:
-            by = f" ({spec.left_by})" if spec.left_by else ""
-            lines += [
-                "",
-                f"A spec left by a team before you{by}, in "
-                f"{spec.path or 'the repository'}. It is old: it says how that "
-                "team worked. Take from it what still holds and write your "
-                "team's own with `write_spec`.",
-                spec.spec,
-            ]
-        else:
-            lines += ["", "Your team's spec:", spec.spec]
-    for agreed in contracts:
-        heading = (
-            "Contracts between your sub-teams:"
-            if agreed.own
-            else "Contracts your team must keep with the teams beside it "
-            "(set by the team above; read-only):"
-        )
-        lines += ["", heading, agreed.contracts]
-    if reports:
-        lines += ["", "What your team has reported so far:"]
-        lines += [f"- {report_line(report, titles, names=names)}" for report in reports]
+    for heading, text in documents:
+        lines += ["", heading, text]
     if context:
         lines += ["", context]
     return lines
@@ -707,12 +679,9 @@ def role_text(
 def hand_over_brief(
     place: SessionTeam,
     job: str,
-    specs: list[InheritedSpec],
-    contracts: list[BoundaryContracts],
-    reports: list[Report],
+    documents: Sequence[tuple[str, str]],
     context: str = "",
     *,
-    titles: Mapping[str, str],
     role: str = "",
     names: Names,
 ) -> str:
@@ -720,9 +689,9 @@ def hand_over_brief(
     of a team's IC that knows nothing but what this gives it.
 
     Args:
-        titles: What each member of the team is called.
         role: How the org works and what this conversation is for.
         job: What changed, what the removed teams left and what to do.
+        documents: What its team's documents say, as each has it said.
         context: The rest of the team's context, as the agent is to read it.
     """
     lines = [
@@ -739,7 +708,7 @@ def hand_over_brief(
         job,
         "",
         "What your team works to, so that you can judge what to pass on:",
-        *_of_the_team(specs, contracts, reports, context, titles, names=names),
+        *_of_the_team(documents, context),
         "",
         "Do the hand-over now. You may read files; change none. When it is "
         "done, end with a line or two on what you gave to whom.",
@@ -751,9 +720,7 @@ def brief(
     place: SessionTeam,
     role: str,
     task: str,
-    specs: list[InheritedSpec],
-    contracts: list[BoundaryContracts],
-    reports: list[Report],
+    documents: Sequence[tuple[str, str]],
     context: str = "",
     kind: str = "",
     *,
@@ -766,6 +733,7 @@ def brief(
 
     Args:
         role_said: How the org works and what its part in it is.
+        documents: What its team's documents say, as each has it said.
         works: Whether it is the member that works in the team's folder;
             None for an IC.
         context: The rest of the team's context, as the agent is to read it.
@@ -787,7 +755,7 @@ def brief(
     if kind:
         lines += ["", kind]
     lines += ["", "Task of the team:", task]
-    lines += _of_the_team(specs, contracts, reports, context, titles, names=names)
+    lines += _of_the_team(documents, context)
     lines.append("")
     if works:
         lines.append("Start on the task now.")
