@@ -7,7 +7,8 @@ that makes tools of the agent SDK out of them.
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, ClassVar, Self
 
-from pydantic import Field, create_model
+from pydantic import Field
+from pydantic.fields import FieldInfo
 
 from openhands.agent_server.director.documents.declared import Document
 from openhands.agent_server.director.documents.protocol import (
@@ -361,7 +362,12 @@ _added: set[tuple[str, str]] = set()
 
 
 def _ask_for(asked: DocumentArgument) -> None:
-    """Have a tool of the director's own take one more text."""
+    """Have a tool of the director's own take one more text.
+
+    The field is added to the class the tool already has. A class made
+    from it would be a second action of the same name, and the agent SDK
+    tells its actions apart by name.
+    """
     if (asked.tool, asked.name) in _added:
         return
     tool = DIRECTOR_TOOLS.get(asked.tool)
@@ -370,24 +376,17 @@ def _ask_for(asked: DocumentArgument) -> None:
     takes = tool.action()
     if asked.name in takes.model_fields:
         raise ValueError(f"{asked.tool} already takes {asked.name!r}")
-    added: dict[str, Any] = {
-        asked.name: (
-            (
-                list[DocumentChoice],
-                Field(default_factory=list, description=asked.description),
-            )
-            if asked.per_folder
-            else (str, Field(default="", description=asked.description))
-        )
-    }
-    extended = create_model(
-        takes.__name__,
-        __base__=takes,
-        __doc__=takes.__doc__,
-        __module__=__name__,
-        **added,
+    if asked.per_folder:
+        annotation: Any = list[DocumentChoice]
+        field = Field(default_factory=list, description=asked.description)
+    else:
+        annotation = str
+        field = Field(default="", description=asked.description)
+    takes.__annotations__[asked.name] = annotation
+    takes.model_fields[asked.name] = FieldInfo.from_annotated_attribute(
+        annotation, field
     )
-    setattr(tool, "action", classmethod(lambda cls: extended))  # noqa: ARG005, B010
+    takes.model_rebuild(force=True)
     _added.add((asked.tool, asked.name))
 
 
