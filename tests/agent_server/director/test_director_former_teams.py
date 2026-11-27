@@ -12,7 +12,7 @@ import pytest
 
 from openhands.agent_server.director import compaction
 from openhands.agent_server.director.launch import StartedAgent
-from openhands.agent_server.director.models import LeftDocument, SplitChild
+from openhands.agent_server.director.models import LeftoverDocument, SplitChild
 from openhands.agent_server.director.org_store import team_id_of
 from openhands.agent_server.director.prompts import (
     HAND_OVER_ROLE,
@@ -174,8 +174,8 @@ async def test_the_spec_of_the_team_before_stays_and_is_shown_as_old(
     await replace(service, ORDERS, keep=["Web"])
 
     orders = node(service, API)
-    assert orders.left_documents == [
-        LeftDocument(name="spec", path="services/api", team="API")
+    assert orders.leftover_documents == [
+        LeftoverDocument(name="spec", path="services/api", team="API")
     ]
     [spec] = service.specs_of(orders)
     assert (spec.spec, spec.old, spec.left_by) == ("# API by hand", True, "API")
@@ -194,7 +194,7 @@ async def test_the_spec_of_the_team_before_stays_and_is_shown_as_old(
     await use(service, orders_ic, WriteSpecTool, WriteSpecAction(file_text="# Orders"))
 
     orders = node(service, API)
-    assert orders.left_documents == []
+    assert orders.leftover_documents == []
     [own] = service.specs_of(orders)
     assert (own.spec, own.old) == ("# Orders", False)
 
@@ -212,9 +212,9 @@ async def test_teams_that_split_or_merge_directories_are_shown_the_specs_left_th
     )
 
     merged = node(service, "services")
-    assert sorted(merged.left_documents, key=lambda old: old.path) == [
-        LeftDocument(name="spec", path="services/api", team="API"),
-        LeftDocument(name="spec", path="services/web", team="Web"),
+    assert sorted(merged.leftover_documents, key=lambda old: old.path) == [
+        LeftoverDocument(name="spec", path="services/api", team="API"),
+        LeftoverDocument(name="spec", path="services/web", team="Web"),
     ]
     assert {spec.spec for spec in service.specs_of(merged)} == {
         "# API by hand",
@@ -230,11 +230,11 @@ async def test_teams_that_split_or_merge_directories_are_shown_the_specs_left_th
         keep=[],
     )
 
-    assert node(service, "services.api.http").left_documents == [
-        LeftDocument(name="spec", path="services/api", team="API")
+    assert node(service, "services.api.http").leftover_documents == [
+        LeftoverDocument(name="spec", path="services/api", team="API")
     ]
-    assert node(service, WEB).left_documents == [
-        LeftDocument(name="spec", path="services/web", team="Web")
+    assert node(service, WEB).leftover_documents == [
+        LeftoverDocument(name="spec", path="services/web", team="Web")
     ]
     assert len(former_of(service, "services")) == 1
 
@@ -264,8 +264,8 @@ async def test_the_ic_is_told_who_has_each_replaced_teams_directory_now(
     for team_id in ("services.api.http", "services.api.db"):
         team = node(service, team_id)
         assert team.agents == [] and service.reports_of(team) == []
-        assert team.left_documents == [
-            LeftDocument(name="spec", path="services/api", team="API")
+        assert team.leftover_documents == [
+            LeftoverDocument(name="spec", path="services/api", team="API")
         ]
     below = service.context_of(node(service, "root"), "ic")["sub_teams"]
     assert {team["team"]: team["status"] for team in below} == {
@@ -305,8 +305,8 @@ async def test_a_pruned_team_is_recorded_and_its_spec_is_old_for_the_team_above(
     assert not has_place(service, API)
     [former] = former_of(service, API)
     assert (former.ended, len(former.reports)) == ("pruned", 2)
-    assert node(service, "root").left_documents == [
-        LeftDocument(name="spec", path="services/api", team="API")
+    assert node(service, "root").leftover_documents == [
+        LeftoverDocument(name="spec", path="services/api", team="API")
     ]
     context = service.context_of(node(service, "root"), "ic")
     [left] = context["specs_left_by_teams_before_you"]
