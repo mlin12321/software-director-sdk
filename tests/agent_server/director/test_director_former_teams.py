@@ -155,7 +155,7 @@ async def test_a_team_put_in_another_teams_directory_gets_none_of_its_memory(
     assert orders.title == "Orders" and orders.agents == []
     assert service.reports_of(orders) == []
     assert service.threads_of(orders) == []
-    assert service._runs().marked(TASK)[orders.id] == "Keep the orders"
+    assert service.org_state.run_state().marked(TASK)[orders.id] == "Keep the orders"
     [former] = former_of(service, API)
     assert (former.title, former.ended, former.path) == (
         "API",
@@ -943,7 +943,9 @@ async def test_a_split_finished_again_after_a_restart_hands_over_once(
         # Nothing is saved once the server has ended.
         if ended.is_set():
             return
-        if any(i.kind == "hand_over" for i in service._runs().open_intents()):
+        if any(
+            i.kind == "hand_over" for i in service.org_state.run_state().open_intents()
+        ):
             ended.set()
             raise ServerEnded
         save_tree(store)

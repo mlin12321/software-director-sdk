@@ -84,6 +84,7 @@ SERVICES_THE_DIRECTOR_HOLDS = [
     "service/agent_confinement_service.py",
     "service/org_save_service.py",
     "service/org_settings_service.py",
+    "service/org_state_service.py",
     "service/resumable_work_service.py",
     "service/work_queue_service.py",
     "service/model_call_service.py",
@@ -91,6 +92,7 @@ SERVICES_THE_DIRECTOR_HOLDS = [
     "service/session_draft_service.py",
     "service/session_landing_service.py",
     "service/stall_watch_service.py",
+    "service/start_line_service.py",
     "service/team_type_service.py",
 ]
 

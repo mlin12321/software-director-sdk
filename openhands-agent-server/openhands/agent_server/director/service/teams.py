@@ -294,7 +294,10 @@ class Teams(Delivery):
                 )
                 kept = [agent for agent in place.agents if agent not in lost]
                 place = store.update_place(place_id, agents=[*kept, added])
-                task = self._runs().marked(TASK).get(place_id) or place.summary
+                task = (
+                    self.org_state.run_state().marked(TASK).get(place_id)
+                    or place.summary
+                )
                 self.resumable_work.begin(
                     place_id, LaunchMember(task=task, role=member)
                 )
@@ -486,7 +489,7 @@ class Teams(Delivery):
 
     def _purpose(self, node: OrgNode) -> str:
         """What a team is for, without the message it was started with."""
-        task = self._runs().marked(TASK).get(node.id) or node.summary
+        task = self.org_state.run_state().marked(TASK).get(node.id) or node.summary
         return task.split(_STARTED_WITH)[0]
 
     def count_accepted_review(self, place_id: str) -> None:
@@ -503,7 +506,7 @@ class Teams(Delivery):
             due = counted["accepted"] >= limit
             if due:
                 counted["accepted"] = 0
-            self._runs().mark(CHECKS, place_id, json.dumps(counted))
+            self.org_state.run_state().mark(CHECKS, place_id, json.dumps(counted))
         if due:
             self._wake_manager(
                 place_id,
@@ -530,7 +533,7 @@ class Teams(Delivery):
             due = raised >= limit
             told = dict(counted["escalations"], **{below_id: raised})
             counted["escalations"][below_id] = 0 if due else raised
-            self._runs().mark(CHECKS, place_id, json.dumps(counted))
+            self.org_state.run_state().mark(CHECKS, place_id, json.dumps(counted))
         if due:
             self._wake_manager(
                 place_id,
@@ -559,7 +562,7 @@ class Teams(Delivery):
         store = self.org
         now = self._clock()
         quiet = {}
-        for team_id, kept in self._runs().marked(PROGRESS).items():
+        for team_id, kept in self.org_state.run_state().marked(PROGRESS).items():
             at = progress_of(kept).get("at")
             if at:
                 since = now - datetime.fromisoformat(at)
@@ -590,11 +593,11 @@ class Teams(Delivery):
 
     async def _stop(self, place_id: str) -> None:
         team = self.org.place(place_id)
-        if team is None or team.stopped is None or self._paused is not None:
+        if team is None or team.stopped is None or self.org_state.paused is not None:
             return
         launcher = self._require_launcher()
         for conversation_id in self._conversations_below(team):
-            if conversation_id in self._running:
+            if conversation_id in self.org_state.running:
                 with suppress(NotFound):
                     await launcher.pause(UUID(conversation_id))
 
@@ -612,14 +615,16 @@ class Teams(Delivery):
         if team is None or team.stopped is not None:
             return
         own = None if own_too else self.team_types.writer_conversation(team)
-        if self._paused is not None:
+        if self.org_state.paused is not None:
             # The org goes on later: those cut off are run again then, like
             # any agent that was in a turn when the org was paused.
             for conversation_id in running:
                 found = self.org.find_by_conversation(conversation_id)
                 if found is not None and conversation_id != own:
-                    self._running.add(conversation_id)
-                    self._runs().mark(RUNNING, conversation_id, found[0].id)
+                    self.org_state.running.add(conversation_id)
+                    self.org_state.run_state().mark(
+                        RUNNING, conversation_id, found[0].id
+                    )
             return
         conversations = self._conversations_below(team)
         # The time it was stopped is not time it showed no progress.
@@ -627,7 +632,7 @@ class Teams(Delivery):
             self.progressed(found[0].id if found else None)
         # In the order it was sent, and before the message that set the
         # team going, which waits behind this in the team's lane.
-        for held in self._runs().held():
+        for held in self.org_state.run_state().held():
             if held.conversation_id in conversations:
                 self._at_once.add(held.seq)
                 await self._deliver(held.seq, held.conversation_id, held.text)
@@ -647,7 +652,7 @@ class Teams(Delivery):
         """
         if place_id is None:
             return
-        run = self._runs()
+        run = self.org_state.run_state()
         seen = progress_of(run.marked(PROGRESS).get(place_id))
         now = self._clock().isoformat()
         checked = now if by_above else seen.get("checked") or now
@@ -770,8 +775,8 @@ class Teams(Delivery):
                     adapt_agent=adapt,
                 )
 
-            await self._when_there_is_room(place.id, start)
-            if self._paused is not None:
+            await self.start_line.when_there_is_room(place.id, start)
+            if self.org_state.paused is not None:
                 self._note_running(conversation_id, place.id, True)
                 await launcher.pause(UUID(conversation_id))
         except Held:
@@ -788,7 +793,7 @@ class Teams(Delivery):
         conversation_id = self.team_types.team(place).conversation(role)
         if conversation_id is not None:
             text, told = await asyncio.to_thread(self._briefing, place, role, task)
-            self._runs().mark(TOLD, conversation_id, told)
+            self.org_state.run_state().mark(TOLD, conversation_id, told)
             await self._send(conversation_id, text)
 
     async def _start_agent(
@@ -822,7 +827,7 @@ class Teams(Delivery):
                 started = await self._start_new(
                     place, role, conversation_id, parent_conversation, task, checkout
                 )
-                if self._paused is not None:
+                if self.org_state.paused is not None:
                     self._note_running(conversation_id, place_id, True)
                     await launcher.pause(UUID(conversation_id))
         except Held:
@@ -944,8 +949,8 @@ class Teams(Delivery):
                 base=base,
             )
 
-        started = await self._when_there_is_room(place_id, start)
-        self._runs().mark(TOLD, conversation_id, told)
+        started = await self.start_line.when_there_is_room(place_id, start)
+        self.org_state.run_state().mark(TOLD, conversation_id, told)
         return started
 
     async def _started_ic(self, place: SessionTeam | None) -> str | None:
@@ -994,7 +999,7 @@ class Teams(Delivery):
         brief = intent.of(Brief)
         place = self.org.place(intent.node_id)
         if place and brief.role == self.team_types.team(place).writer:
-            self._runs().mark(TASK, intent.node_id, brief.task)
+            self.org_state.run_state().mark(TASK, intent.node_id, brief.task)
         await self._brief(intent.node_id, brief.role, brief.task)
 
     async def _do_launch_member(self, intent: Intent) -> None:
@@ -1007,7 +1012,7 @@ class Teams(Delivery):
         above = self.org.place(start.parent or "")
         parent_ic = await self._started_ic(above) or await self._template()
         checkout = start.checkout
-        self._runs().mark(TASK, place_id, task)
+        self.org_state.run_state().mark(TASK, place_id, task)
         self.progressed(place_id, by_above=True)
         started = self.org.place(place_id)
         left: list[str] = []
@@ -1085,7 +1090,7 @@ class Teams(Delivery):
     ) -> None:
         """Keep what a team's hand-over conversation did, for its IC to be
         told when it ends. Safe from any thread."""
-        run = self._runs()
+        run = self.org_state.run_state()
         kept = run.marked(HANDING).get(place_id)
         if kept is None:
             return

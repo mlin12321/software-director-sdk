@@ -228,10 +228,10 @@ async def stream_org_tree(
     )
     if snapshot is None:
         raise NotFound(f"Unknown team: {focus_id}")
-    unwatch = service.watch_state(on_change)
+    unwatch = service.org_state.watch(on_change)
 
     async def with_state(snapshot: SnapshotEvent) -> SnapshotEvent:
-        state = await asyncio.to_thread(service.state)
+        state = await asyncio.to_thread(service.org_state.state)
         return snapshot.model_copy(
             update={"paused": state.paused, "merging": state.merging}
         )

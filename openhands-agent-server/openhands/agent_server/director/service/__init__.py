@@ -155,9 +155,10 @@ class DirectorService(Sync):
         bind_director(None)
         store = self._store
         if store is not None and store.root_id is not None:
-            run = self._runs()
-            if self._paused is None and has_work(run):
-                self._hold("shutdown")
+            run = self.org_state.run_state()
+            if self.org_state.paused is None and has_work(run):
+                self.org_state.hold("shutdown")
+                self.start_line.org_held()
             run.put("clean", "1")
         if self._stop_status is not None:
             self._stop_status()
@@ -181,10 +182,7 @@ class DirectorService(Sync):
         await self.org_save.__aexit__(None, None, None)
         self._launcher = None
         self._loop = None
-        with self._lock:
-            if self._run is not None:
-                self._run.close()
-                self._run = None
+        self.org_state.close()
 
     async def create_org(self, request: CreateOrgRequest) -> OpenedSession:
         """Start a new org: its top team, and the session that works on
@@ -515,7 +513,9 @@ class DirectorService(Sync):
         if escalation_id == MERGE_WAITS:
             # The way into the checkout was cleared: the accepted work is
             # merged now as its reviewer decided, with nobody asked again.
-            decided = json.loads(self._runs().marked(CLEARING).get(place_id) or "{}")
+            decided = json.loads(
+                self.org_state.run_state().marked(CLEARING).get(place_id) or "{}"
+            )
             self.accept_review(place_id, "", **decided)
             return store.place(place_id) or place
         if escalation_id == ORG_WAITS:

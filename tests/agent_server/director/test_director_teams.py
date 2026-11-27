@@ -609,7 +609,7 @@ async def test_a_team_made_in_place_of_one_is_not_taken_for_it(
             return await save()
         # The session is kept with the new team in it, and the split is
         # not on record as done.
-        first._runs().replace_marks(SESSION, kept_sessions(first.org))
+        first.org_state.run_state().replace_marks(SESSION, kept_sessions(first.org))
         ended.set()
         raise ServerEnded
 
@@ -703,10 +703,10 @@ async def test_what_was_held_for_a_pruned_team_does_not_pause_the_org_on_a_resta
     await use(first, ic(first), StopTeamTool, StopTeamAction(team=API, reason="Stuck."))
     first.notify(ic(first, API), "A notice for the stopped team.")
     await first.settled()
-    assert first._runs().held()
+    assert first.org_state.run_state().held()
     await use(first, manager(first), PruneTeamTool, PRUNE_API)
     await first.settled()
-    assert first._runs().held() == []
+    assert first.org_state.run_state().held() == []
     await first.aclose()
 
     second = await again(repo, launcher)

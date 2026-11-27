@@ -134,7 +134,7 @@ class Records(ServiceState):
         accepted."""
         return SessionLandingService(
             org=lambda: self.org,
-            run_state=self._runs,
+            run_state=self.org_state.run_state,
             team_memory=self._memory,
             documents=self.documents,
             team_types=self.team_types,
@@ -464,13 +464,17 @@ class Records(ServiceState):
         with self._counting:
             counted = self._counted(team.parent_id)
             if counted["escalations"].pop(team.id, None) is not None:
-                self._runs().mark(CHECKS, team.parent_id, json.dumps(counted))
+                self.org_state.run_state().mark(
+                    CHECKS, team.parent_id, json.dumps(counted)
+                )
 
     def _counted(self, place_id: str) -> dict[str, Any]:
         """What a Manager's checks have counted: the reviews its IC
         accepted, and the escalations of each team below on its work."""
         try:
-            kept = json.loads(self._runs().marked(CHECKS).get(place_id) or "{}")
+            kept = json.loads(
+                self.org_state.run_state().marked(CHECKS).get(place_id) or "{}"
+            )
         except ValueError:
             kept = {}
         if not isinstance(kept, dict):
@@ -510,7 +514,7 @@ class Records(ServiceState):
             role=role,
             session_id=node.session,
             session=store.session_title(node),
-            human_joined=conversation_id in self._runs().marked(JOINED),
+            human_joined=conversation_id in self.org_state.run_state().marked(JOINED),
             links=[
                 ConversationLink(
                     conversation_id=agent.conversation_id,
@@ -948,7 +952,7 @@ class Records(ServiceState):
             What went with the session, in words; '' when nothing did.
         """
         store = self.org
-        run = self._runs()
+        run = self.org_state.run_state()
         session = top.session
         places = store.session(session)
         reports = sum(len(self.session_drafts.reports(place.id)) for place in places)

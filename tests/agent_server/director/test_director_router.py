@@ -379,18 +379,18 @@ async def test_sends_what_waits_on_the_human_and_each_change_to_it(
 async def test_says_when_the_org_is_paused_and_when_it_runs_again(
     tree_stream_service: DirectorService,
 ):
-    tree_stream_service._hold("human")
+    tree_stream_service.org_state.hold("human")
     body = await open_stream(tree_stream_service)
 
     _, snapshot = await next_event(body)
-    await asyncio.to_thread(tree_stream_service._release)
+    await asyncio.to_thread(tree_stream_service.org_state.release)
     name, running = await next_event(body)
     await body.aclose()  # type: ignore[attr-defined]
 
     assert (snapshot["paused"], snapshot["merging"]) == ("human", False)
     assert name == "org_state"
     assert running == {"type": "org_state", "paused": None, "merging": False}
-    assert tree_stream_service._state_listeners == []
+    assert tree_stream_service.org_state._listeners == []
 
 
 async def test_an_idle_stream_sends_heartbeats(

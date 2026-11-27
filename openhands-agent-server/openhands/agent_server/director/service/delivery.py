@@ -3,7 +3,6 @@ agent to be quiet, and the questions put to a model."""
 
 import asyncio
 import json
-from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from functools import cached_property
 from uuid import UUID
@@ -36,7 +35,6 @@ from openhands.agent_server.director.run_state import (
     JOINED,
     RUNNING,
     TOLD,
-    WAITING,
     Intent,
 )
 from openhands.agent_server.director.service.records import Records
@@ -52,7 +50,6 @@ from openhands.agent_server.director.service.state import (
     _instant,
     lane_for,
 )
-from openhands.agent_server.event_service import ConversationRunLimitExceeded
 from openhands.sdk.errors import (
     NotFound,
     Unavailable,
@@ -75,15 +72,15 @@ class Delivery(Records):
         """What the director begins for a team and finishes after a pause
         or a restart. The service registers the step of each kind."""
         return ResumableWorkService(
-            run_state=self._runs,
+            run_state=self.org_state.run_state,
             work_queue=self.work_queue,
             lane_of=lane_for,
-            is_paused=lambda: self._paused is not None,
+            is_paused=lambda: self.org_state.paused is not None,
             save=self.org_save.save,
             save_soon=self.org_save.save_soon,
             let_go=self._let_go,
             keep_failure=self._keep_failure,
-            left=self._leave_line,
+            left=self.start_line.leave,
             saved_before_forgotten=SAVED_BEFORE_FORGOTTEN,
         )
 
@@ -126,7 +123,7 @@ class Delivery(Records):
         found = self.org.find_by_conversation(conversation_id)
         if found is None:
             raise NotFound(f"No agent of the org has conversation {conversation_id}")
-        run = self._runs()
+        run = self.org_state.run_state()
         if conversation_id in run.marked(JOINED):
             return
         run.mark(JOINED, conversation_id)
@@ -138,7 +135,7 @@ class Delivery(Records):
             await self._require_launcher().mark_joined(UUID(conversation_id))
         except NotFound:
             # Not started yet, or gone: asked for again when it is written to.
-            self._runs().unmark(JOINED, conversation_id)
+            self.org_state.run_state().unmark(JOINED, conversation_id)
 
     def _post(self, conversation_id: str, text: str, *, at_once: bool = False) -> None:
         """Record a message to an agent, then deliver it. Safe from any
@@ -154,7 +151,7 @@ class Delivery(Records):
             raise Unavailable("The director is not running agents on this server")
         found = self.org.find_by_conversation(conversation_id)
         place_id = found[0].id if found else ""
-        seq = self._runs().hold(conversation_id, place_id, text)
+        seq = self.org_state.run_state().hold(conversation_id, place_id, text)
         if at_once:
             self._at_once.add(seq)
         self.org_save.save_soon()
@@ -163,8 +160,8 @@ class Delivery(Records):
         )
 
     async def _deliver(self, seq: int, conversation_id: str, text: str) -> None:
-        run = self._runs()
-        if self._paused is not None or seq in self._delivering:
+        run = self.org_state.run_state()
+        if self.org_state.paused is not None or seq in self._delivering:
             return
         if not run.is_held(seq):
             return
@@ -232,7 +229,7 @@ class Delivery(Records):
         conversation_id = (
             self.team_types.team(place).conversation(role) if place else None
         )
-        run = self._runs()
+        run = self.org_state.run_state()
         before = run.marked(TOLD).get(conversation_id or "")
         if place is None or conversation_id is None or not before:
             return
@@ -252,7 +249,7 @@ class Delivery(Records):
             last = await launcher.condensed(UUID(conversation_id))
         except NotFound:
             return None
-        known = self._runs().marked(CONDENSED).get(conversation_id)
+        known = self.org_state.run_state().marked(CONDENSED).get(conversation_id)
         return last if last is not None and last != known else None
 
     def _with_what_changed(
@@ -282,7 +279,7 @@ class Delivery(Records):
         if again:
             said = again_block(self.team_types.role_text(node, role), now)
             return f"{text}\n\n{said}", json.dumps(now)
-        before = self._runs().marked(TOLD).get(conversation_id)
+        before = self.org_state.run_state().marked(TOLD).get(conversation_id)
         news = changed(
             json.loads(before) if before else {},
             now,
@@ -308,7 +305,7 @@ class Delivery(Records):
     def _in_a_turn_of_its_own(self, conversation_id: str) -> bool:
         """Whether a message now would cut short the turn of an agent that
         runs its own tools."""
-        if conversation_id not in self._running:
+        if conversation_id not in self.org_state.running:
             return False
         found = self.org.find_by_conversation(conversation_id)
         if found is None:
@@ -336,7 +333,7 @@ class Delivery(Records):
         store = self.org
         for team in map(store.place, node_ids):
             for agent in team.agents if team else []:
-                if agent.conversation_id in self._running:
+                if agent.conversation_id in self.org_state.running:
                     raise Held
 
     def _let_go(self, intent: Intent) -> None:
@@ -354,7 +351,7 @@ class Delivery(Records):
         if self._settles(conversation_id):
             # A step is changing its team; the step delivers it when done.
             return
-        run = self._runs()
+        run = self.org_state.run_state()
         waiting = [
             held
             for held in run.held()
@@ -376,66 +373,15 @@ class Delivery(Records):
             lambda: self._deliver(seq, conversation_id, text), place_id or ORG_LANE
         )
 
-    async def _when_there_is_room[T](
-        self, place_id: str, start: Callable[[], Awaitable[T]]
-    ) -> T:
-        """Run ``start`` for a team; while the server is full, wait in line
-        for a conversation to stop running and try again."""
-        while place_id in self._line and self._line[0] != place_id:
-            if self._paused is not None:
-                # The one ahead of it may never start now: it is in line
-                # again when the org resumes.
-                self._runs().mark(WAITING, place_id)
-                raise Held
-            await self._line_moved.wait()
-        try:
-            return await start()
-        except ConversationRunLimitExceeded:
-            logger.info("Server is at its run limit; team %s waits", place_id)
-        finally:
-            # Nothing is awaited from here to the gate, so the team is in
-            # line at the gate before the next one tries.
-            self._leave_line(place_id)
-        store = self.org
-        run = self._runs()
-        run.mark(WAITING, place_id)
-        with suppress(NotFound):
-            store.update_place(place_id, waiting_to_start=True)
-        keeps_place = False
-        try:
-            async with self._start_gate:
-                while True:
-                    if self._paused is not None:
-                        raise Held
-                    self._room.clear()
-                    try:
-                        return await start()
-                    except ConversationRunLimitExceeded:
-                        pass
-                    # Also after a pause: not every conversation is the org's.
-                    with suppress(TimeoutError):
-                        await asyncio.wait_for(
-                            self._room.wait(), timeout=self._run_limit_retry
-                        )
-        except (Held, asyncio.CancelledError):
-            # Stopped while it waited: it is still next when the org resumes.
-            keeps_place = True
-            raise
-        finally:
-            if not keeps_place:
-                run.unmark(WAITING, place_id)
-            with suppress(NotFound):
-                store.update_place(place_id, waiting_to_start=False)
-
     def _note_running(self, conversation_id: str, place_id: str, running: bool) -> None:
-        if running == (conversation_id in self._running):
+        if running == (conversation_id in self.org_state.running):
             return
-        run = self._runs()
+        run = self.org_state.run_state()
         if running:
-            self._running.add(conversation_id)
+            self.org_state.running.add(conversation_id)
             run.mark(RUNNING, conversation_id, place_id)
         else:
-            self._running.discard(conversation_id)
+            self.org_state.running.discard(conversation_id)
             run.unmark(RUNNING, conversation_id)
             if self._loop is not None:
                 self._deliver_what_waited(conversation_id)
@@ -446,14 +392,16 @@ class Delivery(Records):
     async def _send(self, conversation_id: str, text: str) -> None:
         """Deliver a message as part of a step, in its place among them."""
         found = self.org.find_by_conversation(conversation_id)
-        seq = self._runs().hold(conversation_id, found[0].id if found else "", text)
+        seq = self.org_state.run_state().hold(
+            conversation_id, found[0].id if found else "", text
+        )
         await self._deliver(seq, conversation_id, text)
 
     async def _compact(self, folder: str, role: str) -> None:
         """Have a model rewrite one agent's reports shorter, if they are
         still too long."""
         asker = self.model_calls.asker()
-        if asker is None or self._paused is not None:
+        if asker is None or self.org_state.paused is not None:
             return
         team_memory = self._memory()
         reports = await asyncio.to_thread(team_memory.reports, folder, role)
@@ -529,7 +477,7 @@ class Delivery(Records):
         conversation_id = self.team_types.writer_conversation(place) if place else None
         if place is None or conversation_id is None or reported():
             return
-        if self._paused is not None:
+        if self.org_state.paused is not None:
             return
         launcher = self._require_launcher()
         summary = await self.model_calls.summarize(conversation_id, task)
@@ -555,7 +503,11 @@ class Delivery(Records):
         store = self.org
         place = store.place(place_id)
         conversation_id = self.team_types.writer_conversation(place) if place else None
-        if place is None or conversation_id is None or self._paused is not None:
+        if (
+            place is None
+            or conversation_id is None
+            or self.org_state.paused is not None
+        ):
             return
         launcher = self._require_launcher()
         summary = await self.model_calls.summarize(conversation_id, request)

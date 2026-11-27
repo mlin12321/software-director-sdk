@@ -990,7 +990,7 @@ async def test_a_session_whose_ic_could_not_be_started_leaves_nothing_in_the_his
 ):
     service = await started(repo, launcher)
     before = {event.id for event in service.org_history(100).events}
-    tasks = service._runs().marked(TASK)
+    tasks = service.org_state.run_state().marked(TASK)
     launcher.root_error = Unprocessable("cannot start")
 
     with pytest.raises(Unprocessable):
@@ -1004,7 +1004,7 @@ async def test_a_session_whose_ic_could_not_be_started_leaves_nothing_in_the_his
     assert [
         event for event in service.org_history(100).events if event.id not in before
     ] == []
-    assert service._runs().marked(TASK) == tasks
+    assert service.org_state.run_state().marked(TASK) == tasks
     await service.aclose()
 
 

@@ -171,7 +171,7 @@ class Splits(Watch):
 
     async def _split(self, intent: Intent) -> None:
         store = self.org
-        run = self._runs()
+        run = self.org_state.run_state()
         place_id = intent.node_id
         place = store.place(place_id)
         proposal = place.pending_split if place else None
@@ -376,7 +376,7 @@ class Splits(Watch):
             isinstance(intent.payload, HandOver)
             and intent.node_id == place_id
             and intent.payload.former == named
-            for intent in self._runs().open_intents()
+            for intent in self.org_state.run_state().open_intents()
         )
         if former and not begun:
             self.resumable_work.begin(
@@ -393,7 +393,7 @@ class Splits(Watch):
 
     async def _do_prune(self, intent: Intent) -> None:
         store = self.org
-        run = self._runs()
+        run = self.org_state.run_state()
         place_id = intent.node_id
         launcher = self._require_launcher()
         if "planned" not in intent.steps:
@@ -505,7 +505,7 @@ class Splits(Watch):
     async def _do_hand_over(self, intent: Intent) -> None:
         """Put a team's IC in hand-over mode: start the side conversation
         in which it passes on what removed teams left."""
-        store, run, payload = self.org, self._runs(), intent.of(HandOver)
+        store, run, payload = self.org, self.org_state.run_state(), intent.of(HandOver)
         place = store.place(intent.node_id)
         if place is None:
             return
@@ -587,7 +587,7 @@ class Splits(Watch):
     def _hand_over_ended(self, place_id: str) -> None:
         """Tell a team's IC, in its main conversation, what its hand-over
         conversation did. Safe from any thread."""
-        run = self._runs()
+        run = self.org_state.run_state()
         kept = run.marked(HANDING).get(place_id)
         place = self.org.place(place_id)
         if kept is None or place is None or self._loop is None:
@@ -646,7 +646,7 @@ class Splits(Watch):
             )
             # The record is the session's until its work is accepted.
             self.session_drafts.keep_former(team.session, record)
-        run = self._runs()
+        run = self.org_state.run_state()
         for kind in (TASK, PROGRESS, CHECKS):
             run.unmark(kind, team.id)
         self.session_drafts.forget_reports(team.id)

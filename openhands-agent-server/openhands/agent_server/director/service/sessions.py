@@ -90,7 +90,7 @@ class Sessions(Splits):
             routed_requests=self.routed_requests,
             keep_routed=self.keep_routed,
             hand_on=self._hand_on,
-            paused=lambda: self._paused is not None,
+            paused=lambda: self.org_state.paused is not None,
         )
 
     def sessions(self) -> list[Session]:
@@ -129,7 +129,7 @@ class Sessions(Splits):
         root = store.team(store.root_id) if store.root_id else None
         if root is None:
             raise Conflict("There is no org to open a session in")
-        if self._paused is not None:
+        if self.org_state.paused is not None:
             raise Conflict("The org is paused; resume it before opening a session")
         most = self.org_settings.settings.max_open_sessions
         if most and len(store.sessions()) >= most:
@@ -173,7 +173,7 @@ class Sessions(Splits):
                 if other.team_id == team.id and other.agents
             }
         )
-        run = self._runs()
+        run = self.org_state.run_state()
         checkout = str(self._repo_dir)
         branch = await asyncio.to_thread(_branch_of, checkout)
         lead_id = division_lead_id(above.id, session_id)
@@ -502,7 +502,7 @@ class Sessions(Splits):
             ],
         )
         store.update_place(node.id, isolation="shared")
-        run = self._runs()
+        run = self.org_state.run_state()
         for current in [higher, *added]:
             run.mark(TASK, session_team_id(current.id, sid), self._purpose(current))
         return top
@@ -535,7 +535,7 @@ class Sessions(Splits):
 
     async def _do_close_session(self, intent: Intent) -> None:
         store = self.org
-        run = self._runs()
+        run = self.org_state.run_state()
         place_id = intent.node_id
         launcher = self._require_launcher()
         if "planned" not in intent.steps:

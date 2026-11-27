@@ -174,12 +174,12 @@ async def test_a_closed_sessions_count_goes_with_it(
 ):
     uses(launcher, ic(service), 1000, 200, 0.5)
     session = await counted(service)
-    assert session.id in service._runs().marked(USE)
+    assert session.id in service.org_state.run_state().marked(USE)
 
     service.close_session(session.id)
     await service.settled()
 
-    assert service._runs().marked(USE) == {}
+    assert service.org_state.run_state().marked(USE) == {}
 
 
 async def test_no_more_sessions_are_opened_than_the_settings_allow(

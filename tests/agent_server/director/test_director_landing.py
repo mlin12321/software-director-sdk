@@ -1446,7 +1446,7 @@ async def test_what_a_session_has_is_kept_at_once(repo: Path, launcher: FakeLaun
     await service.settled()
 
     # The tree waits to be saved; what the session has does not.
-    kept = service._runs().marked(SESSION)
+    kept = service.org_state.run_state().marked(SESSION)
     assert opened.session.id in kept
     assert "Add refunds." in kept[opened.session.id]
     await service.aclose()

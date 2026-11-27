@@ -2,7 +2,6 @@
 
 import asyncio
 import json
-from collections import deque
 from collections.abc import Collection
 from contextlib import suppress
 from pathlib import Path
@@ -111,8 +110,9 @@ class Sync(Sessions):
         store = await asyncio.to_thread(lambda: self.org)
         if store.root_id is None:
             raise Conflict("There is no org to pause")
-        if self._paused is None:
-            self._hold("human")
+        if self.org_state.paused is None:
+            self.org_state.hold("human")
+            self.start_line.org_held()
             self.work_queue.enqueue(self._pause_agents, PAUSE_LANE)
         return await self.recovery()
 
@@ -134,17 +134,17 @@ class Sync(Sessions):
         store = await asyncio.to_thread(lambda: self.org)
         # One resume at a time: a second would run the same agents again.
         async with self._resume_lock:
-            if self._paused is None:
+            if self.org_state.paused is None:
                 return await self.recovery()
             # A pause that is still stopping agents would stop them after this
             # has set them going again.
             await self.work_queue.after(PAUSE_LANE)
-            run = self._runs()
+            run = self.org_state.run_state()
             await asyncio.to_thread(self._put_aside_stale)
             await asyncio.to_thread(
                 restore_worktrees, self._repo_dir, store.places(), self._home()
             )
-            dropped = self._dropped()
+            dropped = self.org_state.dropped()
             was_running = run.marked(RUNNING)
             waited = list(run.marked(WAITING))
             statuses = await launcher.statuses([UUID(agent) for agent in was_running])
@@ -156,7 +156,7 @@ class Sync(Sessions):
                 elif status == ConversationExecutionStatus.PAUSED:
                     again[conversation_id] = None
             self._resuming = set(again)
-            self._release()
+            self.org_state.release()
         await self._resync()
         for conversation_id in again:
             # Seen stopped, they were just taken for agents that do not run:
@@ -166,7 +166,7 @@ class Sync(Sessions):
             run.unmark(WAITING, place_id)
         intents = run.open_intents()
         starting = {intent.node_id for intent in intents}
-        self._line = deque(place_id for place_id in waited if place_id in starting)
+        self.start_line.line_up(place_id for place_id in waited if place_id in starting)
         for intent in intents:
             self.resumable_work.take_up(intent.id, lane_for(intent))
         for held in run.held():
@@ -191,8 +191,8 @@ class Sync(Sessions):
     async def recovery(self) -> Recovery:
         """What resuming the org does, and what was put aside as stale."""
         store = await asyncio.to_thread(lambda: self.org)
-        run = self._runs()
-        if self._paused is None:
+        run = self.org_state.run_state()
+        if self.org_state.paused is None:
             return Recovery(paused=None, items=[], messages_held=0)
         launcher = self._launcher
         statuses = (
@@ -214,8 +214,8 @@ class Sync(Sessions):
         )
         items = await asyncio.to_thread(describe, run, store, statuses, self._repo_dir)
         return Recovery(
-            paused=self._paused,
-            items=[*items, *self._dropped()],
+            paused=self.org_state.paused,
+            items=[*items, *self.org_state.dropped()],
             messages_held=len(run.held()),
         )
 
@@ -237,7 +237,7 @@ class Sync(Sessions):
         self._require_launcher()
         store = await asyncio.to_thread(lambda: self.org)
         async with self._sync_lock:
-            if self._merging() is not None:
+            if self.org_state.merging() is not None:
                 raise Conflict(
                     "A merge waits for choices. Resolve it or abandon it first."
                 )
@@ -248,7 +248,7 @@ class Sync(Sessions):
             )
             if store.root_id is None:
                 return await self._base(lambda: self._take_org(repo, remote, theirs))
-            resume = self._paused is None
+            resume = self.org_state.paused is None
             if resume:
                 await self.pause()
                 await self.work_queue.after(PAUSE_LANE)
@@ -275,7 +275,7 @@ class Sync(Sessions):
         if store.root_id is None:
             raise Conflict("There is no org to push")
         async with self._sync_lock:
-            if self._merging() is not None:
+            if self.org_state.merging() is not None:
                 raise Conflict(
                     "A merge waits for choices. Resolve it or abandon it first."
                 )
@@ -300,7 +300,7 @@ class Sync(Sessions):
 
     async def merge(self) -> OrgMerge | None:
         """The merge that waits for choices, if there is one."""
-        state = self._merging()
+        state = self.org_state.merging()
         if state is None:
             return None
         return (await asyncio.to_thread(self._weigh, state)).merge
@@ -315,7 +315,7 @@ class Sync(Sessions):
         """
         self._require_launcher()
         async with self._sync_lock:
-            state = self._merging()
+            state = self.org_state.merging()
             if state is None:
                 raise Conflict("No merge waits for choices")
             open_ = (await asyncio.to_thread(self._weigh, state)).merge
@@ -337,10 +337,10 @@ class Sync(Sessions):
             Conflict: No merge waits for choices.
         """
         async with self._sync_lock:
-            state = self._merging()
+            state = self.org_state.merging()
             if state is None:
                 raise Conflict("No merge waits for choices")
-            self._set_merge(None)
+            self.org_state.set_merge(None)
             if state["resume"]:
                 await self.resume()
             return OrgSync(
@@ -554,13 +554,13 @@ class Sync(Sessions):
             outcome = await asyncio.to_thread(self._weigh, state, True)
         except Exception:
             # Nothing waits to be resolved: the org the pull paused goes on.
-            if state["resume"] and self._merging() is None:
+            if state["resume"] and self.org_state.merging() is None:
                 await self.resume()
             raise
         if outcome.result == "conflicts":
-            self._set_merge(state)
+            self.org_state.set_merge(state)
             return outcome
-        self._set_merge(None)
+        self.org_state.set_merge(None)
         await self._resync()
         if state["resume"]:
             await self.resume()
@@ -673,17 +673,19 @@ class Sync(Sessions):
         store.show_again()
 
     def _put_aside_stale(self) -> None:
-        run = self._runs()
+        run = self.org_state.run_state()
         dropped = put_aside_stale(run, self.org, instance=self._instance())
         if run.get("paused") is None:
             # Nothing that was left is this server's to take up.
-            self._paused = None
-            self._announce_state()
+            self.org_state.refresh()
         if dropped:
             run.put(
                 "dropped",
                 json.dumps(
-                    [item.model_dump() for item in [*self._dropped(), *dropped]]
+                    [
+                        item.model_dump()
+                        for item in [*self.org_state.dropped(), *dropped]
+                    ]
                 ),
             )
 
@@ -693,7 +695,7 @@ class Sync(Sessions):
         await asyncio.to_thread(self._look_at_what_was_left)
         await self._resync()
         if (
-            self._paused in ("shutdown", "crash")
+            self.org_state.paused in ("shutdown", "crash")
             and self.org_settings.settings.resume_on_start
         ):
             await self.resume()
@@ -701,19 +703,20 @@ class Sync(Sessions):
     def _look_at_what_was_left(self) -> None:
         if self.org.root_id is None:
             return
-        run = self._runs()
+        run = self.org_state.run_state()
         self._put_aside_stale()
-        if self._paused is None and run.get("clean") == "0" and has_work(run):
-            self._hold("crash")
-        if self._paused is None:
-            for item in self._dropped():
+        if self.org_state.paused is None and run.get("clean") == "0" and has_work(run):
+            self.org_state.hold("crash")
+            self.start_line.org_held()
+        if self.org_state.paused is None:
+            for item in self.org_state.dropped():
                 logger.warning("Run state put aside: %s", item.detail)
             run.put("dropped", None)
         self._working()
 
     async def _pause_agents(self) -> None:
         store = self.org
-        run = self._runs()
+        run = self.org_state.run_state()
         launcher = self._require_launcher()
         agents: list[tuple[str, str, UUID]] = [
             (node.id, agent.role, UUID(agent.conversation_id))
@@ -727,7 +730,7 @@ class Sync(Sessions):
             if statuses.get(conversation_id) != ConversationExecutionStatus.RUNNING:
                 continue
             run.mark(RUNNING, str(conversation_id), place_id)
-            self._running.add(str(conversation_id))
+            self.org_state.running.add(str(conversation_id))
             with suppress(NotFound):
                 store.set_agent(place_id, role, status=AGENT_PAUSED)
             stopping.append(conversation_id)
@@ -745,7 +748,7 @@ class Sync(Sessions):
             if running.get(aside) != ConversationExecutionStatus.RUNNING:
                 continue
             run.mark(RUNNING, mode.conversation_id, place_id)
-            self._running.add(mode.conversation_id)
+            self.org_state.running.add(mode.conversation_id)
             with suppress(NotFound):
                 store.set_hand_over(
                     place_id, mode.model_copy(update={"status": AGENT_PAUSED})
@@ -757,7 +760,7 @@ class Sync(Sessions):
         self, conversation_id: UUID, status: ConversationExecutionStatus
     ) -> None:
         if status != ConversationExecutionStatus.RUNNING and self._loop is not None:
-            self._loop.call_soon_threadsafe(self._room.set)
+            self._loop.call_soon_threadsafe(self.start_line.room_made)
         store = self._store
         if store is None:
             return
@@ -769,7 +772,7 @@ class Sync(Sessions):
         node, role = found
         if status == ConversationExecutionStatus.RUNNING:
             self._resuming.discard(agent)
-        if self._paused is None:
+        if self.org_state.paused is None:
             self._note_running(
                 agent, node.id, status == ConversationExecutionStatus.RUNNING
             )
@@ -779,7 +782,7 @@ class Sync(Sessions):
             a.status != AGENT_BLOCKED for a in node.agents if a.role == role
         )
         now = store.set_agent(node.id, role, status=shown)
-        if self._paused is None and self._loop is not None:
+        if self.org_state.paused is None and self._loop is not None:
             if failed:
                 self.work_queue.enqueue(
                     lambda: self._failed(node.id, role, conversation_id, status),
@@ -860,7 +863,7 @@ class Sync(Sessions):
             return
         if status == ConversationExecutionStatus.RUNNING:
             self._resuming.discard(conversation_id)
-        if self._paused is None:
+        if self.org_state.paused is None:
             self._note_running(
                 conversation_id, node.id, status == ConversationExecutionStatus.RUNNING
             )
@@ -876,7 +879,10 @@ class Sync(Sessions):
         """Tell the IC of a session at rest that what it changed since its
         work was accepted is not the org's until it submits again. Once for
         each accept. Safe from any thread."""
-        if self._changed_since_accept.get(session, True) or self._paused is not None:
+        if (
+            self._changed_since_accept.get(session, True)
+            or self.org_state.paused is not None
+        ):
             return
         places = self.org.session(session)
         at_work = ("working", AGENT_PAUSED)
@@ -914,13 +920,13 @@ class Sync(Sessions):
         )
         starting = {
             intent.node_id
-            for intent in self._runs().open_intents()
+            for intent in self.org_state.run_state().open_intents()
             if intent.kind in STARTING
         }
         for place_id, role, conversation_id in agents:
             status = statuses.get(conversation_id)
             agent = str(conversation_id)
-            if self._paused is None:
+            if self.org_state.paused is None:
                 self._note_running(
                     agent, place_id, status == ConversationExecutionStatus.RUNNING
                 )
@@ -948,7 +954,7 @@ class Sync(Sessions):
         )
         starting = {
             intent.node_id
-            for intent in self._runs().open_intents()
+            for intent in self.org_state.run_state().open_intents()
             if intent.kind == "hand_over"
         }
         for place_id, mode in modes:

@@ -365,7 +365,7 @@ async def test_the_end_of_a_split_cut_off_before_it_is_told_is_told(
 
     def server_ends(*_: object) -> None:
         # The session is kept as it is now, before the IC is told.
-        first._runs().replace_marks(SESSION, kept_sessions(first.org))
+        first.org_state.run_state().replace_marks(SESSION, kept_sessions(first.org))
         ended.set()
         raise ServerEnded
 
@@ -392,12 +392,12 @@ async def test_a_team_in_line_to_start_is_held_when_the_org_is_paused(
     repo: Path, launcher: FakeLauncher
 ):
     service = await started(repo, launcher)
-    service._line.extend(["ahead", "behind"])
+    service.start_line.line_up(["ahead", "behind"])
 
     async def start() -> None:
         raise AssertionError("it is not its turn")
 
-    waits = asyncio.create_task(service._when_there_is_room("behind", start))
+    waits = asyncio.create_task(service.start_line.when_there_is_room("behind", start))
     await asyncio.sleep(0)
     await service.pause()
 
@@ -837,7 +837,7 @@ def test_a_state_file_that_is_no_database_leaves_the_director_working(repo: Path
     state.write_bytes(b"this is not a database" * 100)
     service = DirectorService(repo, save_delay=0)
 
-    assert service._runs().path is None
+    assert service.org_state.run_state().path is None
 
 
 async def test_resuming_waits_for_a_pause_that_is_still_stopping_agents(
@@ -889,7 +889,7 @@ async def test_an_agent_not_yet_run_again_is_taken_up_by_the_next_start(
     await asyncio.sleep(0.05)
 
     # The server ends here a second time: the agent is still one to run again.
-    assert root_ic in second._runs().marked(RUNNING)
+    assert root_ic in second.org_state.run_state().marked(RUNNING)
     never.set()
     await second.aclose()
 

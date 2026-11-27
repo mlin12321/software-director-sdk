@@ -204,7 +204,11 @@ class Reviews(Teams):
     async def _rest(self, place_id: str) -> None:
         place = self.org.place(place_id)
         conversation_id = self.team_types.writer_conversation(place) if place else None
-        if place is None or conversation_id is None or self._paused is not None:
+        if (
+            place is None
+            or conversation_id is None
+            or self.org_state.paused is not None
+        ):
             return
         launcher = self._require_launcher()
         writer = self.team_types.team(place).writer
@@ -213,7 +217,7 @@ class Reviews(Teams):
             # it. Only one that carries on regardless is cut short, which
             # costs it the step it is in.
             await self._until_at_rest(conversation_id)
-            if conversation_id in self._running:
+            if conversation_id in self.org_state.running:
                 await launcher.stop(UUID(conversation_id))
         else:
             await launcher.pause(UUID(conversation_id))
@@ -223,7 +227,7 @@ class Reviews(Teams):
 
     async def _until_at_rest(self, conversation_id: str) -> None:
         for _ in range(_REST_CHECKS):
-            if conversation_id not in self._running:
+            if conversation_id not in self.org_state.running:
                 return
             await asyncio.sleep(_REST_CHECK_SECONDS)
 
@@ -307,9 +311,9 @@ class Reviews(Teams):
         """
         store = self.org
         node = store.place(place_id) if place_id else None
-        if node is None or self._paused is not None:
+        if node is None or self.org_state.paused is not None:
             return
-        run = self._runs()
+        run = self.org_state.run_state()
         held = run.marked(HELD)
         teams = store.below(node.id)
         waiting: list[SessionTeam] = []
@@ -613,7 +617,7 @@ class Reviews(Teams):
             merge = self._merge_of(top)
             if merge is None and self._review_of(top) is not None:
                 seq = top.review.seq if top.review and top.review.seq else 0
-                run = self._runs()
+                run = self.org_state.run_state()
                 decided = run.marked(DECIDED).get(top.id)
                 run.unmark(DECIDED, top.id)
                 merge = Merge(
@@ -805,7 +809,7 @@ class Reviews(Teams):
                     self._ask_manager(top, merge)
                 elif merge.code_landed and all(
                     intent.kind != "land_org" or intent.node_id != top.id
-                    for intent in self._runs().open_intents()
+                    for intent in self.org_state.run_state().open_intents()
                 ):
                     self.resumable_work.begin(top.id, LandOrg())
 
@@ -1380,7 +1384,9 @@ class Reviews(Teams):
             ]
             if decided:
                 # They hold again for whatever is unchanged when it comes back.
-                self._runs().mark(DECIDED, top.id, _ITEMS.dump_json(decided).decode())
+                self.org_state.run_state().mark(
+                    DECIDED, top.id, _ITEMS.dump_json(decided).decode()
+                )
             if merge.asked and any(
                 item.gate == "manager" and item.use is None for item in merge.items
             ):
@@ -1523,7 +1529,7 @@ class Reviews(Teams):
         # Work whose acceptance is being carried out no longer waits.
         accepting = {
             intent.node_id
-            for intent in self._runs().open_intents()
+            for intent in self.org_state.run_state().open_intents()
             if intent.kind == "accept"
         }
         waiting = [
@@ -1542,7 +1548,7 @@ class Reviews(Teams):
         earlier that it is its turn, once that work is decided on. Safe
         from any thread."""
         store = self.org
-        run = self._runs()
+        run = self.org_state.run_state()
         for place_id in run.marked(TURN):
             place = store.place(place_id)
             above = store.place(place.parent_id or "") if place else None
@@ -1576,7 +1582,7 @@ class Reviews(Teams):
             return
         if any(
             intent.kind == "accept" and intent.node_id == place_id
-            for intent in self._runs().open_intents()
+            for intent in self.org_state.run_state().open_intents()
         ):
             raise Conflict(f"The work of {place.title!r} is being accepted already.")
         first = self._before(place)
@@ -1584,7 +1590,7 @@ class Reviews(Teams):
             theirs = first.parent_id != place.parent_id
             if theirs:
                 # Its reviewer is told when the other reviewer has decided.
-                self._runs().mark(TURN, place.id)
+                self.org_state.run_state().mark(TURN, place.id)
             raise Conflict(
                 accept_in_order(
                     place,
@@ -1664,7 +1670,7 @@ class Reviews(Teams):
             self._show_reviewer_items(place, meets)
         if meets is None:
             return None
-        run = self._runs()
+        run = self.org_state.run_state()
         shown = run.marked(SHOWN).get(place.id)
         if reconciled and shown == meets.mark:
             return None
@@ -1710,7 +1716,7 @@ class Reviews(Teams):
         place = self.org.place(place_id)
         if place is None or any(e.id == MERGE_WAITS for e in place.escalations):
             return
-        self._runs().mark(
+        self.org_state.run_state().mark(
             CLEARING,
             place_id,
             json.dumps({"reconciled": reconciled, "choices": choices}),
@@ -1778,7 +1784,7 @@ class Reviews(Teams):
             await asyncio.to_thread(
                 self.review_instructions, self.team_types.type_of(place)
             )
-            self._runs().mark(HELD, place_id)
+            self.org_state.run_state().mark(HELD, place_id)
             self._release_reviews(place.parent_id)
 
     async def _accept(
@@ -1813,7 +1819,7 @@ class Reviews(Teams):
         if first is not None:
             # The acceptance of work submitted earlier was carried out
             # since this one was checked, and left that work waiting.
-            self._runs().mark(TURN, place.id)
+            self.org_state.run_state().mark(TURN, place.id)
             self.notify(
                 reviewer,
                 accept_in_order(place, first, store.session_title(first), names=names),
@@ -1985,8 +1991,8 @@ class Reviews(Teams):
                 self._land_accepted, place, meets.seen if meets else None
             )
             self._changed_since_accept.pop(place.session, None)
-        self._runs().unmark(SHOWN, place_id)
-        self._runs().unmark(CLEARING, place_id)
+        self.org_state.run_state().unmark(SHOWN, place_id)
+        self.org_state.run_state().unmark(CLEARING, place_id)
         self._tell_turns()
         if not is_division_lead(above):
             self.count_accepted_review(above.id)
@@ -2044,7 +2050,7 @@ class Reviews(Teams):
                     f"checkout ({', '.join(found.files)}), and the merge could "
                     f"not be laid out for you: {error}"
                 )
-            self._runs().mark(MERGING, place.id, merge.model_dump_json())
+            self.org_state.run_state().mark(MERGING, place.id, merge.model_dump_json())
             return merge_prepared(place, merge.where, merge.files)
         try:
             commit = finish(

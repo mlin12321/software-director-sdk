@@ -45,10 +45,10 @@ class Watch(Reviews):
             org=lambda: self.org,
             has_org=lambda: self._store is not None,
             settings=lambda: self.org_settings.settings,
-            run_state=self._runs,
+            run_state=self.org_state.run_state,
             clock=self._clock,
-            paused=lambda: self._paused is not None,
-            running=lambda: self._running,
+            paused=lambda: self.org_state.paused is not None,
+            running=lambda: self.org_state.running,
             model_calls=self.model_calls,
             check_managers=self._check_managers,
             work_queue=self.work_queue,
@@ -113,7 +113,7 @@ class Watch(Reviews):
         running = [
             conversation_id
             for conversation_id in self._conversations_below(team)
-            if conversation_id in self._running
+            if conversation_id in self.org_state.running
         ]
         store.set_stopped(
             place_id, Stopped(at=utc_now(), reason=reason, running=sorted(running))
@@ -150,7 +150,7 @@ class Watch(Reviews):
         if store is None:
             return
         launcher = self._require_launcher()
-        run = self._runs()
+        run = self.org_state.run_state()
         marks = run.marked(USE)
         for session in store.sessions():
             conversations = {
@@ -203,13 +203,13 @@ class Watch(Reviews):
             or session.usage.cost < limit
             or top is None
             or top.stopped is not None
-            or self._paused is not None
+            or self.org_state.paused is not None
         ):
             return
         running = [
             conversation_id
             for conversation_id in self._conversations_below(top)
-            if conversation_id in self._running
+            if conversation_id in self.org_state.running
         ]
         store.set_stopped(
             top.id,
