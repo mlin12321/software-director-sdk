@@ -104,7 +104,7 @@ class ContractsProtocol(DocumentProtocolBase):
             raise Invalid(
                 "Contracts are not yours as the Division Lead "
                 f"{words.get('reviewer', '')}: the Division "
-                f"Lead {words.get('overseer', '')} settles them"
+                f"Lead {words.get('manager', '')} settles them"
             )
         if not self.tree.below(call.team):
             raise Invalid(

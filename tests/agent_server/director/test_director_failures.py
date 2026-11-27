@@ -195,7 +195,7 @@ async def test_an_agent_that_cannot_be_started_is_lost_with_the_reason(
     service: DirectorService, launcher: FakeLauncher
 ):
     launcher.derive_error = RuntimeError("npx is not installed")
-    service.tell_overseer(node(service, API).id, "Look in on your team.")
+    service.tell_manager(node(service, API).id, "Look in on your team.")
     await service.settled()
 
     [agent] = [a for a in node(service, API).agents if a.role == "manager"]
@@ -212,7 +212,7 @@ async def test_a_step_of_the_director_that_fails_is_kept_in_the_record(
         raise RuntimeError("the disk is full")
 
     monkeypatch.setattr(service, "_do_launch_member", breaks)
-    service.tell_overseer(node(service, API).id, "Look in on your team.")
+    service.tell_manager(node(service, API).id, "Look in on your team.")
     await service.settled()
 
     [event] = [e for e in record_of(service, "root") if e.kind == "failed"]

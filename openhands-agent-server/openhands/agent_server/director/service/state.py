@@ -966,7 +966,7 @@ class ServiceState:
                             title=kind.title_of(member),
                             writes=member == kind.writer,
                             reviews=member == kind.reviewer,
-                            oversees=member == kind.overseer,
+                            oversees=member == kind.manager,
                         )
                         for member in kind.agents
                     ],

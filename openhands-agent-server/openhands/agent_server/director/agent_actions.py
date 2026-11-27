@@ -288,19 +288,19 @@ def _waiting(place: SessionTeam) -> SplitProposal | None:
 def msg_manager(service: DirectorService, caller: Caller, text: str) -> str:
     """Send the caller's Manager a message."""
     names = service.team(caller.node).names
-    _has(service, caller, "msg_manager", f"message its {names.overseer}")
+    _has(service, caller, "msg_manager", f"message its {names.manager}")
     node = caller.node
     text = text.strip()
     if not text:
         raise Invalid("A message cannot be empty")
     if not service.org.below(node.id):
         raise Invalid(
-            f"A team without sub-teams has nothing to tell its {names.overseer} but a "
+            f"A team without sub-teams has nothing to tell its {names.manager} but a "
             "proposal: use propose_teams. Raise anything else with "
             "raise_escalation."
         )
-    service.send_msg(node.id, caller.role, node.id, service.team(node).overseer, text)
-    return f"Sent to your {names.overseer}."
+    service.send_msg(node.id, caller.role, node.id, service.team(node).manager, text)
+    return f"Sent to your {names.manager}."
 
 
 def propose_teams(
@@ -321,7 +321,7 @@ def propose_teams(
     node = caller.node
     if node.pending_split and node.pending_split.status == "approved":
         raise Conflict(
-            f"The sub-teams your {names.overseer} approved are still being set up"
+            f"The sub-teams your {names.manager} approved are still being set up"
         )
     _keeps(service, node, given)
     proposed = proposed_teams(teams, given, keep, text, service.default_type())
@@ -354,12 +354,12 @@ def propose_teams(
         node.id,
         caller.role,
         node.id,
-        service.team(node).overseer,
+        service.team(node).manager,
         f"{said}\n\nProposed sub-teams:\n{as_written(proposed)}",
         note,
     )
     return (
-        f"Sent to your {names.overseer}. Nothing is set up until it approves; you "
+        f"Sent to your {names.manager}. Nothing is set up until it approves; you "
         "will hear either way."
     )
 
@@ -383,7 +383,7 @@ def msg_ic(service: DirectorService, caller: Caller, text: str, team: str) -> st
     waiting = target.id == node.id and _waiting(node) is not None
     note = (
         "\n\n[director] The sub-teams you proposed still wait on your "
-        f"{names.overseer}. A new proposal takes their place."
+        f"{names.manager}. A new proposal takes their place."
         if waiting
         else ""
     )
@@ -470,7 +470,7 @@ def decline_teams(service: DirectorService, caller: Caller, reason: str) -> str:
         node.id,
         service.team(node).writer,
         reason,
-        f"\n\n[director] Your {names.overseer} declined the sub-teams you proposed "
+        f"\n\n[director] Your {names.manager} declined the sub-teams you proposed "
         f"({named}); the above is its reason. Nothing was set up. Propose "
         "others if the reason leaves room for it; the same ones only if "
         "something has changed.",
@@ -715,7 +715,7 @@ def review_team(
     if given and is_division_lead(caller.node):
         raise Invalid(
             f"{named} is not yours to give as the Division Lead "
-            f"{names.reviewer}: the Division Lead {names.overseer} settles it"
+            f"{names.reviewer}: the Division Lead {names.manager} settles it"
         )
     _keeps(service, caller.node, given)
     if decision == "reject":
@@ -887,14 +887,14 @@ def stop_team(service: DirectorService, caller: Caller, team: str, reason: str) 
     names = service.team(caller.node).names
     _has(service, caller, "stop_team", "stop a team")
     if not reason.strip():
-        raise Invalid(f"Say why the team is stopped; your {names.overseer} is told")
+        raise Invalid(f"Say why the team is stopped; your {names.manager} is told")
     target = _team_below(service, caller, team)
     service.stop_team(target.id, reason.strip())
     return (
         f"Stopped {target.title!r} and every team below it: their agents "
-        f"end the step they are in and are sent nothing. Your {names.overseer} is "
+        f"end the step they are in and are sent nothing. Your {names.manager} is "
         "told. The team goes on when you write to it with msg_team; only "
-        f"your {names.overseer} can remove it."
+        f"your {names.manager} can remove it."
     )
 
 

@@ -257,7 +257,7 @@ class Teams(Delivery):
             )
         return self._tell_other(place_id, member, text, division_lead=division_lead)
 
-    def tell_overseer(
+    def tell_manager(
         self, place_id: str, text: str, *, division_lead: bool = False
     ) -> None:
         """Send a message from the director to the member of a team that
@@ -265,7 +265,7 @@ class Teams(Delivery):
         place = self.org.place(place_id)
         if place is not None:
             self.tell(
-                place_id, self.team(place).overseer, text, division_lead=division_lead
+                place_id, self.team(place).manager, text, division_lead=division_lead
             )
 
     def _tell_other(
@@ -569,7 +569,7 @@ class Teams(Delivery):
                 since = now - datetime.fromisoformat(min(raised))
                 waiting[below.id] = int(since.total_seconds() // 60)
         self.record_event(place_id, "woken", team, reason)
-        self.tell_overseer(
+        self.tell_manager(
             place_id,
             manager_check(
                 reason,

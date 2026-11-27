@@ -797,7 +797,7 @@ def manager(service: DirectorService, node_id: str = "root") -> str | None:
 async def woken(service: DirectorService, node_id: str = "root") -> str:
     """The Manager of a team, started as the first message to it does."""
     if manager(service, node_id) is None:
-        service.tell_overseer(node(service, node_id).id, "Look in on your team.")
+        service.tell_manager(node(service, node_id).id, "Look in on your team.")
         await service.settled()
     found = manager(service, node_id)
     assert found is not None

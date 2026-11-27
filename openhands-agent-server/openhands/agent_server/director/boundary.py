@@ -61,7 +61,7 @@ def worded(denied: Denied, scope: Scope, *, names: Names) -> str:
             )
         case "reads_only":
             return (
-                f"{names.A_overseer} does not edit files, so {path!r} was not "
+                f"{names.A_manager} does not edit files, so {path!r} was not "
                 "changed. Have "
                 f"your {names.writer} make the change."
             )

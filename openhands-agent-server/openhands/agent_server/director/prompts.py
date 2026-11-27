@@ -20,7 +20,7 @@ from openhands.agent_server.director.split import is_inside
 
 
 # The director's own texts name a member as `{writer}`, `{reviewer}` or
-# `{overseer}`, and :func:`in_words` puts in what the reader's team calls it.
+# `{manager}`, and :func:`in_words` puts in what the reader's team calls it.
 _BASICS = (
     "- A team owns one folder. It has {count} agents: {members}.",
     """\
@@ -56,7 +56,7 @@ _PARTS: tuple[tuple[Literal["writer", "reviewer"], str], ...] = (
   The {above_reviewer} one team up reviews it (for the team your session started at, that
   is the Division Lead {above_reviewer}) and you are woken with the result.
 - If you cannot go on, raise an escalation. That shows your team as blocked.
-- Propose sub-teams to your {overseer} with `propose_teams`. Each gets a
+- Propose sub-teams to your {manager} with `propose_teams`. Each gets a
   folder inside yours, a type and an instruction; a `reason` is optional. A
   sub-team is told nothing else of your team. You keep whatever no sub-team
   takes.
@@ -144,7 +144,7 @@ WITH_SUB_TEAMS = (
     "made it. If you change nothing yourself, your sub-teams' accepted work "
     "goes on up without another review. If you do, call `submit_review` "
     "when your own part is complete, and the accepted work goes up with it.",
-    "- Tell your {overseer} with `msg_manager`, at your own discretion, how "
+    "- Tell your {manager} with `msg_manager`, at your own discretion, how "
     "your teams are doing: when one struggles and you cannot fix it, when "
     "two are at odds, when the make-up of the teams no longer fits the work.",
     "- To change the teams, propose again. The block must say what becomes "
@@ -176,12 +176,12 @@ change no teams.
 - If it does not merge, the runtime lays the merge out and names the files.
   Edit only those files there, then accept again. This is the only time you
   write files. The session's team is not sent back for a merge.
-- Teams are not yours: the Division Lead {overseer} settles them.
+- Teams are not yours: the Division Lead {manager} settles them.
 </ORG_ROLE>"""
 
 DIVISION_LEAD_MANAGER_ROLE = """\
 <ORG_ROLE>
-You are the Division Lead {overseer}: the {overseer} of the team above the one a
+You are the Division Lead {manager}: the {manager} of the team above the one a
 session worked at. Ignore {other_parts} above. You write no files and review
 no code; the Division Lead {reviewer} does that, and neither of you waits for the
 other.
@@ -199,7 +199,7 @@ other.
 
 MANAGER_ROLE = """\
 <ORG_ROLE>
-You are your team's {overseer}, not its {writer}. Ignore {other_parts} above.
+You are your team's {manager}, not its {writer}. Ignore {other_parts} above.
 You never edit files or run commands that change the repository; the runtime
 refuses it.
 
@@ -216,11 +216,11 @@ org as a whole works well, not that every team is busy.
   ones, and what your {writer} proposed before. Weigh a proposal by it.
 - After you approve or prune, your {writer} passes on what removed teams left.
   Write to it if the change needs explaining.
-- Settle what {overseers} directly below escalate with `resolve_escalation`,
+- Settle what {managers} directly below escalate with `resolve_escalation`,
   or pass it up with the reason.
 - `prune_team` removes a team directly below; your team's type says when.
   Write to a slow team first. Its folder goes back to your {writer}.
-- You are woken when your {writer} writes, {a_overseer} below escalates, or the
+- You are woken when your {writer} writes, {a_manager} below escalates, or the
   runtime asks you to look at your teams and says what it counted.
 </ORG_ROLE>"""
 
@@ -234,9 +234,9 @@ run commands that change the repository. Only `read_team_context` and
 
 # The role texts, by whom a document's `rules` say something to.
 ROLE_TEXTS: dict[str, str] = {
-    "overseer": MANAGER_ROLE,
+    "manager": MANAGER_ROLE,
     "lead_reviewer": DIVISION_LEAD_IC_ROLE,
-    "lead_overseer": DIVISION_LEAD_MANAGER_ROLE,
+    "lead_manager": DIVISION_LEAD_MANAGER_ROLE,
     "hand_over": HAND_OVER_ROLE,
 }
 
@@ -311,7 +311,7 @@ def left_behind(
 def _approved(children: list[SplitChild], *, names: Names) -> str:
     teams = ", ".join(f"{child.title} ({child.path})" for child in children)
     return (
-        f"Your team was split: your {names.overseer} approved your sub-teams and they "
+        f"Your team was split: your {names.manager} approved your sub-teams and they "
         f"now own their folders: {teams}. None of them has started: a "
         "team starts when you give it its task with msg_team."
     )
@@ -492,7 +492,7 @@ def replaced_job(
         specs: The spec each replaced team wrote, by its directory.
     """
     lines = [
-        f"What changed: your {names.overseer} approved the sub-teams you proposed, and "
+        f"What changed: your {names.manager} approved the sub-teams you proposed, and "
         "they now own their folders. None of them has started; each "
         "starts when your main conversation gives it its task.",
         *(
@@ -526,7 +526,7 @@ def pruned_job(
 ) -> str:
     """What a hand-over conversation is to do after a team was pruned."""
     lines = [
-        f"What changed: your {names.overseer} pruned the team {title!r} ({where}): "
+        f"What changed: your {names.manager} pruned the team {title!r} ({where}): "
         f"{reason} {where} is your team's again.",
         "",
         "What it left is below. It is yours to use or to pass on.",
@@ -591,7 +591,7 @@ def pruned_notice(
             passed on in hand-over mode and is not given here.
     """
     pruned = (
-        f"Your {names.overseer} pruned the team {title!r} ({where}): {reason} Its "
+        f"Your {names.manager} pruned the team {title!r} ({where}): {reason} Its "
         "uncommitted changes were discarded"
         + (f" (kept in git as {saved})" if saved else "")
         + f"; {where} is yours again."
@@ -673,9 +673,9 @@ def role_text(
     elif lead and "review_team" in tools:
         texts.append("lead_reviewer")
     elif lead and "settle_teams" in tools:
-        texts.append("lead_overseer")
+        texts.append("lead_manager")
     elif not lead and "approve_teams" in tools:
-        texts.append("overseer")
+        texts.append("manager")
     said = [org_protocol(names, rules)]
     said += [role_block(whom, names, rules) for whom in texts]
     if not works and not hand_over and not texts:
@@ -772,7 +772,7 @@ def brief(
     lines.append("")
     if works:
         lines.append("Start on the task now.")
-    elif titles.get(role) == names.overseer:
+    elif titles.get(role) == names.manager:
         lines.append(f"Wait until your {names.writer} writes to you.")
     else:
         lines.append("Wait until something is sent to you.")
@@ -807,7 +807,7 @@ def session_work(
     written = "".join(
         f"Contracts it wrote for {directory or 'the repository'}, which its "
         "code is written to. They are not the org's yet: the Division Lead "
-        f"{names.overseer} settles them if other accepted work changed them too. "
+        f"{names.manager} settles them if other accepted work changed them too. "
         f"Judge the code by these:\n{text or '(none)'}\n\n"
         for directory, text in contracts
     )
@@ -1094,7 +1094,7 @@ def teams_settled(
         for directory, text in others
     )
     return (
-        f"The {names.overseer} of {above!r} settled what the org had made something "
+        f"The {names.manager} of {above!r} settled what the org had made something "
         "else of than your session. "
         + (f"The org has your teams now: {', '.join(taken)}. " if taken else "")
         + (
@@ -1145,7 +1145,7 @@ def session_brief(
         "- You start from the team's spec, contracts and records. The "
         "team's reports are shared with other sessions: `report` what they "
         "must know.\n"
-        f"- A spec you write and sub-teams your {names.overseer} approves are this "
+        f"- A spec you write and sub-teams your {names.manager} approves are this "
         "session's alone until your work is accepted.\n"
         "- The sub-teams you see are not started. One starts when you give "
         "it a task with `msg_team`.\n"
@@ -1161,7 +1161,7 @@ def session_brief(
         "Work comes back to you only if it must change or touches files "
         "outside your folder.\n"
         "- Teams and contracts you changed may become the org's a little "
-        f"after your code: the Division Lead {names.overseer} settles those that "
+        f"after your code: the Division Lead {names.manager} settles those that "
         "other accepted work changed too."
     )
 
@@ -1277,7 +1277,7 @@ def unstarted_notice(team: SessionTeam, minutes: int, *, names: Names) -> str:
         f"{team.boundary.path or 'the repository'}) "
         f"was set up {_span(minutes)} ago and has been given no task. Nobody "
         "works in its folder, and nothing there is committed. Give it its "
-        f"task with `msg_team`. If it is not needed, write to your {names.overseer} to "
+        f"task with `msg_team`. If it is not needed, write to your {names.manager} to "
         "have it pruned, or propose your teams again without it. If it waits "
         "on purpose, do nothing: you are not told of it again."
     )
@@ -1382,11 +1382,11 @@ def stall_notice(
         f"  git status --short -- {directory}",
         "",
         f"Then decide. You can wait; write to its {names.writer} with `msg_team`; or "
-        f"write to your {names.overseer} with `msg_manager` if the teams should be "
+        f"write to your {names.manager} with `msg_manager` if the teams should be "
         "made up differently. If it has gone on too long without progress "
         f"and a message did not help, `stop_team` for team {team.id} stops "
         "it. Use that very sparingly: a stopped team does nothing until "
-        f"you write to it again or your {names.overseer} removes it.",
+        f"you write to it again or your {names.manager} removes it.",
     ]
     return "\n".join(lines)
 
@@ -1415,7 +1415,7 @@ def failure_notice(
     else:
         lines.append(
             "It runs again the next time something is sent to it. Nothing is "
-            f"asked of you unless that team waits on its {names.overseer}; then raise "
+            f"asked of you unless that team waits on its {names.manager}; then raise "
             "it with `raise_escalation`."
         )
     return "\n".join(lines)

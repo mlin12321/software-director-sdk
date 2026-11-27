@@ -500,9 +500,9 @@ class DirectorService(Sync):
             self.go_on_past_limit(place_id)
         if lost:
             # A new Manager starts with the answer; the IC goes on as it was.
-            self.tell_overseer(
+            self.tell_manager(
                 place_id,
-                f"The {names.overseer} before you could not be started. The human was "
+                f"The {names.manager} before you could not be started. The human was "
                 f"told, and says:\n{answer}",
                 division_lead=is_division_lead(place),
             )

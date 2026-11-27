@@ -12,7 +12,7 @@ from openhands.agent_server.director.models import Boundary, OrgNode
 from openhands.agent_server.director.scope import glob_matches, written_paths
 
 
-NAMES = Names(writer="IC", reviewer="IC", overseer="Manager")
+NAMES = Names(writer="IC", reviewer="IC", manager="Manager")
 
 
 def write_refusal(

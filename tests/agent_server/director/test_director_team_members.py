@@ -85,7 +85,7 @@ async def test_a_team_starts_with_the_member_that_works_in_its_folder(
     assert [agent.role for agent in root.agents] == ["bench"]
     assert launcher.root_tools == BENCH
     team = service.team(root)
-    assert (team.writer, team.reviewer, team.overseer) == ("bench", "referee", "chair")
+    assert (team.writer, team.reviewer, team.manager) == ("bench", "referee", "chair")
     assert team.members == ("bench", "referee", "chair")
 
 
@@ -191,8 +191,8 @@ async def test_an_escalation_from_below_reaches_the_member_of_the_same_name(
 
 
 def test_the_team_above_is_named_as_its_own_type_names_it():
-    crew = Names(writer="Engineer", reviewer="Checker", overseer="Lead")
-    software = Names(writer="IC", reviewer="IC", overseer="Manager")
+    crew = Names(writer="Engineer", reviewer="Checker", manager="Lead")
+    software = Names(writer="IC", reviewer="IC", manager="Manager")
 
     told = org_protocol(crew.under(software))
 
@@ -209,7 +209,7 @@ def test_a_text_of_the_directors_own_names_no_member_by_itself():
     names = Names(
         writer="Engineer",
         reviewer="Checker",
-        overseer="Lead",
+        manager="Lead",
         members=("an Engineer", "a Checker", "a Lead"),
     )
     texts = [

@@ -113,7 +113,7 @@ class Watch(Reviews):
         # A stopped team is waited for no longer by the reviews beside it.
         self.release_reviews(team.parent_id)
         if team.parent_id is not None:
-            self.tell_overseer(
+            self.tell_manager(
                 team.parent_id,
                 f"Your {names.writer} stopped the team {team.title!r} (id {team.id}): "
                 f"{reason}\nIts agents are at rest and nothing is sent to "

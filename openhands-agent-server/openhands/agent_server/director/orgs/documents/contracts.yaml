@@ -23,9 +23,9 @@ rules:
         contracts between your sub-teams what all of them may rely on from
         now; they are told with their next message.
     lead_reviewer: >-
-        Contracts are not yours: the Division Lead {overseer} settles them
+        Contracts are not yours: the Division Lead {manager} settles them
         with the teams.
-    lead_overseer: >-
+    lead_manager: >-
         Contracts wait for you with the teams. Per contracts, in `contracts`
         of `settle_teams`: the org's, the session's, or a text you write
         that keeps what both sides need. Taking one side's contracts whole

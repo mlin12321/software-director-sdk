@@ -104,9 +104,9 @@ class Splits(Watch):
         )
         self.notify(
             self.writer_conversation(place),
-            f"The sub-teams your {names.overseer} approved could not be set up: "
+            f"The sub-teams your {names.manager} approved could not be set up: "
             f"{reason} "
-            f"{left} Tell your {names.overseer} with msg_manager, with a new "
+            f"{left} Tell your {names.manager} with msg_manager, with a new "
             "proposal if "
             "you have one.",
         )

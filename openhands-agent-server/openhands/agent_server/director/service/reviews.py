@@ -578,7 +578,7 @@ class Reviews(Requests):
                 above_id,
                 "moved",
                 place,
-                f"its {names.overseer} put it here"
+                f"its {names.manager} put it here"
                 if under is not None
                 else "the team it was set up under is gone",
             )
@@ -808,7 +808,7 @@ class Reviews(Requests):
                 }
             ),
         )
-        self.tell_overseer(
+        self.tell_manager(
             review.id,
             merge_request(
                 top,
@@ -849,7 +849,7 @@ class Reviews(Requests):
                         update={"reminded": True, "asked_at": now.isoformat()}
                     ),
                 )
-                self.tell_overseer(
+                self.tell_manager(
                     review.id,
                     "This still waits for you, and with it the teams and "
                     "contracts of every session that submitted later.\n\n"
@@ -869,16 +869,16 @@ class Reviews(Requests):
                 top.id,
                 ORG_WAITS,
                 kind="critical_issue",
-                title=f"{self.team(top).names.A_overseer} has not settled the teams "
+                title=f"{self.team(top).names.A_manager} has not settled the teams "
                 "of accepted work",
                 detail=(
                     f"The code of {top.title!r} is accepted and merged. What "
                     "it makes of the org's teams and contracts waits for the "
-                    f"{self.team(top).names.overseer} that reviews it, which has "
+                    f"{self.team(top).names.manager} that reviews it, which has "
                     "not answered, and the "
                     "teams and contracts of sessions that submitted later "
                     "wait behind it. Answer this to go on without the "
-                    f"{self.team(top).names.overseer}: the org's stay wherever it "
+                    f"{self.team(top).names.manager}: the org's stay wherever it "
                     "has not decided, and "
                     "what the session wrote for a team that is not taken is "
                     "kept in that team's record."
@@ -1358,7 +1358,7 @@ class Reviews(Requests):
             if merge.asked and any(
                 item.gate == "manager" and item.take is None for item in merge.items
             ):
-                self.tell_overseer(
+                self.tell_manager(
                     review.id,
                     f"The work of {top.title!r} was sent back to its team. "
                     "What waited of it for you waits no longer. What you "

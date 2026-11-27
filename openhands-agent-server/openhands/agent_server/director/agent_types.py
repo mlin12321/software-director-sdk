@@ -71,9 +71,9 @@ class Names:
     Attributes:
         writer: The member that works in the team's folder.
         reviewer: The member that reviews the work of the teams below.
-        overseer: The member that settles what the team's sub-teams are.
+        manager: The member that settles what the team's sub-teams are.
         writers: More than one writer; '' is the name with an s.
-        overseers: More than one overseer; '' is the name with an s.
+        managers: More than one manager; '' is the name with an s.
         members: Every member with what it does, as in "an IC, who does
             the work".
         above_writer: The writer of the team above; '' where that team is
@@ -83,9 +83,9 @@ class Names:
 
     writer: str
     reviewer: str
-    overseer: str
+    manager: str
     writers: str = ""
-    overseers: str = ""
+    managers: str = ""
     members: tuple[str, ...] = ()
     above_writer: str = ""
     above_reviewer: str = ""
@@ -93,7 +93,7 @@ class Names:
     def __post_init__(self) -> None:
         for name, default in (
             ("writers", f"{self.writer}s"),
-            ("overseers", f"{self.overseer}s"),
+            ("managers", f"{self.manager}s"),
             ("above_writer", self.writer),
             ("above_reviewer", self.reviewer),
         ):
@@ -105,12 +105,12 @@ class Names:
         return _a(self.writer)
 
     @property
-    def a_overseer(self) -> str:
-        return _a(self.overseer)
+    def a_manager(self) -> str:
+        return _a(self.manager)
 
     @property
-    def A_overseer(self) -> str:  # noqa: N802
-        return "A" + _a(self.overseer)[1:]
+    def A_manager(self) -> str:  # noqa: N802
+        return "A" + _a(self.manager)[1:]
 
     @property
     def reviews_own(self) -> bool:
@@ -130,9 +130,9 @@ class Names:
             "a_writer": self.a_writer,
             "writers": self.writers,
             "reviewer": self.reviewer,
-            "overseer": self.overseer,
-            "a_overseer": self.a_overseer,
-            "overseers": self.overseers,
+            "manager": self.manager,
+            "a_manager": self.a_manager,
+            "managers": self.managers,
             "above_writer": self.above_writer,
             "above_reviewer": self.above_reviewer,
             "count": _COUNTS[count] if count < len(_COUNTS) else str(count),
@@ -339,7 +339,7 @@ class TeamTemplate(BaseModel):
         )
 
     @property
-    def overseer(self) -> str:
+    def manager(self) -> str:
         """The member that settles what a team's sub-teams are."""
         return (
             self.member_with("approve_teams")
@@ -357,7 +357,7 @@ class TeamTemplate(BaseModel):
             or self.member_with("review_team", lead=True)
             or writer
         )
-        overseer = (
+        manager = (
             self.member_with("approve_teams")
             or self.member_with("settle_teams", lead=True)
             or writer
@@ -372,7 +372,7 @@ class TeamTemplate(BaseModel):
                         name == reviewer and name != writer,
                         "reviews what sub-teams submit",
                     ),
-                    (name == overseer, "decides which sub-teams exist"),
+                    (name == manager, "decides which sub-teams exist"),
                 )
                 if held
             ]
@@ -382,9 +382,9 @@ class TeamTemplate(BaseModel):
         return Names(
             writer=self.title_of(writer),
             reviewer=self.title_of(reviewer),
-            overseer=self.title_of(overseer),
+            manager=self.title_of(manager),
             writers=self.agents[writer].plural,
-            overseers=self.agents[overseer].plural,
+            managers=self.agents[manager].plural,
             members=tuple(does(name) for name in self.agents),
         )
 

@@ -65,9 +65,9 @@ class Document(BaseModel):
             "everyone",
             "writer",
             "reviewer",
-            "overseer",
+            "manager",
             "lead_reviewer",
-            "lead_overseer",
+            "lead_manager",
             "hand_over",
         ],
         str,
@@ -77,12 +77,12 @@ class Document(BaseModel):
             "What the members of a team that keeps it are told of it with "
             "how the org works: `everyone` for all of them, `writer` for the "
             "one that works in the team's folder, `reviewer` for the one "
-            "that reviews the teams below, `overseer` for the one that "
-            "decides on its sub-teams, `lead_reviewer` and `lead_overseer` "
+            "that reviews the teams below, `manager` for the one that "
+            "decides on its sub-teams, `lead_reviewer` and `lead_manager` "
             "for the two that take a session's work into the org, and "
             "`hand_over` for the conversation that passes on what removed "
             "teams left. A text may name a member as "
-            "`{writer}`, `{reviewer}` or `{overseer}`, and the number of the "
+            "`{writer}`, `{reviewer}` or `{manager}`, and the number of the "
             "team's agents as `{count}`."
         ),
     )
