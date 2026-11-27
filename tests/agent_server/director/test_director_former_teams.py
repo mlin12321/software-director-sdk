@@ -935,7 +935,7 @@ async def test_a_split_finished_again_after_a_restart_hands_over_once(
 ):
     """The server ends after the hand-over was begun and before the end of
     the split was saved, so the split is finished a second time."""
-    save_tree = service._save_tree
+    save_tree = service.org_save.save_tree
     ended = asyncio.Event()
 
     def save(store) -> None:
@@ -947,7 +947,7 @@ async def test_a_split_finished_again_after_a_restart_hands_over_once(
             raise ServerEnded
         save_tree(store)
 
-    monkeypatch.setattr(service, "_save_tree", save)
+    monkeypatch.setattr(service.org_save, "save_tree", save)
     await use(service, ic(service), ProposeTeamsTool, proposing([ORDERS], ["Web"]))
     await cut_off(
         launcher, ended, use(service, manager(service), ApproveTeamsTool, APPROVE)

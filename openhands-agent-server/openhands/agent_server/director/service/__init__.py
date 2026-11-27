@@ -122,6 +122,7 @@ class DirectorService(Sync):
         self._loop = asyncio.get_running_loop()
         self._launcher = launcher
         await self.work_queue.__aenter__()
+        await self.org_save.__aenter__()
         self._stop_status = launcher.on_status(self._on_status)
         self._stop_guard = launcher.on_action(self.guard_action)
         self._stop_resume = launcher.on_resume(self.with_tools_again)
@@ -180,13 +181,7 @@ class DirectorService(Sync):
         for task in timers:
             task.cancel()
         await asyncio.gather(*timers, return_exceptions=True)
-        # A save that was cut off goes on in its thread: nothing of this
-        # director may write the tree after it has closed.
-        await asyncio.to_thread(self._wait_for_save)
-        if self._save_timer is not None:
-            self._save_timer.cancel()
-            self._save_timer = None
-            await self._save()
+        await self.org_save.__aexit__(None, None, None)
         self._launcher = None
         self._loop = None
         with self._lock:

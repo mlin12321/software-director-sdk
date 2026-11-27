@@ -601,7 +601,7 @@ async def test_a_team_made_in_place_of_one_is_not_taken_for_it(
         ),
     )
     ended = asyncio.Event()
-    save = first._save
+    save = first.org_save.save
 
     async def server_ends() -> None:
         made = first.org.place(api)
@@ -613,7 +613,7 @@ async def test_a_team_made_in_place_of_one_is_not_taken_for_it(
         ended.set()
         raise ServerEnded
 
-    monkeypatch.setattr(first, "_save", server_ends)
+    monkeypatch.setattr(first.org_save, "save", server_ends)
     await cut_off(
         launcher, ended, use(first, manager(first), ApproveTeamsTool, APPROVE)
     )

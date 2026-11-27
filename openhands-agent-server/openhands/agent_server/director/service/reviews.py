@@ -906,7 +906,7 @@ class Reviews(Teams):
                 ),
                 at=utc_now(),
             )
-        self._save_soon()
+        self.org_save.save_soon()
 
     def settle_teams(
         self,
@@ -1022,7 +1022,7 @@ class Reviews(Teams):
             )
             landed = merge.code_landed
         self._org_turn()
-        self._save_soon()
+        self.org_save.save_soon()
         return "Settled. " + (
             "It is the org's as soon as it is its turn."
             if landed
@@ -1120,7 +1120,7 @@ class Reviews(Teams):
         """
         # No save of the tree comes between what this changes of the org
         # and the one commit that takes it and team memory together.
-        with self._saving:
+        with self.org_save.lock:
             return self._land_all(top, seen, org)
 
     def _land_all(
@@ -1722,7 +1722,7 @@ class Reviews(Teams):
             detail=detail,
             at=utc_now(),
         )
-        self._save_soon()
+        self.org_save.save_soon()
 
     async def _do_accept(self, intent: Intent) -> None:
         accept = intent.of(Accept)

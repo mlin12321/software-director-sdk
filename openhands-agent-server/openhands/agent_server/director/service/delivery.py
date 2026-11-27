@@ -79,8 +79,8 @@ class Delivery(Records):
             work_queue=self.work_queue,
             lane_of=lane_for,
             is_paused=lambda: self._paused is not None,
-            save=self._save,
-            save_soon=self._save_soon,
+            save=self.org_save.save,
+            save_soon=self.org_save.save_soon,
             let_go=self._let_go,
             keep_failure=self._keep_failure,
             left=self._leave_line,
@@ -157,7 +157,7 @@ class Delivery(Records):
         seq = self._runs().hold(conversation_id, place_id, text)
         if at_once:
             self._at_once.add(seq)
-        self._save_soon()
+        self.org_save.save_soon()
         self.work_queue.enqueue(
             lambda: self._deliver(seq, conversation_id, text), place_id or ORG_LANE
         )

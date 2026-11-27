@@ -1119,7 +1119,7 @@ class Records(ServiceState):
                 ).model_copy(update={"unaccepted": False})
             )
         routed = self.session_drafts.routed(session)
-        conflicts = self._commit_landing(
+        conflicts = self.org_save.commit_landing(
             Landing(
                 files=files,
                 seen=seen or {},

@@ -421,7 +421,7 @@ async def test_a_review_request_cut_off_by_a_crash_reaches_the_reviewer_once(
         launcher, ended, use(first, ic(first, "services.api"), SubmitReviewTool, DONE)
     )
     # A save the ended server had begun is not one the next start reads half of.
-    await asyncio.to_thread(first._wait_for_save)
+    await asyncio.to_thread(first.org_save.wait)
 
     second = await again(repo, launcher)
     assert (place(second, "services.api"), "continue") in kinds(await second.recovery())
@@ -458,7 +458,7 @@ async def test_an_acceptance_the_server_ended_before_saving_is_not_lost(
 
     # The server ends with the acceptance made and the tree not yet saved.
     launcher.before = nothing_more
-    monkeypatch.setattr(first, "_save", end_instead_of_saving)
+    monkeypatch.setattr(first.org_save, "save", end_instead_of_saving)
     monkeypatch.setattr(first.resumable_work, "save", end_instead_of_saving)
     await cut_off(launcher, ended, use(first, ic(first), ReviewTeamTool, accept()))
 
@@ -492,7 +492,7 @@ async def test_accepted_work_the_server_ended_before_passing_up_still_goes_up(
     ended = asyncio.Event()
 
     async def end_instead(node_id: str, *, acted: bool) -> None:
-        await first._save()
+        await first.org_save.save()
         ended.set()
         raise ServerEnded
 

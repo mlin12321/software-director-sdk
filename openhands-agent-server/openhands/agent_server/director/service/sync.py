@@ -282,7 +282,7 @@ class Sync(Sessions):
             repo = self._repo_dir
 
             def push() -> OrgSync:
-                self._save_tree(store)
+                self.org_save.save_tree(store)
                 org_sync.fetch(repo, remote)
                 if org_sync.behind(repo, remote):
                     raise Conflict(
@@ -629,7 +629,7 @@ class Sync(Sessions):
         synced = self._pull_memory(repo, remote, taken)
         if result == "up_to_date" and synced is not None and synced.changed:
             result = "merged"
-        self._save_tree(store)
+        self.org_save.save_tree(store)
         return OrgSync(
             remote=remote,
             result=result,
@@ -840,7 +840,7 @@ class Sync(Sessions):
             with suppress(NotFound):
                 self.org.settle_escalation(team.id, escalation_id)
         if settled:
-            self._save_soon()
+            self.org_save.save_soon()
 
     def _on_hand_over_status(
         self, store: OrgStore, conversation_id: str, status: ConversationExecutionStatus

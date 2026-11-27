@@ -270,7 +270,7 @@ class Sessions(Splits):
                 raise
         if not rename and not request.title.strip():
             self.work_queue.enqueue(lambda: self._name_session(top.id, text), top.id)
-        self._save_soon()
+        self.org_save.save_soon()
         return OpenedSession(
             session=next(found for found in store.sessions() if found.id == session_id),
             conversation_id=conversation_id,
@@ -392,7 +392,7 @@ class Sessions(Splits):
                 kept=self.kept_documents(top),
             ),
         )
-        self._save_soon()
+        self.org_save.save_soon()
         return (
             f"Handed to the {names.writer} of the team above ({top.title}), which this "
             "session is now opened at. Your team stays in it as a sub-team: "
@@ -513,7 +513,7 @@ class Sessions(Splits):
             title="This request is not this team's",
             detail=f"{why}\n\nThe request:\n{text}",
         )
-        self._save_soon()
+        self.org_save.save_soon()
 
     def close_session(self, session_id: str) -> None:
         """Close a session: its agents are stopped and removed with its
@@ -635,7 +635,7 @@ class Sessions(Splits):
             store.close_session(plan.session)
             await asyncio.to_thread(self._org_turn)
             self._tell_turns()
-            await self._save()
+            await self.org_save.save()
             intent = run.step_done(intent, "removed")
         self._settling.pop(intent.id, None)
 

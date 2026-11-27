@@ -117,7 +117,7 @@ class Watch(Reviews):
         )
         if self._loop is not None:
             self.work_queue.enqueue(lambda: self._stop(place_id), place_id)
-        self._save_soon()
+        self.org_save.save_soon()
         self.record_event(team.parent_id, "stopped", team, reason)
         # A stopped team is waited for no longer by the reviews beside it.
         self.release_reviews(team.parent_id)
@@ -232,7 +232,7 @@ class Watch(Reviews):
                 ),
                 at=utc_now(),
             )
-        self._save_soon()
+        self.org_save.save_soon()
 
     def go_on_past_limit(self, place_id: str) -> None:
         """Let a session that was put to rest at its limit go on for as
@@ -252,4 +252,4 @@ class Watch(Reviews):
             self.work_queue.enqueue(
                 lambda: self._go_on(top.id, stopped.running, own_too=True), top.id
             )
-        self._save_soon()
+        self.org_save.save_soon()

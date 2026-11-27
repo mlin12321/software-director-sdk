@@ -334,7 +334,7 @@ class Teams(Delivery):
             at=utc_now(),
             raised_by=raised_by or self.team(team).writer,
         )
-        self._save_soon()
+        self.org_save.save_soon()
 
     def tell_of_failure(self, place_id: str, role: str, reason: str) -> None:
         """Keep why an agent of a team failed, and tell of it."""

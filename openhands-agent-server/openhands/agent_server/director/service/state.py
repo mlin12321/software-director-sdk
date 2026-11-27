@@ -64,10 +64,7 @@ from openhands.agent_server.director.git import (
 )
 from openhands.agent_server.director.git_store import (
     GitStore,
-    Landing,
     normalize_store_path,
-    swap_together,
-    taking_in,
 )
 from openhands.agent_server.director.headline import provisional_summary
 from openhands.agent_server.director.intents import Accept, LandOrg
@@ -104,9 +101,7 @@ from openhands.agent_server.director.org_persistence import (
     create_org_board,
     load_org,
     own_settings,
-    save_org,
     save_own_settings,
-    saving,
 )
 from openhands.agent_server.director.org_store import (
     OrgStore,
@@ -136,6 +131,7 @@ from openhands.agent_server.director.scope import MergeArea, Scope
 from openhands.agent_server.director.service.model_call_service import (
     ModelCallService,
 )
+from openhands.agent_server.director.service.org_save_service import OrgSaveService
 from openhands.agent_server.director.service.session_draft_service import (
     SessionDraftService,
 )
@@ -144,7 +140,6 @@ from openhands.agent_server.director.service.work_queue_service import (
     WorkQueueService,
 )
 from openhands.agent_server.director.session_state import (
-    kept_sessions,
     restore_sessions,
 )
 from openhands.agent_server.director.split import (
@@ -158,7 +153,6 @@ from openhands.sdk.errors import (
     DomainError,
     Invalid,
     NotFound,
-    OperationFailed,
     Unavailable,
     Unprocessable,
 )
@@ -314,9 +308,6 @@ _AGENT_STATUS: dict[ConversationExecutionStatus, str] = {
 # How long a message waits for an IC that submitted to end its turn.
 _REST_CHECKS = 600
 _REST_CHECK_SECONDS = 0.05
-
-# How often a landing is tried when another writer moves a ref first.
-_LANDING_ATTEMPTS = 8
 
 
 def conversations_of(teams: Iterable[SessionTeam]) -> list[str]:
@@ -477,8 +468,6 @@ class ServiceState:
         self._settling: dict[int, tuple[set[str], str]] = {}
         # The conversations a resume is about to run again.
         self._resuming: set[str] = set()
-        self._save_asked = False
-        self._sessions_asked = False
         # Teams that waited for a run when the org was paused, in the order
         # they waited: each tries to start only when it is the first.
         self._line: deque[str] = deque()
@@ -490,7 +479,6 @@ class ServiceState:
         self._bwrap: str | None = None
         self._stop_guard: Callable[[], None] | None = None
         self._stop_resume: Callable[[], None] | None = None
-        self._save_delay = save_delay
         self._run_limit_retry = run_limit_retry
         self._lock = threading.Lock()
         # Held from looking a need up in the record to keeping it, so that
@@ -501,9 +489,6 @@ class ServiceState:
             self._memory, self._runs, self._document_changed, self
         )
         self.tree: TeamTree = _TeamsOfTheOrg(lambda: self.org)
-        # Held while the tree is saved, and all through a landing, which
-        # changes the tree and saves it with team memory in one step.
-        self._saving = threading.RLock()
         # Held while what waits of a session's work is read and changed.
         self._weighing = threading.RLock()
         self._adding_manager = threading.Lock()
@@ -532,6 +517,14 @@ class ServiceState:
         self._server_url = server_url
         self._tool_key: bytes | None = None
         self.work_queue = WorkQueueService(default_lane=ORG_LANE)
+        self.org_save = OrgSaveService(
+            org=lambda: self.org,
+            repo_dir=lambda: self._repo_dir,
+            team_memory=self._memory,
+            run_state=self._runs,
+            work_queue=self.work_queue,
+            delay=save_delay,
+        )
         self.model_calls = ModelCallService(
             launcher=self._require_launcher,
             sessions=lambda: self._store.sessions() if self._store else [],
@@ -543,7 +536,6 @@ class ServiceState:
         # Held by the start that waits for room, so that starts are served
         # in the order they began to wait.
         self._start_gate = asyncio.Lock()
-        self._save_timer: asyncio.TimerHandle | None = None
         self._stop_status: Callable[[], None] | None = None
         self._create_lock = asyncio.Lock()
         self._first_message_lock = asyncio.Lock()
@@ -1428,7 +1420,7 @@ class ServiceState:
         remembered = self._remembered_repo()
         if remembered is None or not self._load_from(remembered, store):
             self._load_from(self._directory, store)
-        store.on_change(self._schedule_save)
+        store.on_change(self.org_save.tree_changed)
         if self._loop is not None:
             self.work_queue.enqueue(self._came_back)
         return store
@@ -1538,41 +1530,6 @@ class ServiceState:
             moved, self._line_moved = self._line_moved, asyncio.Event()
             moved.set()
 
-    def _schedule_save(self) -> None:
-        loop = self._loop
-        if loop is not None:
-            loop.call_soon_threadsafe(self._arm_save)
-
-    def _arm_save(self) -> None:
-        loop = self._loop
-        if loop is None:
-            return
-        if not self._sessions_asked:
-            # What a session has is only here: it is kept at once, not
-            # when the tree is next saved.
-            self._sessions_asked = True
-            self.work_queue.enqueue(self._keep_sessions)
-        if self._save_timer is not None:
-            return
-        self._save_timer = loop.call_later(
-            self._save_delay, lambda: self.work_queue.enqueue(self._save_due)
-        )
-
-    async def _keep_sessions(self) -> None:
-        self._sessions_asked = False
-        store = self._store
-        if store is None:
-            return
-
-        def keep() -> None:
-            with self._saving:
-                self._runs().replace_marks(SESSION, kept_sessions(store))
-
-        try:
-            await asyncio.to_thread(keep)
-        except (GitError, RunStateError):
-            logger.exception("Could not keep the sessions of %s", self._repo_dir)
-
     async def _base[T](self, work: Callable[[], Awaitable[T]]) -> T:
         """What ``work`` returns, carried out in the lane of what the org
         shares."""
@@ -1583,78 +1540,6 @@ class ServiceState:
 
         await self.work_queue.run_in(BASE_LANE, effect)
         return results[0]
-
-    async def _save_due(self) -> None:
-        self._save_timer = None
-        await self._save()
-
-    def _save_soon(self) -> None:
-        """Save the tree without waiting to gather more changes: what was
-        just recorded as begun refers to it."""
-        if not self._save_asked:
-            self._save_asked = True
-            self.work_queue.enqueue(self._save_asked_for)
-
-    async def _save_asked_for(self) -> None:
-        self._save_asked = False
-        await self._save()
-
-    async def _save(self) -> None:
-        store = self._store
-        if store is None:
-            return
-        try:
-            await asyncio.to_thread(self._save_tree, store)
-        except GitError:
-            logger.exception("Could not save the org tree to %s", self._repo_dir)
-
-    def _commit_landing(
-        self, landing: Landing, message: str, tree: bool
-    ) -> dict[str, str | None]:
-        """Take a landing into team memory, and with ``tree`` save the org
-        tree as it is now with it: both refs move together or neither.
-
-        Returns:
-            The files that were not written, with the text each has now.
-
-        Raises:
-            OperationFailed: Another writer kept moving a ref first.
-        """
-        memory = self._memory()
-        if not tree:
-            return memory.take_in(landing, message)
-        store = self.org
-        with self._saving:
-            for _ in range(_LANDING_ATTEMPTS):
-                mutate, left = taking_in(landing)
-                board = create_org_board(self._repo_dir)
-                staged = [
-                    made
-                    for made in (
-                        memory.stage(mutate, message),
-                        board.stage(saving(store), f"org: {message}"),
-                    )
-                    if made is not None
-                ]
-                if not staged or swap_together(self._repo_dir, staged):
-                    self._runs().replace_marks(SESSION, kept_sessions(store))
-                    return dict(left)
-        raise OperationFailed(
-            f"Gave up landing in {self._repo_dir} after {_LANDING_ATTEMPTS} "
-            "contended attempts"
-        )
-
-    def _save_tree(self, store: OrgStore) -> None:
-        with self._saving:
-            board = create_org_board(self._repo_dir)
-            save_org(board, store)
-            run = self._runs()
-            # Sessions are this machine's: kept here, not with the org.
-            run.replace_marks(SESSION, kept_sessions(store))
-
-    def _wait_for_save(self) -> None:
-        with self._saving:
-            pass
 
     def _shown(self, conversation_id: str, status: ConversationExecutionStatus) -> str:
         """An agent's status as the org shows it. One that was running when

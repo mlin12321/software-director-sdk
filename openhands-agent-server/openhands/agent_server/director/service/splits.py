@@ -294,7 +294,7 @@ class Splits(Watch):
             if store.place(below_id) is not None and store.place(home) is not None:
                 store.move_place(below_id, home)
         self._let_go(intent)
-        await self._save()
+        await self.org_save.save()
         if "handed_over" not in intent.steps:
             # A new team starts nothing by being set up. What it is for is
             # kept for the day something is sent to it.
@@ -466,7 +466,7 @@ class Splits(Watch):
             # The shell the IC above starts next can write there again.
             with suppress(GitError, OSError):
                 await asyncio.to_thread(self._confine, plan.parent)
-            await self._save()
+            await self.org_save.save()
             intent = run.step_done(intent, "removed")
         self._settling.pop(intent.id, None)
         if "told" in intent.steps:
