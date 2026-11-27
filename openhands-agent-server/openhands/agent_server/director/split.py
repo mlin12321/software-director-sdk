@@ -119,7 +119,8 @@ class Proposed(NamedTuple):
     """The sub-teams an IC proposes, as written."""
 
     children: list[SplitChild]
-    contracts: str
+    documents: dict[str, str]
+    """What the proposal gives for documents, by the name of each."""
     keep: list[str]
     """The sub-teams the proposer has now that it says are to stay, by name
     or team id."""
@@ -129,7 +130,7 @@ class Proposed(NamedTuple):
 
 def proposed_teams(
     teams: Sequence[ProposedTeam],
-    contracts: str,
+    documents: Mapping[str, str],
     keep: Sequence[str],
     reason: str,
     default_type: str = "software-engineer",
@@ -154,7 +155,7 @@ def proposed_teams(
             )
             for team in teams
         ],
-        contracts,
+        {name: text for name, text in documents.items() if text.strip()},
         list(keep),
         reason.strip(),
     )
@@ -194,8 +195,7 @@ def as_written(proposed: Proposed) -> str:
             team["isolation"] = child.isolation
         teams.append(team)
     written: dict[str, object] = {}
-    if proposed.contracts.strip():
-        written["contracts"] = proposed.contracts
+    written.update(proposed.documents)
     if proposed.keep:
         written["keep"] = proposed.keep
     written["teams"] = teams

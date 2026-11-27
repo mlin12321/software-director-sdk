@@ -74,12 +74,12 @@ def test_a_proposal_is_read_as_the_teams_it_names():
             ),
             ProposedTeam(name="Web", path="apps/web", instruction="Build the pages"),
         ],
-        "API serves /orders.\n",
+        {"contracts": "API serves /orders.\n", "glossary": " "},
         ["Billing"],
         " The service has two concerns. ",
     )
 
-    assert proposed.contracts == "API serves /orders.\n"
+    assert proposed.documents == {"contracts": "API serves /orders.\n"}
     assert proposed.keep == ["Billing"]
     assert proposed.reason == "The service has two concerns."
     assert proposed.children == [

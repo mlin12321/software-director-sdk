@@ -5,10 +5,13 @@ that makes tools of the agent SDK out of them.
 """
 
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, ClassVar, Self
+from typing import TYPE_CHECKING, Any, ClassVar, Self
+
+from pydantic import Field, create_model
 
 from openhands.agent_server.director.documents.declared import Document
 from openhands.agent_server.director.documents.protocol import (
+    DocumentArgument,
     DocumentProtocolBase,
     when_declared,
 )
@@ -351,10 +354,41 @@ def tool_named(name: str) -> type[_DirectorTool] | None:
 SendDocumentTool = tool_of(catalog.SEND_DOCUMENT)
 
 
+# The arguments documents added to the director's own tools, so that one
+# declared again adds nothing.
+_added: set[tuple[str, str]] = set()
+
+
+def _ask_for(asked: DocumentArgument) -> None:
+    """Have a tool of the director's own take one more text."""
+    if (asked.tool, asked.name) in _added:
+        return
+    tool = DIRECTOR_TOOLS.get(asked.tool)
+    if tool is None:
+        raise ValueError(f"The director has no tool named {asked.tool!r}")
+    takes = tool.action()
+    if asked.name in takes.model_fields:
+        raise ValueError(f"{asked.tool} already takes {asked.name!r}")
+    added: dict[str, Any] = {
+        asked.name: (str, Field(default="", description=asked.description))
+    }
+    extended = create_model(
+        takes.__name__,
+        __base__=takes,
+        __doc__=takes.__doc__,
+        __module__=__name__,
+        **added,
+    )
+    setattr(tool, "action", classmethod(lambda cls: extended))  # noqa: ARG005, B010
+    _added.add((asked.tool, asked.name))
+
+
 def _tool_of_document(document: Document, protocol: type[DocumentProtocolBase]) -> None:
     # A document written with a tool of the director's own brings none.
     if document.written_with not in catalog.DIRECTOR_TOOL_SPECS:
         tool_of(document_tool(document, protocol))
+    for asked in protocol.arguments_in_other_tools(document):
+        _ask_for(asked)
 
 
 # The tools an org's documents bring are made as the org is read.

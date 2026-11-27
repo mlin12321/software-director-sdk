@@ -14,7 +14,6 @@ from openhands.agent_server.director.tools import (
     SubmitReviewTool,
 )
 from openhands.agent_server.director.tools.definition import (
-    ReviewTeamAction,
     SubmitReviewAction,
 )
 from tests.agent_server.director.conftest import (
@@ -31,6 +30,7 @@ from tests.agent_server.director.conftest import (
 from tests.agent_server.director.document_tools import (
     EditContractsAction,
     EditContractsTool,
+    ReviewTeamAction,
     WriteSpecAction,
     WriteSpecTool,
 )

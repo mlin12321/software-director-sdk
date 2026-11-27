@@ -69,10 +69,8 @@ from openhands.agent_server.director.tools import (
 )
 from openhands.agent_server.director.tools.definition import (
     ApproveTeamsAction,
-    ProposeTeamsAction,
     PruneTeamAction,
     RaiseEscalationAction,
-    ReviewTeamAction,
     SubmitReviewAction,
 )
 from openhands.agent_server.director.tools.impl import DirectorObservation
@@ -93,6 +91,10 @@ from openhands.sdk.tool.spec import Tool
 from openhands.sdk.tool.tool import Action, ToolDefinition
 from openhands.sdk.workspace import LocalWorkspace
 from openhands.tools.file_editor.definition import FileEditorAction
+from tests.agent_server.director.document_tools import (
+    ProposeTeamsAction,
+    ReviewTeamAction,
+)
 
 
 def run_git(repo: Path, *args: str) -> str:
@@ -802,7 +804,7 @@ def proposing(
     contracts: str = "",
     keep: list[str] | None = None,
     text: str = "",
-) -> ProposeTeamsAction:
+) -> Any:
     return ProposeTeamsAction(
         teams=as_proposed(children), contracts=contracts, keep=keep or [], text=text
     )
@@ -961,11 +963,11 @@ def requests(service: DirectorService, launcher: FakeLauncher) -> list[str]:
     ]
 
 
-def reject(node_id: str = "services.api") -> ReviewTeamAction:
+def reject(node_id: str = "services.api") -> Any:
     return ReviewTeamAction(team=node_id, decision="reject", findings=[FINDING])
 
 
-def accept(node_id: str = "services.api", needed_above: str = "") -> ReviewTeamAction:
+def accept(node_id: str = "services.api", needed_above: str = "") -> Any:
     return ReviewTeamAction(team=node_id, decision="accept", needed_above=needed_above)
 
 
@@ -1130,7 +1132,7 @@ async def started(repo: Path, launcher: FakeLauncher, **options) -> DirectorServ
     return service
 
 
-def split(below: str, count: int) -> ProposeTeamsAction:
+def split(below: str, count: int) -> Any:
     return proposing(
         [
             SplitChild(title=f"{below} {n}", path=f"{below}/t{n}", task="Work")

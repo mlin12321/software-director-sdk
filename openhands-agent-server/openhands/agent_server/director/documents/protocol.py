@@ -160,6 +160,17 @@ class DocumentProtocolBase(ABC):
         self.store = store
         self.tree = tree
 
+    @classmethod
+    def arguments_in_other_tools(
+        cls,
+        document: Document,  # noqa: ARG003
+    ) -> Sequence["DocumentArgument"]:
+        """What the director's own tools ask their caller for, for this
+        document: an argument of ``propose_teams``, ``review_team`` or
+        ``hand_over``, whose text the document is then told with the step
+        the tool takes. None by default."""
+        return ()
+
     def write(self, call: DocumentToolCall) -> DocumentToolResult:
         """Carry out a call of the document's tool.
 
@@ -311,6 +322,43 @@ def protocol_of(
     return protocol_class(document)(document, store, tree)
 
 
+@dataclass(frozen=True)
+class DocumentArgument:
+    """A text one of the director's own tools asks its caller for, for a
+    document.
+
+    Attributes:
+        tool: The name of the tool.
+        name: What the argument is called.
+        description: What the caller is told to give.
+        answer: What the caller is answered when it gave something.
+    """
+
+    tool: str
+    name: str
+    description: str
+    answer: str = ""
+
+
+# For each tool, the document each of its arguments is given for.
+_asked: dict[str, dict[str, tuple[str, DocumentArgument]]] = {}
+
+
+def document_arguments(tool: str) -> dict[str, DocumentArgument]:
+    """What ``tool`` asks its caller for, for the documents declared: by
+    the name of the document."""
+    return {document: asked for document, asked in _asked.get(tool, {}).values()}
+
+
+def documents_given(tool: str, arguments: BaseModel) -> dict[str, str]:
+    """What a call of ``tool`` gave for each document it asks for, by the
+    name of the document; '' where it gave nothing."""
+    return {
+        document: (getattr(arguments, asked.name, "") or "").strip()
+        for document, asked in document_arguments(tool).items()
+    }
+
+
 # Who is told of each document an org declares, and the ones told so far.
 # The service that reads an org's documents does not know what gives its
 # agents their tools; that part listens here.
@@ -327,6 +375,13 @@ def declare(document: Document) -> None:
             something else.
     """
     found = (document, protocol_class(document))
+    for asked in found[1].arguments_in_other_tools(document):
+        taken = _asked.setdefault(asked.tool, {}).get(asked.name)
+        if taken is not None and taken[0] != document.name:
+            raise ValueError(
+                f"{asked.tool} already asks for {asked.name!r} for {taken[0]}"
+            )
+        _asked[asked.tool][asked.name] = (document.name, asked)
     for tell in _listeners:
         tell(*found)
     _declared[document.name] = found

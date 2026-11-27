@@ -10,6 +10,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from openhands.agent_server.director import agent_actions
+from openhands.agent_server.director.documents.protocol import documents_given
 from openhands.agent_server.director.models import (
     ContractsChoice,
     EscalationKind,
@@ -54,15 +55,6 @@ class ProposeTeamsArguments(BaseModel):
             "sub-teams you already have replaces them, and so does one that "
             "takes part of an existing sub-team's folder; what the new "
             "teams leave of it is yours again."
-        ),
-    )
-    contracts: str = Field(
-        default="",
-        description=(
-            "What the sub-teams must keep between them: types, endpoints, "
-            "file formats. They cannot see each other's work or your spec, "
-            "so this must hold everything they have to respect. What teams "
-            "promise each other is written only here, not in a spec."
         ),
     )
     keep: list[str] = Field(
@@ -201,15 +193,6 @@ class ReviewTeamArguments(BaseModel):
             "holds."
         ),
     )
-    contracts: str = Field(
-        default="",
-        description=(
-            "Only when you accept: what this work establishes that every "
-            "team below yours may rely on from now, a line for each. It is "
-            "added to the contracts between your sub-teams, which each of "
-            "them reads. Leave empty otherwise."
-        ),
-    )
 
 
 class MsgTeamArguments(BaseModel):
@@ -232,21 +215,6 @@ class HandOverArguments(BaseModel):
     """Pass on to a team below yours what the teams before it left."""
 
     team: str = Field(description="The id of a team directly below yours.")
-    notes: str = Field(
-        default="",
-        description=(
-            "What of the removed teams' reports this team should know, in "
-            "your own words or quoted. Kept with its reports."
-        ),
-    )
-    contracts: str = Field(
-        default="",
-        description=(
-            "The contracts this team's own sub-teams must keep between "
-            "them. Takes the place of the ones it has. Only for a team that "
-            "has, or took over, sub-teams."
-        ),
-    )
 
 
 class StopTeamArguments(BaseModel):
@@ -296,7 +264,7 @@ PROPOSE_TEAMS = ToolSpec(
         service,
         caller,
         action.teams,
-        action.contracts,
+        documents_given("propose_teams", action),
         action.keep,
         action.text,
     ),
@@ -455,7 +423,7 @@ REVIEW_TEAM = ToolSpec(
         action.needed_above,
         action.reconciled,
         action.specs,
-        action.contracts,
+        documents_given("review_team", action),
     ),
 )
 
@@ -479,13 +447,12 @@ PRUNE_TEAM = ToolSpec(
 HAND_OVER = ToolSpec(
     name="hand_over",
     summary="IC only. After teams below yours were replaced or pruned, pass on "
-    "to a team directly below what it should know of what they left: "
-    "notes from their reports, and the contracts its own sub-teams must "
-    "keep. Nothing of a removed team reaches another team unless you do "
+    "to a team directly below what it should know of what they left. "
+    "Nothing of a removed team reaches another team unless you do "
     "this. It starts nothing and can be done again.",
     arguments=HandOverArguments,
     act=lambda service, caller, action: agent_actions.hand_over(
-        service, caller, action.team, action.notes, action.contracts
+        service, caller, action.team, documents_given("hand_over", action)
     ),
 )
 

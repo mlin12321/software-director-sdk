@@ -26,6 +26,10 @@ EditContractsTool: Any = tool_named("edit_contracts")
 EditContractsAction: Any = EditContractsTool.action()
 ReportTool: Any = tool_named("report")
 ReportAction: Any = ReportTool.action()
+# The director's own tools that documents add an argument to.
+ProposeTeamsAction: Any = getattr(tool_named("propose_teams"), "action")()
+ReviewTeamAction: Any = getattr(tool_named("review_team"), "action")()
+HandOverAction: Any = getattr(tool_named("hand_over"), "action")()
 
 
 def report(

@@ -47,7 +47,6 @@ from openhands.agent_server.director.tools import (
 )
 from openhands.agent_server.director.tools.definition import (
     RaiseEscalationAction,
-    ReviewTeamAction,
     SettleTeamsAction,
 )
 from openhands.sdk.conversation.state import ConversationExecutionStatus
@@ -86,6 +85,7 @@ from tests.agent_server.director.conftest import (
 from tests.agent_server.director.document_tools import (
     ReportAction,
     ReportTool,
+    ReviewTeamAction,
     WriteSpecAction,
     WriteSpecTool,
     report,
@@ -556,7 +556,7 @@ async def test_a_team_set_up_under_one_the_org_lost_goes_under_the_nearest_team(
 ):
     top, conversation = await at_api(service)
     sets_up_jobs(service, top)
-    service.hand_over(api_place(service, top), "", IDEMPOTENT)
+    service.removed_team_handed_over(api_place(service, top), {"contracts": IDEMPOTENT})
     service.org.remove("services.api")
 
     answer = await session_accepted(service, top, conversation)
@@ -605,8 +605,12 @@ async def test_contracts_and_notes_a_session_hands_over_are_the_orgs_on_accept(
     top, conversation = await at_api(service)
     place = api_place(service, top)
 
-    service.hand_over(
-        place, "The old jobs team retried forever.", "Jobs are idempotent."
+    service.removed_team_handed_over(
+        place,
+        {
+            "report": "The old jobs team retried forever.",
+            "contracts": "Jobs are idempotent.",
+        },
     )
 
     # Until its work is accepted they are the session's alone.
@@ -639,7 +643,9 @@ async def test_contracts_both_changed_wait_for_the_manager_above(
     service: DirectorService, launcher: FakeLauncher, take: str, holds: str
 ):
     top, conversation = await at_api(service)
-    service.hand_over(api_place(service, top), "", "Refunds go through Jobs.")
+    service.removed_team_handed_over(
+        api_place(service, top), {"contracts": "Refunds go through Jobs."}
+    )
     # Other accepted work set the contracts of the same directory meanwhile.
     service.team_memory.write(
         "services/api", "contracts.md", "Orders go through Jobs.\n"
@@ -1169,7 +1175,7 @@ async def test_a_reviewer_writes_the_spec_that_holds(service: DirectorService):
     )
     assert shown.is_error and "say in `specs`" in shown.text
 
-    def decided(path: str, take: str, text: str = "") -> ReviewTeamAction:
+    def decided(path: str, take: str, text: str = "") -> Any:
         return ReviewTeamAction(
             team=top,
             decision="accept",
@@ -1527,7 +1533,9 @@ async def test_contracts_the_org_did_not_take_are_on_record_when_the_session_clo
     service: DirectorService,
 ):
     top, conversation = await at_api(service)
-    service.hand_over(api_place(service, top), "", "Refunds go through Jobs.")
+    service.removed_team_handed_over(
+        api_place(service, top), {"contracts": "Refunds go through Jobs."}
+    )
     service.team_memory.write(
         "services/api", "contracts.md", "Orders go through Jobs.\n"
     )
@@ -1553,7 +1561,9 @@ async def test_contracts_for_a_team_the_org_lost_wait_with_the_rest_of_the_landi
     )
     await service.settled()
     ahead = web.session.teams[0].id
-    service.hand_over(node(service, ahead), "", "The web session's contracts.")
+    service.removed_team_handed_over(
+        node(service, ahead), {"contracts": "The web session's contracts."}
+    )
     service.team_memory.write("apps/web", "contracts.md", "The org's.\n")
     await session_accepted(service, ahead, web.conversation_id)
     opened = await service.open_session(
@@ -1562,7 +1572,7 @@ async def test_contracts_for_a_team_the_org_lost_wait_with_the_rest_of_the_landi
     await service.settled()
     top = opened.session.teams[0].id
     place = api_place(service, top)
-    service.hand_over(place, "", "Refunds go through Jobs.")
+    service.removed_team_handed_over(place, {"contracts": "Refunds go through Jobs."})
     # Other accepted work set the team at that directory up anew meanwhile.
     service.org.update_team("services.api", since="set up anew")
 

@@ -289,7 +289,7 @@ class Splits(Watch):
         await asyncio.to_thread(
             self.sub_teams_created,
             place,
-            {"contracts": proposal.contracts},
+            proposal.documents,
             bool(plan.replaces),
         )
 
@@ -360,7 +360,7 @@ class Splits(Watch):
             for team_id in proposal.replaces
             if (records := [r for r in kept if r.id == team_key(team_id)])
         ]
-        replaced = bool(proposal.contracts.strip())
+        replaced = bool(proposal.documents)
         unfinished: dict[str, list[str]] = {}
         for child in proposal.children:
             with suppress(GitError, OSError):

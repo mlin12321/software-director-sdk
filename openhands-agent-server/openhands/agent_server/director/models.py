@@ -199,9 +199,12 @@ class SplitProposal(BaseModel):
     were read from the message and checked."""
 
     children: list[SplitChild] = Field(min_length=1)
-    contracts: str = Field(
-        default="",
-        description="The interfaces the sub-teams must keep between them.",
+    documents: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "What the proposal gives for documents, by the name of each: "
+            "the contracts the sub-teams must keep between them, for one."
+        ),
     )
     reason: str = Field(
         default="",

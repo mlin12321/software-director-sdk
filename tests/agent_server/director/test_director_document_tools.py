@@ -6,6 +6,15 @@ from uuid import UUID
 
 import pytest
 
+from openhands.agent_server.director.documents.declared import Document
+from openhands.agent_server.director.documents.protocol import (
+    DocumentArgument,
+    DocumentProtocolBase,
+    declare,
+    document_arguments,
+    documents_given,
+    register_protocol,
+)
 from openhands.agent_server.director.service import DirectorService
 from openhands.agent_server.director.service.state import team_ref
 from openhands.agent_server.director.tools.definition import tool_named
@@ -168,3 +177,70 @@ async def test_a_report_is_an_entry_its_teams_members_are_told(
     [kept] = service.own_reports(root)
     assert kept.session_id == root.session and kept.at and kept.id
     await service.aclose()
+
+
+def test_the_directors_tools_ask_for_what_the_shipped_documents_say():
+    def asked(tool: str) -> dict[str, str]:
+        made = tool_named(tool)
+        assert made is not None
+        fields = made.action().model_fields
+        return {
+            one.name: fields[one.name].description or ""
+            for one in document_arguments(tool).values()
+        }
+
+    assert set(asked("propose_teams")) == {"contracts"}
+    assert "types, endpoints" in asked("propose_teams")["contracts"]
+    assert set(asked("review_team")) == {"contracts"}
+    # Another test's document may have added one more.
+    assert {"notes", "contracts"} <= set(asked("hand_over"))
+    handed = document_arguments("hand_over")
+    assert (handed["report"].name, handed["contracts"].name) == ("notes", "contracts")
+
+
+class _Minutes(DocumentProtocolBase):
+    @classmethod
+    def arguments_in_other_tools(cls, document: Document):
+        return (
+            DocumentArgument(
+                "hand_over", document.name, "What was agreed.", "the minutes are kept"
+            ),
+        )
+
+
+def test_a_document_of_an_orgs_own_adds_an_argument_to_a_tool_of_the_directors():
+    register_protocol("minutes-of-meetings", _Minutes)
+    minutes = Document(
+        name="minutes", description="What was agreed.", protocol="minutes-of-meetings"
+    )
+
+    declare(minutes)
+    declare(minutes)
+
+    made = tool_named("hand_over")
+    assert made is not None
+    action = made.action()(team="services.api", minutes=" Ship on Friday. ")
+    assert action.model_fields["minutes"].description == "What was agreed."
+    assert documents_given("hand_over", action)["minutes"] == "Ship on Friday."
+    assert document_arguments("hand_over")["minutes"].answer == "the minutes are kept"
+
+    clash = Document(name="notes", description="Notes.", protocol="minutes-of-meetings")
+    with pytest.raises(ValueError, match="already asks for 'notes' for report"):
+        declare(clash)
+
+
+async def test_a_team_is_not_given_a_document_its_type_does_not_keep(
+    service: DirectorService,
+):
+    # The lab's type keeps a glossary and no contracts.
+    refused = call_tool(
+        service,
+        UUID(bench(service)),
+        "propose_teams",
+        {
+            "teams": [{"name": "Rig", "path": "rig", "instruction": "Build it"}],
+            "contracts": "Rig serves Assay.",
+        },
+    )
+
+    assert refused.is_error and "keeps no contracts" in refused.text

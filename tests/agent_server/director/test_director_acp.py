@@ -10,7 +10,7 @@ from collections.abc import AsyncIterator, Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
-from typing import cast
+from typing import Any, cast
 from uuid import UUID, uuid4
 
 import httpx
@@ -49,7 +49,6 @@ from openhands.agent_server.director.tools import (
     SubmitReviewTool,
 )
 from openhands.agent_server.director.tools.definition import (
-    ProposeTeamsAction,
     SubmitReviewAction,
 )
 from openhands.agent_server.server_context import server_context_of
@@ -84,7 +83,7 @@ def starts_of(launcher: FakeLauncher) -> dict[str | None, DerivedStart]:
     return {str(start.conversation_id): start for start in launcher.derived}
 
 
-def split(*children: SplitChild) -> ProposeTeamsAction:
+def split(*children: SplitChild) -> Any:
     return proposing(list(children))
 
 

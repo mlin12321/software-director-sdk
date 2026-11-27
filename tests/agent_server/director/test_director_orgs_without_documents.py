@@ -10,6 +10,7 @@ from openhands.agent_server.director.service.state import team_ref
 from tests.agent_server.director.conftest import (
     API,
     APPROVE,
+    SPLIT,
     ApproveTeamsTool,
     FakeLauncher,
     ProposeTeamsTool,
@@ -51,7 +52,16 @@ async def test_an_org_whose_teams_keep_no_documents_splits_and_lands_its_work(
     assert "spec" not in context and "reports_of_your_team" not in context
 
     service.update_org_settings(OrgSettings(default_agent_type="bare"))
-    await split_root(service)
+    refused = await use(service, ic(service), ProposeTeamsTool, SPLIT)
+    assert refused.is_error and "keeps no contracts" in refused.text
+    await use(
+        service,
+        ic(service),
+        ProposeTeamsTool,
+        SPLIT.model_copy(update={"contracts": ""}),
+    )
+    await use(service, manager(service), ApproveTeamsTool, APPROVE)
+    await tasked(service)
     api = node(service, API)
     assert service.type_of(api).name == "bare"
     assert service.documents_of(api) == []

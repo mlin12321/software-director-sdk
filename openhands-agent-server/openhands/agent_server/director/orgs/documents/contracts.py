@@ -17,6 +17,7 @@ from openhands.agent_server.director.documents.protocol import (
     INSERT_LINE,
     NEW_STR,
     OLD_STR,
+    DocumentArgument,
     DocumentProtocolBase,
     DocumentToolCall,
     DocumentToolResult,
@@ -48,6 +49,41 @@ class ContractsProtocol(DocumentProtocolBase):
     @classmethod
     def arguments_for(cls, document: Document) -> type[BaseModel]:  # noqa: ARG003
         return EditContractsArguments
+
+    @classmethod
+    def arguments_in_other_tools(
+        cls,
+        document: Document,
+    ) -> Sequence[DocumentArgument]:
+        name = document.name
+        return (
+            DocumentArgument(
+                "propose_teams",
+                name,
+                "What the sub-teams must keep between them: types, endpoints, "
+                "file formats. They cannot see each other's work or your spec, "
+                "so this must hold everything they have to respect. What teams "
+                "promise each other is written only here, not in a spec.",
+            ),
+            DocumentArgument(
+                "review_team",
+                name,
+                "Only when you accept: what this work establishes that every "
+                "team below yours may rely on from now, a line for each. It is "
+                "added to the contracts between your sub-teams, which each of "
+                "them reads. Leave empty otherwise.",
+                "What you wrote was added to the contracts between your "
+                "sub-teams; each is told with its next message.",
+            ),
+            DocumentArgument(
+                "hand_over",
+                name,
+                "The contracts this team's own sub-teams must keep between "
+                "them. Takes the place of the ones it has. Only for a team that "
+                "has, or took over, sub-teams.",
+                "the contracts between its sub-teams are written",
+            ),
+        )
 
     def write(self, call: DocumentToolCall) -> DocumentToolResult:
         # Contracts are first written by the proposal that makes the

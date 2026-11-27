@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 from openhands.agent_server.director.documents.declared import Document
 from openhands.agent_server.director.documents.events import RemovedTeamHandedOver
 from openhands.agent_server.director.documents.protocol import (
+    DocumentArgument,
     DocumentProtocolBase,
     DocumentToolCall,
     DocumentToolResult,
@@ -31,6 +32,21 @@ class ReportProtocol(DocumentProtocolBase):
     @classmethod
     def arguments_for(cls, document: Document) -> type[BaseModel]:  # noqa: ARG003
         return ReportArguments
+
+    @classmethod
+    def arguments_in_other_tools(
+        cls,
+        document: Document,  # noqa: ARG003
+    ) -> Sequence[DocumentArgument]:
+        return (
+            DocumentArgument(
+                "hand_over",
+                "notes",
+                "What of the removed teams' reports this team should know, in "
+                "your own words or quoted. Kept with its reports.",
+                "your notes are with its reports, marked as handed over",
+            ),
+        )
 
     def write(self, call: DocumentToolCall) -> DocumentToolResult:
         given = call.arguments

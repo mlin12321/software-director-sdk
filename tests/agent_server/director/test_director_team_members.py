@@ -50,8 +50,7 @@ TEAMS = proposing(
     [
         SplitChild(title="Assay", path="assay", task="Run the assay"),
         SplitChild(title="Rig", path="rig", task="Build the rig", agent_type="lab"),
-    ],
-    contracts="Assay runs on what Rig builds.",
+    ]
 )
 
 

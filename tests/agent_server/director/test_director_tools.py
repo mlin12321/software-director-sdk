@@ -38,11 +38,9 @@ from openhands.agent_server.director.tools.definition import (
     DeclineTeamsAction,
     MsgIcAction,
     MsgManagerAction,
-    ProposeTeamsAction,
     PruneTeamAction,
     ReadTeamContextAction,
     ResolveEscalationAction,
-    ReviewTeamAction,
     SubmitReviewAction,
 )
 from openhands.sdk.conversation.state import (
@@ -74,8 +72,10 @@ from tests.agent_server.director.conftest import (
     woken,
 )
 from tests.agent_server.director.document_tools import (
+    ProposeTeamsAction,
     ReportAction,
     ReportTool,
+    ReviewTeamAction,
     WriteSpecAction,
     WriteSpecTool,
 )

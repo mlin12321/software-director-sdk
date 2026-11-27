@@ -145,8 +145,8 @@ export interface DirectorSplitChild {
  */
 export interface DirectorSplitProposal {
   children: DirectorSplitChild[];
-  /** The interfaces the sub-teams must keep between them. */
-  contracts: string;
+  /** What the proposal gives for documents, by the name of each. */
+  documents: Record<string, string>;
   /** Why the proposer wants this make-up of teams, when it said. */
   reason?: string;
   status: DirectorSplitStatus;

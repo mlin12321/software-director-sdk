@@ -35,10 +35,8 @@ from openhands.agent_server.director.tools import (
     StopTeamTool,
 )
 from openhands.agent_server.director.tools.definition import (
-    HandOverAction,
     MsgManagerAction,
     MsgTeamAction,
-    ProposeTeamsAction,
     PruneTeamAction,
     ReadTeamContextAction,
     StopTeamAction,
@@ -71,6 +69,8 @@ from tests.agent_server.director.conftest import (
     use,
 )
 from tests.agent_server.director.document_tools import (
+    HandOverAction,
+    ProposeTeamsAction,
     ReportAction,
     ReportTool,
     WriteSpecAction,
