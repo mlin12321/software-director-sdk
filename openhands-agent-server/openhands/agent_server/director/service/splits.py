@@ -48,7 +48,7 @@ from openhands.agent_server.director.run_state import (
     TOLD,
     Intent,
 )
-from openhands.agent_server.director.service.intent_service import Held
+from openhands.agent_server.director.service.resumable_work_service import Held
 from openhands.agent_server.director.service.state import (
     _REASON_KEPT,
     PRUNED_REFS,
@@ -76,12 +76,12 @@ class Splits(Watch):
 
     def carry_out_split(self, place_id: str) -> None:
         """Start the sub-teams of a team's approved split. Safe from any thread."""
-        self.intents.begin(place_id, Split())
+        self.resumable_work.begin(place_id, Split())
 
     def prune(self, place_id: str, reason: str) -> None:
         """Remove a team and what is below it; its boundary goes back to
         the team above. Safe from any thread."""
-        self.intents.begin(place_id, Prune(reason=reason))
+        self.resumable_work.begin(place_id, Prune(reason=reason))
 
     async def _do_finish_split(self, intent: Intent) -> None:
         await self._finish_split(intent.node_id)
@@ -327,7 +327,7 @@ class Splits(Watch):
                 # was stopped.
                 self.progressed(below_id, by_above=True)
                 if plan.was_stopped:
-                    self.lanes.enqueue(
+                    self.work_queue.enqueue(
                         lambda below_id=below_id: self._go_on(
                             below_id, plan.cut_off, own_too=True
                         ),
@@ -335,7 +335,7 @@ class Splits(Watch):
                     )
             # Begun first: a server that ends between the two tells the IC
             # twice rather than never.
-            self.intents.begin(place_id, FinishSplit())
+            self.resumable_work.begin(place_id, FinishSplit())
             intent = run.step_done(intent, "handed_over")
 
     async def _finish_split(self, place_id: str) -> None:
@@ -348,7 +348,7 @@ class Splits(Watch):
         with suppress(GitError, OSError):
             await asyncio.to_thread(self._confine, place_id)
         # The record each replaced team left last: the one just made.
-        kept = self.session_records.former(place.session)
+        kept = self.session_drafts.former(place.session)
         former = [
             records[-1]
             for team_id in proposal.replaces
@@ -379,7 +379,7 @@ class Splits(Watch):
             for intent in self._runs().open_intents()
         )
         if former and not begun:
-            self.intents.begin(
+            self.resumable_work.begin(
                 place_id,
                 HandOver(
                     conversation=str(uuid4()),
@@ -473,7 +473,7 @@ class Splits(Watch):
             return
         former = [
             record
-            for record in self.session_records.former(above.session if above else "")
+            for record in self.session_drafts.former(above.session if above else "")
             if record.id == team_key(place_id) and record.at == plan.stamp
         ]
         self.notify(
@@ -489,7 +489,7 @@ class Splits(Watch):
             ),
         )
         if former and parent_ic is not None:
-            self.intents.begin(
+            self.resumable_work.begin(
                 plan.parent,
                 HandOver(
                     conversation=str(uuid4()),
@@ -514,7 +514,7 @@ class Splits(Watch):
         # The records are the session's own until its work is accepted.
         former = [
             record
-            for record in self.session_records.former(place.session)
+            for record in self.session_drafts.former(place.session)
             if (record.id, record.at) in wanted
         ]
         stays = self.kept_documents(place).stay_when_removed
@@ -615,7 +615,7 @@ class Splits(Watch):
         teams that come after it, and forget what was counted for it. A
         team of the same name or directory then starts from nothing but
         what the old team left in its folder. Doing it again changes nothing."""
-        kept = self.session_records.former(team.session)
+        kept = self.session_drafts.former(team.session)
         record = next((f for f in kept if f.id == team.team_id and f.at == at), None)
         if record is None:
             reports = await asyncio.to_thread(self.reports_of, team)
@@ -639,14 +639,14 @@ class Splits(Watch):
                 documents={name: text for name, text in kept.items() if text},
                 session=self.org.session_title(team),
                 since=team.since,
-                threads=self.session_records.take_threads(team.id),
+                threads=self.session_drafts.take_threads(team.id),
             )
             # The record is the session's until its work is accepted.
-            self.session_records.keep_former(team.session, record)
+            self.session_drafts.keep_former(team.session, record)
         run = self._runs()
         for kind in (TASK, PROGRESS, CHECKS):
             run.unmark(kind, team.id)
-        self.session_records.forget_reports(team.id)
+        self.session_drafts.forget_reports(team.id)
         self._work_accepted(team)
         return record
 

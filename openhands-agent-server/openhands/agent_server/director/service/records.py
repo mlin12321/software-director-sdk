@@ -65,7 +65,7 @@ from openhands.agent_server.director.run_state import (
     USE,
     Intent,
 )
-from openhands.agent_server.director.service.session_record_service import (
+from openhands.agent_server.director.service.session_draft_service import (
     thread_name,
 )
 from openhands.agent_server.director.service.state import (
@@ -182,7 +182,7 @@ class Records(ServiceState):
             return
         event = self._event(kind, team, detail, paths, other, other_gone)
         event = event.model_copy(update={"base": between[0], "head": between[1]})
-        self.session_records.keep_event(session, team_key(above_id), event)
+        self.session_drafts.keep_event(session, team_key(above_id), event)
         if kind in _CHANGES_THE_ORG:
             self._note_change(session)
 
@@ -244,7 +244,7 @@ class Records(ServiceState):
             else []
         )
         session = session_in(node_id)
-        own = self.session_records.events(session, team_key(node_id)) if session else []
+        own = self.session_drafts.events(session, team_key(node_id)) if session else []
         return [*org, *own]
 
     def record_need(self, team: SessionTeam, path: str, how: str) -> None:
@@ -299,7 +299,7 @@ class Records(ServiceState):
             read = (head, team_memory.routed())
             with self._lock:
                 self._routed_read = read
-        own = self.session_records.routed()
+        own = self.session_drafts.routed()
         return sorted([*read[1], *own], key=lambda request: request.at)
 
     def keep_routed(
@@ -321,7 +321,7 @@ class Records(ServiceState):
                 "id": uuid4().hex,
             }
         )
-        self.session_records.keep_routed(team.session, request)
+        self.session_drafts.keep_routed(team.session, request)
         self.record_event(
             team.parent_id,
             "asked" if kind == "asked" else "misrouted",
@@ -548,7 +548,7 @@ class Records(ServiceState):
             )
             for writer, ic in pairs
             if (
-                messages := self.session_records.thread(
+                messages := self.session_drafts.thread(
                     thread_name(writer, ic, ic_to_ic)
                 )
             )
@@ -696,7 +696,7 @@ class Records(ServiceState):
         works = role == self.team(place).writer
         if works and store.below(place.id):
             context["asked_directly_of_teams_below"] = self.asked_below(place)
-        if works and (handed := self.session_records.handed_over_to(place.id)):
+        if works and (handed := self.session_drafts.handed_over_to(place.id)):
             context["handed_over_to_your_team"] = handed
             # It is the team's to write into its own documents.
             todo = rules_said(
@@ -758,7 +758,7 @@ class Records(ServiceState):
         the ones its own session removed and the org does not know of yet."""
         own = [
             former
-            for former in self.session_records.former(session_of(node))
+            for former in self.session_drafts.former(session_of(node))
             if former.above == team_key(node.id)
         ]
         return [*self._former_below(self.team_memory, node.id), *own]
@@ -786,7 +786,7 @@ class Records(ServiceState):
         # Times are kept to the second: of events in one second the later
         # recorded comes first, and a page never ends inside a second, so
         # that reading on from its last time misses none.
-        for (_, team_id), kept in self.session_records.events_by_team().items():
+        for (_, team_id), kept in self.session_drafts.events_by_team().items():
             events += [
                 HistoryEvent(
                     **event.model_dump(),
@@ -815,7 +815,7 @@ class Records(ServiceState):
         are the team's: an agent started again reads what it wrote before."""
         team_memory = self._memory()
         reports = team_memory.reports(node.boundary.path) if self.is_orgs(node) else []
-        own = self.session_records.reports(node.id)
+        own = self.session_drafts.reports(node.id)
         return sorted([*reports, *own], key=lambda report: report.at)
 
     def entries(self, team: TeamRef, name: str) -> list[Report]:
@@ -842,7 +842,7 @@ class Records(ServiceState):
             "session_id": session_of(place),
         }
         # Its session's alone until the session's work is accepted.
-        self.session_records.keep_report(
+        self.session_drafts.keep_report(
             place.id,
             entry.model_copy(update={"at": entry.at or _instant(), **said_where}),
         )
@@ -885,7 +885,7 @@ class Records(ServiceState):
         """The documents another team passed to this one to read, as they
         are now in the session they were passed in."""
         found = []
-        for folder, name in self.session_records.passed_to(node.id):
+        for folder, name in self.session_drafts.passed_to(node.id):
             text = self.documents.read(session_of(node), DocumentRef(folder, name))
             if text:
                 found.append(
@@ -949,7 +949,7 @@ class Records(ServiceState):
     def _land_records(self, top: SessionTeam, *args: Any, **kwargs: Any) -> Taken:
         """:meth:`_land_kept`, with nothing written to the session's records
         between reading them and clearing them: it would be lost."""
-        with self.session_records.unchanged():
+        with self.session_drafts.unchanged():
             return self._land_kept(top, *args, **kwargs)
 
     def _land_kept(
@@ -1041,7 +1041,7 @@ class Records(ServiceState):
                 at = normalize_store_path(place.boundary.path)
                 reports[at] = [
                     *reports.get(at, []),
-                    *self.session_records.reports(place.id),
+                    *self.session_drafts.reports(place.id),
                 ]
         if review is not None:
             # What its reviewers recorded is the team's they review from.
@@ -1052,7 +1052,7 @@ class Records(ServiceState):
             )
             at = normalize_store_path((home or review).boundary.path)
             reports[at] = sorted(
-                [*reports.get(at, []), *self.session_records.reports(review.id)],
+                [*reports.get(at, []), *self.session_drafts.reports(review.id)],
                 key=lambda report: report.at,
             )
         not_taken = [
@@ -1065,20 +1065,20 @@ class Records(ServiceState):
                 ended="not_taken",
                 at=stamp,
                 review=place.review.state if place.review else None,
-                reports=self.session_records.reports(place.id),
+                reports=self.session_drafts.reports(place.id),
                 compacted_report="\n\n".join(
-                    r.text for r in self.session_records.reports(place.id)
+                    r.text for r in self.session_drafts.reports(place.id)
                 ),
                 documents=of_left.get(place.id, {}),
                 session=store.session_title(place),
                 since=place.since,
             )
             for place in left.values()
-            if self.session_records.reports(place.id) or place.id in of_left
+            if self.session_drafts.reports(place.id) or place.id in of_left
         ]
         removed = [
             record
-            for record in self.session_records.former(session)
+            for record in self.session_drafts.former(session)
             if record.id not in waits
         ]
         former, forget, forget_reports = [], [], []
@@ -1096,7 +1096,7 @@ class Records(ServiceState):
         of_team = {place.team_id: place for place in places}
         events: dict[str, list[TeamEvent]] = {}
         kept_events: list[str] = []
-        for (_, kept_for), kept in self.session_records.events_by_team(session).items():
+        for (_, kept_for), kept in self.session_drafts.events_by_team(session).items():
             team_id = kept_for
             place = of_team.get(team_id)
             if team_id in waits:
@@ -1118,7 +1118,7 @@ class Records(ServiceState):
                     "what its session wrote for it is kept in its record",
                 ).model_copy(update={"unaccepted": False})
             )
-        routed = self.session_records.routed(session)
+        routed = self.session_drafts.routed(session)
         conflicts = self._commit_landing(
             Landing(
                 files=files,
@@ -1134,12 +1134,12 @@ class Records(ServiceState):
             tree,
         )
         for kept_for in kept_events:
-            self.session_records.forget_events(session, kept_for)
+            self.session_drafts.forget_events(session, kept_for)
         for request in routed:
-            self.session_records.forget_routed(session, request)
+            self.session_drafts.forget_routed(session, request)
         if review is not None:
-            self.session_records.forget_reports(review.id)
-            self.session_records.forget_passed(review.id)
+            self.session_drafts.forget_reports(review.id)
+            self.session_drafts.forget_passed(review.id)
         for file in files:
             if file in conflicts:
                 continue
@@ -1200,10 +1200,10 @@ class Records(ServiceState):
                     self._undraft(session, file)
         for place in places:
             if place.team_id not in waits:
-                self.session_records.forget_reports(place.id)
-                self.session_records.forget_passed(place.id)
+                self.session_drafts.forget_reports(place.id)
+                self.session_drafts.forget_passed(place.id)
         for record in removed:
-            self.session_records.forget_former(session, record)
+            self.session_drafts.forget_former(session, record)
         grown: list[tuple[str, str]] = [
             (team, role)
             for team, kept in reports.items()
@@ -1222,19 +1222,19 @@ class Records(ServiceState):
         run = self._runs()
         session = top.session
         places = store.session(session)
-        reports = sum(len(self.session_records.reports(place.id)) for place in places)
+        reports = sum(len(self.session_drafts.reports(place.id)) for place in places)
         files = sorted(self.drafts(session))
-        records = self.session_records.former(session)
+        records = self.session_drafts.former(session)
         for place in places:
-            self.session_records.forget_reports(place.id)
-            self.session_records.forget_passed(place.id)
-            self.session_records.forget_handed_over(place.id)
+            self.session_drafts.forget_reports(place.id)
+            self.session_drafts.forget_passed(place.id)
+            self.session_drafts.forget_handed_over(place.id)
             self._drop_merge_checkout(place.id)
         for file in files:
             self._undraft(session, file)
-        self.session_records.forget_session(session)
+        self.session_drafts.forget_session(session)
         for place in places:
-            self.session_records.take_threads(place.id)
+            self.session_drafts.take_threads(place.id)
         run.unmark(USE, session)
         return ", ".join(
             said
@@ -1253,7 +1253,7 @@ class Records(ServiceState):
         teams that were there before it. The team is told with its next
         message, or in its briefing, and no document is written by this.
         Safe from any thread."""
-        self.session_records.keep_handed_over(
+        self.session_drafts.keep_handed_over(
             place.id,
             {
                 "by": f"the {self.team(above).title(member)} of {above.title}",

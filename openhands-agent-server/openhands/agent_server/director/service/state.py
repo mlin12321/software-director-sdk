@@ -133,16 +133,16 @@ from openhands.agent_server.director.sandbox import (
     find_bwrap,
 )
 from openhands.agent_server.director.scope import MergeArea, Scope
-from openhands.agent_server.director.service.lane_service import (
-    LaneService,
-)
 from openhands.agent_server.director.service.model_call_service import (
     ModelCallService,
 )
-from openhands.agent_server.director.service.session_record_service import (
-    SessionRecordService,
+from openhands.agent_server.director.service.session_draft_service import (
+    SessionDraftService,
 )
 from openhands.agent_server.director.service.stall_watch_service import progress_of
+from openhands.agent_server.director.service.work_queue_service import (
+    WorkQueueService,
+)
 from openhands.agent_server.director.session_state import (
     kept_sessions,
     restore_sessions,
@@ -496,7 +496,7 @@ class ServiceState:
         # Held from looking a need up in the record to keeping it, so that
         # an agent that tries the same file again is counted once.
         self._keeping_needs = threading.Lock()
-        self.session_records = SessionRecordService(run_state=self._runs)
+        self.session_drafts = SessionDraftService(run_state=self._runs)
         self.documents: DocumentStore = GitDocumentStore(
             self._memory, self._runs, self._document_changed, self
         )
@@ -531,7 +531,7 @@ class ServiceState:
         self._own_settings: tuple[str, OrgSettings] | None = None
         self._server_url = server_url
         self._tool_key: bytes | None = None
-        self.lanes = LaneService(default_lane=ORG_LANE)
+        self.work_queue = WorkQueueService(default_lane=ORG_LANE)
         self.model_calls = ModelCallService(
             launcher=self._require_launcher,
             sessions=lambda: self._store.sessions() if self._store else [],
@@ -1240,7 +1240,7 @@ class ServiceState:
 
     async def settled(self) -> None:
         """Wait until everything asked for so far has been carried out."""
-        await self.lanes.settled()
+        await self.work_queue.settled()
 
     def _conversations_below(self, team: SessionTeam) -> list[str]:
         """The conversations of a team and of every team below it."""
@@ -1430,7 +1430,7 @@ class ServiceState:
             self._load_from(self._directory, store)
         store.on_change(self._schedule_save)
         if self._loop is not None:
-            self.lanes.enqueue(self._came_back)
+            self.work_queue.enqueue(self._came_back)
         return store
 
     def _load_from(
@@ -1551,11 +1551,11 @@ class ServiceState:
             # What a session has is only here: it is kept at once, not
             # when the tree is next saved.
             self._sessions_asked = True
-            self.lanes.enqueue(self._keep_sessions)
+            self.work_queue.enqueue(self._keep_sessions)
         if self._save_timer is not None:
             return
         self._save_timer = loop.call_later(
-            self._save_delay, lambda: self.lanes.enqueue(self._save_due)
+            self._save_delay, lambda: self.work_queue.enqueue(self._save_due)
         )
 
     async def _keep_sessions(self) -> None:
@@ -1581,7 +1581,7 @@ class ServiceState:
         async def effect() -> None:
             results.append(await work())
 
-        await self.lanes.run_in(BASE_LANE, effect)
+        await self.work_queue.run_in(BASE_LANE, effect)
         return results[0]
 
     async def _save_due(self) -> None:
@@ -1593,7 +1593,7 @@ class ServiceState:
         just recorded as begun refers to it."""
         if not self._save_asked:
             self._save_asked = True
-            self.lanes.enqueue(self._save_asked_for)
+            self.work_queue.enqueue(self._save_asked_for)
 
     async def _save_asked_for(self) -> None:
         self._save_asked = False

@@ -51,7 +51,7 @@ class Watch(Reviews):
             running=lambda: self._running,
             model_calls=self.model_calls,
             check_managers=self._check_managers,
-            lanes=self.lanes,
+            work_queue=self.work_queue,
             progressed=self.progressed,
             release_reviews=self._release_reviews,
             record_event=self.record_event,
@@ -116,7 +116,7 @@ class Watch(Reviews):
             place_id, Stopped(at=utc_now(), reason=reason, running=sorted(running))
         )
         if self._loop is not None:
-            self.lanes.enqueue(lambda: self._stop(place_id), place_id)
+            self.work_queue.enqueue(lambda: self._stop(place_id), place_id)
         self._save_soon()
         self.record_event(team.parent_id, "stopped", team, reason)
         # A stopped team is waited for no longer by the reviews beside it.
@@ -137,8 +137,8 @@ class Watch(Reviews):
         while True:
             await asyncio.sleep(self._stall_poll)
             if self._loop is not None:
-                self.lanes.enqueue(self._count_use, STALL_LANE)
-                self.lanes.enqueue(self.stall_watch.check_stalls, STALL_LANE)
+                self.work_queue.enqueue(self._count_use, STALL_LANE)
+                self.work_queue.enqueue(self.stall_watch.check_stalls, STALL_LANE)
 
     async def _count_use(self) -> None:
         """Add up what each session's agents have used since it was last
@@ -214,7 +214,7 @@ class Watch(Reviews):
                 running=sorted(running),
             ),
         )
-        self.lanes.enqueue(lambda: self._stop(top.id), top.id)
+        self.work_queue.enqueue(lambda: self._stop(top.id), top.id)
         used = session.usage
         if all(e.id != LIMIT_WAITS for e in top.escalations):
             store.raise_escalation(
@@ -249,7 +249,7 @@ class Watch(Reviews):
         stopped = top.stopped
         if stopped is not None:
             store.set_stopped(top.id, None)
-            self.lanes.enqueue(
+            self.work_queue.enqueue(
                 lambda: self._go_on(top.id, stopped.running, own_too=True), top.id
             )
         self._save_soon()

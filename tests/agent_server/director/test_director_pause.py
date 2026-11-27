@@ -32,7 +32,7 @@ from openhands.agent_server.director.service import (
     RESTART_NOTE,
     DirectorService,
 )
-from openhands.agent_server.director.service.intent_service import Held
+from openhands.agent_server.director.service.resumable_work_service import Held
 from openhands.agent_server.director.session_state import kept_sessions
 from openhands.agent_server.director.tools import (
     ApproveTeamsTool,
@@ -459,7 +459,7 @@ async def test_an_acceptance_the_server_ended_before_saving_is_not_lost(
     # The server ends with the acceptance made and the tree not yet saved.
     launcher.before = nothing_more
     monkeypatch.setattr(first, "_save", end_instead_of_saving)
-    monkeypatch.setattr(first.intents, "save", end_instead_of_saving)
+    monkeypatch.setattr(first.resumable_work, "save", end_instead_of_saving)
     await cut_off(launcher, ended, use(first, ic(first), ReviewTeamTool, accept()))
 
     second = await again(repo, launcher)

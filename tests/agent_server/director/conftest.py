@@ -629,7 +629,7 @@ def former_of(service: DirectorService, team_id: str) -> list[FormerTeam]:
     kept = [
         record
         for session in service.org.sessions()
-        for record in service.session_records.former(session.id)
+        for record in service.session_drafts.former(session.id)
         if record.id == team_key(team_id)
     ]
     return [*service.team_memory.former(team_id), *kept]
@@ -641,7 +641,7 @@ def record_of(service: DirectorService, team_id: str) -> list[TeamEvent]:
     own = [
         event
         for session in service.org.sessions()
-        for event in service.session_records.events(session.id, team_id)
+        for event in service.session_drafts.events(session.id, team_id)
     ]
     return [*service.team_memory.history(team_id), *own]
 

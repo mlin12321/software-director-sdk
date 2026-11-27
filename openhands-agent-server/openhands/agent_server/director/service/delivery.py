@@ -39,11 +39,11 @@ from openhands.agent_server.director.run_state import (
     WAITING,
     Intent,
 )
-from openhands.agent_server.director.service.intent_service import (
-    Held,
-    IntentService,
-)
 from openhands.agent_server.director.service.records import Records
+from openhands.agent_server.director.service.resumable_work_service import (
+    Held,
+    ResumableWorkService,
+)
 from openhands.agent_server.director.service.state import (
     MODELS_LANE,
     ORG_LANE,
@@ -71,12 +71,12 @@ class Delivery(Records):
     """Sends agents what the director has for them."""
 
     @cached_property
-    def intents(self) -> IntentService:
+    def resumable_work(self) -> ResumableWorkService:
         """What the director begins for a team and finishes after a pause
         or a restart. The service registers the step of each kind."""
-        return IntentService(
+        return ResumableWorkService(
             run_state=self._runs,
-            lanes=self.lanes,
+            work_queue=self.work_queue,
             lane_of=lane_for,
             is_paused=lambda: self._paused is not None,
             save=self._save,
@@ -92,7 +92,7 @@ class Delivery(Records):
         place = self.org.place(place_id)
         if place is not None:
             task = f"{place.summary}\n\nLatest report of the team: {report}"
-            self.lanes.enqueue(
+            self.work_queue.enqueue(
                 lambda: self._summarize(place_id, task), f"headline:{place_id}"
             )
 
@@ -113,7 +113,7 @@ class Delivery(Records):
         it has grown past what the org set. Safe from any thread."""
         reports = self._memory().reports(folder, role)
         if compaction.due(reports, self.settings.report_compaction_chars):
-            self.lanes.enqueue(lambda: self._compact(folder, role), MODELS_LANE)
+            self.work_queue.enqueue(lambda: self._compact(folder, role), MODELS_LANE)
 
     def joined(self, conversation_id: str) -> None:
         """Note that the human has written in an agent's conversation, so
@@ -131,7 +131,7 @@ class Delivery(Records):
             return
         run.mark(JOINED, conversation_id)
         # After what starts the conversation, when it is not there yet.
-        self.lanes.enqueue(lambda: self._mark_joined(conversation_id), found[0].id)
+        self.work_queue.enqueue(lambda: self._mark_joined(conversation_id), found[0].id)
 
     async def _mark_joined(self, conversation_id: str) -> None:
         try:
@@ -158,7 +158,7 @@ class Delivery(Records):
         if at_once:
             self._at_once.add(seq)
         self._save_soon()
-        self.lanes.enqueue(
+        self.work_queue.enqueue(
             lambda: self._deliver(seq, conversation_id, text), place_id or ORG_LANE
         )
 
@@ -370,7 +370,7 @@ class Delivery(Records):
             for held in waiting:
                 run.delivered(held.seq)
         self._at_once.add(seq)
-        self.lanes.enqueue(
+        self.work_queue.enqueue(
             lambda: self._deliver(seq, conversation_id, text), place_id or ORG_LANE
         )
 
@@ -439,7 +439,7 @@ class Delivery(Records):
                 self._deliver_what_waited(conversation_id)
                 for intent_id, (teams, lane) in list(self._settling.items()):
                     if place_id in teams:
-                        self.intents.take_up(intent_id, lane)
+                        self.resumable_work.take_up(intent_id, lane)
 
     async def _send(self, conversation_id: str, text: str) -> None:
         """Deliver a message as part of a step, in its place among them."""

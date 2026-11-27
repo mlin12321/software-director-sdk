@@ -53,8 +53,8 @@ from openhands.agent_server.director.run_state import (
     Intent,
 )
 from openhands.agent_server.director.service.delivery import Delivery
-from openhands.agent_server.director.service.intent_service import Held
-from openhands.agent_server.director.service.session_record_service import (
+from openhands.agent_server.director.service.resumable_work_service import Held
+from openhands.agent_server.director.service.session_draft_service import (
     thread_name,
 )
 from openhands.agent_server.director.service.stall_watch_service import (
@@ -126,7 +126,7 @@ class Teams(Delivery):
                 f"This org does not let the {self.team(sender_place).title(sender)} "
                 f"of {sender_place.title!r} pass a document to {target_place.title!r}"
             )
-        self.session_records.keep_passed(target_place_id, ref.folder, ref.name)
+        self.session_drafts.keep_passed(target_place_id, ref.folder, ref.name)
 
     def send_msg(
         self,
@@ -180,7 +180,7 @@ class Teams(Delivery):
             first, second = sender_place_id, target_place_id
         else:
             first, second = target_place_id, sender_place_id
-        self.session_records.keep_message(
+        self.session_drafts.keep_message(
             thread_name(first, second, between_ics),
             ThreadMessage(at=_instant(), sender=sender, text=text),
         )
@@ -215,7 +215,9 @@ class Teams(Delivery):
         stopped = team.stopped
         if stopped is not None:
             store.set_stopped(place_id, None)
-            self.lanes.enqueue(lambda: self._go_on(place_id, stopped.running), place_id)
+            self.work_queue.enqueue(
+                lambda: self._go_on(place_id, stopped.running), place_id
+            )
         self.progressed(place_id, by_above=True)
         return stopped
 
@@ -288,7 +290,9 @@ class Teams(Delivery):
                 kept = [agent for agent in place.agents if agent not in lost]
                 place = store.update_place(place_id, agents=[*kept, added])
                 task = self._runs().marked(TASK).get(place_id) or place.summary
-                self.intents.begin(place_id, LaunchMember(task=task, role=member))
+                self.resumable_work.begin(
+                    place_id, LaunchMember(task=task, role=member)
+                )
         conversation_id = self.team(place).conversation(member)
         self.notify(conversation_id, text)
         return conversation_id
@@ -417,7 +421,7 @@ class Teams(Delivery):
                 [ic] = _new_agents(uuid4(), member)
                 store.update_place(place_id, agents=[ic, *place.agents])
                 purpose = self._purpose(place)
-                self.intents.begin(
+                self.resumable_work.begin(
                     place_id,
                     StartTeam(
                         task=f"{purpose}{_STARTED_WITH}{text}",
@@ -1021,7 +1025,7 @@ class Teams(Delivery):
         if opens and not is_division_lead(started):
             self._checkout_for_session(place_id)
         purpose = start.purpose or task
-        self.lanes.enqueue(
+        self.work_queue.enqueue(
             lambda: self._summarize(place_id, purpose, first=True), place_id
         )
 

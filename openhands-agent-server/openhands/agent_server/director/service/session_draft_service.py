@@ -44,16 +44,18 @@ def thread_name(writer_node_id: str, ic_node_id: str, ic_to_ic: bool) -> str:
 
 
 @dataclass
-class SessionRecordService:
-    """Keeps the records of the sessions open on this machine.
+class SessionDraftService:
+    """Keeps what the sessions open on this machine have not had accepted
+    yet: their drafts of what the org will have on record.
 
-    None of it is the org's: the director makes it the org's when a
-    session's work is accepted, and drops it when a session is closed. It
-    decides neither; it reads, adds and forgets. Safe from any thread.
+    None of it is the org's, and none of it is a lasting log: the director
+    makes it the org's when a session's work is accepted, and drops it
+    when a session is closed. It decides neither; it reads, adds and
+    forgets. Safe from any thread.
     """
 
     run_state: Callable[[], RunState]
-    """Where the records are kept."""
+    """Where the drafts are kept."""
     # Held while one record is read and added to.
     _keeping: threading.RLock = field(default_factory=threading.RLock, init=False)
 

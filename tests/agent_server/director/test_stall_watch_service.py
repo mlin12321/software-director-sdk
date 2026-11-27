@@ -9,7 +9,6 @@ from typing import Any, cast
 import pytest
 
 from openhands.agent_server.director.models import DirectorSettings
-from openhands.agent_server.director.service.lane_service import LaneService
 from openhands.agent_server.director.service.model_call_service import (
     ModelCallService,
 )
@@ -17,6 +16,7 @@ from openhands.agent_server.director.service.stall_watch_service import (
     StallWatchService,
     progress_of,
 )
+from openhands.agent_server.director.service.work_queue_service import WorkQueueService
 
 
 def watch(looked: list[str], **given: Any) -> StallWatchService:
@@ -43,7 +43,7 @@ def watch(looked: list[str], **given: Any) -> StallWatchService:
         running=lambda: set(),
         model_calls=cast(ModelCallService, None),
         check_managers=lambda: looked.append("managers"),
-        lanes=LaneService(default_lane="org"),
+        work_queue=WorkQueueService(default_lane="org"),
         progressed=never,
         release_reviews=never,
         record_event=never,

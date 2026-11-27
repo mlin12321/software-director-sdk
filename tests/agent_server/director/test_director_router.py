@@ -26,7 +26,7 @@ from openhands.agent_server.director.org_store import OrgStore
 from openhands.agent_server.director.service import (
     DirectorService,
 )
-from openhands.agent_server.director.service.session_record_service import (
+from openhands.agent_server.director.service.session_draft_service import (
     thread_name,
 )
 from openhands.agent_server.server_context import server_context_of
@@ -221,9 +221,9 @@ async def test_returns_the_threads_a_places_agents_take_part_in(running, repo: P
     told = ThreadMessage(
         at="2026-11-02T00:00:00+00:00", sender="manager", text="Status?"
     )
-    service.session_records.keep_message(thread_name(top, top, False), asked)
-    service.session_records.keep_message(thread_name(top, "below@other", False), told)
-    service.session_records.keep_message(
+    service.session_drafts.keep_message(thread_name(top, top, False), asked)
+    service.session_drafts.keep_message(thread_name(top, "below@other", False), told)
+    service.session_drafts.keep_message(
         thread_name("above@other", "below@other", False), told
     )
 
