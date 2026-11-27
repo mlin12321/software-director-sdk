@@ -67,9 +67,6 @@ from openhands.agent_server.director.service.session_draft_service import (
 from openhands.agent_server.director.service.team_history_service import (
     TeamHistoryService,
 )
-from openhands.agent_server.director.service.team_member_start_service import (
-    TeamMemberStartService,
-)
 from openhands.agent_server.director.service.team_type_service import (
     TeamTypeService,
 )
@@ -124,17 +121,14 @@ class TeamMessagingService:
     """What a Manager's checks count."""
     message_delivery: MessageDeliveryService
     """Sends an agent a message."""
-    member_start: TeamMemberStartService
-    """Says where a member that has no conversation yet is derived from."""
     resumable_work: ResumableWorkService
     """Begins the step that starts a member."""
     work_queue: WorkQueueService
     """What carries out setting a team going again."""
     launcher: Callable[[], TeamLauncher]
     """What reaches the conversations; raises where there is none."""
-    joined: Callable[[str], None]
-    """Notes that the human has written in a conversation."""
-    clock: Callable[[], datetime]
+    in_place: Callable[[SessionTeam], bool]
+    """Whether a team that starts works in the checkout it has."""
     release_reviews: Callable[[str | None], None]
     """Hands the reviews that wait at a team to its IC
     (:meth:`ReviewService.release_reviews`); a function, because that
@@ -273,7 +267,7 @@ class TeamMessagingService:
             self.work_queue.enqueue(
                 lambda: self.go_on(place_id, stopped.running), place_id
             )
-        self.progressed(place_id, by_above=True)
+        self.org_state.progressed(place_id, by_above=True)
         return stopped
 
     def tell(
@@ -489,18 +483,16 @@ class TeamMessagingService:
                     StartTeam(
                         task=f"{purpose}{STARTED_WITH}{text}",
                         purpose=purpose,
-                        parent=self.member_start.derived_from(place),
-                        checkout=place.worktree_path
-                        if self.member_start.in_place(place)
-                        else None,
+                        parent=store.derived_from(place),
+                        checkout=place.worktree_path if self.in_place(place) else None,
                     ),
                 )
                 if human and ic.conversation_id:
-                    self.joined(ic.conversation_id)
+                    self.message_delivery.joined(ic.conversation_id)
                 return ic.conversation_id
         if human:
             self.message_delivery.post(conversation_id, text, at_once=True)
-            self.joined(conversation_id)
+            self.message_delivery.joined(conversation_id)
         else:
             self.message_delivery.notify(conversation_id, text)
         return conversation_id
@@ -578,7 +570,7 @@ class TeamMessagingService:
                 on which of a team's tasks the limit was reached.
         """
         store = self.org()
-        now = self.clock()
+        now = self.org_state.clock()
         quiet = {}
         for team_id, kept in self.org_state.run_state().marked(PROGRESS).items():
             at = progress_of(kept).get("at")
@@ -647,7 +639,7 @@ class TeamMessagingService:
         conversations = self.org().conversations_below(team)
         # The time it was stopped is not time it showed no progress.
         for found in map(self.org().find_by_conversation, conversations):
-            self.progressed(found[0].id if found else None)
+            self.org_state.progressed(found[0].id if found else None)
         # In the order it was sent, and before the message that set the
         # team going, which waits behind this in the team's lane.
         for held in self.org_state.run_state().held():
@@ -659,27 +651,6 @@ class TeamMessagingService:
             # The team's own IC is run by the message that set it going.
             if conversation_id in running and conversation_id != own:
                 await self.run_again(conversation_id, None)
-
-    def progressed(self, place_id: str | None, *, by_above: bool = False) -> None:
-        """Note that a team got somewhere just now: the time it may show no
-        progress starts again. Safe from any thread.
-
-        Args:
-            by_above: The IC of the team above turned to it just now (gave
-                it a task, wrote to it, sent its work back), so the time
-                until that IC is next told how it stands starts again too.
-        """
-        if place_id is None:
-            return
-        run = self.org_state.run_state()
-        seen = progress_of(run.marked(PROGRESS).get(place_id))
-        now = self.clock().isoformat()
-        checked = now if by_above else seen.get("checked") or now
-        run.mark(
-            PROGRESS,
-            place_id,
-            json.dumps({"at": now, "head": seen.get("head"), "checked": checked}),
-        )
 
     async def run_again(self, conversation_id: str, note: str | None) -> None:
         """Have an agent that a restart cut off carry on. It stays one that

@@ -40,13 +40,9 @@ def request(kind: str, team_id: str = "api") -> RoutedRequest:
 
 
 def routing(
-    requests: list[RoutedRequest], kept: list[tuple[Any, ...]], handed: list[Any]
+    requests: list[RoutedRequest], kept: list[tuple[Any, ...]]
 ) -> RequestRoutingService:
     places = {"root": ABOVE}
-
-    def hand_on(place: Any, above: Any, routed: RoutedRequest, why: str) -> str:
-        handed.append((place.id, above.id, routed.text, why))
-        return "Handed on."
 
     return RequestRoutingService(
         checkouts=GitCheckouts(),
@@ -56,22 +52,19 @@ def routing(
         purpose=lambda node: "",
         routed_requests=lambda: requests,
         keep_routed=lambda *said: kept.append(said),
-        hand_on=hand_on,
         paused=lambda: False,
     )
 
 
-def test_a_request_a_team_says_is_not_its_own_is_kept_and_handed_on():
+def test_a_request_a_team_says_is_not_its_own_is_kept_and_goes_to_the_team_above():
     kept: list[tuple[Any, ...]] = []
-    handed: list[Any] = []
 
-    told = routing([request("asked")], kept, handed).not_ours(TEAM, "It is billing's")
+    above, taken = routing([request("asked")], kept).take_back(TEAM, "It is billing's")
 
-    assert told == "Handed on."
+    assert (above.id, taken.text) == ("root", "Add a currency field")
     assert kept == [
         ("misrouted", TEAM, "Add a currency field", "model", "It is billing's")
     ]
-    assert handed == [("api", "root", "Add a currency field", "It is billing's")]
 
 
 @pytest.mark.parametrize(
@@ -79,13 +72,12 @@ def test_a_request_a_team_says_is_not_its_own_is_kept_and_handed_on():
     [[], [request("asked", "web")], [request("asked"), request("misrouted")]],
     ids=["nothing sent", "sent to another team", "handed on already"],
 )
-def test_nothing_is_handed_on_that_is_not_with_the_team(
+def test_nothing_is_taken_back_that_is_not_with_the_team(
     requests: list[RoutedRequest],
 ):
     kept: list[tuple[Any, ...]] = []
-    handed: list[Any] = []
 
     with pytest.raises(Invalid):
-        routing(requests, kept, handed).not_ours(TEAM, "Not ours")
+        routing(requests, kept).take_back(TEAM, "Not ours")
 
-    assert not kept and not handed
+    assert not kept

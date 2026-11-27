@@ -22,6 +22,9 @@ from openhands.agent_server.director.run_state import TOLD
 from openhands.agent_server.director.service.agent_confinement_service import (
     AgentConfinementService,
 )
+from openhands.agent_server.director.service.agent_launch_service import (
+    AgentLaunchService,
+)
 from openhands.agent_server.director.service.check_count_service import (
     CheckCountService,
 )
@@ -58,6 +61,7 @@ from tests.agent_server.director.test_team_documents import (
 
 
 SESSION = "s1"
+NOW = datetime(2026, 1, 2, tzinfo=UTC)
 ROOT = f"root@{SESSION}"
 A = f"a@{SESSION}"
 
@@ -82,6 +86,8 @@ class Starts:
         self.store.set_agent(ROOT, "ic", conversation_id=str(self.top))
         self.store.set_agent(A, "ic", conversation_id=str(self.agent))
         self.launcher = FakeLauncher()
+        agent_launch = AgentLaunchService()
+        agent_launch.launcher = self.launcher
         self.launcher.root = SimpleNamespace(  # type: ignore[assignment]
             workspace=SimpleNamespace(working_dir=repo)
         )
@@ -91,7 +97,7 @@ class Starts:
         self.queue = WorkQueueService(default_lane="org")
         self.org_state = OrgStateService(
             repo_dir=lambda: repo,
-            clock=lambda: datetime.now(UTC),
+            clock=lambda: NOW,
             environment=GitCodingEnvironment(),
         )
         self.start_line = start_line = StartLineService(
@@ -113,13 +119,10 @@ class Starts:
             org_save=self.org_save,
             work_queue=self.queue,
             team_types=self.team_types,
-            launcher=lambda: self.launcher,
-            is_running=lambda: True,
+            agent_launch=agent_launch,
             context_of=lambda place, role: dict(context),
-            is_stopped=lambda conversation_id: False,
             lane_of=lambda intent: intent.node_id,
             take_up=lambda intent_id, lane: None,
-            default_lane="org",
             retry=0,
         )
         self.service = TeamMemberStartService(
@@ -128,7 +131,6 @@ class Starts:
             ),
             team_summaries=cast(TeamSummaryService, None),
             work_queue=self.queue,
-            progressed=lambda *said, **named: None,
             checkouts=GitCheckouts(),
             org=lambda: self.store,
             repo_dir=lambda: repo,
@@ -230,15 +232,14 @@ async def test_a_briefing_is_sent_to_an_agent_that_runs_already(starts: Starts):
     assert "Now build the lexer" in text
 
 
-def test_the_team_a_session_is_opened_at_works_in_the_checkout_it_has(
+def test_a_team_below_is_derived_from_the_team_a_session_is_opened_at(
     starts: Starts,
 ):
     top = starts.store.place(ROOT)
     below = starts.store.place(A)
     assert top is not None and below is not None
 
-    assert not starts.service.in_place(below)
-    assert starts.service.derived_from(below) == ROOT
+    assert starts.store.derived_from(below) == ROOT
 
 
 def test_a_conversation_is_called_by_its_team_its_session_and_its_member():

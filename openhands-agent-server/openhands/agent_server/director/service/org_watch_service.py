@@ -285,7 +285,7 @@ class OrgWatchService:
         if told is None:
             # The IC above has this much time to act before it shows
             # no progress itself.
-            self.team_messaging.progressed(team.parent_id)
+            self.org_state.progressed(team.parent_id)
         minutes = int((now - since).total_seconds() // 60)
         self.work_queue.enqueue(
             lambda team_id=team.id, minutes=minutes: self._tell_of_stall(

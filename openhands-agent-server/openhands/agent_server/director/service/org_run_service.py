@@ -6,14 +6,13 @@ import json
 from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass, field
-from pathlib import Path
 from uuid import UUID, uuid4
 
 from openhands.agent_server.director.environment.checkouts import Checkouts
 from openhands.agent_server.director.intents import Brief, LandOrg, StartTeam
-from openhands.agent_server.director.launch import TeamLauncher
 from openhands.agent_server.director.models import (
     FileEdit,
+    OrgSummary,
     Recovery,
     SessionTeam,
     StartAgainRequest,
@@ -45,9 +44,13 @@ from openhands.agent_server.director.run_state import (
 from openhands.agent_server.director.service.agent_confinement_service import (
     AgentConfinementService,
 )
+from openhands.agent_server.director.service.agent_launch_service import (
+    AgentLaunchService,
+)
 from openhands.agent_server.director.service.message_delivery_service import (
     MessageDeliveryService,
 )
+from openhands.agent_server.director.service.org_load_service import OrgLoadService
 from openhands.agent_server.director.service.org_save_service import OrgSaveService
 from openhands.agent_server.director.service.org_settings_service import (
     OrgSettingsService,
@@ -67,9 +70,11 @@ from openhands.agent_server.director.service.review_service import (
 )
 from openhands.agent_server.director.service.session_merge_service import (
     ORG_WAITS,
-    SessionMergeService,
 )
 from openhands.agent_server.director.service.start_line_service import StartLineService
+from openhands.agent_server.director.service.team_history_service import (
+    TeamHistoryService,
+)
 from openhands.agent_server.director.service.team_member_start_service import (
     TeamMemberStartService,
 )
@@ -126,14 +131,8 @@ class OrgRunService:
     launcher reports each change of an agent's status to `on_status`.
     """
 
-    org: Callable[[], OrgStore]
-    """The org that is run."""
     checkouts: Checkouts
     """Where each team's work is and how it moves."""
-    find_org: Callable[[], OrgStore | None]
-    """The org if it was loaded already, for a status that arrives early."""
-    repo_dir: Callable[[], Path]
-    """The repository the org is in."""
     org_state: OrgStateService
     org_save: OrgSaveService
     org_settings: OrgSettingsService
@@ -146,25 +145,35 @@ class OrgRunService:
     resumable_work: ResumableWorkService
     work_queue: WorkQueueService
     team_splits: TeamSplitService
-    launcher: Callable[[], TeamLauncher]
-    """What reaches the conversations; raises where there is none."""
-    find_launcher: Callable[[], TeamLauncher | None]
-    """The same, or None where the director runs no agents."""
-    loop: Callable[[], asyncio.AbstractEventLoop | None]
-    """The loop the director works on while it is started."""
-    home: Callable[[], str]
-    """The directory the server was started for, in the repository."""
-    instance: Callable[[], str]
-    """Names this server, to tell its run state from another's."""
-    working: Callable[[], None]
-    """Records that the org is run by this server."""
+    agent_launch: AgentLaunchService
+    """What reaches the conversations, while the director runs agents."""
     lane_of: Callable[[Intent], str]
     """The lane a step is carried out in."""
     reviews: ReviewService
-    session_merges: SessionMergeService
     org_watch: OrgWatchService
     """Lets a session that rests at its limit go on."""
+    org_load: OrgLoadService
+    """The org that is run, where it lives and which server runs it."""
+    team_history: TeamHistoryService
+    """Which sessions changed something since their work was accepted."""
     _resume_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False)
+
+    def summary(self) -> OrgSummary:
+        """The org at a glance: where it lives and whether it is held."""
+        store = self.org_load.org
+        repository = self.org_load.repo_dir_now()
+        return OrgSummary(
+            root_id=store.root_id,
+            node_count=len(store),
+            repo_path=str(repository),
+            directory=self.org_load.home(),
+            is_git_repository=self.checkouts.is_repository(repository),
+            boundary_enforcement=(
+                "sandbox" if self.confinement.is_sandboxed else "checks"
+            ),
+            paused=self.org_state.paused if self.org_state.run_state() else None,
+            merging=self.org_state.run_state().get("merge") is not None,
+        )
 
     def shown(self, conversation_id: str, status: ConversationExecutionStatus) -> str:
         """An agent's status as the org shows it. One that was running when
@@ -189,8 +198,8 @@ class OrgRunService:
             Conflict: There is no org.
             Unavailable: The director is not running.
         """
-        self.launcher()
-        store = await asyncio.to_thread(lambda: self.org())
+        self.agent_launch.require()
+        store = await asyncio.to_thread(lambda: self.org_load.org)
         if store.root_id is None:
             raise Conflict("There is no org to pause")
         if self.org_state.paused is None:
@@ -213,8 +222,8 @@ class OrgRunService:
         Raises:
             Unavailable: The director is not running.
         """
-        launcher = self.launcher()
-        store = await asyncio.to_thread(lambda: self.org())
+        launcher = self.agent_launch.require()
+        store = await asyncio.to_thread(lambda: self.org_load.org)
         # One resume at a time: a second would run the same agents again.
         async with self._resume_lock:
             if self.org_state.paused is None:
@@ -225,7 +234,10 @@ class OrgRunService:
             run = self.org_state.run_state()
             await asyncio.to_thread(self._put_aside_stale)
             await asyncio.to_thread(
-                self.checkouts.restore, self.repo_dir(), store.places(), self.home()
+                self.checkouts.restore,
+                self.org_load.repo_dir_now(),
+                store.places(),
+                self.org_load.home(),
             )
             dropped = self.org_state.dropped()
             was_running = run.marked(RUNNING)
@@ -273,11 +285,11 @@ class OrgRunService:
 
     async def recovery(self) -> Recovery:
         """What resuming the org does, and what was put aside as stale."""
-        store = await asyncio.to_thread(lambda: self.org())
+        store = await asyncio.to_thread(lambda: self.org_load.org)
         run = self.org_state.run_state()
         if self.org_state.paused is None:
             return Recovery(paused=None, items=[], messages_held=0)
-        launcher = self.find_launcher()
+        launcher = self.agent_launch.launcher
         statuses = (
             await launcher.statuses(
                 [
@@ -296,7 +308,7 @@ class OrgRunService:
             else {}
         )
         items = await asyncio.to_thread(
-            describe, run, store, statuses, self.repo_dir(), self.checkouts
+            describe, run, store, statuses, self.org_load.repo_dir_now(), self.checkouts
         )
         return Recovery(
             paused=self.org_state.paused,
@@ -313,7 +325,7 @@ class OrgRunService:
             Forbidden: The team's agents may not write the file either.
             Invalid: The path does not name a file that can be committed.
         """
-        store = await asyncio.to_thread(lambda: self.org())
+        store = await asyncio.to_thread(lambda: self.org_load.org)
         place = store.place(place_id)
         if place is None:
             raise NotFound(f"Unknown team: {place_id}")
@@ -324,7 +336,7 @@ class OrgRunService:
             for agent in place.agents
             if agent.conversation_id is not None
         ]
-        launcher = self.find_launcher()
+        launcher = self.agent_launch.launcher
         if agents and launcher is not None:
             statuses = await launcher.statuses(agents)
             if ConversationExecutionStatus.RUNNING in statuses.values():
@@ -336,7 +348,11 @@ class OrgRunService:
             self.checkouts.write_by_hand, place, sub_teams, path, content
         )
         ic = self.team_types.writer_conversation(place)
-        if edit.commit is not None and ic is not None and self.loop() is not None:
+        if (
+            edit.commit is not None
+            and ic is not None
+            and self.agent_launch.loop is not None
+        ):
             self.message_delivery.notify(
                 ic,
                 f"The human changed {edit.path} in your team's checkout by hand "
@@ -367,8 +383,8 @@ class OrgRunService:
             Unavailable: The director is not running.
         """
         names = self.team_types.names_at(node_id)
-        launcher = self.launcher()
-        store = await asyncio.to_thread(lambda: self.org())
+        launcher = self.agent_launch.require()
+        store = await asyncio.to_thread(lambda: self.org_load.org)
         place = store.place(node_id)
         if place is None:
             team = store.team(node_id)
@@ -388,7 +404,7 @@ class OrgRunService:
                 f"The {names.writer} of team {place.title} has a conversation here"
             )
         conversation = request.conversation
-        like = self.member_start.derived_from(place) if leads else place.parent_id
+        like = self.org_load.org.derived_from(place) if leads else place.parent_id
         above = store.place(like) if like else None
         # A session's IC that never started has no checkout yet: it gets
         # one of its own, never the one of the team it works beside.
@@ -413,7 +429,10 @@ class OrgRunService:
                 "conversation."
             )
         await asyncio.to_thread(
-            self.checkouts.restore, self.repo_dir(), [place], self.home()
+            self.checkouts.restore,
+            self.org_load.repo_dir_now(),
+            [place],
+            self.org_load.home(),
         )
         ic_id = uuid4()
         task = await asyncio.to_thread(
@@ -444,7 +463,7 @@ class OrgRunService:
                     task=task,
                     parent=like,
                     checkout=place.worktree_path
-                    if own_checkout or self.member_start.in_place(place)
+                    if own_checkout or self.org_load.in_place(place)
                     else None,
                 ),
             )
@@ -491,7 +510,9 @@ class OrgRunService:
 
     def _put_aside_stale(self) -> None:
         run = self.org_state.run_state()
-        dropped = put_aside_stale(run, self.org(), instance=self.instance())
+        dropped = put_aside_stale(
+            run, self.org_load.org, instance=self.org_load.instance()
+        )
         if run.get("paused") is None:
             # Nothing that was left is this server's to take up.
             self.org_state.refresh()
@@ -518,7 +539,7 @@ class OrgRunService:
             await self.resume()
 
     def look_at_what_was_left(self) -> None:
-        if self.org().root_id is None:
+        if self.org_load.org.root_id is None:
             return
         run = self.org_state.run_state()
         self._put_aside_stale()
@@ -529,12 +550,12 @@ class OrgRunService:
             for item in self.org_state.dropped():
                 logger.warning("Run state put aside: %s", item.detail)
             run.put("dropped", None)
-        self.working()
+        self.org_load.working()
 
     async def _pause_agents(self) -> None:
-        store = self.org()
+        store = self.org_load.org
         run = self.org_state.run_state()
-        launcher = self.launcher()
+        launcher = self.agent_launch.require()
         agents: list[tuple[str, str, UUID]] = [
             (node.id, agent.role, UUID(agent.conversation_id))
             for node in store.places()
@@ -576,10 +597,10 @@ class OrgRunService:
     def on_status(
         self, conversation_id: UUID, status: ConversationExecutionStatus
     ) -> None:
-        loop = self.loop()
+        loop = self.agent_launch.loop
         if status != ConversationExecutionStatus.RUNNING and loop is not None:
             loop.call_soon_threadsafe(self.start_line.room_made)
-        store = self.find_org()
+        store = self.org_load.find_org()
         if store is None:
             return
         agent = str(conversation_id)
@@ -600,7 +621,7 @@ class OrgRunService:
             a.status != AGENT_BLOCKED for a in node.agents if a.role == role
         )
         now = store.set_agent(node.id, role, status=shown)
-        if self.org_state.paused is None and self.loop() is not None:
+        if self.org_state.paused is None and self.agent_launch.loop is not None:
             if failed:
                 self.work_queue.enqueue(
                     lambda: self._failed(node.id, role, conversation_id, status),
@@ -627,14 +648,14 @@ class OrgRunService:
         status: ConversationExecutionStatus,
     ) -> None:
         """Find why an agent's conversation failed, keep it and tell of it."""
-        said = await self.launcher().failure(conversation_id)
+        said = await self.agent_launch.require().failure(conversation_id)
         if said is None:
             said = (
                 "It repeated the same step without getting anywhere."
                 if status == ConversationExecutionStatus.STUCK
                 else "Its conversation ended with an error it gave no account of."
             )
-        team = self.org().place(place_id)
+        team = self.org_load.org.place(place_id)
         if team is None or all(
             a.status != AGENT_BLOCKED for a in team.agents if a.role == role
         ):
@@ -650,14 +671,14 @@ class OrgRunService:
         never say that it runs: the failure the human was told of would
         then stay with them after the agent has gone on.
         """
-        team = self.org().place(place_id)
+        team = self.org_load.org.place(place_id)
         if team is None or all(
             a.status != AGENT_BLOCKED for a in team.agents if a.role == role
         ):
             return
         with suppress(NotFound):
             self._runs_again(
-                self.org().set_agent(place_id, role, status="working"), role
+                self.org_load.org.set_agent(place_id, role, status="working"), role
             )
 
     def _runs_again(self, team: SessionTeam, role: str) -> None:
@@ -668,7 +689,7 @@ class OrgRunService:
         settled = [e.id for e in team.escalations if e.id in waits]
         for escalation_id in settled:
             with suppress(NotFound):
-                self.org().settle_escalation(team.id, escalation_id)
+                self.org_load.org.settle_escalation(team.id, escalation_id)
         if settled:
             self.org_save.save_soon()
 
@@ -699,7 +720,7 @@ class OrgRunService:
         """Whether the server has an agent profile of that name. Called
         from an agent's tool, off the loop; where it cannot be asked, the
         answer is yes and the team's start says otherwise."""
-        launcher, loop = self.find_launcher(), self.loop()
+        launcher, loop = self.agent_launch.launcher, self.agent_launch.loop
         if launcher is None or loop is None:
             return True
         try:
@@ -715,11 +736,11 @@ class OrgRunService:
         work was accepted is not the org's until it submits again. Once for
         each accept. Safe from any thread."""
         if (
-            self.session_merges.changed_since_accept.get(session, True)
+            self.team_history.changed_since_accept.get(session, True)
             or self.org_state.paused is not None
         ):
             return
-        places = self.org().session(session)
+        places = self.org_load.org.session(session)
         at_work = ("working", AGENT_PAUSED)
         if any(
             place.status == "working"
@@ -727,7 +748,7 @@ class OrgRunService:
             for place in places
         ):
             return
-        self.session_merges.changed_since_accept[session] = True
+        self.team_history.changed_since_accept[session] = True
         top = places[0] if places else None
         if top is None or top.review is None or top.review.state != "accepted":
             return
@@ -738,7 +759,7 @@ class OrgRunService:
 
     async def resync(self) -> None:
         """Read every agent's status back from its conversation."""
-        store = self.org()
+        store = self.org_load.org
         agents: list[tuple[str, str, UUID]] = [
             (node.id, agent.role, UUID(agent.conversation_id))
             for node in store.places()
@@ -750,7 +771,7 @@ class OrgRunService:
         # Shells that were lost with the git directory come back for the
         # agents that still start theirs.
         await asyncio.to_thread(self.confinement.confine_all)
-        statuses = await self.launcher().statuses(
+        statuses = await self.agent_launch.require().statuses(
             [conversation_id for _, _, conversation_id in agents]
         )
         starting = {
@@ -776,7 +797,7 @@ class OrgRunService:
     async def _resync_hand_overs(self) -> None:
         """Read back how each IC's hand-over conversation stands. One that
         ended or was lost while nothing followed it is ended here."""
-        store = self.org()
+        store = self.org_load.org
         modes = [
             (node.id, mode)
             for node in store.places()
@@ -784,7 +805,7 @@ class OrgRunService:
         ]
         if not modes:
             return
-        statuses = await self.launcher().statuses(
+        statuses = await self.agent_launch.require().statuses(
             [UUID(mode.conversation_id) for _, mode in modes]
         )
         starting = {
@@ -820,8 +841,8 @@ class OrgRunService:
             Unavailable: The director is not running.
         """
         names = self.team_types.names_at(place_id)
-        self.launcher()
-        store = self.org()
+        self.agent_launch.require()
+        store = self.org_load.org
         place = store.place(place_id)
         escalation = next(
             (e for e in place.escalations if e.id == escalation_id)

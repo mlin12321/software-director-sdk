@@ -70,8 +70,9 @@ class TeamHistoryService:
     """The same, raising ``Unavailable`` where the org has no team memory."""
     session_drafts: SessionDraftService
     """Where what a session recorded waits for its work to be accepted."""
-    org_changed: Callable[[str], None]
-    """Told the session that recorded something that changes the org."""
+    changed_since_accept: dict[str, bool] = field(default_factory=dict, init=False)
+    """The sessions that changed something of the org's after their work
+    was accepted, and whether their IC was told to submit it."""
     _lock: threading.Lock = field(default_factory=threading.Lock, init=False)
     # Held from looking a need up in the record to keeping it, so that an
     # agent that tries the same file again is counted once.
@@ -118,7 +119,16 @@ class TeamHistoryService:
         event = event.model_copy(update={"base": between[0], "head": between[1]})
         self.session_drafts.keep_event(session, team_key(above_id), event)
         if kind in CHANGES_THE_ORG:
-            self.org_changed(session)
+            self.note_change(session)
+
+    def note_change(self, session: str) -> None:
+        """Remember that a session whose work is accepted has changed
+        something since: the org takes it only when it is submitted again."""
+        store = self.org()
+        top = next(iter(store.session(session)), None)
+        if top is not None and top.review is not None:
+            if top.review.state == "accepted" and store.opens_session(top):
+                self.changed_since_accept.setdefault(session, False)
 
     def event(
         self,

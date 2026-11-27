@@ -12,7 +12,6 @@ from typing import Literal
 from uuid import UUID, uuid4
 
 from openhands.agent_server.director.documents.store import DocumentRef
-from openhands.agent_server.director.documents.team_documents import TeamDocuments
 from openhands.agent_server.director.environment import EnvironmentFailed
 from openhands.agent_server.director.environment.checkouts import Checkouts, time_stamp
 from openhands.agent_server.director.environment.records import (
@@ -21,7 +20,6 @@ from openhands.agent_server.director.environment.records import (
 )
 from openhands.agent_server.director.headline import provisional_summary, summary_of
 from openhands.agent_server.director.intents import FinishSplit, HandOver, Prune, Split
-from openhands.agent_server.director.launch import TeamLauncher
 from openhands.agent_server.director.models import (
     FormerTeam,
     HandOverMode,
@@ -58,6 +56,9 @@ from openhands.agent_server.director.run_state import (
 from openhands.agent_server.director.service.agent_confinement_service import (
     AgentConfinementService,
 )
+from openhands.agent_server.director.service.agent_launch_service import (
+    AgentLaunchService,
+)
 from openhands.agent_server.director.service.check_count_service import (
     CheckCountService,
 )
@@ -73,7 +74,6 @@ from openhands.agent_server.director.service.resumable_work_service import (
     Held,
     ResumableWorkService,
 )
-from openhands.agent_server.director.service.review_service import ReviewService
 from openhands.agent_server.director.service.session_draft_service import (
     SessionDraftService,
 )
@@ -182,13 +182,8 @@ class TeamSplitService:
     session_drafts: SessionDraftService
     resumable_work: ResumableWorkService
     work_queue: WorkQueueService
-    team_documents: Callable[[], TeamDocuments]
-    """The documents of the org as each team reads them."""
-    launcher: Callable[[], TeamLauncher]
-    """What reaches the conversations; raises where there is none."""
-    is_running: Callable[[], bool]
-    """Whether the director is running agents on this server."""
-    reviews: ReviewService
+    agent_launch: AgentLaunchService
+    """What reaches the conversations, while the director runs agents."""
     retry: float
     """How many seconds lie between two tries to start a hand-over."""
 
@@ -381,7 +376,7 @@ class TeamSplitService:
                 self.message_delivery.let_go(intent)
                 self._decline(place, refusal)
                 return
-            launcher = self.launcher()
+            launcher = self.agent_launch.require()
             for conversation_id in map(UUID, plan.conversations):
                 await launcher.stop(conversation_id)
                 await launcher.delete(conversation_id)
@@ -436,7 +431,7 @@ class TeamSplitService:
                             below.review,
                             self.team_context.so_far(below),
                             self.team_context.asked_of(below),
-                            self.reviews.review_instructions(
+                            self.team_types.review_instructions(
                                 self.team_types.type_of(below)
                             ),
                             self.team_types.kept_documents(above).read_by_sub_teams,
@@ -445,7 +440,7 @@ class TeamSplitService:
                 # Under a new team it starts from now: its time without
                 # progress, and what was held for it while a team above
                 # was stopped.
-                self.team_messaging.progressed(below_id, by_above=True)
+                self.org_state.progressed(below_id, by_above=True)
                 if plan.was_stopped:
                     self.work_queue.enqueue(
                         lambda below_id=below_id: self.team_messaging.go_on(
@@ -515,7 +510,7 @@ class TeamSplitService:
         store = self.org()
         run = self.org_state.run_state()
         place_id = intent.node_id
-        launcher = self.launcher()
+        launcher = self.agent_launch.require()
         if "planned" not in intent.steps:
             place = store.place(place_id)
             above = store.place(place.parent_id) if place and place.parent_id else None
@@ -699,7 +694,7 @@ class TeamSplitService:
             if before is not None:
                 # One hand-over at a time: the one before it ends here.
                 with suppress(NotFound):
-                    await self.launcher().pause(UUID(before))
+                    await self.agent_launch.require().pause(UUID(before))
         if await self.member_start.start_hand_over(place, conversation, job):
             return
         # Once more, after what a full server is given to make room.
@@ -721,7 +716,7 @@ class TeamSplitService:
         run = self.org_state.run_state()
         kept = run.marked(HANDING).get(place_id)
         place = self.org().place(place_id)
-        if kept is None or place is None or not self.is_running():
+        if kept is None or place is None or not self.agent_launch.is_running:
             return
         run.unmark(HANDING, place_id)
         done = json.loads(kept)
@@ -733,7 +728,7 @@ class TeamSplitService:
                 names=self.team_types.names_at(place_id),
                 rules=[
                     protocol.document.rules_by_member
-                    for protocol in self.team_documents().kept_by(
+                    for protocol in self.org_settings.team_documents().kept_by(
                         self.team_types.reader_of(place)
                     )
                     if protocol.document.name not in done["written"]
@@ -756,7 +751,7 @@ class TeamSplitService:
             # that keeps nothing stays where it is: an old one for whoever
             # has the directory next.
             kept = await asyncio.to_thread(
-                self.team_documents().when_team_is_removed,
+                self.org_settings.team_documents().when_team_is_removed,
                 self.team_types.reader_of(team),
             )
             record = FormerTeam(

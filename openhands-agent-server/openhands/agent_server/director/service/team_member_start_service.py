@@ -22,7 +22,6 @@ from openhands.agent_server.director.org_store import (
     AGENT_LOST,
     OrgStore,
     is_division_lead,
-    session_team_id,
 )
 from openhands.agent_server.director.prompts import (
     brief as first_message,
@@ -99,46 +98,13 @@ class TeamMemberStartService:
     context_of: Callable[[SessionTeam, str], dict[str, Any]]
     """What a member of a team reads of its place."""
     tell_of_failure: Callable[[str, str, str], None]
+    """Tells the team above that a member of a team could not be started:
+    the place, the member and the reason."""
     check_counts: CheckCountService
     """Forgets what a team of the same name before counted."""
     team_summaries: TeamSummaryService
     """Writes the first headline of a team that starts."""
     work_queue: WorkQueueService
-    progressed: Callable[..., None]
-    """Notes that a team was given something to do
-    (:meth:`TeamMessagingService.progressed`); a function, because that
-    service holds this one."""
-    """Tells the team above that a member of a team could not be started:
-    the place, the member and the reason."""
-
-    def in_place(self, place: SessionTeam) -> bool:
-        """Whether a team that starts works in the checkout it has: a
-        session's Division Lead place, and the team a session is opened
-        at when sessions get no worktree or the session has one already."""
-        return is_division_lead(place) or (
-            self.org().opens_session(place)
-            and (
-                place.isolation != "worktree"
-                or self.checkouts.root_of(place.worktree_path)
-                != self.checkouts.root_of(str(self.repo_dir()))
-            )
-        )
-
-    def derived_from(self, place: SessionTeam) -> str | None:
-        """The place whose IC the IC of ``node`` is derived from when it
-        starts: the team above, or for the team a session is opened at and
-        its reviewer, who of the session works already."""
-        store = self.org()
-        opened = store.session_of(place)
-        if is_division_lead(place) and opened:
-            return session_team_id(opened.team_id, opened.id)
-        if store.opens_session(place):
-            # A session that went a team higher has an IC below already.
-            return next(
-                (team.id for team in store.below(place.id) if team.agents),
-                place.parent_id,
-            )
-        return place.parent_id
 
     async def template(self) -> str | None:
         """A conversation of the org to derive an agent from when nothing
@@ -435,7 +401,7 @@ class TeamMemberStartService:
             # A Division Lead Manager is derived from the session's IC,
             # never from the Division Lead IC, whose role it would inherit.
             derived_from = await self.started_ic(
-                self.org().place(self.derived_from(place) or "")
+                self.org().place(self.org().derived_from(place) or "")
                 if is_division_lead(place)
                 else place
             )
@@ -483,7 +449,7 @@ class TeamMemberStartService:
         parent_ic = await self.started_ic(above) or await self.template()
         checkout = start.checkout
         self.org_state.run_state().mark(TASK, place_id, task)
-        self.progressed(place_id, by_above=True)
+        self.org_state.progressed(place_id, by_above=True)
         started = self.org().place(place_id)
         left: list[str] = []
         # A session starts beside the team's own work: what is uncommitted

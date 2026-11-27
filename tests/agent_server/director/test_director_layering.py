@@ -80,37 +80,9 @@ def test_the_directors_own_parts_do_not_know_the_shipped_orgs_or_the_service(
     assert not reached
 
 
-SERVICES_THE_DIRECTOR_HOLDS = [
-    "service/agent_confinement_service.py",
-    "service/team_member_start_service.py",
-    "service/check_count_service.py",
-    "service/org_load_service.py",
-    "service/org_run_service.py",
-    "service/org_save_service.py",
-    "service/org_settings_service.py",
-    "service/org_state_service.py",
-    "service/org_sync_service.py",
-    "service/resumable_work_service.py",
-    "service/work_queue_service.py",
-    "service/message_delivery_service.py",
-    "service/model_call_service.py",
-    "service/request_routing_service.py",
-    "service/review_service.py",
-    "service/session_record_service.py",
-    "service/session_draft_service.py",
-    "service/session_record_service.py",
-    "service/org_watch_service.py",
-    "service/session_merge_service.py",
-    "service/session_lifecycle_service.py",
-    "service/org_watch_service.py",
-    "service/start_line_service.py",
-    "service/team_context_service.py",
-    "service/team_history_service.py",
-    "service/team_messaging_service.py",
-    "service/team_split_service.py",
-    "service/team_summary_service.py",
-    "service/team_type_service.py",
-]
+SERVICES_THE_DIRECTOR_HOLDS = sorted(
+    f"service/{path.name}" for path in (DIRECTOR / "service").glob("*_service.py")
+)
 
 
 @pytest.mark.parametrize("module", SERVICES_THE_DIRECTOR_HOLDS)

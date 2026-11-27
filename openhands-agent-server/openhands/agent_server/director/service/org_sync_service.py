@@ -33,6 +33,7 @@ from openhands.agent_server.director.org_persistence import (
 from openhands.agent_server.director.org_store import (
     OrgStore,
 )
+from openhands.agent_server.director.service.org_load_service import OrgLoadService
 from openhands.agent_server.director.service.org_run_service import (
     PAUSE_LANE,
     OrgRunService,
@@ -66,15 +67,10 @@ class OrgSyncService:
     abandoned. One pull, push or step of a merge runs at a time.
     """
 
-    org: Callable[[], OrgStore]
-    """The org that is pushed and pulled."""
     environment: CodingEnvironment
     """Where the org's records are kept."""
-    repo_dir: Callable[[], Path]
-    """The repository the org is in."""
-    repository: Callable[[], Path]
-    """The repository the org is in, or would be in; raises where the
-    director's directory is in none."""
+    org_load: OrgLoadService
+    """The org that is synced and the repository it is in."""
     org_state: OrgStateService
     org_save: OrgSaveService
     work_queue: WorkQueueService
@@ -82,10 +78,6 @@ class OrgSyncService:
     """Pauses the org for a pull and resumes it after."""
     launcher: Callable[[], TeamLauncher]
     """What reaches the conversations; raises where there is none."""
-    join: Callable[[Path], bool]
-    """Takes up the org saved in a repository."""
-    working: Callable[[], None]
-    """Records that the org is run by this server."""
     _sync_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False)
 
     async def pull_org(self, remote: str) -> OrgSync:
@@ -104,13 +96,13 @@ class OrgSyncService:
             Unavailable: The director is not running, or has no repository.
         """
         self.launcher()
-        store = await asyncio.to_thread(lambda: self.org())
+        store = await asyncio.to_thread(lambda: self.org_load.org)
         async with self._sync_lock:
             if self.org_state.merging() is not None:
                 raise Conflict(
                     "A merge waits for choices. Resolve it or abandon it first."
                 )
-            repo = await asyncio.to_thread(self.repository)
+            repo = await asyncio.to_thread(self.org_load.repository)
             await asyncio.to_thread(self.environment.remote.fetch, repo, remote)
             theirs = await asyncio.to_thread(
                 self.environment.remote.org_tree_of, repo, remote
@@ -144,7 +136,7 @@ class OrgSyncService:
             NotFound: The repository has no such remote.
             UpstreamFailed: The remote could not be reached or refused.
         """
-        store = await asyncio.to_thread(lambda: self.org())
+        store = await asyncio.to_thread(lambda: self.org_load.org)
         if store.root_id is None:
             raise Conflict("There is no org to push")
         async with self._sync_lock:
@@ -152,7 +144,7 @@ class OrgSyncService:
                 raise Conflict(
                     "A merge waits for choices. Resolve it or abandon it first."
                 )
-            repo = self.repo_dir()
+            repo = self.org_load.repo_dir_now()
 
             def push() -> OrgSync:
                 self.org_save.save_tree(store)
@@ -222,7 +214,7 @@ class OrgSyncService:
                 remote=state["remote"],
                 result="up_to_date",
                 head=await asyncio.to_thread(
-                    self.environment.org_tree(self.repo_dir()).head
+                    self.environment.org_tree(self.org_load.repo_dir_now()).head
                 ),
             )
 
@@ -236,7 +228,7 @@ class OrgSyncService:
             if not board.move_to(theirs):
                 raise Conflict("The org was changed meanwhile. Pull once more.")
             pulled = self._pull_memory(repo, remote, ())
-            self.join(repo)
+            self.org_load.join(repo)
             return OrgSync(
                 remote=remote,
                 result="fast_forward",
@@ -245,7 +237,7 @@ class OrgSyncService:
             )
 
         outcome = await asyncio.to_thread(take)
-        await asyncio.to_thread(self.working)
+        await asyncio.to_thread(self.org_load.working)
         await self.org_run.came_back()
         return outcome
 
@@ -270,8 +262,8 @@ class OrgSyncService:
     def _weigh(self, state: dict[str, Any], land: bool = False) -> OrgSync:
         """Work a merge out and, when ``land`` is set and no conflict is
         open, write it."""
-        store = self.org()
-        repo, remote = self.repo_dir(), state["remote"]
+        store = self.org_load.org
+        repo, remote = self.org_load.repo_dir_now(), state["remote"]
         theirs: str | None = state["theirs"]
         choices: dict[str, Side] = state["choices"]
         board = self.environment.org_tree(repo)

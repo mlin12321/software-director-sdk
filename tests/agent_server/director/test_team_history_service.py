@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from openhands.agent_server.director.environment.git.git_store import GitStore
-from openhands.agent_server.director.models import SessionTeam
+from openhands.agent_server.director.models import Review, SessionTeam
 from openhands.agent_server.director.org_store import OrgStore
 from openhands.agent_server.director.prompts import NEED_WRITE
 from openhands.agent_server.director.run_state import RunState
@@ -33,13 +33,11 @@ class History:
         for node in small_tree():
             self.store.upsert(node)
         open_session_in(self.store, "root", SESSION)
-        self.changed: list[str] = []
         self.service = TeamHistoryService(
             org=lambda: self.store,
             team_memory=lambda: GitStore(repo),
             require_team_memory=lambda: GitStore(repo),
             session_drafts=SessionDraftService(run_state=lambda: run),
-            org_changed=self.changed.append,
         )
 
     def place(self, team_id: str) -> SessionTeam:
@@ -61,15 +59,24 @@ def test_an_event_is_read_in_the_record_of_the_team_above(history: History):
     [event] = history.service.history_of(f"root@{SESSION}")
     assert (event.kind, event.team_id, event.detail) == ("woken", "a", "it stood still")
     assert event.unaccepted
-    assert history.changed == []
 
 
-def test_an_event_that_changes_the_org_is_told_to_whoever_listens(history: History):
+def test_a_change_to_the_org_is_noted_only_once_a_sessions_work_is_accepted(
+    history: History,
+):
     a = history.place("a")
+    history.service.record_event(a.parent_id, "pruned", a)
+    assert history.service.changed_since_accept == {}
 
+    history.store.set_review(
+        f"root@{SESSION}",
+        Review(state="accepted", seq=1, round=1, at="2026-01-02T00:00:00+00:00"),
+    )
+    history.service.record_event(a.parent_id, "woken", a, "it stood still")
+    assert history.service.changed_since_accept == {}
     history.service.record_event(a.parent_id, "pruned", a)
 
-    assert history.changed == [SESSION]
+    assert history.service.changed_since_accept == {SESSION: False}
 
 
 def test_nothing_is_kept_for_the_team_above_the_top(history: History):

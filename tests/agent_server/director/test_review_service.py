@@ -58,8 +58,6 @@ class Reviews(Messaging):
         self.merges = SessionMergeService(
             org=lambda: self.store,
             team_memory=lambda: GitStore(repo),
-            team_documents=team_documents,
-            clock=lambda: NOW,
             org_state=self.org_state,
             org_save=self.org_save,
             org_settings=self.messaging.org_settings,
@@ -76,9 +74,7 @@ class Reviews(Messaging):
             org=lambda: self.store,
             repo_dir=lambda: repo,
             checkouts=GitCheckouts(),
-            team_documents=team_documents,
             launcher=lambda: self.launcher,
-            find_review_instructions=lambda: None,
             org_state=self.org_state,
             org_save=self.org_save,
             org_settings=self.messaging.org_settings,

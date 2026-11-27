@@ -37,7 +37,6 @@ def reports(repo: Path) -> TeamHistoryService:
     run = RunState(None)
     return TeamHistoryService(
         require_team_memory=lambda: GitStore(repo),
-        org_changed=lambda session: None,
         org=lambda: store,
         team_memory=lambda: GitStore(repo),
         session_drafts=SessionDraftService(run_state=lambda: run),

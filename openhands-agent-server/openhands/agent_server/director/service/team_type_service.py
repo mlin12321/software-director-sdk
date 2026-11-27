@@ -7,6 +7,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from openhands.agent_server.director import bugbot
 from openhands.agent_server.director.agent_types import (
     DEFAULT_TYPE,
     TYPES_FOLDER,
@@ -91,6 +92,9 @@ class TeamTypeService:
     """Where a team stands among the others, for the same."""
     org: Callable[[], OrgStore]
     """The org whose teams are asked about."""
+    find_review_instructions: Callable[[], str | None] = lambda: None
+    """The code review skill a reviewer is given with a team's write-up,
+    or None to leave it out."""
     _lock: threading.Lock = field(default_factory=threading.Lock, init=False)
     _agent_types: dict[str, TeamTemplate] | None = field(default=None, init=False)
     _protocols: dict[str, DocumentProtocolBase] = field(
@@ -98,6 +102,12 @@ class TeamTypeService:
     )
     # The files the two were read from, with when each was last changed.
     _seen: tuple[tuple[str, int], ...] = field(default=(), init=False)
+    # The skills that were looked for, by name; '' for one that could not
+    # be loaded.
+    _review_instructions: dict[str, str] = field(default_factory=dict, init=False)
+    _loading_review_instructions: threading.Lock = field(
+        default_factory=threading.Lock, init=False
+    )
 
     @property
     def agent_types(self) -> dict[str, TeamTemplate]:
@@ -284,3 +294,42 @@ class TeamTypeService:
             own=found.protocol if found else "",
             rules=self.document_rules(place),
         )
+
+    def review_instructions(self, kind: TeamTemplate | None = None) -> str:
+        """What an IC reviewing a team below checks its work by: the skill
+        the team's type names, then the type's own checklist.
+
+        A skill is loaded once. One that cannot be loaded is left out, and
+        the review request stands without it.
+
+        Args:
+            kind: The type of the team whose work is reviewed; the default
+                type when None.
+        """
+        kind = kind or self.agent_types.get(DEFAULT_TYPE)
+        if kind is None:
+            return ""
+        parts: list[str] = []
+        skill = kind.review.checklist_skill
+        if skill:
+            # One fetch at a time: two would clone the same repository.
+            with self._loading_review_instructions:
+                if skill not in self._review_instructions:
+                    found = (
+                        self.find_review_instructions()
+                        if skill in bugbot.CODE_REVIEW_SKILLS
+                        else bugbot.public_skill((skill,))
+                    )
+                    self._review_instructions[skill] = found.strip() if found else ""
+            parts.append(self._review_instructions[skill])
+        parts.append(kind.review.checklist.strip())
+        return "\n\n".join(part for part in parts if part)
+
+    def load_review_instructions(self) -> None:
+        """Fetch what reviewers of every type check work by, so that it is
+        there when a review is requested. Safe from any thread."""
+        try:
+            for kind in self.agent_types.values():
+                self.review_instructions(kind)
+        except Exception:
+            logger.exception("Could not load the review instructions")

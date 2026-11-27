@@ -492,7 +492,7 @@ def raise_escalation(
         raise Invalid("An escalation needs a title")
     if kind == "misrouted":
         _writes(service, caller, "say a request is not its team's")
-        return service.request_routing.not_ours(
+        return service.session_lifecycle.not_ours(
             caller.node, ": ".join(filter(None, (title.strip(), detail.strip())))
         )
     store = service.org_load.org
@@ -505,7 +505,7 @@ def raise_escalation(
         detail=detail.strip(),
         raised_by=caller.role,
     )
-    service.team_messaging.progressed(node.id)
+    service.org_state.progressed(node.id)
     if escalation.held_by is None:
         return (
             f"Raised as {escalation.id}. Nobody is above your team: it waits "
@@ -558,7 +558,7 @@ def resolve_escalation(
     mine = _title(service, caller, caller.role)
     if action == "settle":
         store.settle_escalation(raiser.id, escalation_id)
-        service.team_messaging.progressed(raiser.id)
+        service.org_state.progressed(raiser.id)
         service.message_delivery.notify(
             service.team_types.team(raiser).conversation(escalation.raised_by),
             f"The {mine} of {caller.node.title!r} settled "
@@ -664,7 +664,7 @@ def submit_review(service: DirectorService, caller: Caller, summary: str) -> str
             commit=service.checkouts.version(Path(node.worktree_path)) or "",
         ),
     )
-    service.team_messaging.progressed(node.id)
+    service.org_state.progressed(node.id)
     service.reviews.rest(node.id)
     service.reviews.request_review(node.id)
     service.team_summaries.refresh_headline(

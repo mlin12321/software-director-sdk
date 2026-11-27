@@ -13,8 +13,12 @@ from openhands.agent_server.director.environment.git import (
 )
 from openhands.agent_server.director.environment.git.git_store import GitStore
 from openhands.agent_server.director.intents import LaunchMember
+from openhands.agent_server.director.models import Stopped
 from openhands.agent_server.director.org_store import OrgStore
 from openhands.agent_server.director.run_state import RUNNING, TOLD, Intent
+from openhands.agent_server.director.service.agent_launch_service import (
+    AgentLaunchService,
+)
 from openhands.agent_server.director.service.message_delivery_service import (
     MessageDeliveryService,
 )
@@ -50,12 +54,13 @@ class Delivery:
         self.agent = uuid4()
         self.store.set_agent(A, "ic", conversation_id=str(self.agent))
         self.launcher = FakeLauncher()
+        self.agent_launch = AgentLaunchService()
+        self.agent_launch.launcher = self.launcher
         self.launcher.known[self.agent] = ConversationExecutionStatus.IDLE
         self.context: dict[str, str] = {
             "status": "idle",
             "task": "Build the parser",
         }
-        self.stopped: set[str] = set()
         self.taken_up: list[tuple[int, str]] = []
         self.queue = WorkQueueService(default_lane="org")
         self.org_state = OrgStateService(
@@ -82,13 +87,10 @@ class Delivery:
                 tree=RootAboveApi(),
                 org=lambda: self.store,
             ),
-            launcher=lambda: self.launcher,
-            is_running=lambda: True,
+            agent_launch=self.agent_launch,
             context_of=lambda place, role: dict(self.context),
-            is_stopped=lambda conversation_id: conversation_id in self.stopped,
             lane_of=lambda intent: intent.node_id,
             take_up=lambda intent_id, lane: self.taken_up.append((intent_id, lane)),
-            default_lane="org",
             retry=0,
         )
 
@@ -152,7 +154,9 @@ async def test_a_message_waits_while_the_org_is_paused(delivery: Delivery):
 
 
 async def test_a_message_to_a_stopped_team_waits(delivery: Delivery):
-    delivery.stopped.add(str(delivery.agent))
+    delivery.store.set_stopped(
+        A, Stopped(at="2026-01-02T00:00:00+00:00", reason="Wait.")
+    )
 
     delivery.service.notify(str(delivery.agent), "Go on.")
     await delivery.queue.settled()

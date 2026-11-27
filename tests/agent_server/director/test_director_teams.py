@@ -712,5 +712,18 @@ async def test_what_was_held_for_a_pruned_team_does_not_pause_the_org_on_a_resta
     await first.aclose()
 
     second = await again(repo, launcher)
-    assert second.org_load.summary().paused is None
+    assert second.org_run.summary().paused is None
     await second.aclose()
+
+
+async def test_only_a_sessions_top_places_start_in_the_checkout_they_have(
+    service: DirectorService,
+):
+    await split_root(service)
+    top = node(service, "root")
+    lead = service.org_load.org.place(top.parent_id or "")
+    assert lead is not None
+
+    assert service.org_load.in_place(lead)
+    assert not service.org_load.in_place(node(service, "services.api"))
+    assert service.org_load.in_place(top) == (top.isolation != "worktree")

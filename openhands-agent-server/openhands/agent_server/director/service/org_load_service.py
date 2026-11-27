@@ -12,9 +12,13 @@ from openhands.agent_server.director.agent_types import TeamTemplate
 from openhands.agent_server.director.documents.store import TeamRef
 from openhands.agent_server.director.environment import CodingEnvironment
 from openhands.agent_server.director.environment.records import RecordStore
-from openhands.agent_server.director.models import OrgNodeInput, OrgSummary
+from openhands.agent_server.director.models import OrgNodeInput, SessionTeam
 from openhands.agent_server.director.org_persistence import load_org
-from openhands.agent_server.director.org_store import OrgStore, team_ref
+from openhands.agent_server.director.org_store import (
+    OrgStore,
+    is_division_lead,
+    team_ref,
+)
 from openhands.agent_server.director.remembered import RememberedFile
 from openhands.agent_server.director.run_state import SESSION
 from openhands.agent_server.director.service.org_state_service import OrgStateService
@@ -75,8 +79,6 @@ class OrgLoadService:
     loaded: Callable[[], None]
     """Told when the org's store has been loaded, so that what the org had
     begun is taken up."""
-    is_sandboxed: Callable[[], bool]
-    """Whether the agents' shells are confined on this server."""
     _repo_dir: Path = field(init=False)
     _store: OrgStore | None = field(default=None, init=False)
     _lock: threading.Lock = field(default_factory=threading.Lock, init=False)
@@ -113,6 +115,20 @@ class OrgLoadService:
         not load the org."""
         return self._repo_dir
 
+    def in_place(self, place: SessionTeam) -> bool:
+        """Whether a team that starts works in the checkout it has: a
+        session's Division Lead place, and the team a session is opened
+        at when sessions get no worktree or the session has one already."""
+        checkouts = self.environment.checkouts
+        return is_division_lead(place) or (
+            self.org.opens_session(place)
+            and (
+                place.isolation != "worktree"
+                or checkouts.root_of(place.worktree_path)
+                != checkouts.root_of(str(self._repo_dir))
+            )
+        )
+
     def move_to(self, repository: Path) -> Path:
         """Have the org be in ``repository`` from now on.
 
@@ -141,19 +157,6 @@ class OrgLoadService:
         """The team memory of the repository the org is in as far as is
         known, whether or not it is a repository."""
         return self.environment.team_memory(self._repo_dir)
-
-    def summary(self) -> OrgSummary:
-        store = self.org
-        return OrgSummary(
-            root_id=store.root_id,
-            node_count=len(store),
-            repo_path=str(self._repo_dir),
-            directory=self.home(),
-            is_git_repository=self.environment.checkouts.is_repository(self._repo_dir),
-            boundary_enforcement="sandbox" if self.is_sandboxed() else "checks",
-            paused=self.org_state.paused if self.org_state.run_state() else None,
-            merging=self.org_state.run_state().get("merge") is not None,
-        )
 
     def repository(self) -> Path:
         """The repository the org is in, or would be in.

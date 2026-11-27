@@ -13,7 +13,6 @@ from typing import NamedTuple
 from pydantic import TypeAdapter
 
 from openhands.agent_server.director.documents.store import DocumentRef
-from openhands.agent_server.director.documents.team_documents import TeamDocuments
 from openhands.agent_server.director.environment.records import (
     RecordStore,
     normalize_store_path,
@@ -171,9 +170,6 @@ class SessionMergeService:
     """The org as it is loaded now."""
     team_memory: Callable[[], RecordStore]
     """The org's team memory, where there is a repository."""
-    team_documents: Callable[[], TeamDocuments]
-    """The org's documents as each team reads and writes them."""
-    clock: Callable[[], datetime]
     org_state: OrgStateService
     org_save: OrgSaveService
     org_settings: OrgSettingsService
@@ -186,9 +182,6 @@ class SessionMergeService:
     session_records: SessionRecordService
     confinement: AgentConfinementService
     """Keeps the merges that are laid out for reviewers to finish."""
-    changed_since_accept: dict[str, bool] = field(default_factory=dict, init=False)
-    """The sessions that changed something of the org's after their work
-    was accepted, and whether their IC was told to submit it."""
     _weighing: threading.RLock = field(default_factory=threading.RLock, init=False)
     """Held while what waits of a session is read and decided, so that two
     answers are not given for the same thing."""
@@ -196,15 +189,6 @@ class SessionMergeService:
     def next_submission(self) -> int:
         """The place in the order of the work that is submitted now."""
         return self.org_state.run_state().count("submitted")
-
-    def note_change(self, session: str) -> None:
-        """Remember that a session whose work is accepted has changed
-        something since: the org takes it only when it is submitted again."""
-        store = self.org()
-        top = next(iter(store.session(session)), None)
-        if top is not None and top.review is not None:
-            if top.review.state == "accepted" and store.opens_session(top):
-                self.changed_since_accept.setdefault(session, False)
 
     def document_choices(
         self, place_id: str, choices: Sequence[DocumentChoice]
@@ -689,7 +673,7 @@ class SessionMergeService:
             merge.model_copy(
                 update={
                     "asked": mark,
-                    "asked_at": self.clock().isoformat(),
+                    "asked_at": self.org_state.clock().isoformat(),
                     "reminded": False,
                 }
             ),
@@ -725,7 +709,7 @@ class SessionMergeService:
             waiting = [item for item in merge.items if item.gate == "manager"]
             if all(item.use for item in waiting):
                 return
-            now = self.clock()
+            now = self.org_state.clock()
             if now - datetime.fromisoformat(merge.asked_at) < timedelta(minutes=limit):
                 return
             if not merge.reminded:
@@ -1343,7 +1327,7 @@ class SessionMergeService:
     def _waits_for_team_changes(self, file: str) -> bool:
         """Whether what a session wrote in a file of team memory becomes
         the org's only with its changes to the teams: its document says."""
-        protocol = self.team_documents().at(file)
+        protocol = self.org_settings.team_documents().at(file)
         return protocol is not None and protocol.waits_for_team_changes
 
     def documents_waiting(self, top: SessionTeam) -> list[tuple[str, str, str]]:

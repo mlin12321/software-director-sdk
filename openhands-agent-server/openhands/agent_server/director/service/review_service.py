@@ -3,16 +3,13 @@
 import asyncio
 import hashlib
 import json
-import threading
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from uuid import UUID
 
 from openhands.agent_server.director import bugbot
-from openhands.agent_server.director.agent_types import DEFAULT_TYPE, TeamTemplate
 from openhands.agent_server.director.documents.store import DocumentRef
-from openhands.agent_server.director.documents.team_documents import TeamDocuments
 from openhands.agent_server.director.environment import EnvironmentFailed
 from openhands.agent_server.director.environment.checkouts import (
     Checkouts,
@@ -133,12 +130,8 @@ class ReviewService:
     """The repository the org is in."""
     checkouts: Checkouts
     """Where each team's work is and how it moves."""
-    team_documents: Callable[[], TeamDocuments]
-    """The org's documents as each team reads and writes them."""
     launcher: Callable[[], TeamLauncher]
     """What runs the agents; raises where the director runs none."""
-    find_review_instructions: Callable[[], str | None]
-    """Gives the code review skill reviewers check work by."""
     org_state: OrgStateService
     org_save: OrgSaveService
     org_settings: OrgSettingsService
@@ -155,10 +148,6 @@ class ReviewService:
     session_records: SessionRecordService
     session_merges: SessionMergeService
     """What a session's accepted work makes of the org."""
-    _review_instructions: dict[str, str] = field(default_factory=dict, init=False)
-    _loading_review_instructions: threading.Lock = field(
-        default_factory=threading.Lock, init=False
-    )
 
     def request_review(self, place_id: str) -> None:
         """Have the work a team submitted reviewed. Safe from any thread."""
@@ -227,7 +216,7 @@ class ReviewService:
         store.set_review(place_id, review)
         self.confinement.drop_merge_checkout(place_id)
         self.tell_turns()
-        self.team_messaging.progressed(place_id, by_above=True)
+        self.org_state.progressed(place_id, by_above=True)
         self.team_history.record_event(
             place.parent_id,
             "sent_back",
@@ -323,7 +312,9 @@ class ReviewService:
                         team.review,
                         self.team_context.so_far(team),
                         self.team_context.asked_of(team),
-                        self.review_instructions(self.team_types.type_of(team)),
+                        self.team_types.review_instructions(
+                            self.team_types.type_of(team)
+                        ),
                         self.team_types.kept_documents(node).read_by_sub_teams,
                     )
                 )
@@ -404,7 +395,9 @@ class ReviewService:
         files = changes.files if changes else []
         opens = self.org().opens_session(place)
         changed = (
-            self.team_documents().changed_elsewhere(place.session) if opens else []
+            self.org_settings.team_documents().changed_elsewhere(place.session)
+            if opens
+            else []
         )
         inherited = self.session_records.documents_inherited(place) if opens else []
         if not files and not changed and not inherited:
@@ -656,7 +649,7 @@ class ReviewService:
             # A skill is fetched over the network the first time: not on
             # the loop, where every agent's turn would wait for it.
             await asyncio.to_thread(
-                self.review_instructions, self.team_types.type_of(place)
+                self.team_types.review_instructions, self.team_types.type_of(place)
             )
             self.org_state.run_state().mark(HELD, place_id)
             self.release_held(place.parent_id)
@@ -700,7 +693,7 @@ class ReviewService:
             await asyncio.to_thread(
                 self.session_merges.land_accepted, place, meets.seen if meets else None
             )
-            self.session_merges.changed_since_accept.pop(place.session, None)
+            self.team_history.changed_since_accept.pop(place.session, None)
         self._tell_accepted(place, above, reviewer, merged)
         await self.pass_up(above.id, acted=True)
         if needed_above:
@@ -953,7 +946,7 @@ class ReviewService:
             place.review.model_copy(update={"state": "accepted", "at": utc_now()}),
             base_commit=tip or place.base_commit,
         )
-        self.team_messaging.progressed(above.id)
+        self.org_state.progressed(above.id)
         self.check_counts.work_accepted(place)
         if meets is not None or resolved:
             self.team_history.record_event(
@@ -1155,7 +1148,7 @@ class ReviewService:
                 self.session_merges.land_accepted, store.place(place.id) or place, None
             )
             # As after any accept: what changes from now is said once more.
-            self.session_merges.changed_since_accept.pop(place.session, None)
+            self.team_history.changed_since_accept.pop(place.session, None)
 
     async def pass_up(self, place_id: str, *, acted: bool) -> None:
         """Take a team's work into the team above without another review,
@@ -1260,42 +1253,3 @@ class ReviewService:
             self.team_types.writer_conversation(above),
             put_aside_notice(team, files, ref),
         )
-
-    def review_instructions(self, kind: TeamTemplate | None = None) -> str:
-        """What an IC reviewing a team below checks its work by: the skill
-        the team's type names, then the type's own checklist.
-
-        A skill is loaded once. One that cannot be loaded is left out, and
-        the review request stands without it.
-
-        Args:
-            kind: The type of the team whose work is reviewed; the default
-                type when None.
-        """
-        kind = kind or self.team_types.agent_types.get(DEFAULT_TYPE)
-        if kind is None:
-            return ""
-        parts: list[str] = []
-        skill = kind.review.checklist_skill
-        if skill:
-            # One fetch at a time: two would clone the same repository.
-            with self._loading_review_instructions:
-                if skill not in self._review_instructions:
-                    found = (
-                        self.find_review_instructions()
-                        if skill in bugbot.CODE_REVIEW_SKILLS
-                        else bugbot.public_skill((skill,))
-                    )
-                    self._review_instructions[skill] = found.strip() if found else ""
-            parts.append(self._review_instructions[skill])
-        parts.append(kind.review.checklist.strip())
-        return "\n\n".join(part for part in parts if part)
-
-    def load_review_instructions(self) -> None:
-        """Fetch what reviewers of every type check work by, so that it is
-        there when a review is requested. Safe from any thread."""
-        try:
-            for kind in self.team_types.agent_types.values():
-                self.review_instructions(kind)
-        except Exception:
-            logger.exception("Could not load the review instructions")
