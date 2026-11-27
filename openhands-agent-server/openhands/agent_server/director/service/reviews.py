@@ -87,7 +87,6 @@ from openhands.agent_server.director.service.records import (
     Taken,
 )
 from openhands.agent_server.director.service.state import (
-    _LANE,
     _REST_CHECK_SECONDS,
     _REST_CHECKS,
     ASIDE_REFS,
@@ -193,14 +192,14 @@ class Reviews(Teams):
         place = self.org.place(place_id)
         if place is not None and self.org.opens_session(place):
             self._open_merge(place)
-        self._begin(place_id, RequestReview())
+        self.intents.begin(place_id, RequestReview())
 
     def rest(self, place_id: str) -> None:
         """End the turn of a team's IC after the step it is in: it has
         handed its work over and acts again when something is sent to it.
         Safe from any thread."""
         if self._loop is not None:
-            self._enqueue(lambda: self._rest(place_id), place_id)
+            self.lanes.enqueue(lambda: self._rest(place_id), place_id)
 
     async def _rest(self, place_id: str) -> None:
         place = self.org.place(place_id)
@@ -290,7 +289,7 @@ class Reviews(Teams):
         """Hand a team's IC the reviews its sub-teams wait for (see
         :meth:`_release_reviews`). Safe from any thread."""
         if place_id is not None and self._loop is not None:
-            self._enqueue(lambda: self._released(place_id), f"review:{place_id}")
+            self.lanes.enqueue(lambda: self._released(place_id), f"review:{place_id}")
 
     async def _released(self, place_id: str) -> None:
         self._release_reviews(place_id)
@@ -458,7 +457,7 @@ class Reviews(Teams):
             choices: What it decided about the documents of a session's work.
         """
         place = self.org.place(place_id)
-        self._begin(
+        self.intents.begin(
             place_id,
             Accept(
                 needed_above=needed_above,
@@ -806,7 +805,7 @@ class Reviews(Teams):
                     intent.kind != "land_org" or intent.node_id != top.id
                     for intent in self._runs().open_intents()
                 ):
-                    self._begin(top.id, LandOrg())
+                    self.intents.begin(top.id, LandOrg())
 
     def _ask_manager(self, top: SessionTeam, merge: Merge) -> None:
         """Ask the Manager of a session's Division Lead place to
@@ -2137,9 +2136,11 @@ class Reviews(Teams):
         if place.review is not None and place.review.state == "pending":
             return
         opens = store.opens_session(place)
-        if opens and _LANE.get() != BASE_LANE:
+        if opens and self.lanes.current != BASE_LANE:
             # The work of a session goes into what the org shares.
-            await self._in_base(lambda: self._pass_up(place_id, acted=acted))
+            await self.lanes.run_in(
+                BASE_LANE, lambda: self._pass_up(place_id, acted=acted)
+            )
             return
         ic = self.writer_conversation(place)
         above = store.place(place.parent_id) if place.parent_id else None

@@ -19,6 +19,7 @@ from openhands.agent_server.director.prompts import (
     unstarted_notice,
 )
 from openhands.agent_server.director.run_state import PROGRESS, RunState
+from openhands.agent_server.director.service.lane_service import LaneService
 from openhands.agent_server.director.service.model_call_service import (
     ModelCallService,
 )
@@ -71,8 +72,8 @@ class StallWatchService:
     """Asks the IC of a team that shows no progress what it is doing."""
     check_managers: Callable[[], None]
     """Looks at the Managers that were asked to settle teams and did not."""
-    enqueue: Callable[[Callable[[], Any], str], None]
-    """Has a step run in the lane named."""
+    lanes: LaneService
+    """What telling of a stall is carried out with."""
     progressed: Callable[[str | None], None]
     """Starts a team's time without progress again."""
     release_reviews: Callable[[str | None], None]
@@ -254,7 +255,7 @@ class StallWatchService:
             # no progress itself.
             self.progressed(team.parent_id)
         minutes = int((now - since).total_seconds() // 60)
-        self.enqueue(
+        self.lanes.enqueue(
             lambda team_id=team.id, minutes=minutes: self._tell_of_stall(
                 team_id, minutes
             ),

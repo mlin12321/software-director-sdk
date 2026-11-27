@@ -32,7 +32,7 @@ from openhands.agent_server.director.service import (
     RESTART_NOTE,
     DirectorService,
 )
-from openhands.agent_server.director.service.state import _Held
+from openhands.agent_server.director.service.intent_service import Held
 from openhands.agent_server.director.session_state import kept_sessions
 from openhands.agent_server.director.tools import (
     ApproveTeamsTool,
@@ -402,7 +402,7 @@ async def test_a_team_in_line_to_start_is_held_when_the_org_is_paused(
     await service.pause()
 
     # The one ahead of it may never start now.
-    with pytest.raises(_Held):
+    with pytest.raises(Held):
         await asyncio.wait_for(waits, 1)
     await service.aclose()
 
@@ -459,6 +459,7 @@ async def test_an_acceptance_the_server_ended_before_saving_is_not_lost(
     # The server ends with the acceptance made and the tree not yet saved.
     launcher.before = nothing_more
     monkeypatch.setattr(first, "_save", end_instead_of_saving)
+    monkeypatch.setattr(first.intents, "save", end_instead_of_saving)
     await cut_off(launcher, ended, use(first, ic(first), ReviewTeamTool, accept()))
 
     second = await again(repo, launcher)

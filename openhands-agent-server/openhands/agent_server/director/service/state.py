@@ -10,7 +10,6 @@ import sqlite3
 import threading
 from collections import deque
 from collections.abc import Awaitable, Callable, Iterable, Sequence
-from contextvars import ContextVar
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -71,7 +70,7 @@ from openhands.agent_server.director.git_store import (
     taking_in,
 )
 from openhands.agent_server.director.headline import provisional_summary
-from openhands.agent_server.director.intents import Accept, IntentPayload, LandOrg
+from openhands.agent_server.director.intents import Accept, LandOrg
 from openhands.agent_server.director.launch import TeamLauncher
 from openhands.agent_server.director.merge_checkout import MergeCheckout, discard
 from openhands.agent_server.director.models import (
@@ -134,6 +133,9 @@ from openhands.agent_server.director.sandbox import (
     find_bwrap,
 )
 from openhands.agent_server.director.scope import MergeArea, Scope
+from openhands.agent_server.director.service.lane_service import (
+    LaneService,
+)
 from openhands.agent_server.director.service.model_call_service import (
     ModelCallService,
 )
@@ -310,15 +312,8 @@ _AGENT_STATUS: dict[ConversationExecutionStatus, str] = {
 _REST_CHECKS = 600
 _REST_CHECK_SECONDS = 0.05
 
-type Effect = Callable[[], Awaitable[None]]
-# The lane the running step is carried out in; '' outside the lanes.
-_LANE: ContextVar[str] = ContextVar("director_lane", default="")
 # How often a landing is tried when another writer moves a ref first.
 _LANDING_ATTEMPTS = 8
-
-
-class _Held(Exception):
-    """The org was paused before a step could be finished."""
 
 
 def conversations_of(teams: Iterable[SessionTeam]) -> list[str]:
@@ -461,9 +456,8 @@ class ServiceState:
         self._run_of: Path | None = None
         self._paused: PauseReason | None = None
         self._state_listeners: list[Callable[[OrgStateEvent], None]] = []
-        # The intents and messages being carried out right now, so that
-        # resuming does not carry one out a second time.
-        self._in_flight: set[int] = set()
+        # The messages being delivered right now, so that resuming does
+        # not deliver one a second time.
         self._delivering: set[int] = set()
         # Messages that do not wait for their agent's turn to end: what the
         # human said, and what waited for a turn that has now ended.
@@ -533,13 +527,7 @@ class ServiceState:
         self._own_settings: tuple[str, OrgSettings] | None = None
         self._server_url = server_url
         self._tool_key: bytes | None = None
-        # What each lane still has to carry out; a lane exists while it works.
-        self._lanes: dict[str, deque[Effect]] = {}
-        self._workers: set[asyncio.Task[None]] = set()
-        # Effects asked for and not carried out yet.
-        self._unsettled = 0
-        self._quiet = asyncio.Event()
-        self._quiet.set()
+        self.lanes = LaneService(default_lane=ORG_LANE)
         self.model_calls = ModelCallService(
             launcher=self._require_launcher,
             sessions=lambda: self._store.sessions() if self._store else [],
@@ -1237,12 +1225,7 @@ class ServiceState:
 
     async def settled(self) -> None:
         """Wait until everything asked for so far has been carried out."""
-        # Let what other threads asked for reach the queue first.
-        await asyncio.sleep(0)
-        # What is carried out may ask for more.
-        while self._unsettled:
-            await self._quiet.wait()
-            await asyncio.sleep(0)
+        await self.lanes.settled()
 
     def _conversations_below(self, team: SessionTeam) -> list[str]:
         """The conversations of a team and of every team below it."""
@@ -1432,7 +1415,7 @@ class ServiceState:
             self._load_from(self._directory, store)
         store.on_change(self._schedule_save)
         if self._loop is not None:
-            self._enqueue(self._came_back)
+            self.lanes.enqueue(self._came_back)
         return store
 
     def _load_from(
@@ -1530,119 +1513,9 @@ class ServiceState:
             except (OSError, ValueError, TypeError):
                 logger.exception("Could not write %s", self._remembered)
 
-    def _enqueue(self, effect: Effect, lane: str = ORG_LANE) -> None:
-        loop = self._loop
-        if loop is None:
-            raise Unavailable("The director is not running agents on this server")
-        loop.call_soon_threadsafe(self._put, effect, lane)
-
-    def _put(self, effect: Effect, lane: str) -> None:
-        self._unsettled += 1
-        self._quiet.clear()
-        waiting = self._lanes.get(lane)
-        if waiting is not None:
-            waiting.append(effect)
-            return
-        self._lanes[lane] = deque([effect])
-        worker = asyncio.create_task(self._work(lane), name=f"director-{lane}")
-        self._workers.add(worker)
-        worker.add_done_callback(self._workers.discard)
-
-    async def _work(self, lane: str) -> None:
-        waiting = self._lanes[lane]
-        _LANE.set(lane)
-        try:
-            while waiting:
-                effect = waiting.popleft()
-                try:
-                    await effect()
-                except Exception:
-                    logger.exception("A director action failed")
-                finally:
-                    self._unsettled -= 1
-                    if not self._unsettled:
-                        self._quiet.set()
-        finally:
-            del self._lanes[lane]
-
     def next_submission(self) -> int:
         """The place in the order of the work that is submitted now."""
         return self._runs().count("submitted")
-
-    async def _in_base(self, effect: Effect) -> None:
-        """Carry ``effect`` out in the lane of what the org shares and wait
-        for it: after everything that was asked for there before."""
-        if _LANE.get() == BASE_LANE:
-            await effect()
-            return
-        loop = asyncio.get_running_loop()
-        done: asyncio.Future[None] = loop.create_future()
-
-        async def carried_out() -> None:
-            try:
-                await effect()
-            except Exception as error:
-                done.set_exception(error)
-            else:
-                done.set_result(None)
-
-        self._put(carried_out, BASE_LANE)
-        await done
-
-    def _begin(self, place_id: str, payload: IntentPayload) -> None:
-        """Record something of several steps the director does for a team,
-        then do it. Safe from any thread.
-
-        It is finished after a restart or a pause from the steps that were
-        done, so each step must be safe to take twice.
-        """
-        if self._loop is None:
-            raise Unavailable("The director is not running agents on this server")
-        intent = self._runs().begin(place_id, payload)
-        self._save_soon()
-        self._enqueue(lambda: self._carry_out(intent.id), _lane_for(intent))
-
-    def _keep_failure(self, intent: Intent, error: Exception) -> None:
-        """Keep a step of the director that failed. The service does."""
-
-    def _let_go(self, intent: Intent) -> None:
-        """Deliver what waited for the teams a step changes. The service does."""
-
-    async def _carry_out(self, intent_id: int) -> None:
-        run = self._runs()
-        if self._paused is not None or intent_id in self._in_flight:
-            return
-        intent = next(
-            (open_ for open_ in run.open_intents() if open_.id == intent_id), None
-        )
-        if intent is None:
-            return
-        step = self._steps().get(intent.kind)
-        if step is None:
-            run.finish(intent.id)
-            self._leave_line(intent.node_id)
-            return
-        self._in_flight.add(intent.id)
-        try:
-            await step(intent)
-        except _Held:
-            return
-        except Exception as error:
-            logger.exception("A director action failed")
-            run.finish(intent.id)
-            # What waited for the teams it was to change waits no longer.
-            self._let_go(intent)
-            self._keep_failure(intent, error)
-        else:
-            if intent.kind in _SAVED_BEFORE_FORGOTTEN:
-                # What it changed in the tree is saved before it is
-                # forgotten: a server that ends in between does the step
-                # again, never loses it.
-                await self._save()
-            run.finish(intent.id)
-        finally:
-            self._in_flight.discard(intent.id)
-            self._leave_line(intent.node_id)
 
     def _leave_line(self, place_id: str) -> None:
         if place_id in self._line:
@@ -1663,11 +1536,11 @@ class ServiceState:
             # What a session has is only here: it is kept at once, not
             # when the tree is next saved.
             self._sessions_asked = True
-            self._enqueue(self._keep_sessions)
+            self.lanes.enqueue(self._keep_sessions)
         if self._save_timer is not None:
             return
         self._save_timer = loop.call_later(
-            self._save_delay, lambda: self._enqueue(self._save_due)
+            self._save_delay, lambda: self.lanes.enqueue(self._save_due)
         )
 
     async def _keep_sessions(self) -> None:
@@ -1693,7 +1566,7 @@ class ServiceState:
         async def effect() -> None:
             results.append(await work())
 
-        await self._in_base(effect)
+        await self.lanes.run_in(BASE_LANE, effect)
         return results[0]
 
     async def _save_due(self) -> None:
@@ -1705,7 +1578,7 @@ class ServiceState:
         just recorded as begun refers to it."""
         if not self._save_asked:
             self._save_asked = True
-            self._enqueue(self._save_asked_for)
+            self.lanes.enqueue(self._save_asked_for)
 
     async def _save_asked_for(self) -> None:
         self._save_asked = False
@@ -1784,10 +1657,6 @@ class ServiceState:
             Path(team.worktree_path),
         )
 
-    def _steps(self) -> dict[str, Callable[[Intent], Awaitable[None]]]:
-        """What carries out each kind of intent. The service names its own."""
-        return {}
-
     async def _came_back(self) -> None:
         """Take up what the org had begun before the server stopped."""
 
@@ -1827,12 +1696,12 @@ def _child_node(
 
 # Steps whose outcome is in the tree alone. The steps that start agents are
 # not among them: their outcome is the conversation.
-_SAVED_BEFORE_FORGOTTEN = frozenset(
+SAVED_BEFORE_FORGOTTEN = frozenset(
     {"accept", "finish_split", "request_review", "land_org"}
 )
 
 
-def _lane_for(intent: Intent) -> str:
+def lane_for(intent: Intent) -> str:
     payload = intent.payload
     if isinstance(payload, LandOrg) or (isinstance(payload, Accept) and payload.base):
         return BASE_LANE
