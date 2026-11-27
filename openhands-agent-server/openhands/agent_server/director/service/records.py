@@ -779,7 +779,7 @@ class Records(ServiceState):
                     {
                         "was_for": former.purpose,
                         "reports_as_one": former.compacted_report,
-                        "contracts_between_its_sub_teams": former.contracts,
+                        "documents": former.documents,
                     }
                     if in_full
                     else {}
@@ -1254,10 +1254,12 @@ class Records(ServiceState):
             if file in held or (owner is not None and owner.team_id in waits):
                 continue
             if owner is not None and owner.id in left:
-                kind = "spec" if file.endswith(SPEC_FILE) else "contracts"
-                of_left.setdefault(owner.id, {})[kind] = text or ""
+                kind = DocumentRef.at(file).name
+                kept_of_it = of_left.setdefault(owner.id, {})
+                if text:
+                    kept_of_it[kind] = text
                 if (
-                    kind == "spec"
+                    kind == LEFT_BEHIND
                     and text
                     and store.team(owner.team_id) is None
                     and all(
@@ -1304,13 +1306,12 @@ class Records(ServiceState):
                 review=place.review.state if place.review else None,
                 reports=self.own_reports(place),
                 compacted_report="\n\n".join(r.text for r in self.own_reports(place)),
-                contracts=of_left.get(place.id, {}).get("contracts", ""),
-                spec=of_left.get(place.id, {}).get("spec", ""),
+                documents=of_left.get(place.id, {}),
                 session=store.session_title(place),
                 since=place.since,
             )
             for place in left.values()
-            if self.own_reports(place) or of_left.get(place.id)
+            if self.own_reports(place) or place.id in of_left
         ]
         removed = [
             record for record in self.former_drafts(session) if record.id not in waits

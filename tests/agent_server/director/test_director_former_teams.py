@@ -64,6 +64,7 @@ from tests.agent_server.director.conftest import (
     node,
     proposing,
     shipped,
+    split_api,
     started,
     sub_teams,
     tasked,
@@ -475,6 +476,26 @@ async def test_the_contracts_of_a_block_that_replaces_teams_take_the_place_of_th
     assert memory_of(service, "contracts.md") == "Orders serves Web.\n"
     told = launcher.messages_to(ic(service))[-1]
     assert "If they name teams that are gone, restate them" in told
+
+
+async def test_what_a_removed_team_kept_of_its_documents_is_in_its_record(
+    service: DirectorService, launcher: FakeLauncher
+):
+    await split_api(service)
+
+    await use(service, manager(service), PruneTeamTool, PRUNE_API)
+
+    [former] = former_of(service, API)
+    assert former.documents == {"contracts": "Order has an id.\n"}
+    [told] = [
+        team
+        for team in service.context_of(node(service, "root"), "ic", in_full=True)[
+            "former_teams"
+        ]
+        if team["team_id"] == API
+    ]
+    assert told["documents"] == former.documents
+    assert "Its contracts:\nOrder has an id." in "\n".join(left_behind([former]))
 
 
 async def test_the_ic_above_is_given_what_a_pruned_team_left(

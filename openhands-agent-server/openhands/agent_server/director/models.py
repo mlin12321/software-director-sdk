@@ -604,14 +604,13 @@ class FormerTeam(BaseModel):
             "there were several. '' when it recorded nothing."
         ),
     )
-    contracts: str = Field(
-        default="", description="The contracts between its own sub-teams."
-    )
-    spec: str = Field(
-        default="",
+    documents: dict[str, str] = Field(
+        default_factory=dict,
         description=(
-            "The spec a session wrote for it that the org did not take. '' "
-            "for a team whose spec is in its directory."
+            "What is kept of its documents, by the name of each: what a "
+            "document left of itself when the team went, and what a session "
+            "wrote for it that the org did not take. A document that stays "
+            "in the team's directory is not among them."
         ),
     )
     session: str = Field(
@@ -648,8 +647,7 @@ class FormerTeamSummary(BaseModel):
     ended: FormerEnd
     at: str
     compacted_report: str = ""
-    contracts: str = ""
-    spec: str = ""
+    documents: dict[str, str] = Field(default_factory=dict)
     session: str = ""
 
 
