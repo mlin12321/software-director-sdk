@@ -1016,6 +1016,12 @@ export interface DirectorSettings {
    */
   resume_on_start: boolean;
   /**
+   * The kind of organisation the org is, which says who may write to whom
+   * and who may pass or read whose documents: 'software' and 'research'
+   * pass documents down the tree only, 'open' refuses nothing.
+   */
+  org_kind: string;
+  /**
    * How many characters of reports one agent may have before a model
    * rewrites them into one shorter report.
    */

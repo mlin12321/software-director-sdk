@@ -348,6 +348,9 @@ def tool_named(name: str) -> type[_DirectorTool] | None:
     return DIRECTOR_TOOLS.get(name)
 
 
+SendDocumentTool = tool_of(catalog.SEND_DOCUMENT)
+
+
 def _tool_of_document(document: Document, protocol: type[DocumentProtocolBase]) -> None:
     # A document written with a tool of the director's own brings none.
     if document.written_with not in catalog.DIRECTOR_TOOL_SPECS:

@@ -12,6 +12,7 @@ from openhands.agent_server.director.context import (
     briefing_block,
     steady,
 )
+from openhands.agent_server.director.documents.store import DocumentRef
 from openhands.agent_server.director.git import (
     GitError,
     bring_over,
@@ -27,6 +28,7 @@ from openhands.agent_server.director.models import (
     Stopped,
     ThreadMessage,
 )
+from openhands.agent_server.director.org import TeamMember
 from openhands.agent_server.director.org_store import (
     AGENT_LOST,
     is_division_lead,
@@ -46,6 +48,7 @@ from openhands.agent_server.director.run_state import (
     HANDING,
     PROGRESS,
     RUNNING,
+    SENT,
     TASK,
     TOLD,
     Intent,
@@ -65,10 +68,12 @@ from openhands.agent_server.director.service.state import (
     _progress_of,
     checkout_root,
     failure_waits,
+    team_ref,
 )
 from openhands.sdk.conversation.state import ConversationExecutionStatus
 from openhands.sdk.errors import (
     Conflict,
+    Invalid,
     NotFound,
 )
 from openhands.sdk.logger import get_logger
@@ -81,7 +86,53 @@ logger = get_logger(__name__)
 class Teams(Delivery):
     """Starts agents and carries what is said between teams."""
 
-    def send(
+    def send_ref(
+        self,
+        sender_place_id: str,
+        sender: str,
+        target_place_id: str,
+        target: str,
+        ref: DocumentRef,
+    ) -> None:
+        """Pass a document from one agent of a session to another, to read
+        from now on in that session: the one way a document goes between
+        agents that is not a matter of course. The reader's team is told
+        of it, and of what it says, with its next message. Safe from any
+        thread.
+
+        Raises:
+            NotFound: One of the two teams is no longer in the org, or
+                there is no such document.
+            Invalid: The org does not allow it.
+        """
+        store = self.org
+        sender_place = store.place(sender_place_id)
+        target_place = store.place(target_place_id)
+        if sender_place is None or target_place is None:
+            raise NotFound("That team is no longer in the org")
+        if self.documents.read(sender_place.session, ref) is None:
+            raise NotFound(
+                f"There is no {ref.name} of {ref.folder or 'the repository'}"
+            )
+        if not self.org_kind.allows_ref(
+            TeamMember(team_ref(sender_place), sender),
+            TeamMember(team_ref(target_place), target),
+            ref,
+        ):
+            raise Invalid(
+                f"This org does not let the {self.team(sender_place).title(sender)} "
+                f"of {sender_place.title!r} pass a document to {target_place.title!r}"
+            )
+        with self._keeping:
+            run = self._runs()
+            kept = run.marked(SENT).get(target_place_id)
+            passed = json.loads(kept) if kept else []
+            if [ref.folder, ref.name] not in passed:
+                run.mark(
+                    SENT, target_place_id, json.dumps([*passed, [ref.folder, ref.name]])
+                )
+
+    def send_msg(
         self,
         sender_place_id: str,
         sender: str,
@@ -108,12 +159,21 @@ class Teams(Delivery):
 
         Raises:
             NotFound: One of the two teams is no longer in the org.
+            Invalid: The org does not allow it.
         """
         store = self.org
         sender_place = store.place(sender_place_id)
         target_place = store.place(target_place_id)
         if sender_place is None or target_place is None:
             raise NotFound("That team is no longer in the org")
+        if not self.org_kind.allows_msg(
+            TeamMember(team_ref(sender_place), sender),
+            TeamMember(team_ref(target_place), target),
+        ):
+            raise Invalid(
+                f"This org does not let the {self.team(sender_place).title(sender)} "
+                f"of {sender_place.title!r} write to {target_place.title!r}"
+            )
         # The member that works in a team's folder is the one the team is
         # written to through, and the one that is given work.
         to_writer = target == self.team(target_place).writer

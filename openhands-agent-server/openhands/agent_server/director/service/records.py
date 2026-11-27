@@ -78,6 +78,7 @@ from openhands.agent_server.director.run_state import (
     JOINED,
     REPORTS,
     ROUTED,
+    SENT,
     TASK,
     THREADS,
     USE,
@@ -676,6 +677,14 @@ class Records(ServiceState):
                 "isolation": place.isolation,
             },
             **self.documents_told(place),
+            "documents_passed_to_you": [
+                {
+                    "document": passed.name,
+                    "of": passed.folder or "the repository",
+                    "text": passed.text,
+                }
+                for passed in self.documents_passed_to(place)
+            ],
             "specs_left_by_teams_before_you": [
                 {
                     "directory": spec.path or "the repository",
@@ -972,6 +981,19 @@ class Records(ServiceState):
                 told |= protocol.told_to_reader(team_ref(node), of_it)
         return told
 
+    def documents_passed_to(self, node: OrgNode) -> list[ShownDocument]:
+        """The documents another team passed to this one to read, as they
+        are now in the session they were passed in."""
+        kept = self._runs().marked(SENT).get(node.id)
+        found = []
+        for folder, name in json.loads(kept) if kept else []:
+            text = self.documents.read(session_of(node), DocumentRef(folder, name))
+            if text:
+                found.append(
+                    ShownDocument(folder=folder, name=name, text=text, own=False)
+                )
+        return found
+
     def _protocols_for(self, node: OrgNode) -> list[DocumentProtocolBase]:
         """What every document of the org does: first the ones the team's
         type keeps, in the order the type lists them."""
@@ -1031,7 +1053,7 @@ class Records(ServiceState):
                 ref = owner.keeps(name)
                 # A session opened at the top team has that team's own
                 # place above it: one folder, shown once.
-                if ref in found or not self.kind.allows_read(reader, owner, name):
+                if ref in found or not self.org_kind.allows_read(reader, owner, name):
                     continue
                 # What a team before this one left in the folder is not
                 # this team's own until it writes one itself.
@@ -1358,6 +1380,7 @@ class Records(ServiceState):
             run.unmark(ROUTED, key)
         if review is not None:
             run.unmark(REPORTS, review.id)
+            run.unmark(SENT, review.id)
         for file in files:
             if file in conflicts:
                 continue
@@ -1401,6 +1424,7 @@ class Records(ServiceState):
         for place in places:
             if place.team_id not in waits:
                 run.unmark(REPORTS, place.id)
+                run.unmark(SENT, place.id)
         for record in removed:
             run.unmark(FORMER, f"{session}\n{record.id}\n{record.at}")
         grown: list[tuple[str, str]] = [
@@ -1426,6 +1450,7 @@ class Records(ServiceState):
         records = self.former_drafts(session)
         for place in places:
             run.unmark(REPORTS, place.id)
+            run.unmark(SENT, place.id)
             self._drop_merge_checkout(place.id)
         for file in files:
             self._undraft(session, file)
