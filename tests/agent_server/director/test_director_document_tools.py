@@ -7,8 +7,8 @@ from uuid import UUID
 import pytest
 
 from openhands.agent_server.director.documents.declared import Document
-from openhands.agent_server.director.documents.protocol import (
-    DocumentProtocolBase,
+from openhands.agent_server.director.documents.protocol import DocumentProtocolBase
+from openhands.agent_server.director.documents.registry import (
     declare,
     register_protocol,
 )

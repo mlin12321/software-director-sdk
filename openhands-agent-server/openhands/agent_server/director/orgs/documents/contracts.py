@@ -8,16 +8,45 @@ from openhands.agent_server.director.documents.events import (
     TeamRef,
     TeamRemoved,
 )
-from openhands.agent_server.director.documents.protocol import (
+from openhands.agent_server.director.documents.protocol import DocumentProtocolBase
+from openhands.agent_server.director.documents.registry import register_protocol
+from openhands.agent_server.director.documents.schema import (
     BriefedPart,
-    DocumentProtocolBase,
     DocumentsBriefed,
     DocumentToolCall,
     DocumentToolResult,
     ShownDocument,
-    register_protocol,
+)
+from openhands.agent_server.director.documents.writer import (
+    DocumentWriterBase,
+    EditorWriter,
 )
 from openhands.sdk.errors import Invalid
+
+
+class ContractsWriter(EditorWriter):
+    """Writes contracts for the member that settles them, and says who
+    reads them now."""
+
+    def __call__(self, call: DocumentToolCall) -> DocumentToolResult:
+        words = call.words
+        if call.leads_session:
+            raise Invalid(
+                "Contracts are not yours as the Division Lead "
+                f"{words.get('reviewer', '')}: the Division "
+                f"Lead {words.get('manager', '')} settles them"
+            )
+        super().__call__(call)
+        if self.tree.below(call.team):
+            return DocumentToolResult(
+                "The contracts between your sub-teams are changed. Each "
+                "sub-team is told with its next message; write to one with "
+                "msg_team if it must know at once."
+            )
+        return DocumentToolResult(
+            "Saved. Your team has no sub-teams yet: the ones you propose read "
+            "these contracts once they are set up."
+        )
 
 
 class ContractsProtocol(DocumentProtocolBase):
@@ -32,26 +61,7 @@ class ContractsProtocol(DocumentProtocolBase):
     # those left is passed on.
     usable_in_hand_over: ClassVar[bool] = True
     waits_for_team_changes: ClassVar[bool] = True
-
-    def write(self, call: DocumentToolCall) -> DocumentToolResult:
-        words = call.words
-        if call.leads_session:
-            raise Invalid(
-                "Contracts are not yours as the Division Lead "
-                f"{words.get('reviewer', '')}: the Division "
-                f"Lead {words.get('manager', '')} settles them"
-            )
-        super().write(call)
-        if self.tree.below(call.team):
-            return DocumentToolResult(
-                "The contracts between your sub-teams are changed. Each "
-                "sub-team is told with its next message; write to one with "
-                "msg_team if it must know at once."
-            )
-        return DocumentToolResult(
-            "Saved. Your team has no sub-teams yet: the ones you propose read "
-            "these contracts once they are set up."
-        )
+    writer_class: ClassVar[type[DocumentWriterBase]] = ContractsWriter
 
     def told_to_reader(
         self,

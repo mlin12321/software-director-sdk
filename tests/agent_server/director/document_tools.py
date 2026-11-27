@@ -9,7 +9,7 @@ from typing import Any
 
 import openhands.agent_server.director.tools  # noqa: F401
 from openhands.agent_server.director.documents.declared import load_documents
-from openhands.agent_server.director.documents.protocol import declare
+from openhands.agent_server.director.documents.registry import declare
 from openhands.agent_server.director.models import Report, SessionTeam
 from openhands.agent_server.director.orgs import SHIPPED_DOCUMENTS
 from openhands.agent_server.director.service import DirectorService
