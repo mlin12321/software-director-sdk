@@ -137,6 +137,7 @@ from openhands.agent_server.director.scope import MergeArea, Scope
 from openhands.agent_server.director.service.model_call_service import (
     ModelCallService,
 )
+from openhands.agent_server.director.service.stall_watch_service import progress_of
 from openhands.agent_server.director.session_state import (
     kept_sessions,
     restore_sessions,
@@ -292,9 +293,6 @@ ORG_WAITS = "org-waits"
 LIMIT_WAITS = "limit-reached"
 # How much of an error is kept as the reason an agent failed.
 _REASON_KEPT = 600
-# The escalation that tells the human a team shows no progress where no IC
-# works above it.
-STALL_WAITS = "stalled"
 
 
 def failure_waits(role: str) -> str:
@@ -514,7 +512,7 @@ class ServiceState:
         self._counting = threading.Lock()
         self._clock = clock
         self._stall_poll = stall_poll
-        self._stall_watch: asyncio.Task[None] | None = None
+        self._stall_timer: asyncio.Task[None] | None = None
         # Held to read it too: it is written in place.
         self._remember_lock = threading.RLock()
         self._store: OrgStore | None = None
@@ -1270,7 +1268,7 @@ class ServiceState:
         was paused, or its server was not running, is nobody's."""
         now = self._clock().isoformat()
         for place_id, kept in run.marked(PROGRESS).items():
-            seen = _progress_of(kept)
+            seen = progress_of(kept)
             # A team without a task was told of once, and stays told.
             told = {"told": now} if "told" in seen else {}
             again = {"at": now, "head": seen.get("head"), "checked": now}
@@ -1848,18 +1846,6 @@ def _new_agents(ic_id: UUID, member: str) -> list[AgentRef]:
     Any other joins when something is first sent to it (see
     :meth:`DirectorService.tell`)."""
     return [AgentRef(role=member, conversation_id=str(ic_id), status="idle")]
-
-
-def _progress_of(kept: str | None) -> dict[str, Any]:
-    """What is known of a team's progress: when it last got anywhere
-    (``at``), the last commit in its directory then (``head``), when the IC
-    above was last told that it shows none (``told``), and when that IC last
-    turned to the team or was told of it (``checked``)."""
-    try:
-        seen = json.loads(kept) if kept else {}
-    except ValueError:
-        return {}
-    return seen if isinstance(seen, dict) else {}
 
 
 def _base_of(workspace: str) -> str:

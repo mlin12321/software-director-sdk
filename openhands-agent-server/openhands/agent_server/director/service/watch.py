@@ -2,14 +2,9 @@
 
 import asyncio
 import json
-from datetime import datetime, timedelta
-from pathlib import Path
-from typing import Any
+from functools import cached_property
 from uuid import UUID
 
-from openhands.agent_server.director.git import (
-    last_commit_in,
-)
 from openhands.agent_server.director.models import (
     Escalation,
     Session,
@@ -18,27 +13,18 @@ from openhands.agent_server.director.models import (
     Usage,
 )
 from openhands.agent_server.director.org_store import (
-    is_division_lead,
     utc_now,
 )
-from openhands.agent_server.director.prompts import (
-    STALL_QUESTION,
-    check_in_notice,
-    in_words,
-    stall_notice,
-    unstarted_notice,
-)
 from openhands.agent_server.director.run_state import (
-    PROGRESS,
     USE,
-    RunState,
 )
 from openhands.agent_server.director.service.reviews import Reviews
+from openhands.agent_server.director.service.stall_watch_service import (
+    StallWatchService,
+)
 from openhands.agent_server.director.service.state import (
     LIMIT_WAITS,
     STALL_LANE,
-    STALL_WAITS,
-    _progress_of,
 )
 from openhands.sdk.errors import (
     Conflict,
@@ -47,8 +33,31 @@ from openhands.sdk.errors import (
 
 
 class Watch(Reviews):
-    """Looks for teams without progress and stops teams, and carries what
-    an agent cannot settle to the agent that can."""
+    """Stops teams, counts what sessions use, and carries what an agent
+    cannot settle to the agent that can. What looks for teams without
+    progress is a service it holds."""
+
+    @cached_property
+    def stall_watch(self) -> StallWatchService:
+        """Finds teams that show no progress. Built here, where everything
+        it is given is defined."""
+        return StallWatchService(
+            org=lambda: self.org,
+            has_org=lambda: self._store is not None,
+            settings=lambda: self.settings,
+            run_state=self._runs,
+            clock=self._clock,
+            paused=lambda: self._paused is not None,
+            running=lambda: self._running,
+            model_calls=self.model_calls,
+            check_managers=self._check_managers,
+            enqueue=self._enqueue,
+            progressed=self.progressed,
+            release_reviews=self._release_reviews,
+            record_event=self.record_event,
+            tell_writer=self.tell_writer,
+            tell_above=self.tell_above,
+        )
 
     def hand_escalation(
         self,
@@ -129,7 +138,7 @@ class Watch(Reviews):
             await asyncio.sleep(self._stall_poll)
             if self._loop is not None:
                 self._enqueue(self._count_use, STALL_LANE)
-                self._enqueue(self._check_stalls, STALL_LANE)
+                self._enqueue(self.stall_watch.check_stalls, STALL_LANE)
 
     async def _count_use(self) -> None:
         """Add up what each session's agents have used since it was last
@@ -244,217 +253,3 @@ class Watch(Reviews):
                 lambda: self._go_on(top.id, stopped.running, own_too=True), top.id
             )
         self._save_soon()
-
-    def _owes_work(self, team: SessionTeam) -> bool:
-        """Whether a team has yet to submit, or to submit again, and nothing
-        holds it."""
-        return (
-            team.parent_id is not None
-            and team.status != "blocked"
-            and not team.waiting_to_start
-            and (team.review is None or team.review.state == "changes_requested")
-            and self.writer_conversation(team) is not None
-        )
-
-    def _may_stall(self, team: SessionTeam) -> bool:
-        """Whether a team owes work nobody waits to give it: it has not
-        submitted, or its work was sent back, and nothing holds it. A team
-        that waits for one below it that owes work is not such a team: the
-        wait is counted where the work is."""
-        return (
-            self._owes_work(team)
-            and not any(above.stopped for above in self.org.above(team.id))
-            and not any(
-                below.stopped is None and self._owes_work(below)
-                for below in self.org.below(team.id)
-            )
-        )
-
-    def _waits_for_a_task(self, team: SessionTeam) -> bool:
-        """Whether a team was set up and never given a task, with nothing
-        that holds the team above from giving it one."""
-        return (
-            team.parent_id is not None
-            # A team the org already had is there for the session's IC to
-            # use or not; one the session set up itself is owed a task.
-            and self.org.team(team.team_id) is None
-            and not is_division_lead(team)
-            and not team.agents
-            and not team.waiting_to_start
-            and team.stopped is None
-            and not any(above.stopped for above in self.org.above(team.id))
-        )
-
-    def _may_be_checked_in_on(self, team: SessionTeam) -> bool:
-        """Whether the IC above is told from time to time how a team stands:
-        it owes work, is not stopped, and an IC stands above it."""
-        store = self.org
-        above = store.place(team.parent_id) if team.parent_id else None
-        return (
-            above is not None
-            and not is_division_lead(above)
-            and self.writer_conversation(above) is not None
-            and self._owes_work(team)
-            and team.stopped is None
-            and not any(each.stopped for each in store.above(team.id))
-        )
-
-    async def _check_stalls(self) -> None:
-        """Tell the IC above of each team that has shown no progress for
-        longer than the org allows, once for every such stretch of time, and
-        of each team it has not turned to or been told of for the time
-        between two check-ins. A team is never told of twice at once: being
-        told that it shows no progress is a check-in too."""
-        limit = self.settings.soft_check_in_minutes
-        check_in = self.settings.hard_check_in_minutes
-        store = self._store
-        if (not limit and not check_in) or store is None or self._paused is not None:
-            return
-        if limit:
-            await asyncio.to_thread(self._check_managers)
-        run = self._runs()
-        marks = run.marked(PROGRESS)
-        teams = {team.id: team for team in store.places()}
-        for gone in marks.keys() - teams.keys():
-            run.unmark(PROGRESS, gone)
-        # What each IC is told of the teams below it, in one message.
-        check_ins: dict[str, list[str]] = {}
-        for team in teams.values():
-            if team.parent_id is None:
-                continue
-            now = self._clock()
-            seen = _progress_of(marks.get(team.id))
-            head = await asyncio.to_thread(
-                last_commit_in, Path(team.worktree_path), team.boundary.path
-            )
-            if "at" not in seen:
-                # Seen for the first time.
-                first = {
-                    "at": now.isoformat(),
-                    "head": head,
-                    "checked": now.isoformat(),
-                }
-                run.mark(PROGRESS, team.id, json.dumps(first))
-                continue
-            if head != seen.get("head"):
-                # It has committed since.
-                seen = {
-                    "at": now.isoformat(),
-                    "head": head,
-                    "checked": seen.get("checked") or now.isoformat(),
-                }
-                run.mark(PROGRESS, team.id, json.dumps(seen))
-            elif limit and self._tell_if_stalled(team, seen, now, limit, run):
-                continue
-            if not check_in or not self._may_be_checked_in_on(team):
-                continue
-            checked = datetime.fromisoformat(seen.get("checked") or seen["at"])
-            if now - checked < timedelta(minutes=max(check_in, limit)):
-                continue
-            # Told of now, so it is not told of as showing no progress
-            # before as long again.
-            told = {"checked": now.isoformat(), "told": now.isoformat()}
-            run.mark(PROGRESS, team.id, json.dumps({**seen, **told}))
-            ic = self.writer_conversation(team)
-            check_ins.setdefault(team.parent_id, []).append(
-                check_in_notice(
-                    team,
-                    int((now - checked).total_seconds() // 60),
-                    in_a_turn=ic in self._running,
-                    head=head,
-                    again=max(check_in, limit),
-                    names=self.team(team).names,
-                )
-            )
-        for above_id, texts in check_ins.items():
-            self.tell_writer(above_id, "\n\n".join(texts))
-
-    def _tell_if_stalled(
-        self,
-        team: SessionTeam,
-        seen: dict[str, Any],
-        now: datetime,
-        limit: int,
-        run: RunState,
-    ) -> bool:
-        """Have the IC above told of a team that has shown no progress for
-        ``limit`` minutes since it last did, or since that IC was last told.
-
-        Returns:
-            Whether it is told of now.
-        """
-        unstarted = self._waits_for_a_task(team)
-        if not unstarted and not self._may_stall(team):
-            return False
-        since = datetime.fromisoformat(seen["at"])
-        told = seen.get("told")
-        if unstarted and told is not None:
-            # Said once: a team may be left without a task on purpose.
-            return False
-        if now - datetime.fromisoformat(told or seen["at"]) < timedelta(minutes=limit):
-            return False
-        again = {"told": now.isoformat(), "checked": now.isoformat()}
-        run.mark(PROGRESS, team.id, json.dumps({**seen, **again}))
-        if unstarted and team.parent_id is not None:
-            self.tell_writer(
-                team.parent_id,
-                unstarted_notice(
-                    team,
-                    int((now - since).total_seconds() // 60),
-                    names=self.team(team).names,
-                ),
-            )
-            return True
-        if told is None:
-            # The IC above has this much time to act before it shows
-            # no progress itself.
-            self.progressed(team.parent_id)
-        minutes = int((now - since).total_seconds() // 60)
-        self._enqueue(
-            lambda team_id=team.id, minutes=minutes: self._tell_of_stall(
-                team_id, minutes
-            ),
-            f"review:{team.id}",
-        )
-        return True
-
-    async def _tell_of_stall(self, place_id: str, minutes: int) -> None:
-        names = self.names_at(place_id)
-        store = self.org
-        team = store.place(place_id)
-        above = store.place(team.parent_id) if team and team.parent_id else None
-        if team is None or above is None or self._paused is not None:
-            return
-        if not self._may_stall(team):
-            return
-        ic = self.writer_conversation(team)
-        in_a_turn = ic in self._running
-        account = None
-        if ic is not None and not in_a_turn:
-            account = await self.model_calls.ask_agent(
-                ic, in_words(STALL_QUESTION, names)
-            )
-        self.record_event(above.id, "stalled", team, f"{minutes} min")
-        # Its reviewer is woken now anyway, and no longer waits for it.
-        self._release_reviews(above.id)
-        said = (
-            f"Its {names.writer} is in a turn right now, so it was not asked what "
-            "it is doing."
-            if in_a_turn
-            else f"Asked just now, its {names.writer} says:\n{account.strip()}"
-            if account
-            else f"Asked just now what it is doing, its {names.writer} gave no answer."
-        )
-        self.tell_above(
-            team,
-            stall_notice(
-                team, minutes, in_a_turn=in_a_turn, account=account, names=names
-            ),
-            waits=STALL_WAITS,
-            title=f"{team.title!r} has shown no progress for {minutes} min",
-            detail=(
-                f"No commit in {team.boundary.path or 'the repository'}, "
-                f"nothing submitted, no escalation.\n{said}\nAnswer this to "
-                f"tell its {names.writer} what to do: your answer is sent to it."
-            ),
-        )

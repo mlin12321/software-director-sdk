@@ -40,6 +40,9 @@ from openhands.agent_server.director.run_state import (
 )
 from openhands.agent_server.director.runtime import bind_director
 from openhands.agent_server.director.scope import Scope, named_paths, searched_folder
+from openhands.agent_server.director.service.stall_watch_service import (
+    STALL_WAITS,
+)
 from openhands.agent_server.director.service.state import (
     AGENT_PAUSED,
     DIRECTOR_TOOL_NAMES,
@@ -48,7 +51,6 @@ from openhands.agent_server.director.service.state import (
     ORG_WAITS,
     RESTART_NOTE,
     ROOT_ID,
-    STALL_WAITS,
     _instant,
     _summary_of,
     checkout_root,
@@ -116,7 +118,7 @@ class DirectorService(Sync):
                 "file tools, and nothing holds the process of an ACP agent"
             )
         bind_director(self)
-        self._stall_watch = asyncio.create_task(
+        self._stall_timer = asyncio.create_task(
             self._watch_for_stalls(), name="director-stall-watch"
         )
         if self._store is not None:
@@ -149,9 +151,9 @@ class DirectorService(Sync):
             self._stop_resume()
             self._stop_resume = None
         workers = list(self._workers)
-        if self._stall_watch is not None:
-            workers.append(self._stall_watch)
-            self._stall_watch = None
+        if self._stall_timer is not None:
+            workers.append(self._stall_timer)
+            self._stall_timer = None
         for worker in workers:
             worker.cancel()
         await asyncio.gather(*workers, return_exceptions=True)

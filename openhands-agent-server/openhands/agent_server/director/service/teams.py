@@ -54,6 +54,9 @@ from openhands.agent_server.director.run_state import (
     Intent,
 )
 from openhands.agent_server.director.service.delivery import Delivery
+from openhands.agent_server.director.service.stall_watch_service import (
+    progress_of,
+)
 from openhands.agent_server.director.service.state import (
     _REASON_KEPT,
     _STARTED_WITH,
@@ -64,7 +67,6 @@ from openhands.agent_server.director.service.state import (
     _Held,
     _instant,
     _new_agents,
-    _progress_of,
     checkout_root,
     failure_waits,
     team_ref,
@@ -556,7 +558,7 @@ class Teams(Delivery):
         now = self._clock()
         quiet = {}
         for team_id, kept in self._runs().marked(PROGRESS).items():
-            at = _progress_of(kept).get("at")
+            at = progress_of(kept).get("at")
             if at:
                 since = now - datetime.fromisoformat(at)
                 quiet[team_id] = int(since.total_seconds() // 60)
@@ -644,7 +646,7 @@ class Teams(Delivery):
         if place_id is None:
             return
         run = self._runs()
-        seen = _progress_of(run.marked(PROGRESS).get(place_id))
+        seen = progress_of(run.marked(PROGRESS).get(place_id))
         now = self._clock().isoformat()
         checked = now if by_above else seen.get("checked") or now
         run.mark(
