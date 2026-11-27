@@ -57,6 +57,7 @@ def test_what_a_tool_is_knows_no_tool_of_the_directors():
         "documents/schema.py",
         "documents/writer.py",
         "documents/registry.py",
+        "documents/team_documents.py",
         "documents/tree.py",
         "tools/spec.py",
     ],

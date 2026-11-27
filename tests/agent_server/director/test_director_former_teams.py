@@ -183,7 +183,7 @@ async def test_the_spec_of_the_team_before_stays_and_is_shown_as_old(
     assert orders.leftover_documents == [
         LeftoverDocument(name="spec", path="services/api", team="API")
     ]
-    [left] = service.documents_left_to(orders)
+    [left] = service.team_documents.left_to(service.reader_of(orders))
     assert (left.name, left.text, left.left_by) == ("spec", "# API by hand", "API")
     assert own_document(service, orders, "spec") is None
 
@@ -208,7 +208,7 @@ async def test_the_spec_of_the_team_before_stays_and_is_shown_as_old(
     orders = node(service, API)
     assert orders.leftover_documents == []
     assert own_document(service, orders, "spec") == "# Orders"
-    assert service.documents_left_to(orders) == []
+    assert service.team_documents.left_to(service.reader_of(orders)) == []
 
 
 async def test_teams_that_split_or_merge_directories_are_shown_the_specs_left_there(
@@ -228,7 +228,9 @@ async def test_teams_that_split_or_merge_directories_are_shown_the_specs_left_th
         LeftoverDocument(name="spec", path="services/api", team="API"),
         LeftoverDocument(name="spec", path="services/web", team="Web"),
     ]
-    assert {old.text for old in service.documents_left_to(merged)} == {
+    assert {
+        old.text for old in service.team_documents.left_to(service.reader_of(merged))
+    } == {
         "# API by hand",
         "# Web",
     }

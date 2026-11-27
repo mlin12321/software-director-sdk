@@ -68,7 +68,7 @@ async def test_an_org_whose_teams_keep_no_documents_splits_and_lands_its_work(
     (config.parent / "types" / "bare.yaml").write_text(_a_type_that_keeps_nothing())
     service = await an_org(repo, launcher, config, agent_type="bare")
     root = node(service, "root")
-    assert service.documents_of(root) == []
+    assert service.team_documents.listed(service.reader_of(root)) == []
     context = service.context_of(root, "ic")
     assert "spec" not in context and "reports_of_your_team" not in context
 
@@ -82,7 +82,7 @@ async def test_an_org_whose_teams_keep_no_documents_splits_and_lands_its_work(
     await tasked(service)
     api = node(service, API)
     assert service.type_of(api).name == "bare"
-    assert service.documents_of(api) == []
+    assert service.team_documents.listed(service.reader_of(api)) == []
     checkout = Path(root.worktree_path)
     (checkout / "README.md").write_text("# Checkout\n")
     git(checkout, ["add", "-A"])
@@ -118,7 +118,7 @@ async def test_a_team_reads_the_contracts_of_whichever_team_is_above_it_now(
         place = node(service, jobs.id)
         return [
             shown.text.strip()
-            for shown in service.documents_shown(place)
+            for shown in service.team_documents.shown(service.reader_of(place))
             if shown.name == "contracts" and shown.folder != team_ref(place).folder
         ]
 
@@ -192,7 +192,7 @@ async def test_a_document_of_an_orgs_own_stays_when_its_team_is_removed(
     assert root.leftover_documents == [
         LeftoverDocument(name="runbook", path="services/api", team="API")
     ]
-    [left] = service.documents_left_to(root)
+    [left] = service.team_documents.left_to(service.reader_of(root))
     assert (left.name, left.text) == ("runbook", "Restart the queue first.\n")
     context = service.context_of(root, "ic")
     assert context["documents_left_by_teams_before_you"] == [

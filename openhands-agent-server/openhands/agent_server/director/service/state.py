@@ -48,9 +48,12 @@ from openhands.agent_server.director.documents.registry import (
     protocol_of,
 )
 from openhands.agent_server.director.documents.store import (
-    DocumentRef,
     DocumentStore,
     GitDocumentStore,
+)
+from openhands.agent_server.director.documents.team_documents import (
+    Reader,
+    TeamDocuments,
 )
 from openhands.agent_server.director.documents.tree import TeamTree
 from openhands.agent_server.director.git import (
@@ -739,19 +742,22 @@ class ServiceState:
     def _document_changed(self, session: str) -> None:
         """A session wrote or removed a document."""
 
-    def protocols_of(self, node: OrgNodeInput) -> list[DocumentProtocolBase]:
-        """What each document a team keeps does, as its type lists them."""
-        protocols = self.protocols
-        return [
-            protocols[name]
-            for name in self.type_of(node).documents
-            if name in protocols
-        ]
+    @property
+    def team_documents(self) -> TeamDocuments:
+        """The documents of the org as each team reads, writes and leaves
+        them."""
+        return TeamDocuments(self.documents, self.protocols, self.org_kind)
 
-    def protocol_at(self, file: str) -> DocumentProtocolBase | None:
-        """What the document kept in ``file`` of team memory does; None
-        for a file that is no document anyone declared."""
-        return self.protocols.get(DocumentRef.at(file).name)
+    def reader_of(self, node: OrgNodeInput) -> Reader:
+        """A team as its documents see it."""
+        kind = self.type_of(node)
+        return Reader(
+            team=team_ref(node),
+            keeps=tuple(kind.documents),
+            leftover=tuple(node.leftover_documents),
+            titles=kind.titles,
+            descriptions={name: said for name, said in kind.documents.items() if said},
+        )
 
     def _declared(
         self,
@@ -867,7 +873,7 @@ class ServiceState:
         them: what each is called and what its protocol says of it."""
         kept = [
             protocol
-            for protocol in self.protocols_of(place)
+            for protocol in self.team_documents.kept_by(self.reader_of(place))
             if protocol.document.name != REPORT
         ]
 
@@ -886,7 +892,8 @@ class ServiceState:
         """What each document a team keeps says of itself to its members,
         with how the org works."""
         return [
-            protocol.document.rules_by_member for protocol in self.protocols_of(place)
+            protocol.document.rules_by_member
+            for protocol in self.team_documents.kept_by(self.reader_of(place))
         ]
 
     def writer_conversation(self, place: SessionTeam) -> str | None:

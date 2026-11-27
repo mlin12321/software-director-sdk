@@ -28,6 +28,7 @@ from openhands.agent_server.director.org_store import (
 from openhands.agent_server.director.routing import USAGE_ID
 from openhands.agent_server.director.run_state import TASK
 from openhands.agent_server.director.service import DirectorService
+from openhands.agent_server.director.service.state import team_ref
 from openhands.agent_server.director.tools import (
     ApproveTeamsTool,
     MsgTeamTool,
@@ -933,7 +934,7 @@ async def test_a_spec_of_a_closed_session_is_dropped(service: DirectorService):
     await service.settled()
 
     assert service.team_memory.read("services/api/spec.md") == before
-    assert service.document_draft(session.teams[0], "spec") is None
+    assert service.team_documents.draft(team_ref(session.teams[0]), "spec") is None
 
 
 async def test_work_that_goes_up_by_itself_takes_its_place_after_what_waits(

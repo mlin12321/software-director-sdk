@@ -603,7 +603,7 @@ class Splits(Watch):
                 names=self.names_at(place_id),
                 rules=[
                     protocol.document.rules_by_member
-                    for protocol in self.protocols_of(place)
+                    for protocol in self.team_documents.kept_by(self.reader_of(place))
                     if protocol.document.name not in done["written"]
                 ],
             ),
@@ -623,7 +623,9 @@ class Splits(Watch):
             # What each of the team's documents keeps of itself. A document
             # that keeps nothing stays where it is: an old one for whoever
             # has the directory next.
-            kept = await asyncio.to_thread(self.team_removed, team)
+            kept = await asyncio.to_thread(
+                self.team_documents.when_team_is_removed, self.reader_of(team)
+            )
             record = FormerTeam(
                 id=team.team_id,
                 title=team.title,
