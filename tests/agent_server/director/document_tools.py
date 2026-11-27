@@ -14,7 +14,28 @@ from openhands.agent_server.director.models import Report, SessionTeam
 from openhands.agent_server.director.orgs import SHIPPED_DOCUMENTS
 from openhands.agent_server.director.service import DirectorService
 from openhands.agent_server.director.service.state import team_ref
-from openhands.agent_server.director.tools.definition import tool_named
+from openhands.agent_server.director.tools.definition import (
+    HandOverAction,
+    ProposeTeamsAction,
+    ReviewTeamAction,
+    SettleTeamsAction,
+    tool_named,
+)
+
+
+__all__ = [
+    "HandOverAction",
+    "ProposeTeamsAction",
+    "ReviewTeamAction",
+    "SettleTeamsAction",
+    "ReportAction",
+    "ReportTool",
+    "WriteContractsAction",
+    "WriteContractsTool",
+    "WriteSpecAction",
+    "WriteSpecTool",
+    "report",
+]
 
 
 for _document in load_documents([SHIPPED_DOCUMENTS]).values():
@@ -22,15 +43,10 @@ for _document in load_documents([SHIPPED_DOCUMENTS]).values():
 
 WriteSpecTool: Any = tool_named("write_spec")
 WriteSpecAction: Any = WriteSpecTool.action()
-EditContractsTool: Any = tool_named("edit_contracts")
-EditContractsAction: Any = EditContractsTool.action()
+WriteContractsTool: Any = tool_named("write_contracts")
+WriteContractsAction: Any = WriteContractsTool.action()
 ReportTool: Any = tool_named("report")
 ReportAction: Any = ReportTool.action()
-# The director's own tools that documents add an argument to.
-ProposeTeamsAction: Any = getattr(tool_named("propose_teams"), "action")()
-ReviewTeamAction: Any = getattr(tool_named("review_team"), "action")()
-HandOverAction: Any = getattr(tool_named("hand_over"), "action")()
-SettleTeamsAction: Any = getattr(tool_named("settle_teams"), "action")()
 
 
 def report(

@@ -13,7 +13,7 @@ agents:
             - resolve_escalation
             - report
             - write_spec
-            - edit_contracts
+            - write_contracts
             - msg_manager
             - propose_teams
             - msg_team

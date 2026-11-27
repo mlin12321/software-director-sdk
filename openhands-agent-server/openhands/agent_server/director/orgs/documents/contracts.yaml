@@ -3,31 +3,43 @@
 # each of its sub-teams reads it.
 name: contracts
 description: What teams promise each other.
-tool: edit_contracts
 tool_description: >-
-    IC only, with sub-teams. Change the contracts between your sub-teams
-    with the commands of your file editor: `str_replace` to change one
-    place, `insert` to add text after a line, or at the end with no
-    `insert_line`. The contracts are kept outside the working tree. Every
-    sub-team reads them and is told of the change with its next message.
+    IC only. Write the contracts between your sub-teams with the commands of
+    your file editor: `create` with the whole of them in `file_text`,
+    `str_replace` to change one place, `insert` to add text after a line, or
+    at the end with no `insert_line`. Write them before you propose
+    sub-teams: types, endpoints, file formats, everything the sub-teams have
+    to respect, since they cannot see each other's work or your spec. The
+    contracts are kept outside the working tree. Every sub-team reads them
+    and is told of a change with its next message.
 protocol: contracts
 rules:
     everyone: >-
         Contracts: what teams promise each other. Promises go only in
         contracts; do not repeat them in a spec.
     writer: >-
-        A proposal of sub-teams gives, in `contracts`, what they must keep
-        between them: each sub-team is told it.
+        Before you propose sub-teams, write what they must keep between them
+        with `write_contracts`: your {manager} reads the contracts with the
+        proposal, and each sub-team is told them.
     reviewer: >-
-        When you accept with `review_team`, its `contracts` adds to the
-        contracts between your sub-teams what all of them may rely on from
-        now; they are told with their next message.
+        When you have accepted work with `review_team`, add to the contracts
+        with `write_contracts` what all your sub-teams may rely on from now;
+        they are told with their next message.
     lead_reviewer: >-
         Contracts are not yours: the Division Lead {manager} settles them
         with the teams.
     lead_manager: >-
-        Contracts wait for you with the teams. Per contracts, in `contracts`
-        of `settle_teams`: the org's, the session's, or a text you write
-        that keeps what both sides need. Taking one side's contracts whole
-        often breaks the other side's code. If you do not take the
-        session's, its {writer} is told to follow up.
+        Contracts wait for you with the teams. Per contracts, in
+        `merge_choices` of `settle_teams`: the org's, the session's, or a
+        text you write that keeps what both sides need. Taking one side's
+        contracts whole often breaks the other side's code. If you do not
+        take the session's, its {writer} is told to follow up.
+    hand_over: >-
+        `write_contracts` works here: restate the contracts between your
+        sub-teams if they name teams that are gone.
+    teams_replaced: >-
+        The contracts between your sub-teams read as before. If they name
+        teams that are gone, restate them with `write_contracts`.
+    handed_over: >-
+        If your team took over sub-teams, write what they must keep between
+        them with `write_contracts`.

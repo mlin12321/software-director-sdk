@@ -135,7 +135,7 @@ def test_the_shipped_documents_are_the_ones_the_shipped_types_keep():
 
     assert set(documents) == {"spec", "contracts", "report"}
     assert documents["spec"].written_with == "write_spec"
-    assert documents["contracts"].written_with == "edit_contracts"
+    assert documents["contracts"].written_with == "write_contracts"
     for folder in SHIPPED_TYPES:
         for path in folder.glob("*.yaml"):
             kind = read_type(path, DIRECTOR_TOOL_NAMES, documents)
@@ -263,65 +263,21 @@ def contracts(store: GitDocumentStore) -> ContractsProtocol:
     return protocol
 
 
-def test_contracts_are_seeded_by_the_proposal_that_made_the_sub_teams(
+def test_the_steps_of_a_teams_work_write_nothing_into_its_contracts(
     contracts: ContractsProtocol, store: GitDocumentStore
 ):
-    contracts.when_sub_teams_are_created(
-        SubTeamsCreated(TEAM, {"contracts": "Cart owns the cart page."})
-    )
-    # A later proposal that replaces no team adds to them, once.
-    for _ in range(2):
-        contracts.when_sub_teams_are_created(
-            SubTeamsCreated(TEAM, {"contracts": "Checkout owns the order."})
-        )
-
-    assert store.read("one", CONTRACTS) == (
-        "Cart owns the cart page.\n\nCheckout owns the order.\n"
-    )
-    assert store.read("two", CONTRACTS) is None
-
-
-def test_contracts_of_a_proposal_that_replaced_teams_take_the_place_of_the_old(
-    contracts: ContractsProtocol, store: GitDocumentStore
-):
+    # Contracts are written with their own tool alone: no step of the
+    # team's work puts a text into them.
     store.write("one", CONTRACTS, "Cart owns the cart page.\n")
 
-    contracts.when_sub_teams_are_created(
-        SubTeamsCreated(TEAM, {"contracts": "Shop owns it all."}, replaced=True)
-    )
-
-    assert store.read("one", CONTRACTS) == "Shop owns it all.\n"
-
-
-def test_contracts_grow_by_what_a_reviewer_establishes_and_a_hand_over_replaces(
-    contracts: ContractsProtocol, store: GitDocumentStore
-):
-    store.write("one", CONTRACTS, "Cart owns the cart page.\n")
-
-    contracts.when_sub_team_work_is_accepted(
-        SubTeamWorkAccepted(TEAM, {"contracts": "Prices are in cents."})
-    )
-
-    assert store.read("one", CONTRACTS) == (
-        "Cart owns the cart page.\n\nPrices are in cents.\n"
-    )
-
+    contracts.when_sub_teams_are_created(SubTeamsCreated(TEAM))
+    contracts.when_sub_team_work_is_accepted(SubTeamWorkAccepted(TEAM))
     contracts.when_removed_team_is_handed_over(
-        RemovedTeamHandedOver(TEAM, {"contracts": "Only the cart is left."})
+        RemovedTeamHandedOver(TEAM, "Only the cart is left.", writer="ic")
     )
 
-    assert store.read("one", CONTRACTS) == "Only the cart is left.\n"
-
-
-def test_contracts_are_told_only_of_what_is_given_for_them(
-    contracts: ContractsProtocol, store: GitDocumentStore
-):
-    contracts.when_sub_teams_are_created(SubTeamsCreated(TEAM, {"notes": "Other."}))
-    contracts.when_sub_team_work_is_accepted(
-        SubTeamWorkAccepted(TEAM, {"contracts": "  "})
-    )
-
-    assert store.drafts("one") == {}
+    assert store.read("one", CONTRACTS) == "Cart owns the cart page.\n"
+    assert store.read("two", CONTRACTS) is None
 
 
 def test_a_removed_teams_contracts_go_into_its_record_and_out_of_its_folder(
@@ -433,7 +389,7 @@ def test_a_document_says_its_own_part_of_a_briefing(
     api = TREE.ref("services.api")
 
     def briefed(*shown: ShownDocument) -> DocumentsBriefed:
-        return DocumentsBriefed(api, shown, {"ic": "IC"}, "IC")
+        return DocumentsBriefed(api, shown, {"ic": "IC"})
 
     own = ShownDocument(api.folder, "notes", "# Notes", own=True)
     above = ShownDocument("services", "contracts", "# Agreed", own=False)

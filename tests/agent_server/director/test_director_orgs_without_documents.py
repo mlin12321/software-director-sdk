@@ -11,6 +11,7 @@ from tests.agent_server.director.conftest import (
     API,
     APPROVE,
     SPLIT,
+    SPLIT_CONTRACTS,
     ApproveTeamsTool,
     FakeLauncher,
     ProposeTeamsTool,
@@ -24,6 +25,7 @@ from tests.agent_server.director.conftest import (
     started,
     tasked,
     use,
+    write_contracts,
 )
 
 
@@ -33,7 +35,7 @@ def _a_type_that_keeps_nothing() -> str:
     kept, _, rest = shipped.partition("documents:\n")
     actions = rest[rest.index("actions:\n") :]
     bare = kept.replace("name: software-engineer", "name: bare", 1) + actions
-    for tool in ("report", "write_spec", "edit_contracts"):
+    for tool in ("report", "write_spec", "write_contracts"):
         bare = bare.replace(f"            - {tool}\n", "")
     return bare
 
@@ -52,14 +54,11 @@ async def test_an_org_whose_teams_keep_no_documents_splits_and_lands_its_work(
     assert "spec" not in context and "reports_of_your_team" not in context
 
     service.update_org_settings(OrgSettings(default_agent_type="bare"))
-    refused = await use(service, ic(service), ProposeTeamsTool, SPLIT)
-    assert refused.is_error and "keeps no contracts" in refused.text
-    await use(
-        service,
-        ic(service),
-        ProposeTeamsTool,
-        SPLIT.model_copy(update={"contracts": ""}),
-    )
+    # A team that keeps no contracts has no tool to write any, and the
+    # tools that set up its sub-teams ask for none.
+    refused = await write_contracts(service, SPLIT_CONTRACTS)
+    assert refused.is_error
+    await use(service, ic(service), ProposeTeamsTool, SPLIT)
     await use(service, manager(service), ApproveTeamsTool, APPROVE)
     await tasked(service)
     api = node(service, API)
@@ -83,13 +82,13 @@ async def test_a_team_reads_the_contracts_of_whichever_team_is_above_it_now(
 ):
     service = await started(repo, launcher)
     await split_root(service)
+    await write_contracts(service, "Jobs take an order id.", API)
     await use(
         service,
         ic(service, API),
         ProposeTeamsTool,
         proposing(
             [SplitChild(title="Jobs", path="services/api/jobs", task="Run the jobs")],
-            "Jobs take an order id.",
         ),
     )
     await use(service, manager(service, API), ApproveTeamsTool, APPROVE)

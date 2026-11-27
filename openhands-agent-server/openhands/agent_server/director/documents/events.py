@@ -1,7 +1,6 @@
 """What a document is told of the work of the team that keeps it."""
 
-from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from openhands.agent_server.director.documents.store import TeamRef
 
@@ -13,13 +12,9 @@ class SubTeamsCreated:
 
     Attributes:
         team: The team that has them.
-        given: What the proposal gave for documents, by the name of each.
-        replaced: Whether the proposal replaced sub-teams the team had.
     """
 
     team: TeamRef
-    given: Mapping[str, str] = field(default_factory=dict)
-    replaced: bool = False
 
 
 @dataclass(frozen=True)
@@ -28,11 +23,9 @@ class SubTeamWorkAccepted:
 
     Attributes:
         team: The team whose reviewer accepted.
-        given: What the reviewer gave for documents, by the name of each.
     """
 
     team: TeamRef
-    given: Mapping[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -42,12 +35,12 @@ class RemovedTeamHandedOver:
 
     Attributes:
         team: The team it was passed on to.
-        given: What was given for documents, by the name of each.
+        text: What the team above said of it, in its own words.
         writer: The member of that team that works in its folder.
     """
 
     team: TeamRef
-    given: Mapping[str, str] = field(default_factory=dict)
+    text: str = ""
     writer: str = ""
 
 

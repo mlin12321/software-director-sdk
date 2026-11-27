@@ -69,6 +69,8 @@ class Document(BaseModel):
             "lead_reviewer",
             "lead_manager",
             "hand_over",
+            "teams_replaced",
+            "handed_over",
         ],
         str,
     ] = Field(
@@ -81,7 +83,9 @@ class Document(BaseModel):
             "decides on its sub-teams, `lead_reviewer` and `lead_manager` "
             "for the two that take a session's work into the org, and "
             "`hand_over` for the conversation that passes on what removed "
-            "teams left. A text may name a member as "
+            "teams left, `teams_replaced` for the {writer} once sub-teams it "
+            "had were replaced, and `handed_over` for the {writer} of a team "
+            "that is handed what the teams before it left. A text may name a member as "
             "`{writer}`, `{reviewer}` or `{manager}`, and the number of the "
             "team's agents as `{count}`."
         ),

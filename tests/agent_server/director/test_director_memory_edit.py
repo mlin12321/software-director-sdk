@@ -6,9 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from openhands.agent_server.director.models import ReviewFinding, SessionTeam
 from openhands.agent_server.director.service import DirectorService
-from openhands.agent_server.director.service.state import team_ref
 from openhands.agent_server.director.tools import (
     ReviewTeamTool,
     SubmitReviewTool,
@@ -24,23 +22,17 @@ from tests.agent_server.director.conftest import (
     ic,
     node,
     org_config,
+    own_contracts,
     split_into_typed_teams,
     use,
 )
 from tests.agent_server.director.document_tools import (
-    EditContractsAction,
-    EditContractsTool,
     ReviewTeamAction,
+    WriteContractsAction,
+    WriteContractsTool,
     WriteSpecAction,
     WriteSpecTool,
 )
-
-
-def own_contracts(service: DirectorService, place: SessionTeam) -> str:
-    """The contracts between the sub-teams of a place, as its session has
-    them."""
-    ref = team_ref(place).keeps("contracts")
-    return service.documents.read(place.session, ref) or ""
 
 
 @pytest.fixture
@@ -65,28 +57,25 @@ async def test_accepting_work_can_add_to_the_contracts_every_sub_team_reads(
     )
     finding = "Checked: 2k warmup gives 0.97 (Tables)."
 
-    refused = await use(
-        service,
-        ic(service),
-        ReviewTeamTool,
-        ReviewTeamAction(
-            team="tables",
-            decision="reject",
-            findings=[ReviewFinding(issue="No command given.")],
-            contracts=finding,
-        ),
-    )
-    assert refused.is_error and "leave it empty when you reject" in refused.text
-    assert finding not in own_contracts(service, node(service, "root"))
-
     accepted = await use(
         service,
         ic(service),
         ReviewTeamTool,
-        ReviewTeamAction(team="tables", decision="accept", contracts=finding),
+        ReviewTeamAction(team="tables", decision="accept"),
+    )
+    assert not accepted.is_error
+    assert finding not in own_contracts(service, node(service, "root"))
+
+    # What the accepted work establishes is the reviewer's to add, with
+    # the contracts' own tool.
+    added = await use(
+        service,
+        ic(service),
+        WriteContractsTool,
+        WriteContractsAction(command="insert", new_str=finding),
     )
 
-    assert not accepted.is_error
+    assert not added.is_error
     contracts = own_contracts(service, node(service, "root"))
     assert "Tables reads what Harness writes" in contracts
     assert contracts.rstrip().endswith(finding)
@@ -195,16 +184,16 @@ async def test_the_contracts_are_changed_by_the_ic_whose_sub_teams_keep_them(
     await use(
         service,
         ic(service),
-        EditContractsTool,
-        EditContractsAction(
+        WriteContractsTool,
+        WriteContractsAction(
             command="str_replace", old_str="to `out/`", new_str="to `results/`"
         ),
     )
     await use(
         service,
         ic(service),
-        EditContractsTool,
-        EditContractsAction(
+        WriteContractsTool,
+        WriteContractsAction(
             command="insert", new_str="Unchecked: 4k warmup diverges (Tables)."
         ),
     )
@@ -213,13 +202,16 @@ async def test_the_contracts_are_changed_by_the_ic_whose_sub_teams_keep_them(
         "Tables reads what Harness writes to `results/`.\n\n"
         "Unchecked: 4k warmup diverges (Tables).\n"
     )
-    # A team without sub-teams sets no contracts, and the IC that only
-    # reviews a session's work has none of its own.
+    # A team without sub-teams writes the contracts its sub-teams will
+    # keep before it proposes them; the ones it works to are not changed
+    # by that.
     leaf = await use(
         service,
         ic(service, "harness"),
-        EditContractsTool,
-        EditContractsAction(command="insert", new_str="Mine now."),
+        WriteContractsTool,
+        WriteContractsAction(command="create", file_text="Runs take a seed.\n"),
     )
-    assert leaf.is_error and "sets no contracts" in leaf.text
+    assert not leaf.is_error and "no sub-teams yet" in leaf.text
+    assert own_contracts(service, node(service, "harness")) == "Runs take a seed.\n"
+    assert "Tables reads what Harness writes" in own_contracts(service, root)
     assert division_lead_ic(service) is None

@@ -2,7 +2,7 @@
 records and what they needed of each other."""
 
 import json
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Collection, Sequence
 from pathlib import Path
 from typing import Any, NamedTuple
 from uuid import uuid4
@@ -70,6 +70,7 @@ from openhands.agent_server.director.prompts import (
     needs_between,
     proposal_facts,
     record_line,
+    rules_said,
     track_records,
 )
 from openhands.agent_server.director.recovery import STEP_NAMES
@@ -77,6 +78,7 @@ from openhands.agent_server.director.run_state import (
     CHECKS,
     EVENTS,
     FORMER,
+    HANDED,
     JOINED,
     REPORTS,
     ROUTED,
@@ -767,6 +769,16 @@ class Records(ServiceState):
         works = role == self.team(place).writer
         if works and store.below(place.id):
             context["asked_directly_of_teams_below"] = self.asked_below(place)
+        if works and (handed := self.handed_over_to(place)):
+            context["handed_over_to_your_team"] = handed
+            # It is the team's to write into its own documents.
+            todo = rules_said(
+                self.document_rules(place),
+                "handed_over",
+                self.team(place).names.words(),
+            )
+            if todo:
+                context["what_to_do_with_what_was_handed_over"] = " ".join(todo)
         if works:
             # The IC is the one that passes on what removed teams left.
             context["former_teams"] = [
@@ -906,14 +918,10 @@ class Records(ServiceState):
         place = self.org.place(team.id)
         if place is None:
             raise NotFound(f"There is no team {team.id}")
-        said_where = (
-            {}
-            if entry.handed_over
-            else {
-                "session": self.org.session_title(place),
-                "session_id": session_of(place),
-            }
-        )
+        said_where = {
+            "session": self.org.session_title(place),
+            "session_id": session_of(place),
+        }
         # Its session's alone until the session's work is accepted.
         self._keep_report(
             place, entry.model_copy(update={"at": entry.at or _instant(), **said_where})
@@ -995,7 +1003,6 @@ class Records(ServiceState):
                 reader=team_ref(place),
                 shown=[found for found in shown if found.name == name],
                 titles=team.kind.titles,
-                above_writer=team.names.above_writer,
             )
             for name in (
                 protocol.document.name for protocol in self._protocols_for(place)
@@ -1021,6 +1028,12 @@ class Records(ServiceState):
                 if old.name == document.name
             ]
         return parts
+
+    def handed_over_to(self, node: OrgNode) -> list[dict[str, str]]:
+        """What the team above said to this team of the teams that were
+        there before it: who said it, when, and the text."""
+        kept = self._runs().marked(HANDED).get(node.id)
+        return json.loads(kept) if kept else []
 
     def documents_passed_to(self, node: OrgNode) -> list[ShownDocument]:
         """The documents another team passed to this one to read, as they
@@ -1495,6 +1508,7 @@ class Records(ServiceState):
         for place in places:
             run.unmark(REPORTS, place.id)
             run.unmark(SENT, place.id)
+            run.unmark(HANDED, place.id)
             self._drop_merge_checkout(place.id)
         for file in files:
             self._undraft(session, file)
@@ -1551,34 +1565,55 @@ class Records(ServiceState):
             if self.read_file(place, _spec_file(directory))
         ]
 
-    def sub_teams_created(
-        self, place: SessionTeam, given: Mapping[str, str], replaced: bool
-    ) -> None:
+    def documents_sub_teams_read(self, place: SessionTeam) -> list[tuple[str, str]]:
+        """The documents of ``place`` that every team directly below it
+        reads, as its session has them: the name and the text of each
+        that says something."""
+        team = team_ref(place)
+        found = []
+        for protocol in self.protocols_of(place):
+            if not protocol.read_by_sub_teams:
+                continue
+            name = protocol.document.name
+            text = self.documents.read(team.session, team.keeps(name))
+            if text and text.strip():
+                found.append((name, text.strip()))
+        return found
+
+    def sub_teams_created(self, place: SessionTeam) -> None:
         """Tell the documents of ``place`` that it now has the sub-teams
-        a proposal named, with what the proposal gave for them."""
+        a proposal named."""
         _ = self.team_memory  # refuses where the org has no team memory
-        created = SubTeamsCreated(team_ref(place), given, replaced)
+        created = SubTeamsCreated(team_ref(place))
         for protocol in self.protocols_of(place):
             protocol.when_sub_teams_are_created(created)
 
-    def sub_team_work_accepted(
-        self, place: SessionTeam, given: Mapping[str, str]
-    ) -> None:
+    def sub_team_work_accepted(self, place: SessionTeam) -> None:
         """Tell the documents of ``place`` that its reviewer accepted the
-        work of a sub-team, with what the reviewer gave for them."""
-        _ = self.team_memory
-        accepted = SubTeamWorkAccepted(team_ref(place), given)
+        work of a sub-team."""
+        accepted = SubTeamWorkAccepted(team_ref(place))
         for protocol in self.protocols_of(place):
             protocol.when_sub_team_work_is_accepted(accepted)
 
     def removed_team_handed_over(
-        self, place: SessionTeam, given: Mapping[str, str]
+        self, place: SessionTeam, above: SessionTeam, member: str, text: str
     ) -> None:
-        """Tell the documents of ``place`` what the team above passed on
-        to it of the teams that were there before."""
-        _ = self.team_memory
+        """Keep what a member of the team above says to ``place`` of the
+        teams that were there before it. The team is told with its next
+        message, or in its briefing; its documents are told too, and none
+        is written by this. Safe from any thread."""
+        with self._keeping:
+            run = self._runs()
+            kept = run.marked(HANDED).get(place.id)
+            said = json.loads(kept) if kept else []
+            entry = {
+                "by": f"the {self.team(above).title(member)} of {above.title}",
+                "at": utc_now(),
+                "text": text,
+            }
+            run.mark(HANDED, place.id, json.dumps([*said, entry]))
         handed = RemovedTeamHandedOver(
-            team_ref(place), given, writer=self.team(place).writer
+            team_ref(place), text, writer=self.team(place).writer
         )
         for protocol in self.protocols_of(place):
             protocol.when_removed_team_is_handed_over(handed)

@@ -92,15 +92,24 @@ def _bullet(line: str) -> str:
     return textwrap.fill(line, width=76, subsequent_indent="  ")
 
 
-def _rules_for(
+def rules_said(
     rules: Sequence[Mapping[str, str]], whom: str, words: Mapping[str, str]
 ) -> list[str]:
-    """What the documents a team keeps say to ``whom`` of its members."""
+    """What the documents a team keeps say to ``whom``: a line for each
+    that says something, in the words of the team."""
     return [
-        _bullet("- " + " ".join(said[whom].format_map(words).split()))
+        " ".join(said[whom].format_map(words).split())
         for said in rules
         if said.get(whom, "").strip()
     ]
+
+
+def _rules_for(
+    rules: Sequence[Mapping[str, str]], whom: str, words: Mapping[str, str]
+) -> list[str]:
+    """What the documents a team keeps say to ``whom`` of its members, as
+    the points of a list."""
+    return [_bullet(f"- {line}") for line in rules_said(rules, whom, words)]
 
 
 def org_protocol(names: Names, rules: Sequence[Mapping[str, str]] = ()) -> str:
@@ -388,19 +397,6 @@ def left_for_team(files: list[str], *, names: Names) -> str:
     )
 
 
-def _contracts_now(contracts_replaced: bool) -> str:
-    if contracts_replaced:
-        return (
-            "- The contracts between your sub-teams are now the ones of this "
-            "proposal alone."
-        )
-    return (
-        "- The contracts between your sub-teams read as before. If they name "
-        "teams that are gone, restate them: the `contracts` of a proposal "
-        "that replaces teams take the place of the old text."
-    )
-
-
 _ASIDE = (
     "What they left (reports, contracts, specs) is being passed on in "
     "hand-over mode: a side conversation of yours, which the director has "
@@ -411,11 +407,11 @@ _ASIDE = (
 )
 
 _HAND_OVER = (
-    "- Give each new team what it should know of this with `hand_over`: "
-    "notes in your own words or quoted, and, for a team that took over "
-    "sub-teams, the contracts those must keep. Where one team's folder "
-    "is now divided among several, give each the part that concerns its "
-    "folder. It starts nothing and can be done again later; "
+    "- Give each new team what it should know of this with `hand_over`, "
+    "in your own words or quoted. Where one team's folder is now divided "
+    "among several, give each the part that concerns its folder. The "
+    "team is told with its next message and writes what should last into "
+    "its own documents. It starts nothing and can be done again later; "
     "`read_team_context` returns what the removed teams left "
     "(`former_teams`)."
 )
@@ -434,9 +430,9 @@ def approved_notice(
     children: list[SplitChild],
     former: list[FormerTeam],
     *,
-    contracts_replaced: bool,
     unfinished: dict[str, list[str]],
     names: Names,
+    rules: Sequence[Mapping[str, str]] = (),
 ) -> str:
     """What an IC is told once the sub-teams it proposed are set up.
 
@@ -445,8 +441,8 @@ def approved_notice(
             changed there and not committed.
         former: The teams they replaced. What those left is passed on in
             hand-over mode and is not given here.
-        contracts_replaced: Whether the proposal's contracts took the place
-            of the ones the team had.
+        rules: What each document the team keeps says of itself; the
+            `teams_replaced` of each is told where teams were replaced.
     """
     lines = [_approved(children, names=names), "", _split_effects(children, unfinished)]
     todo = []
@@ -459,7 +455,7 @@ def approved_notice(
             f"The teams they replaced are gone: {gone}. What those had "
             f"committed is in your checkout. {_ASIDE}",
         ]
-        todo += [_contracts_now(contracts_replaced)]
+        todo += _rules_for(rules, "teams_replaced", names.words())
     else:
         todo += [_REWRITE_SPEC]
     todo += ["- Give a team its task with `msg_team` when there is one."]
@@ -482,14 +478,16 @@ def replaced_job(
     former: list[FormerTeam],
     specs: dict[str, str],
     *,
-    contracts_replaced: bool,
     names: Names,
+    rules: Sequence[Mapping[str, str]] = (),
 ) -> str:
     """What a hand-over conversation is to do after teams were replaced.
 
     Args:
         teams: The sub-teams that were set up.
         specs: The spec each replaced team wrote, by its directory.
+        rules: What each document the team keeps says of itself; the
+            `teams_replaced` of each is told.
     """
     lines = [
         f"What changed: your {names.manager} approved the sub-teams you proposed, and "
@@ -509,7 +507,7 @@ def replaced_job(
         "What is yours to do here:",
         _HAND_OVER,
         _SPEC_STAYS,
-        _contracts_now(contracts_replaced),
+        *_rules_for(rules, "teams_replaced", names.words()),
         _REWRITE_SPEC,
     ]
     return "\n".join(lines)
@@ -559,7 +557,7 @@ def handed_over_notice(given: list[str], spec: bool) -> str:
     """What an IC is told in its main conversation once its hand-over
     conversation has ended."""
     to = (
-        f"It gave notes or contracts to: {', '.join(given)}."
+        f"It handed over to: {', '.join(given)}."
         if given
         else "It gave nothing to any team."
     )
@@ -914,7 +912,7 @@ def reconcile_request(
             f"The team that holds its folder now is the one in "
             f"{home or 'the repository'}, which is left that spec as an old "
             "one. If something in it has to hold on, write the spec of "
-            f"{home or 'the repository'} from both in `specs`; otherwise "
+            f"{home or 'the repository'} from both in `merge_choices`; otherwise "
             "the next session there is told to.",
             f"The spec of {home or 'the repository'} now:",
             theirs or "(none)",
@@ -931,7 +929,7 @@ def reconcile_request(
         "`review_team` and say in `reconciled` what you decided; without "
         "that it is not merged."
         + (
-            " For each spec above you may say in `specs` whether the org's "
+            " For each spec above you may say in `merge_choices` whether the org's "
             "stays, the session's holds, or a text you write from both does; "
             "unnamed, the session's holds."
             if specs or inherited
@@ -1036,7 +1034,7 @@ def merge_request(
         "(`under`) or call otherwise (`title`), so that it fits the org as "
         "it is now."
         + (
-            " For each contracts above say in `contracts` which holds: "
+            " For each contracts above say in `merge_choices` which holds: "
             "'org', 'session', or 'text' with the contracts you write from "
             "both. Unnamed, the session's hold."
             if contracts

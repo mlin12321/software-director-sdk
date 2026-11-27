@@ -10,11 +10,8 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from openhands.agent_server.director import agent_actions
-from openhands.agent_server.director.documents.protocol import (
-    document_choices,
-    documents_given,
-)
 from openhands.agent_server.director.models import (
+    DocumentChoice,
     EscalationKind,
     ReviewFinding,
     TeamChoice,
@@ -103,6 +100,14 @@ class SettleTeamsArguments(BaseModel):
         default="",
         description="Why, in a sentence or two; the session's IC is told.",
     )
+    merge_choices: list[DocumentChoice] = Field(
+        default_factory=list,
+        description=(
+            "For a document that waits with the teams: whether the org's "
+            "stays, the session's holds, or a text you write from both does. "
+            "Unnamed, the session's holds."
+        ),
+    )
 
 
 class DeclineTeamsArguments(BaseModel):
@@ -178,6 +183,15 @@ class ReviewTeamArguments(BaseModel):
             "shown it again. Leave empty otherwise."
         ),
     )
+    merge_choices: list[DocumentChoice] = Field(
+        default_factory=list,
+        description=(
+            "Only when you accept the work of a session: for a document in "
+            "it that the org also changed, whether the org's stays, the "
+            "session's holds, or a text you write from both does. Unnamed, "
+            "the session's holds."
+        ),
+    )
 
 
 class MsgTeamArguments(BaseModel):
@@ -200,6 +214,13 @@ class HandOverArguments(BaseModel):
     """Pass on to a team below yours what the teams before it left."""
 
     team: str = Field(description="The id of a team directly below yours.")
+    text: str = Field(
+        description=(
+            "What the team should know of what the teams before it left, in "
+            "your own words or quoted. Where a folder is now divided among "
+            "several teams, the part that concerns this team's folder."
+        )
+    )
 
 
 class StopTeamArguments(BaseModel):
@@ -249,7 +270,6 @@ PROPOSE_TEAMS = ToolSpec(
         service,
         caller,
         action.teams,
-        documents_given("propose_teams", action),
         action.keep,
         action.text,
     ),
@@ -331,19 +351,20 @@ DECLINE_TEAMS = ToolSpec(
 
 SETTLE_TEAMS = ToolSpec(
     name="settle_teams",
-    summary="Division Lead Manager only. Settle the teams and contracts that "
-    "both a session and other accepted work changed: for each, the "
-    "org's or the session's; a team taken from the session may go "
-    "under another team or get another name; contracts may be a text "
-    "you write. It becomes the org's once the session's code is "
-    "accepted and it is the session's turn.",
+    summary="Division Lead Manager only. Settle the teams, and the documents "
+    "that wait with them, that both a session and other accepted work "
+    "changed: for each, the org's or the session's; a team taken from "
+    "the session may go under another team or get another name; a "
+    "document may be a text you write (`merge_choices`). It becomes the "
+    "org's once the session's code is accepted and it is the session's "
+    "turn.",
     arguments=SettleTeamsArguments,
     act=lambda service, caller, action: agent_actions.settle_teams(
         service,
         caller,
         action.teams,
         action.note,
-        document_choices("settle_teams", action),
+        action.merge_choices,
     ),
 )
 
@@ -401,7 +422,8 @@ REVIEW_TEAM = ToolSpec(
     "files which also changed in your checkout since it began is not "
     "merged until you say in `reconciled` what you decided about them. "
     "Work that does not merge by itself is laid out for you to merge. "
-    "Of a session's work you may decide each spec in `specs`.",
+    "Of a session's work you may decide each document the org also "
+    "changed in `merge_choices`.",
     arguments=ReviewTeamArguments,
     act=lambda service, caller, action: agent_actions.review_team(
         service,
@@ -411,8 +433,7 @@ REVIEW_TEAM = ToolSpec(
         action.findings,
         action.needed_above,
         action.reconciled,
-        document_choices("review_team", action),
-        documents_given("review_team", action),
+        action.merge_choices,
     ),
 )
 
@@ -438,10 +459,11 @@ HAND_OVER = ToolSpec(
     summary="IC only. After teams below yours were replaced or pruned, pass on "
     "to a team directly below what it should know of what they left. "
     "Nothing of a removed team reaches another team unless you do "
-    "this. It starts nothing and can be done again.",
+    "this. The team is told with its next message and records what "
+    "should last itself. It starts nothing and can be done again.",
     arguments=HandOverArguments,
     act=lambda service, caller, action: agent_actions.hand_over(
-        service, caller, action.team, documents_given("hand_over", action)
+        service, caller, action.team, action.text
     ),
 )
 

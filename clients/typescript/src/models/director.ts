@@ -145,8 +145,6 @@ export interface DirectorSplitChild {
  */
 export interface DirectorSplitProposal {
   children: DirectorSplitChild[];
-  /** What the proposal gives for documents, by the name of each. */
-  documents: Record<string, string>;
   /** Why the proposer wants this make-up of teams, when it said. */
   reason?: string;
   status: DirectorSplitStatus;
@@ -674,18 +672,13 @@ export interface DirectorReport {
   text: string;
   /**
    * The title of the session the agent that wrote it works in; `''` for a
-   * report a model rewrote or the IC above handed over.
+   * report a model rewrote.
    */
   session?: string;
   /** That session's id: two sessions may have one title. */
   session_id?: string;
   /** True for the one report a model wrote in place of earlier ones. */
   compacted?: boolean;
-  /**
-   * True for what the IC of the team above passed on of the teams that were
-   * there before this one. The team's own agents did not write it.
-   */
-  handed_over?: boolean;
   /**
    * Names the report, so that it is added to a team's record once however
    * often that is tried. `''` for one a model rewrote.

@@ -64,6 +64,7 @@ from openhands.agent_server.director.service import (
     DIRECTOR_TOOL_NAMES,
     DirectorService,
 )
+from openhands.agent_server.director.service.state import team_ref
 from openhands.agent_server.director.split import ProposedTeam
 from openhands.agent_server.director.tools import (
     ApproveTeamsTool,
@@ -99,6 +100,8 @@ from openhands.tools.file_editor.definition import FileEditorAction
 from tests.agent_server.director.document_tools import (
     ProposeTeamsAction,
     ReviewTeamAction,
+    WriteContractsAction,
+    WriteContractsTool,
 )
 
 
@@ -806,12 +809,36 @@ async def woken(service: DirectorService, node_id: str = "root") -> str:
 
 def proposing(
     children: list[SplitChild],
-    contracts: str = "",
     keep: list[str] | None = None,
     text: str = "",
 ) -> Any:
-    return ProposeTeamsAction(
-        teams=as_proposed(children), contracts=contracts, keep=keep or [], text=text
+    return ProposeTeamsAction(teams=as_proposed(children), keep=keep or [], text=text)
+
+
+def own_contracts(service: DirectorService, place: SessionTeam) -> str:
+    """The contracts between the sub-teams of a place, as its session has
+    them."""
+    ref = team_ref(place).keeps("contracts")
+    return service.documents.read(place.session, ref) or ""
+
+
+def session_contracts(service: DirectorService, place: SessionTeam, text: str) -> None:
+    """Have the session of ``place`` hold contracts for it, as written
+    there with the contracts' tool."""
+    ref = team_ref(place).keeps("contracts")
+    service.documents.write(place.session, ref, f"{text.strip()}\n")
+
+
+async def write_contracts(
+    service: DirectorService, text: str, node_id: str = "root"
+) -> DirectorObservation:
+    """Write the contracts between a team's sub-teams as its IC does,
+    which it does before it proposes them."""
+    return await use(
+        service,
+        ic(service, node_id),
+        WriteContractsTool,
+        WriteContractsAction(command="create", file_text=f"{text}\n"),
     )
 
 
@@ -825,14 +852,15 @@ SPLIT = proposing(
             isolation="worktree",
         ),
     ],
-    "POST /checkout returns {order_id}",
 )
+SPLIT_CONTRACTS = "POST /checkout returns {order_id}"
 
 
 APPROVE = ApproveTeamsAction()
 
 
 async def split_root(service: DirectorService) -> None:
+    await write_contracts(service, SPLIT_CONTRACTS)
     await use(service, ic(service), ProposeTeamsTool, SPLIT)
     await use(service, manager(service), ApproveTeamsTool, APPROVE)
     await tasked(service)
@@ -891,7 +919,6 @@ TEAMS = proposing(
         ),
         SplitChild(title="Harness", path="harness", task="Build the harness"),
     ],
-    contracts="Tables reads what Harness writes to `out/`.",
 )
 
 
@@ -932,6 +959,7 @@ async def an_org(
 
 
 async def split_into_typed_teams(service: DirectorService) -> None:
+    await write_contracts(service, "Tables reads what Harness writes to `out/`.")
     await use(service, ic(service), ProposeTeamsTool, TEAMS)
     await use(service, manager(service), ApproveTeamsTool, APPROVE)
     await tasked(service)
@@ -977,6 +1005,7 @@ def accept(node_id: str = "services.api", needed_above: str = "") -> Any:
 
 
 async def split_api(service: DirectorService) -> None:
+    await write_contracts(service, "Order has an id.", "services.api")
     await use(
         service,
         ic(service, "services.api"),
@@ -987,7 +1016,6 @@ async def split_api(service: DirectorService) -> None:
                     title="Schema", path="services/api/schema", task="Define orders"
                 )
             ],
-            "Order has an id.",
         ),
     )
     await use(service, manager(service, "services.api"), ApproveTeamsTool, APPROVE)

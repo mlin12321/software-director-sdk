@@ -121,7 +121,7 @@ agents:
     title: IC
     writes: true
     tools: [read_team_context, raise_escalation, resolve_escalation, report,
-            write_spec, edit_contracts, msg_manager, propose_teams, msg_team,
+            write_spec, write_contracts, msg_manager, propose_teams, msg_team,
             hand_over, stop_team, submit_review, review_team]
     lead_tools: [read_team_context, report, review_team]
     text: |
@@ -176,7 +176,7 @@ Which type a team gets:
 
 A type may also name the agent profile its teams run on, with `sas_profile: <profile name>` (a software-agent-sdk profile, as made in the settings of Canvas). It is used when the IC that proposes the team names no model for it, and it need not be among the profiles the org lets ICs choose. That is the only tie between the two: a type without it runs on whatever the team above does. The first team of an org always runs on the profile picked in the chat box.
 
-For research, an IC of type `researcher` splits by hypothesis, each direction submits after every experiment, and the IC above compares what its sub-teams submit and adds what it checked to the contracts with `review_team`, which every sub-team reads.
+For research, an IC of type `researcher` splits by hypothesis, each direction submits after every experiment, and the IC above compares what its sub-teams submit and adds what it checked to the contracts with `write_contracts`, which every sub-team reads.
 
 ### What has been run with the research types
 
@@ -188,7 +188,7 @@ Small sessions on a toy data set (400 rows, four columns), two directions under 
 - **With the protocol in the briefing.** After the org's protocol moved from the agents' system prompts into their first message, a software session with one split and the research session above each landed again on Cursor (seven minutes for the research one). Neither was long enough for a conversation to be condensed.
 - **What it cost.** The same task on Claude Code (five agents, no review sent back) cost $7.57 in nine minutes for 2.1 million tokens. The top team submitted twice, once before and once after it wrote down what was established, so the Division Lead reviewed twice. Cursor reports no use, so a session on Cursor shows no cost and no cost limit holds it.
 
-What a type does not do, since it is text: nothing but the reviewing IC checks that held-out data was left alone or that a claim has a committed result. Directions can read each other's folders. Contracts are never shortened by the director; the IC that owns them trims them with `edit_contracts`. Only trees one or two levels deep have been run.
+What a type does not do, since it is text: nothing but the reviewing IC checks that held-out data was left alone or that a claim has a committed result. Directions can read each other's folders. Contracts are never shortened by the director; the IC that owns them trims them with `write_contracts`. Only trees one or two levels deep have been run.
 
 A setting to start from: `default_agent_type: researcher`, `soft_check_in_minutes` longer than a usual experiment (the notice wakes the IC above, which costs a turn), `max_depth: 2`, and a session cost limit.
 

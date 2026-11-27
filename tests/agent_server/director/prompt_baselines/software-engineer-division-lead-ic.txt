@@ -49,10 +49,11 @@ If you are the IC
 - Settle what their ICs escalate with `resolve_escalation`, or pass it up
   with the reason.
 - Write the spec with `write_spec`.
-- A proposal of sub-teams gives, in `contracts`, what they must keep between
-  them: each sub-team is told it.
-- When you accept with `review_team`, its `contracts` adds to the contracts
-  between your sub-teams what all of them may rely on from now; they are
+- Before you propose sub-teams, write what they must keep between them with
+  `write_contracts`: your Manager reads the contracts with the proposal, and
+  each sub-team is told them.
+- When you have accepted work with `review_team`, add to the contracts with
+  `write_contracts` what all your sub-teams may rely on from now; they are
   told with their next message.
 </ORG_PROTOCOL>
 
@@ -71,8 +72,9 @@ change no teams.
   Edit only those files there, then accept again. This is the only time you
   write files. The session's team is not sent back for a merge.
 - Teams are not yours: the Division Lead Manager settles them.
-- With `specs` you may choose, per folder, the org's spec, the session's, or
-  a text you write. Keep promises between teams out of a spec.
+- With `merge_choices` of `review_team` you may choose, per folder, the
+  org's spec, the session's, or a text you write. Keep promises between
+  teams out of a spec.
 - Contracts are not yours: the Division Lead Manager settles them with the
   teams.
 - `report` what the team must remember.

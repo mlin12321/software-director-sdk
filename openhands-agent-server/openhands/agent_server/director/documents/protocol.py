@@ -79,14 +79,11 @@ class DocumentsBriefed:
         shown: The documents of this kind the team reads, as ``read_from``
             names them; none that is empty.
         titles: What each member of the team is called.
-        above_writer: What the member that works in the folder of the team
-            above is called.
     """
 
     reader: TeamRef
     shown: Sequence[ShownDocument]
     titles: Mapping[str, str]
-    above_writer: str
 
 
 class BriefedPart(NamedTuple):
@@ -168,6 +165,8 @@ class DocumentProtocolBase(ABC):
 
     usable_in_hand_over: ClassVar[bool] = False
     """Whether its tool also works in a hand-over conversation."""
+    read_by_sub_teams: ClassVar[bool] = False
+    """Whether a team also reads the one the team above it keeps."""
 
     @classmethod
     def arguments_for(cls, document: Document) -> type[BaseModel]:
@@ -187,17 +186,6 @@ class DocumentProtocolBase(ABC):
         self.document = document
         self.store = store
         self.tree = tree
-
-    @classmethod
-    def arguments_in_other_tools(
-        cls,
-        document: Document,  # noqa: ARG003
-    ) -> Sequence["DocumentArgument"]:
-        """What the director's own tools ask their caller for, for this
-        document: an argument of ``propose_teams``, ``review_team`` or
-        ``hand_over``, whose text the document is then told with the step
-        the tool takes. None by default."""
-        return ()
 
     def write(self, call: DocumentToolCall) -> DocumentToolResult:
         """Carry out a call of the document's tool.
@@ -293,8 +281,10 @@ class DocumentProtocolBase(ABC):
         worked out from the tree whenever it is asked and never kept, so
         it holds for a team wherever it has been moved.
 
-        The plain answer: its own and no other team's."""
-        return [reader]
+        The plain answer: its own, and before it the one of the team
+        above where the document is ``read_by_sub_teams``."""
+        above = self.tree.above(reader) if self.read_by_sub_teams else None
+        return [reader] if above is None else [above, reader]
 
     def waits_for_team_changes(self) -> bool:
         """Whether what a session wrote of this document becomes the
@@ -361,57 +351,6 @@ def protocol_of(
     return protocol_class(document)(document, store, tree)
 
 
-@dataclass(frozen=True)
-class DocumentArgument:
-    """A text one of the director's own tools asks its caller for, for a
-    document.
-
-    Attributes:
-        tool: The name of the tool.
-        name: What the argument is called.
-        description: What the caller is told to give.
-        answer: What the caller is answered when it gave something.
-        per_folder: Whether it is not one text but a choice for each
-            folder whose document waits to be settled.
-    """
-
-    tool: str
-    name: str
-    description: str
-    answer: str = ""
-    per_folder: bool = False
-
-
-# For each tool, the document each of its arguments is given for.
-_asked: dict[str, dict[str, tuple[str, DocumentArgument]]] = {}
-
-
-def document_arguments(tool: str) -> dict[str, DocumentArgument]:
-    """What ``tool`` asks its caller for, for the documents declared: by
-    the name of the document."""
-    return {document: asked for document, asked in _asked.get(tool, {}).values()}
-
-
-def documents_given(tool: str, arguments: BaseModel) -> dict[str, str]:
-    """What a call of ``tool`` gave for each document it asks for, by the
-    name of the document; '' where it gave nothing."""
-    return {
-        document: (getattr(arguments, asked.name, "") or "").strip()
-        for document, asked in document_arguments(tool).items()
-        if not asked.per_folder
-    }
-
-
-def document_choices(tool: str, arguments: BaseModel) -> dict[str, list[Any]]:
-    """What a call of ``tool`` chose for each document it asks a choice
-    for, by the name of the document."""
-    return {
-        document: list(getattr(arguments, asked.name, None) or [])
-        for document, asked in document_arguments(tool).items()
-        if asked.per_folder
-    }
-
-
 # Who is told of each document an org declares, and the ones told so far.
 # The service that reads an org's documents does not know what gives its
 # agents their tools; that part listens here.
@@ -428,13 +367,6 @@ def declare(document: Document) -> None:
             something else.
     """
     found = (document, protocol_class(document))
-    for asked in found[1].arguments_in_other_tools(document):
-        taken = _asked.setdefault(asked.tool, {}).get(asked.name)
-        if taken is not None and taken[0] != document.name:
-            raise ValueError(
-                f"{asked.tool} already asks for {asked.name!r} for {taken[0]}"
-            )
-        _asked[asked.tool][asked.name] = (document.name, asked)
     for tell in _listeners:
         tell(*found)
     _declared[document.name] = found

@@ -5,7 +5,7 @@ team does not allow, so a tool cannot reach past its own team.
 """
 
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Literal
@@ -16,7 +16,6 @@ from pydantic import BaseModel
 from openhands.agent_server.director.boundary import owns
 from openhands.agent_server.director.documents.protocol import (
     DocumentToolCall,
-    document_arguments,
 )
 from openhands.agent_server.director.git import head_of, uncommitted
 from openhands.agent_server.director.git_store import team_key
@@ -86,25 +85,9 @@ def acting(service: DirectorService, conversation_id: UUID) -> Caller:
 _ASIDE = (
     "You are in hand-over mode, and this conversation is for the hand-over "
     "alone: of the director's "
-    "tools only `read_team_context`, `hand_over` and `write_spec` work here. "
-    "Leave the rest to your main conversation."
+    "tools only `read_team_context`, `hand_over` and the ones your first "
+    "message here named work. Leave the rest to your main conversation."
 )
-
-
-def _keeps(
-    service: DirectorService, team: SessionTeam, given: Mapping[str, str]
-) -> None:
-    """Refuse what is given for a document the team does not keep.
-
-    Raises:
-        Invalid: The type of ``team`` keeps no such document.
-    """
-    kept = set(service.type_of(team).documents)
-    missing = [
-        name for name, text in given.items() if text.strip() and name not in kept
-    ]
-    if missing:
-        raise Invalid(f"{team.title!r} keeps no {', '.join(missing)}: leave that empty")
 
 
 def _not_aside(caller: Caller) -> None:
@@ -261,7 +244,6 @@ def _checked(
     )
     return SplitProposal(
         children=split.children,
-        documents=proposed.documents,
         reason=proposed.reason,
         replaces=[team.id for team in split.replaces],
         keeps=[team.id for team in split.keeps],
@@ -307,15 +289,10 @@ def propose_teams(
     service: DirectorService,
     caller: Caller,
     teams: Sequence[ProposedTeam],
-    given: Mapping[str, str],
     keep: Sequence[str],
     text: str,
 ) -> str:
-    """Put the sub-teams the caller proposes before its Manager.
-
-    Args:
-        given: What the proposal gives for documents, by the name of each.
-    """
+    """Put the sub-teams the caller proposes before its Manager."""
     names = service.team(caller.node).names
     _has(service, caller, "propose_teams", "propose sub-teams")
     node = caller.node
@@ -323,8 +300,7 @@ def propose_teams(
         raise Conflict(
             f"The sub-teams your {names.manager} approved are still being set up"
         )
-    _keeps(service, node, given)
-    proposed = proposed_teams(teams, given, keep, text, service.default_type())
+    proposed = proposed_teams(teams, keep, text, service.default_type())
     proposal = _checked(service, node, proposed)
     store = service.org
     store.update_place(node.id, pending_split=proposal)
@@ -346,6 +322,7 @@ def propose_teams(
     facts = service.facts_of_proposal(node, proposal)
     if facts:
         note += f"\n\n{facts}"
+    read = service.documents_sub_teams_read(node)
     service.record_event(
         node.id, "proposed", None, _named(proposal, replaced), _paths(proposal)
     )
@@ -355,7 +332,11 @@ def propose_teams(
         caller.role,
         node.id,
         service.team(node).manager,
-        f"{said}\n\nProposed sub-teams:\n{as_written(proposed)}",
+        f"{said}\n\nProposed sub-teams:\n{as_written(proposed)}"
+        + "".join(
+            f"\n\nYour team's {name}, which each sub-team reads:\n{text}"
+            for name, text in read
+        ),
         note,
     )
     return (
@@ -684,19 +665,14 @@ def review_team(
     findings: list[ReviewFinding],
     needed_above: str,
     reconciled: str = "",
-    choices: Mapping[str, list[DocumentChoice]] | None = None,
-    given: Mapping[str, str] | None = None,
+    choices: Sequence[DocumentChoice] = (),
 ) -> str:
     """Accept the work a team directly below submitted, or send it back.
 
     Args:
         choices: For the documents the work and the org each made
-            something else of: what holds for each folder, by the name of
-            the document.
-        given: What the accepted work establishes, for the documents of
-            the caller's team that keep such a thing: by the name of each.
+            something else of: which holds.
     """
-    names = service.team(caller.node).names
     _has(service, caller, "review_team", "review the work of a team")
     team = _team_named(service, caller, place_id)
     if team is None or team.parent_id != caller.node.id:
@@ -704,34 +680,18 @@ def review_team(
     place_id = team.id
     if team.review is None or team.review.state != "pending":
         raise Conflict(f"Team {place_id} has no work waiting for your review")
-    given = {name: text for name, text in (given or {}).items() if text.strip()}
-    asked = document_arguments("review_team")
-    named = ", ".join(f"`{asked[name].name}`" for name in given)
-    if given and decision == "reject":
-        raise Invalid(
-            f"{named} records what accepted work establishes; leave it "
-            "empty when you reject"
-        )
-    if given and is_division_lead(caller.node):
-        raise Invalid(
-            f"{named} is not yours to give as the Division Lead "
-            f"{names.reviewer}: the Division Lead {names.manager} settles it"
-        )
-    _keeps(service, caller.node, given)
     if decision == "reject":
         if not findings:
             raise Invalid("Say what must change before you can accept the work")
         service.request_changes(place_id, findings)
         return f"Sent back to {team.title!r} with what must change."
-    chosen = service.document_choices(place_id, choices or {})
+    chosen = service.document_choices(place_id, choices)
     service.check_accept(place_id, reconciled.strip())
     service.accept_review(place_id, needed_above.strip(), reconciled.strip(), chosen)
-    if given:
-        service.sub_team_work_accepted(caller.node, given)
+    service.sub_team_work_accepted(caller.node)
     return (
         f"Accepting the work of {team.title!r}. You are told if it cannot be "
         "brought into your checkout."
-        + "".join(f" {asked[name].answer}" for name in given if asked[name].answer)
     )
 
 
@@ -740,13 +700,12 @@ def settle_teams(
     caller: Caller,
     teams: list[TeamChoice],
     note: str,
-    choices: Mapping[str, list[DocumentChoice]] | None = None,
+    choices: Sequence[DocumentChoice] = (),
 ) -> str:
     """Settle what waits for the caller of a session's teams.
 
     Args:
-        choices: For the documents that wait: what holds for each folder,
-            by the name of the document.
+        choices: For the documents that wait with the teams: which holds.
     """
     _has(service, caller, "settle_teams", "settle the sub-teams of a session")
     return service.settle_teams(
@@ -762,7 +721,7 @@ def settle_teams(
             for choice in teams
         ],
         note.strip(),
-        choices or {},
+        choices,
     )
 
 
@@ -852,29 +811,23 @@ def msg_team(service: DirectorService, caller: Caller, team: str, text: str) -> 
     )
 
 
-def hand_over(
-    service: DirectorService, caller: Caller, team: str, given: Mapping[str, str]
-) -> str:
+def hand_over(service: DirectorService, caller: Caller, team: str, text: str) -> str:
     """Pass on to a team directly below what the teams before it left.
 
     Args:
-        given: What is passed on, for the documents that take such a
-            thing: by the name of each. It is the session's alone until
-            its work is accepted, and starts nothing.
+        text: What the team should know of it, in the caller's words. It
+            is kept for the team, which is told with its next message and
+            writes what should last into its own documents. It starts
+            nothing.
     """
     _has(service, caller, "hand_over", "hand over what removed teams left", aside=True)
-    asked = document_arguments("hand_over")
-    given = {name: text for name, text in given.items() if text.strip()}
-    if not given:
-        names = ", ".join(one.name for one in asked.values()) or "nothing it takes"
-        raise Invalid(f"Give at least one of {names}: there is nothing to hand over")
+    if not text.strip():
+        raise Invalid("Say what the team should know: there is nothing to hand over")
     target = _team_below(service, caller, team)
-    _keeps(service, target, given)
-    service.removed_team_handed_over(target, given)
+    service.removed_team_handed_over(target, caller.node, caller.role, text.strip())
     if caller.hand_over:
         service.note_hand_over(caller.node.id, team=target.title)
-    done = [asked[name].answer or f"{asked[name].name} given" for name in given]
-    return f"Handed over to {target.title!r}: {' and '.join(done)}. " + (
+    return f"Handed over to {target.title!r}. " + (
         "Its agents read it with the next message they get."
         if target.agents
         else "It has not started; it reads this in its briefing when you "

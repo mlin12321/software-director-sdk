@@ -71,6 +71,7 @@ from tests.agent_server.director.conftest import (
     root_conversation,
     run_git,
     session_accepted,
+    session_contracts,
     sets_up_jobs,
     shipped,
     shipped_type,
@@ -555,7 +556,7 @@ async def test_a_team_set_up_under_one_the_org_lost_goes_under_the_nearest_team(
 ):
     top, conversation = await at_api(service)
     sets_up_jobs(service, top)
-    service.removed_team_handed_over(api_place(service, top), {"contracts": IDEMPOTENT})
+    session_contracts(service, api_place(service, top), IDEMPOTENT)
     service.org.remove("services.api")
 
     answer = await session_accepted(service, top, conversation)
@@ -598,19 +599,14 @@ def api_place(service: DirectorService, top: str) -> SessionTeam:
     return place
 
 
-async def test_contracts_and_notes_a_session_hands_over_are_the_orgs_on_accept(
+async def test_contracts_and_reports_a_session_writes_are_the_orgs_on_accept(
     service: DirectorService,
 ):
     top, conversation = await at_api(service)
     place = api_place(service, top)
 
-    service.removed_team_handed_over(
-        place,
-        {
-            "report": "The old jobs team retried forever.",
-            "contracts": "Jobs are idempotent.",
-        },
-    )
+    report(service, place, "ic", "The old jobs team retried forever.")
+    session_contracts(service, place, "Jobs are idempotent.")
 
     # Until its work is accepted they are the session's alone.
     assert service.team_memory.read(API_CONTRACTS) is None
@@ -626,7 +622,7 @@ async def test_contracts_and_notes_a_session_hands_over_are_the_orgs_on_accept(
 
     assert service.team_memory.read(API_CONTRACTS) == "Jobs are idempotent.\n"
     [note] = service.team_memory.reports("services/api", "ic")
-    assert (note.text, note.handed_over) == ("The old jobs team retried forever.", True)
+    assert note.text == "The old jobs team retried forever."
     assert waiting(service, top) == []
 
 
@@ -642,9 +638,7 @@ async def test_contracts_both_changed_wait_for_the_manager_above(
     service: DirectorService, launcher: FakeLauncher, take: str, holds: str
 ):
     top, conversation = await at_api(service)
-    service.removed_team_handed_over(
-        api_place(service, top), {"contracts": "Refunds go through Jobs."}
-    )
+    session_contracts(service, api_place(service, top), "Refunds go through Jobs.")
     # Other accepted work set the contracts of the same directory meanwhile.
     service.team_memory.write(
         "services/api", "contracts.md", "Orders go through Jobs.\n"
@@ -686,7 +680,8 @@ async def test_contracts_both_changed_wait_for_the_manager_above(
     )
     choice = DocumentChoice.model_validate(
         {
-            "path": "services/api",
+            "document": "contracts",
+            "folder": "services/api",
             "take": take,
             "text": "Orders, carts and refunds go through Jobs.",
         }
@@ -695,10 +690,14 @@ async def test_contracts_both_changed_wait_for_the_manager_above(
         service,
         asked,
         SettleTeamsTool,
-        SettleTeamsAction(contracts=[DocumentChoice(path="apps/web", take="org")]),
+        SettleTeamsAction(
+            merge_choices=[
+                DocumentChoice(document="contracts", folder="apps/web", take="org")
+            ]
+        ),
     )
     stale = await use(
-        service, asked, SettleTeamsTool, SettleTeamsAction(contracts=[choice])
+        service, asked, SettleTeamsTool, SettleTeamsAction(merge_choices=[choice])
     )
     assert unknown.is_error and "services/api" in unknown.text
     assert stale.is_error and "changed since you were shown" in stale.text
@@ -708,7 +707,7 @@ async def test_contracts_both_changed_wait_for_the_manager_above(
     )
 
     settled = await use(
-        service, asked, SettleTeamsTool, SettleTeamsAction(contracts=[choice])
+        service, asked, SettleTeamsTool, SettleTeamsAction(merge_choices=[choice])
     )
 
     assert not settled.is_error
@@ -1172,21 +1171,36 @@ async def test_a_reviewer_writes_the_spec_that_holds(service: DirectorService):
     shown = await use(
         service, division_lead_ic(service, top), ReviewTeamTool, accept(top)
     )
-    assert shown.is_error and "say in `specs`" in shown.text
+    assert shown.is_error and "say in `merge_choices`" in shown.text
 
-    def decided(path: str, take: str, text: str = "") -> Any:
+    def decided(path: str, take: str, text: str = "", document: str = "spec") -> Any:
         return ReviewTeamAction(
             team=top,
             decision="accept",
             reconciled="Both.",
-            specs=[
+            merge_choices=[
                 DocumentChoice.model_validate(
-                    {"path": path, "take": take, "text": text}
+                    {"document": document, "folder": path, "take": take, "text": text}
                 )
             ],
         )
 
-    # Only the specs of the work are its reviewer's to decide.
+    # Only the documents that land with the work are its reviewer's to
+    # decide: one that waits with the teams is settled with them, and the
+    # org keeps no other.
+    reviewer = division_lead_ic(service, top)
+    with_teams = await use(
+        service,
+        reviewer,
+        ReviewTeamTool,
+        decided("services/api", "org", "", "contracts"),
+    )
+    unknown = await use(
+        service, reviewer, ReviewTeamTool, decided("services/api", "org", "", "minutes")
+    )
+    assert with_teams.is_error and "waits with the teams" in with_teams.text
+    assert unknown.is_error and "keeps no document named 'minutes'" in unknown.text
+    # And only the ones of the folders of the work.
     elsewhere = await use(
         service,
         division_lead_ic(service, top),
@@ -1232,7 +1246,9 @@ async def test_a_reviewer_keeps_the_orgs_spec(service: DirectorService):
             team=top,
             decision="accept",
             reconciled="Theirs.",
-            specs=[DocumentChoice(path="services/api", take="org")],
+            merge_choices=[
+                DocumentChoice(document="spec", folder="services/api", take="org")
+            ],
         ),
     )
     await service.settled()
@@ -1325,8 +1341,13 @@ async def test_a_spec_written_for_a_team_the_org_lost_is_left_to_the_team_that_h
             team=top,
             decision="accept",
             reconciled="Kept what holds.",
-            specs=[
-                DocumentChoice(path="", take="text", text="# Checkout, with refunds")
+            merge_choices=[
+                DocumentChoice(
+                    document="spec",
+                    folder="",
+                    take="text",
+                    text="# Checkout, with refunds",
+                )
             ]
             if rewritten
             else [],
@@ -1514,13 +1535,13 @@ async def test_work_that_waited_for_the_human_is_merged_as_its_reviewer_decided(
     await use(service, ic(service), SubmitReviewTool, DONE)
     top = node(service, "root")
     decided = DocumentChoice.model_validate(
-        {"path": "", "take": "text", "text": "# Reviewer"}
+        {"document": "spec", "folder": "", "take": "text", "text": "# Reviewer"}
     )
     await use(
         service,
         division_lead_ic(service),
         ReviewTeamTool,
-        ReviewTeamAction(team=top.id, decision="accept", specs=[decided]),
+        ReviewTeamAction(team=top.id, decision="accept", merge_choices=[decided]),
     )
     assert [e.id for e in node(service, "root").escalations] == [MERGE_WAITS]
     run_git(repo, "checkout", "--", "app.py")
@@ -1536,9 +1557,7 @@ async def test_contracts_the_org_did_not_take_are_on_record_when_the_session_clo
     service: DirectorService,
 ):
     top, conversation = await at_api(service)
-    service.removed_team_handed_over(
-        api_place(service, top), {"contracts": "Refunds go through Jobs."}
-    )
+    session_contracts(service, api_place(service, top), "Refunds go through Jobs.")
     service.team_memory.write(
         "services/api", "contracts.md", "Orders go through Jobs.\n"
     )
@@ -1564,9 +1583,7 @@ async def test_contracts_for_a_team_the_org_lost_wait_with_the_rest_of_the_landi
     )
     await service.settled()
     ahead = web.session.teams[0].id
-    service.removed_team_handed_over(
-        node(service, ahead), {"contracts": "The web session's contracts."}
-    )
+    session_contracts(service, node(service, ahead), "The web session's contracts.")
     service.team_memory.write("apps/web", "contracts.md", "The org's.\n")
     await session_accepted(service, ahead, web.conversation_id)
     opened = await service.open_session(
@@ -1575,7 +1592,7 @@ async def test_contracts_for_a_team_the_org_lost_wait_with_the_rest_of_the_landi
     await service.settled()
     top = opened.session.teams[0].id
     place = api_place(service, top)
-    service.removed_team_handed_over(place, {"contracts": "Refunds go through Jobs."})
+    session_contracts(service, place, "Refunds go through Jobs.")
     # Other accepted work set the team at that directory up anew meanwhile.
     service.org.update_team("services.api", since="set up anew")
 

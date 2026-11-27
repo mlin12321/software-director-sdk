@@ -3,7 +3,7 @@
 import asyncio
 import hashlib
 import json
-from collections.abc import Mapping
+from collections.abc import Sequence
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import NamedTuple
@@ -378,25 +378,17 @@ class Reviews(Requests):
         return session.request if session else ""
 
     def document_choices(
-        self, place_id: str, choices: Mapping[str, list[DocumentChoice]]
+        self, place_id: str, choices: Sequence[DocumentChoice]
     ) -> list[dict[str, str]]:
         """What a reviewer decided about the documents of a session's
         work, as it is kept with the acceptance.
 
-        Args:
-            choices: What holds for each folder, by the name of the
-                document.
-
         Raises:
-            Invalid: The work is not a session's, a directory is not in
-                it, or a text is missing.
+            Invalid: The work is not a session's, the org keeps no such
+                document or settles it with the teams, a directory is not
+                in the work, or a text is missing.
         """
-        decided = [
-            (document, choice)
-            for document, of_it in choices.items()
-            for choice in of_it
-        ]
-        if not decided:
+        if not choices:
             return []
         place = self.org.place(place_id)
         if place is None or not self.org.opens_session(place):
@@ -407,16 +399,25 @@ class Reviews(Requests):
         own = normalize_store_path(place.boundary.path)
         homes = {home for home, *_ in self.specs_inherited(place)}
         chosen = []
-        for document, choice in decided:
-            path = normalize_store_path(choice.path)
+        for choice in choices:
+            document = choice.document.strip()
+            protocol = self.protocols.get(document)
+            if protocol is None:
+                raise Invalid(f"The org keeps no document named {document!r}")
+            if protocol.waits_for_team_changes():
+                raise Invalid(
+                    f"What holds of {document} is not decided with the work: it "
+                    "waits with the teams, for the member that settles those."
+                )
+            path = normalize_store_path(choice.folder)
             if not (path == own or is_inside(path, own) or path in homes):
                 raise Invalid(
-                    f"{choice.path!r} is not a folder of this work "
+                    f"{choice.folder!r} is not a folder of this work "
                     f"({own or 'the repository'}), so its {document} is not yours "
                     "to decide here."
                 )
             if choice.take == "text" and not choice.text.strip():
-                raise Invalid(f"Write the {document} of {choice.path!r} in `text`.")
+                raise Invalid(f"Write the {document} of {choice.folder!r} in `text`.")
             chosen.append(
                 {
                     "document": document,
@@ -892,7 +893,7 @@ class Reviews(Requests):
         review_id: str,
         teams: list[TeamChoice],
         note: str,
-        choices: Mapping[str, list[DocumentChoice]] | None = None,
+        choices: Sequence[DocumentChoice] = (),
     ) -> str:
         """Settle what a session's work makes of the org's teams and
         contracts that waits at its Division Lead place. A team
@@ -937,9 +938,8 @@ class Reviews(Requests):
                 (item.document, item.key) for item in waiting if item.waits_with_teams
             ]
             chosen = {
-                (document, normalize_store_path(choice.path)): choice
-                for document, of_it in (choices or {}).items()
-                for choice in of_it
+                (choice.document, normalize_store_path(choice.folder)): choice
+                for choice in choices
             }
             for document in {document for document, _ in chosen}:
                 unknown = [

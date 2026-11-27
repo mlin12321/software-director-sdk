@@ -11,3 +11,6 @@ rules:
         read reports.
     lead_reviewer: '`report` what the team must remember.'
     lead_manager: '`report` what the team must remember.'
+    handed_over: >-
+        `report` what of it your team must remember: what was handed over is
+        kept only for this session.

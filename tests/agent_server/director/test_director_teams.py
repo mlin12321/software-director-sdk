@@ -660,7 +660,6 @@ async def test_sub_teams_that_fail_to_be_set_up_are_put_aside_and_told(
         ProposeTeamsTool,
         proposing(
             [SplitChild(title="Cart", path="apps/web/cart", task="The cart")],
-            contracts="Cart owns the cart page.",
         ),
     )
     await use(service, manager(service, "apps.web"), ApproveTeamsTool, APPROVE)

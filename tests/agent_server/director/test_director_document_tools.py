@@ -8,12 +8,8 @@ import pytest
 
 from openhands.agent_server.director.documents.declared import Document
 from openhands.agent_server.director.documents.protocol import (
-    DocumentArgument,
     DocumentProtocolBase,
     declare,
-    document_arguments,
-    document_choices,
-    documents_given,
     register_protocol,
 )
 from openhands.agent_server.director.service import DirectorService
@@ -110,9 +106,14 @@ async def test_a_plain_document_is_changed_in_one_place_as_a_file_is(
 async def test_only_what_a_document_allows_is_offered_in_a_hand_over(
     service: DirectorService,
 ):
-    # The spec may be written by the member that takes over what a removed
-    # team left; a plain document may not.
-    assert service.hand_over_tools == ("read_team_context", "hand_over", "write_spec")
+    # The spec and the contracts may be written by the member that takes
+    # over what a removed team left; a plain document may not.
+    assert service.hand_over_tools == (
+        "read_team_context",
+        "hand_over",
+        "write_contracts",
+        "write_spec",
+    )
 
 
 async def test_a_team_is_told_the_documents_its_type_keeps_under_their_names(
@@ -180,73 +181,46 @@ async def test_a_report_is_an_entry_its_teams_members_are_told(
     await service.aclose()
 
 
-def test_the_directors_tools_ask_for_what_the_shipped_documents_say():
-    def asked(tool: str) -> dict[str, str]:
-        made = tool_named(tool)
-        assert made is not None
-        fields = made.action().model_fields
-        return {
-            one.name: fields[one.name].description or ""
-            for one in document_arguments(tool).values()
-        }
+_OWN_TOOLS = ("propose_teams", "review_team", "hand_over", "settle_teams")
 
-    assert set(asked("propose_teams")) == {"contracts"}
-    assert "types, endpoints" in asked("propose_teams")["contracts"]
-    assert set(asked("review_team")) == {"contracts", "specs"}
-    reviewed = tool_named("review_team")
-    assert reviewed is not None
-    accepted = reviewed.action()(
-        team="services.api",
-        decision="accept",
-        specs=[{"path": "services/api", "take": "org"}],
-    )
-    assert list(document_choices("review_team", accepted)) == ["spec"]
-    assert documents_given("review_team", accepted) == {"contracts": ""}
-    settle = tool_named("settle_teams")
-    assert settle is not None
-    chosen = settle.action()(
-        contracts=[{"path": "services/api", "take": "org"}], teams=[]
-    )
-    assert [
-        (document, [choice.path for choice in choices])
-        for document, choices in document_choices("settle_teams", chosen).items()
-    ] == [("contracts", ["services/api"])]
-    assert documents_given("settle_teams", chosen) == {}
-    # Another test's document may have added one more.
-    assert {"notes", "contracts"} <= set(asked("hand_over"))
-    handed = document_arguments("hand_over")
-    assert (handed["report"].name, handed["contracts"].name) == ("notes", "contracts")
+
+def _taken(tool: str) -> dict[str, str]:
+    """What a tool of the director's own takes: each argument and what
+    its caller is told of it."""
+    made = tool_named(tool)
+    assert made is not None
+    return {
+        name: field.description or ""
+        for name, field in made.action().model_fields.items()
+    }
 
 
 class _Minutes(DocumentProtocolBase):
-    @classmethod
-    def arguments_in_other_tools(cls, document: Document):
-        return (
-            DocumentArgument(
-                "hand_over", document.name, "What was agreed.", "the minutes are kept"
-            ),
-        )
+    """A document with a protocol of an org's own."""
 
 
-def test_a_document_of_an_orgs_own_adds_an_argument_to_a_tool_of_the_directors():
+def test_a_document_adds_nothing_to_the_tools_of_the_directors_own():
+    before = {tool: _taken(tool) for tool in _OWN_TOOLS}
     register_protocol("minutes-of-meetings", _Minutes)
-    minutes = Document(
-        name="minutes", description="What was agreed.", protocol="minutes-of-meetings"
+
+    declare(
+        Document(
+            name="minutes",
+            description="What was agreed.",
+            protocol="minutes-of-meetings",
+        )
     )
 
-    declare(minutes)
-    declare(minutes)
-
-    made = tool_named("hand_over")
-    assert made is not None
-    action = made.action()(team="services.api", minutes=" Ship on Friday. ")
-    assert action.model_fields["minutes"].description == "What was agreed."
-    assert documents_given("hand_over", action)["minutes"] == "Ship on Friday."
-    assert document_arguments("hand_over")["minutes"].answer == "the minutes are kept"
-
-    clash = Document(name="notes", description="Notes.", protocol="minutes-of-meetings")
-    with pytest.raises(ValueError, match="already asks for 'notes' for report"):
-        declare(clash)
+    # Every org is offered the same tools, whatever documents it keeps.
+    assert {tool: _taken(tool) for tool in _OWN_TOOLS} == before
+    assert tool_named("write_minutes") is not None
+    assert set(before["propose_teams"]) == {"teams", "keep", "text"}
+    assert set(before["hand_over"]) == {"team", "text"}
+    # Which of two versions of a document holds is asked by the tools that
+    # merge a session's work, of whatever documents the org keeps.
+    for tool in ("review_team", "settle_teams"):
+        said = before[tool]["merge_choices"]
+        assert "spec" not in said and "contracts" not in said
 
 
 async def test_a_team_is_not_given_a_document_its_type_does_not_keep(
@@ -256,11 +230,8 @@ async def test_a_team_is_not_given_a_document_its_type_does_not_keep(
     refused = call_tool(
         service,
         UUID(bench(service)),
-        "propose_teams",
-        {
-            "teams": [{"name": "Rig", "path": "rig", "instruction": "Build it"}],
-            "contracts": "Rig serves Assay.",
-        },
+        "write_contracts",
+        {"command": "create", "file_text": "Rig serves Assay."},
     )
 
-    assert refused.is_error and "keeps no contracts" in refused.text
+    assert refused.is_error

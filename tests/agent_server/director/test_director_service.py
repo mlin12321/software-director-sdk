@@ -478,7 +478,7 @@ async def split_root(service: DirectorService, *children: SplitChild) -> None:
         return agent_actions.caller_of(service, UUID(conversation_id))
 
     agent_actions.propose_teams(
-        service, caller("ic"), as_proposed(list(children)), {}, [], ""
+        service, caller("ic"), as_proposed(list(children)), [], ""
     )
     agent_actions.approve_teams(service, caller("manager"))
     await service.settled()
