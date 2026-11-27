@@ -16,8 +16,8 @@ from openhands.agent_server.director.documents.events import (
     SubTeamsProposed,
     TeamRemoved,
 )
-from openhands.agent_server.director.documents.protocol import (
-    DocumentProtocolBase,
+from openhands.agent_server.director.documents.protocol import DocumentProtocolBase
+from openhands.agent_server.director.documents.schema import (
     DocumentsBriefed,
     ShownDocument,
 )

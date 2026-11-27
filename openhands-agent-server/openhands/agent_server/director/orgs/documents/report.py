@@ -1,21 +1,22 @@
 """What the members of a team record for themselves as they work."""
 
 from collections.abc import Mapping, Sequence
-from typing import Any
+from typing import Any, ClassVar
 
 from pydantic import BaseModel, Field
 
 from openhands.agent_server.director.documents.declared import Document
-from openhands.agent_server.director.documents.protocol import (
+from openhands.agent_server.director.documents.protocol import DocumentProtocolBase
+from openhands.agent_server.director.documents.registry import register_protocol
+from openhands.agent_server.director.documents.schema import (
     BriefedPart,
-    DocumentProtocolBase,
     DocumentsBriefed,
     DocumentToolCall,
     DocumentToolResult,
     ShownDocument,
-    register_protocol,
 )
 from openhands.agent_server.director.documents.store import LogEntry, TeamRef
+from openhands.agent_server.director.documents.writer import DocumentWriterBase
 from openhands.sdk.errors import Invalid
 
 
@@ -25,15 +26,14 @@ class ReportArguments(BaseModel):
     text: str = Field(description="What to record, in plain English.")
 
 
-class ReportProtocol(DocumentProtocolBase):
-    """A log that is only added to: each call of its tool adds an entry,
-    and the members of the team read all of them."""
+class ReportWriter(DocumentWriterBase):
+    """Adds an entry to the log with each call."""
 
     @classmethod
     def arguments_for(cls, document: Document) -> type[BaseModel]:  # noqa: ARG003
         return ReportArguments
 
-    def write(self, call: DocumentToolCall) -> DocumentToolResult:
+    def __call__(self, call: DocumentToolCall) -> DocumentToolResult:
         given = call.arguments
         assert isinstance(given, ReportArguments)
         text = given.text.strip()
@@ -43,6 +43,13 @@ class ReportProtocol(DocumentProtocolBase):
             call.team, self.document.name, LogEntry(at="", role=call.member, text=text)
         )
         return DocumentToolResult("Recorded for you and the other agent of your team.")
+
+
+class ReportProtocol(DocumentProtocolBase):
+    """A log that is only added to: each call of its tool adds an entry,
+    and the members of the team read all of them."""
+
+    writer_class: ClassVar[type[DocumentWriterBase]] = ReportWriter
 
     def told_to_reader(
         self,

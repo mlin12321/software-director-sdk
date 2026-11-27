@@ -15,17 +15,23 @@ from openhands.agent_server.director.documents.events import (
     TeamRef,
     TeamRemoved,
 )
-from openhands.agent_server.director.documents.protocol import (
-    DocumentProtocolBase,
-    DocumentsBriefed,
-    ShownDocument,
+from openhands.agent_server.director.documents.protocol import DocumentProtocolBase
+from openhands.agent_server.director.documents.registry import (
     UnknownProtocol,
     protocol_of,
+)
+from openhands.agent_server.director.documents.schema import (
+    DocumentsBriefed,
+    ShownDocument,
 )
 from openhands.agent_server.director.documents.store import (
     DocumentDraft,
     DocumentRef,
     GitDocumentStore,
+)
+from openhands.agent_server.director.documents.writer import (
+    DocumentWriterBase,
+    EditorWriter,
 )
 from openhands.agent_server.director.git_store import GitStore
 from openhands.agent_server.director.org import OrgBase
@@ -397,3 +403,12 @@ def test_a_document_says_its_own_part_of_a_briefing(
     [(heading, text)] = contracts.told_in_briefing(briefed(above))
     assert heading.startswith("Contracts your team must keep")
     assert text == "# Agreed"
+
+
+def test_a_protocol_names_what_writes_its_document_and_does_no_writing_itself():
+    # What a document is and what carries out a call of its tool are two
+    # classes, as a tool's definition and its executor are.
+    for held in ("write", "edited", "arguments_for"):
+        assert not hasattr(DocumentProtocolBase, held)
+    assert DocumentProtocolBase.writer_class is EditorWriter
+    assert issubclass(EditorWriter, DocumentWriterBase)

@@ -41,8 +41,8 @@ from openhands.agent_server.director.documents.declared import (
     load_documents,
 )
 from openhands.agent_server.director.documents.events import TeamRef
-from openhands.agent_server.director.documents.protocol import (
-    DocumentProtocolBase,
+from openhands.agent_server.director.documents.protocol import DocumentProtocolBase
+from openhands.agent_server.director.documents.registry import (
     UnknownProtocol,
     declare,
     protocol_of,
