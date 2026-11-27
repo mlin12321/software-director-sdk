@@ -260,7 +260,7 @@ async def test_a_pushed_org_is_whole_in_another_clone_except_for_its_sessions(
     assert pushed.result == "pushed" and pulled.result == "fast_forward"
     assert [found.id for found in there.org_load.org.teams()] == ["root", API, WEB]
     assert team(there, API).title == "API" and team(there, API).summary
-    [carried] = there.team_reports.reports_of(team(there, API))
+    [carried] = there.team_history.reports_of(team(there, API))
     assert carried.text == "Never log card numbers"
     assert there.org_load.team_memory.read("contracts.md")
     # Who works on it is the first machine's alone.

@@ -852,7 +852,7 @@ def hand_over(service: DirectorService, caller: Caller, team: str, text: str) ->
     if not text.strip():
         raise Invalid("Say what the team should know: there is nothing to hand over")
     target = _team_below(service, caller, team)
-    service.session_documents.removed_team_handed_over(
+    service.session_records.removed_team_handed_over(
         target, caller.node, caller.role, text.strip()
     )
     if caller.hand_over:

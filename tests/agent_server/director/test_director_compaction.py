@@ -84,7 +84,7 @@ async def test_long_reports_are_rewritten_by_a_model_once_they_are_the_teams(
         await landed(service)
         report(service, root, "ic", "Then this.")
         await service.work_queue.settled()
-        kept = service.team_reports.reports_of(root)
+        kept = service.team_history.reports_of(root)
     finally:
         await service.aclose()
 
@@ -107,7 +107,7 @@ async def test_an_answer_that_is_no_shorter_leaves_the_reports_as_they_are(
         root = node(service, "root")
         report(service, root, "ic", "a" * 1_200)
         await landed(service)
-        kept = service.team_reports.reports_of(root)
+        kept = service.team_history.reports_of(root)
     finally:
         await service.aclose()
 

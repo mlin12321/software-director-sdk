@@ -76,14 +76,14 @@ from openhands.agent_server.director.service.resumable_work_service import (
     ResumableWorkService,
 )
 from openhands.agent_server.director.service.review_service import ReviewService
-from openhands.agent_server.director.service.session_document_service import (
-    SessionDocumentService,
-)
 from openhands.agent_server.director.service.session_draft_service import (
     SessionDraftService,
 )
 from openhands.agent_server.director.service.session_merge_service import (
     SessionMergeService,
+)
+from openhands.agent_server.director.service.session_record_service import (
+    SessionRecordService,
 )
 from openhands.agent_server.director.service.team_history_service import (
     ASKED_KEPT,
@@ -161,7 +161,7 @@ class SessionLifecycleService:
     member_start: TeamMemberStartService
     check_counts: CheckCountService
     confinement: AgentConfinementService
-    session_documents: SessionDocumentService
+    session_records: SessionRecordService
     session_drafts: SessionDraftService
     team_splits: TeamSplitService
     model_calls: ModelCallService
@@ -353,7 +353,7 @@ class SessionLifecycleService:
                 )
             except BaseException:
                 # Nothing of a session that never began stays in the record.
-                self.session_documents.leave(top)
+                self.session_records.leave(top)
                 for place in store.session(session_id):
                     run.unmark(TASK, place.id)
                 store.close_session(session_id)
@@ -716,7 +716,7 @@ class SessionLifecycleService:
                     BASE_LANE,
                     lambda: asyncio.to_thread(self.session_merges.settle_on_close, top),
                 )
-                gone = await asyncio.to_thread(self.session_documents.leave, top)
+                gone = await asyncio.to_thread(self.session_records.leave, top)
                 # Once: a step cut off after it would record it again.
                 if plan.known and "told" not in intent.steps:
                     await asyncio.to_thread(

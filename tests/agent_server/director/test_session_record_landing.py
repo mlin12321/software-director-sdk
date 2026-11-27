@@ -2,6 +2,7 @@
 store of teams and a run state in memory, and no director."""
 
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -9,6 +10,7 @@ from openhands.agent_server.director.documents.store import (
     DocumentRef,
     RecordDocumentStore,
 )
+from openhands.agent_server.director.documents.team_documents import TeamDocuments
 from openhands.agent_server.director.environment.git import GitCodingEnvironment
 from openhands.agent_server.director.environment.git.git_store import GitStore
 from openhands.agent_server.director.models import (
@@ -20,19 +22,22 @@ from openhands.agent_server.director.models import (
 from openhands.agent_server.director.org_persistence import load_org
 from openhands.agent_server.director.org_store import OrgStore
 from openhands.agent_server.director.run_state import RunState
+from openhands.agent_server.director.service.agent_confinement_service import (
+    AgentConfinementService,
+)
 from openhands.agent_server.director.service.org_save_service import OrgSaveService
 from openhands.agent_server.director.service.session_draft_service import (
     SessionDraftService,
 )
-from openhands.agent_server.director.service.session_landing_service import (
-    SessionLandingService,
+from openhands.agent_server.director.service.session_record_service import (
+    SessionRecordService,
 )
 from openhands.agent_server.director.service.team_type_service import (
     TeamTypeService,
 )
 from openhands.agent_server.director.service.work_queue_service import WorkQueueService
 from tests.agent_server.director.conftest import open_session_in, small_tree
-from tests.agent_server.director.test_team_documents import RootAboveApi
+from tests.agent_server.director.test_team_documents import AnyOrg, RootAboveApi
 
 
 AT = "2026-01-01T00:00:00Z"
@@ -46,7 +51,7 @@ def event(kind: TeamEventKind, team: SessionTeam, detail: str) -> TeamEvent:
 
 
 @pytest.fixture
-def landing(repo: Path) -> SessionLandingService:
+def landing(repo: Path) -> SessionRecordService:
     run = RunState(None)
     store = OrgStore(lambda node: team_types.type_of(node))
     documents = RecordDocumentStore(lambda: GitStore(repo), lambda: run)
@@ -59,11 +64,16 @@ def landing(repo: Path) -> SessionLandingService:
     for node in small_tree():
         store.upsert(node)
     open_session_in(store, "root", SESSION)
-    return SessionLandingService(
+    return SessionRecordService(
         org=lambda: store,
         run_state=lambda: run,
         team_memory=lambda: GitStore(repo),
         documents=documents,
+        require_team_memory=lambda: GitStore(repo),
+        team_documents=lambda: TeamDocuments(
+            documents, team_types.protocols, AnyOrg(RootAboveApi())
+        ),
+        confinement=cast(AgentConfinementService, None),
         team_types=team_types,
         session_drafts=SessionDraftService(run_state=lambda: run),
         org_save=OrgSaveService(
@@ -79,11 +89,11 @@ def landing(repo: Path) -> SessionLandingService:
     )
 
 
-def top(landing: SessionLandingService) -> SessionTeam:
+def top(landing: SessionRecordService) -> SessionTeam:
     return place(landing, "root")
 
 
-def place(landing: SessionLandingService, team_id: str) -> SessionTeam:
+def place(landing: SessionRecordService, team_id: str) -> SessionTeam:
     found = landing.org().instance(team_id, SESSION)
     assert found is not None
     return found
@@ -94,7 +104,7 @@ def report(text: str) -> Report:
 
 
 def test_a_document_a_session_wrote_becomes_the_orgs_and_is_its_draft_no_more(
-    landing: SessionLandingService,
+    landing: SessionRecordService,
 ):
     landing.documents.write(SESSION, A_SPEC, "Take orders.")
 
@@ -106,7 +116,7 @@ def test_a_document_a_session_wrote_becomes_the_orgs_and_is_its_draft_no_more(
 
 
 def test_what_agents_recorded_lands_with_their_team_and_is_forgotten(
-    landing: SessionLandingService,
+    landing: SessionRecordService,
 ):
     a = place(landing, "a")
     landing.session_drafts.keep_report(a.id, report("Orders are idempotent."))
@@ -120,7 +130,7 @@ def test_what_agents_recorded_lands_with_their_team_and_is_forgotten(
 
 
 def test_what_is_of_a_team_that_waits_stays_the_sessions(
-    landing: SessionLandingService,
+    landing: SessionRecordService,
 ):
     a, b = place(landing, "a"), place(landing, "b")
     landing.documents.write(SESSION, A_SPEC, "Take orders.")
@@ -137,7 +147,7 @@ def test_what_is_of_a_team_that_waits_stays_the_sessions(
     assert landing.session_drafts.reports(b.id) == []
 
 
-def test_a_file_that_is_held_stays_a_draft(landing: SessionLandingService):
+def test_a_file_that_is_held_stays_a_draft(landing: SessionRecordService):
     landing.documents.write(SESSION, A_SPEC, "Take orders.")
 
     landing.land(top(landing), held=[A_SPEC.path])
@@ -147,7 +157,7 @@ def test_a_file_that_is_held_stays_a_draft(landing: SessionLandingService):
 
 
 def test_a_document_someone_else_changed_meanwhile_is_not_written_over(
-    landing: SessionLandingService,
+    landing: SessionRecordService,
 ):
     memory = landing.team_memory()
     memory.write("svc/a", "spec.md", "First.")
@@ -163,7 +173,7 @@ def test_a_document_someone_else_changed_meanwhile_is_not_written_over(
 
 
 def test_a_changed_document_is_written_over_where_its_reviewer_was_shown_it(
-    landing: SessionLandingService,
+    landing: SessionRecordService,
 ):
     memory = landing.team_memory()
     memory.write("svc/a", "spec.md", "First.")
@@ -177,7 +187,7 @@ def test_a_changed_document_is_written_over_where_its_reviewer_was_shown_it(
 
 
 def test_the_tree_lands_with_the_records_only_when_it_is_asked_to(
-    landing: SessionLandingService, repo: Path
+    landing: SessionRecordService, repo: Path
 ):
     landing.documents.write(SESSION, A_SPEC, "Take orders.")
     landing.land(top(landing))
@@ -192,7 +202,7 @@ def test_the_tree_lands_with_the_records_only_when_it_is_asked_to(
 
 
 def test_what_a_lost_team_left_goes_to_the_nearest_team_that_holds_its_folder(
-    landing: SessionLandingService,
+    landing: SessionRecordService,
 ):
     session_top = top(landing)
 
@@ -202,7 +212,7 @@ def test_what_a_lost_team_left_goes_to_the_nearest_team_that_holds_its_folder(
 
 
 def test_a_place_is_the_orgs_only_while_the_org_has_that_very_team(
-    landing: SessionLandingService,
+    landing: SessionRecordService,
 ):
     store = landing.org()
     a = place(landing, "a")
