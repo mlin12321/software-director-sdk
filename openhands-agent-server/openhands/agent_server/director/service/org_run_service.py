@@ -53,6 +53,11 @@ from openhands.agent_server.director.service.org_settings_service import (
     OrgSettingsService,
 )
 from openhands.agent_server.director.service.org_state_service import OrgStateService
+from openhands.agent_server.director.service.org_watch_service import (
+    LIMIT_WAITS,
+    STALL_WAITS,
+    OrgWatchService,
+)
 from openhands.agent_server.director.service.resumable_work_service import (
     ResumableWorkService,
 )
@@ -60,15 +65,10 @@ from openhands.agent_server.director.service.review_service import (
     MERGE_WAITS,
     ReviewService,
 )
-from openhands.agent_server.director.service.session_limit_service import (
-    LIMIT_WAITS,
-    SessionLimitService,
-)
 from openhands.agent_server.director.service.session_merge_service import (
     ORG_WAITS,
     SessionMergeService,
 )
-from openhands.agent_server.director.service.stall_watch_service import STALL_WAITS
 from openhands.agent_server.director.service.start_line_service import StartLineService
 from openhands.agent_server.director.service.team_member_start_service import (
     TeamMemberStartService,
@@ -162,7 +162,7 @@ class OrgRunService:
     """The lane a step is carried out in."""
     reviews: ReviewService
     session_merges: SessionMergeService
-    session_limits: SessionLimitService
+    org_watch: OrgWatchService
     """Lets a session that rests at its limit go on."""
     _resume_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False)
 
@@ -864,7 +864,7 @@ class OrgRunService:
             self.resumable_work.begin(place_id, LandOrg(org_holds=True))
             return store.place(place_id) or place
         if escalation_id == LIMIT_WAITS:
-            self.session_limits.go_on_past_limit(place_id)
+            self.org_watch.go_on_past_limit(place_id)
         if lost:
             # A new Manager starts with the answer; the IC goes on as it was.
             self.team_messaging.tell_manager(

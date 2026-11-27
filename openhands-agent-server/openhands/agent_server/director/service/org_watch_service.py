@@ -1,16 +1,28 @@
-"""Teams that show no progress: finding them and telling the IC above."""
+"""What the director's timer watches of a running org: teams that show no
+progress, and what the sessions' agents use."""
 
 import asyncio
 import json
-from collections.abc import Awaitable, Callable, Collection
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
+from uuid import UUID
 
 from openhands.agent_server.director.environment.checkouts import Checkouts
-from openhands.agent_server.director.models import DirectorSettings, SessionTeam
-from openhands.agent_server.director.org_store import OrgStore, is_division_lead
+from openhands.agent_server.director.launch import TeamLauncher
+from openhands.agent_server.director.models import (
+    Session,
+    SessionTeam,
+    Stopped,
+    Usage,
+)
+from openhands.agent_server.director.org_store import (
+    OrgStore,
+    is_division_lead,
+    utc_now,
+)
 from openhands.agent_server.director.prompts import (
     STALL_QUESTION,
     check_in_notice,
@@ -18,10 +30,29 @@ from openhands.agent_server.director.prompts import (
     stall_notice,
     unstarted_notice,
 )
-from openhands.agent_server.director.run_state import PROGRESS, RunState
+from openhands.agent_server.director.run_state import PROGRESS, USE, RunState
 from openhands.agent_server.director.service.model_call_service import (
     ModelCallService,
 )
+from openhands.agent_server.director.service.org_save_service import OrgSaveService
+from openhands.agent_server.director.service.org_settings_service import (
+    OrgSettingsService,
+)
+from openhands.agent_server.director.service.org_state_service import (
+    OrgStateService,
+    progress_of,
+)
+from openhands.agent_server.director.service.review_service import ReviewService
+from openhands.agent_server.director.service.session_merge_service import (
+    SessionMergeService,
+)
+from openhands.agent_server.director.service.team_history_service import (
+    TeamHistoryService,
+)
+from openhands.agent_server.director.service.team_messaging_service import (
+    TeamMessagingService,
+)
+from openhands.agent_server.director.service.team_type_service import TeamTypeService
 from openhands.agent_server.director.service.work_queue_service import WorkQueueService
 from openhands.agent_server.director.team import Team
 
@@ -29,71 +60,50 @@ from openhands.agent_server.director.team import Team
 # The id of the escalation that asks the human what a team that shows no
 # progress is to do, when no IC stands above it.
 STALL_WAITS = "stalled"
+# The escalation that asks the human whether a session that reached its
+# token limit goes on.
+LIMIT_WAITS = "limit-reached"
 # The lane the director's timer does its work in.
 STALL_LANE = "stalls"
 
 
-def progress_of(kept: str | None) -> dict[str, Any]:
-    """What is known of a team's progress: when it last got anywhere
-    (``at``), the last commit in its directory then (``head``), when the IC
-    above was last told that it shows none (``told``), and when that IC last
-    turned to the team or was told of it (``checked``)."""
-    try:
-        seen = json.loads(kept) if kept else {}
-    except ValueError:
-        return {}
-    return seen if isinstance(seen, dict) else {}
-
-
 @dataclass
-class StallWatchService:
-    """Finds the teams that owe work and show no progress, and has the IC
-    above each told: once for every stretch of time the org allows, and
-    from time to time how each team below it stands.
+class OrgWatchService:
+    """Watches the running org on the director's one timer.
 
-    It keeps what it has seen in the run state and sends nothing itself:
-    what is said goes through the functions it is given. It runs no timer;
-    whoever holds it has ``check_stalls`` run.
+    Each look does two things. What the agents of each session used since
+    the last look is added up (`count_use`), and a session that reached
+    its limit is put to rest and the human asked (`LIMIT_WAITS`); the
+    answer lets it go on (`go_on_past_limit`). And the teams that owe work
+    and show no progress are found (`check_stalls`): the IC above each is
+    told once for every stretch of time the org allows, and from time to
+    time how each team below it stands.
+
+    What it has seen is kept in the run state. `watch` is the timer;
+    whoever starts the director runs it as a task.
     """
 
     org: Callable[[], OrgStore]
     """The org's tree, as it is when asked."""
-    checkouts: Checkouts
-    """Where each team's work is and how it moves."""
     has_org: Callable[[], bool]
     """Whether an org is loaded: none is loaded only to look at it."""
-    settings: Callable[[], DirectorSettings]
-    """The org's settings, for the minutes a team may show no progress."""
-    run_state: Callable[[], RunState]
-    """Where what was seen of each team is kept."""
-    clock: Callable[[], datetime]
-    """The time now."""
-    paused: Callable[[], bool]
-    """Whether the org is paused, when nobody is told anything."""
-    running: Callable[[], Collection[str]]
-    """The conversations that are in a turn."""
-    model_calls: ModelCallService
-    """Asks the IC of a team that shows no progress what it is doing."""
-    count_use: Callable[[], Awaitable[None]]
-    """Adds up what the sessions' agents used since it was last looked at."""
+    checkouts: Checkouts
+    """Where each team's work is, for when it last changed."""
+    launcher: Callable[[], TeamLauncher]
+    """What runs the agents and knows what each has used."""
     poll_seconds: float
     """How often the timer looks."""
-    check_managers: Callable[[], None]
-    """Looks at the Managers that were asked to settle teams and did not."""
+    org_state: OrgStateService
+    org_settings: OrgSettingsService
+    org_save: OrgSaveService
+    team_types: TeamTypeService
+    team_history: TeamHistoryService
+    team_messaging: TeamMessagingService
+    reviews: ReviewService
+    session_merges: SessionMergeService
+    model_calls: ModelCallService
+    """Asks the IC of a team that shows no progress what it is doing."""
     work_queue: WorkQueueService
-    """What telling of a stall is carried out with."""
-    progressed: Callable[[str | None], None]
-    """Starts a team's time without progress again."""
-    release_reviews: Callable[[str | None], None]
-    """Sends a team's IC the reviews that wait for it."""
-    record_event: Callable[..., None]
-    """Keeps an event in the record of a team
-    (:meth:`TeamHistoryService.record_event`)."""
-    tell_writer: Callable[[str, str], object]
-    """Sends a message to the IC of the team with this id."""
-    tell_above: Callable[..., None]
-    """Tells the IC above a team, or the human when none stands above it
-    (:meth:`TeamMessagingService.tell_above`)."""
 
     def _writer_conversation(self, team: SessionTeam) -> str | None:
         of_team = Team(self.org(), team)
@@ -168,14 +178,18 @@ class StallWatchService:
         of each team it has not turned to or been told of for the time
         between two check-ins. A team is never told of twice at once: being
         told that it shows no progress is a check-in too."""
-        limit = self.settings().soft_check_in_minutes
-        check_in = self.settings().hard_check_in_minutes
-        if (not limit and not check_in) or not self.has_org() or self.paused():
+        limit = self.org_settings.settings.soft_check_in_minutes
+        check_in = self.org_settings.settings.hard_check_in_minutes
+        if (
+            (not limit and not check_in)
+            or not self.has_org()
+            or self.org_state.paused is not None
+        ):
             return
         store = self.org()
         if limit:
-            await asyncio.to_thread(self.check_managers)
-        run = self.run_state()
+            await asyncio.to_thread(self.session_merges.check_managers)
+        run = self.org_state.run_state()
         marks = run.marked(PROGRESS)
         teams = {team.id: team for team in store.places()}
         for gone in marks.keys() - teams.keys():
@@ -185,7 +199,7 @@ class StallWatchService:
         for team in teams.values():
             if team.parent_id is None:
                 continue
-            now = self.clock()
+            now = self.org_state.clock()
             seen = progress_of(marks.get(team.id))
             head = await asyncio.to_thread(
                 self.checkouts.last_change, Path(team.worktree_path), team.boundary.path
@@ -223,14 +237,14 @@ class StallWatchService:
                 check_in_notice(
                     team,
                     int((now - checked).total_seconds() // 60),
-                    in_a_turn=ic in self.running(),
+                    in_a_turn=ic in self.org_state.running,
                     head=head,
                     again=max(check_in, limit),
                     names=Team(self.org(), team).names,
                 )
             )
         for above_id, texts in check_ins.items():
-            self.tell_writer(above_id, "\n\n".join(texts))
+            self.team_messaging.tell_writer(above_id, "\n\n".join(texts))
 
     def _tell_if_stalled(
         self,
@@ -259,7 +273,7 @@ class StallWatchService:
         again = {"told": now.isoformat(), "checked": now.isoformat()}
         run.mark(PROGRESS, team.id, json.dumps({**seen, **again}))
         if unstarted and team.parent_id is not None:
-            self.tell_writer(
+            self.team_messaging.tell_writer(
                 team.parent_id,
                 unstarted_notice(
                     team,
@@ -271,7 +285,7 @@ class StallWatchService:
         if told is None:
             # The IC above has this much time to act before it shows
             # no progress itself.
-            self.progressed(team.parent_id)
+            self.team_messaging.progressed(team.parent_id)
         minutes = int((now - since).total_seconds() // 60)
         self.work_queue.enqueue(
             lambda team_id=team.id, minutes=minutes: self._tell_of_stall(
@@ -285,21 +299,21 @@ class StallWatchService:
         store = self.org()
         team = store.place(place_id)
         above = store.place(team.parent_id) if team and team.parent_id else None
-        if team is None or above is None or self.paused():
+        if team is None or above is None or self.org_state.paused is not None:
             return
         names = Team(store, team).names
         if not self.may_stall(team):
             return
         ic = self._writer_conversation(team)
-        in_a_turn = ic in self.running()
+        in_a_turn = ic in self.org_state.running
         account = None
         if ic is not None and not in_a_turn:
             account = await self.model_calls.ask_agent(
                 ic, in_words(STALL_QUESTION, names)
             )
-        self.record_event(above.id, "stalled", team, f"{minutes} min")
+        self.team_history.record_event(above.id, "stalled", team, f"{minutes} min")
         # Its reviewer is woken now anyway, and no longer waits for it.
-        self.release_reviews(above.id)
+        self.reviews.release_held(above.id)
         said = (
             f"Its {names.writer} is in a turn right now, so it was not asked what "
             "it is doing."
@@ -308,7 +322,7 @@ class StallWatchService:
             if account
             else f"Asked just now what it is doing, its {names.writer} gave no answer."
         )
-        self.tell_above(
+        self.team_messaging.tell_above(
             team,
             stall_notice(
                 team, minutes, in_a_turn=in_a_turn, account=account, names=names
@@ -321,3 +335,122 @@ class StallWatchService:
                 f"tell its {names.writer} what to do: your answer is sent to it."
             ),
         )
+
+    async def count_use(self) -> None:
+        """Add up what each session's agents have used since it was last
+        looked at, and put a session that reached its limit to rest."""
+        if not self.has_org():
+            return
+        store = self.org()
+        launcher = self.launcher()
+        run = self.org_state.run_state()
+        marks = run.marked(USE)
+        for session in store.sessions():
+            conversations = {
+                conversation_id
+                for team in session.teams
+                for conversation_id in self.org().conversations_below(team)
+            }
+            now = await launcher.usage([UUID(each) for each in sorted(conversations)])
+            last: dict[str, list[float]] = json.loads(marks.get(session.id) or "{}")
+            added = Usage()
+            for conversation_id, used in now.items():
+                before = last.get(str(conversation_id), [0, 0, 0.0, 0])
+                # A count that went down began again, with a server.
+                added = added.plus(
+                    Usage(
+                        input_tokens=max(0, used.input_tokens - int(before[0])),
+                        output_tokens=max(0, used.output_tokens - int(before[1])),
+                        cost=max(0.0, used.cost - before[2]),
+                        unpriced_tokens=max(0, used.unpriced_tokens - int(before[3])),
+                    )
+                )
+                last[str(conversation_id)] = [
+                    used.input_tokens,
+                    used.output_tokens,
+                    used.cost,
+                    used.unpriced_tokens,
+                ]
+            run.mark(USE, session.id, json.dumps(last))
+            # As it is now: the human may have let it go on while this waited.
+            session = next(
+                (each for each in store.sessions() if each.id == session.id), None
+            )
+            if session is None:
+                continue
+            limit = (
+                session.cost_allowance or self.org_settings.settings.session_cost_limit
+            )
+            kept = store.set_session_use(session.id, session.usage.plus(added), limit)
+            if kept is not None:
+                self._hold_at_limit(kept)
+
+    def _hold_at_limit(self, session: Session) -> None:
+        """Put the agents of a session that reached its limit to rest and
+        ask the human whether it goes on."""
+        store = self.org()
+        top = store.instance(session.team_id, session.id)
+        limit = session.cost_allowance
+        if (
+            not limit
+            or session.usage.cost < limit
+            or top is None
+            or top.stopped is not None
+            or self.org_state.paused is not None
+        ):
+            return
+        running = [
+            conversation_id
+            for conversation_id in self.org().conversations_below(top)
+            if conversation_id in self.org_state.running
+        ]
+        store.set_stopped(
+            top.id,
+            Stopped(
+                at=utc_now(),
+                reason=f"The session reached its limit of ${limit:,.2f}.",
+                running=sorted(running),
+            ),
+        )
+        self.work_queue.enqueue(lambda: self.team_messaging.stop(top.id), top.id)
+        used = session.usage
+        if all(e.id != LIMIT_WAITS for e in top.escalations):
+            store.raise_escalation(
+                top.id,
+                LIMIT_WAITS,
+                kind="critical_issue",
+                title=f"{session.title!r} reached its limit of ${limit:,.2f}",
+                detail=(
+                    f"Its agents have used ${used.cost:,.2f} "
+                    f"({used.input_tokens:,} tokens in, "
+                    f"{used.output_tokens:,} out) and are at rest.\nAnswer "
+                    "this to let it go on for as much again; your answer is "
+                    f"sent to its {self.team_types.team(top).names.writer}. Close the "
+                    "session to end it."
+                ),
+                at=utc_now(),
+            )
+        self.org_save.save_soon()
+
+    def go_on_past_limit(self, place_id: str) -> None:
+        """Let a session that was put to rest at its limit go on for as
+        much again, or without a limit when the org has none now."""
+        store = self.org()
+        top = store.place(place_id)
+        session = store.session_of(top) if top else None
+        if top is None or session is None:
+            return
+        limit = self.org_settings.settings.session_cost_limit
+        store.set_session_use(
+            session.id, session.usage, session.usage.cost + limit if limit else 0.0
+        )
+        stopped = top.stopped
+        if stopped is not None:
+            store.set_stopped(top.id, None)
+            self.work_queue.enqueue(
+                lambda: self.team_messaging.go_on(
+                    top.id, stopped.running, own_too=True
+                ),
+                top.id,
+            )
+        self.org_save.save_soon()

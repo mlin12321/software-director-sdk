@@ -53,16 +53,16 @@ from openhands.agent_server.director.service.org_save_service import OrgSaveServ
 from openhands.agent_server.director.service.org_settings_service import (
     OrgSettingsService,
 )
-from openhands.agent_server.director.service.org_state_service import OrgStateService
+from openhands.agent_server.director.service.org_state_service import (
+    OrgStateService,
+    progress_of,
+)
 from openhands.agent_server.director.service.resumable_work_service import (
     ResumableWorkService,
 )
 from openhands.agent_server.director.service.session_draft_service import (
     SessionDraftService,
     thread_name,
-)
-from openhands.agent_server.director.service.stall_watch_service import (
-    progress_of,
 )
 from openhands.agent_server.director.service.team_history_service import (
     TeamHistoryService,
