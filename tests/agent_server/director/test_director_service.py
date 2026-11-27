@@ -1216,7 +1216,7 @@ async def test_a_pruned_agents_shell_and_index_are_removed(
     # agent would be started by, and the index with its marker.
     assert len(left) == 7
 
-    service.prune(node(service, "services.api").id, "x")
+    service.team_splits.prune(node(service, "services.api").id, "x")
     await service.settled()
 
     assert not [path for path in left if path.exists()]

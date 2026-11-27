@@ -3,7 +3,6 @@ team memory, the settings, the queue of steps and the agents' shells."""
 
 import asyncio
 import os
-import re
 import threading
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -37,16 +36,11 @@ from openhands.agent_server.director.git import (
 from openhands.agent_server.director.git_store import (
     GitStore,
 )
-from openhands.agent_server.director.headline import provisional_summary
 from openhands.agent_server.director.intents import Accept, LandOrg
 from openhands.agent_server.director.launch import TeamLauncher
 from openhands.agent_server.director.merge_checkout import MergeCheckout, discard
 from openhands.agent_server.director.models import (
-    HandOverMode,
     OrgSummary,
-    SessionTeam,
-    SessionTeamInput,
-    SplitChild,
     TeamMatch,
 )
 from openhands.agent_server.director.org_persistence import (
@@ -55,8 +49,6 @@ from openhands.agent_server.director.org_persistence import (
 )
 from openhands.agent_server.director.org_store import (
     OrgStore,
-    instant,
-    session_team_id,
     team_ref,
 )
 from openhands.agent_server.director.remembered import RememberedFile
@@ -98,7 +90,6 @@ from openhands.agent_server.director.session_state import (
     restore_sessions,
 )
 from openhands.agent_server.director.split import (
-    child_boundary,
     clean_path,
 )
 from openhands.sdk.conversation.state import ConversationExecutionStatus
@@ -125,9 +116,6 @@ SUMMARY_TIMEOUT_SECONDS = 20.0
 # How long a model may take over a team's diff, or over an agent's reports.
 MODEL_CALL_TIMEOUT_SECONDS = 120.0
 # A team whose work is sent back this many times is stopped.
-# Where, in the org's repository, the uncommitted work a prune discarded is
-# kept.
-PRUNED_REFS = "refs/agents/pruned"
 # Where what an IC left uncommitted in the directory of a sub-team with a
 # checkout of its own is kept: under `left`, what went to the team as it
 # started; under `aside`, what was in the way of the team's accepted work.
@@ -171,25 +159,6 @@ _AGENT_STATUS: dict[ConversationExecutionStatus, str] = {
 # How long a message waits for an IC that submitted to end its turn.
 _REST_CHECKS = 600
 _REST_CHECK_SECONDS = 0.05
-
-
-def hand_over_of(place: SessionTeam) -> HandOverMode | None:
-    """The hand-over mode of the team's IC, if it is or was in it."""
-    for agent in place.agents:
-        if agent.hand_over is not None:
-            return agent.hand_over
-    return None
-
-
-def _summary_of(text: str) -> str:
-    first_line = text.strip().splitlines()[0] if text.strip() else ""
-    return first_line[:200]
-
-
-def apart(team: SessionTeam, above: SessionTeam) -> bool:
-    """Whether a team works in a checkout of its own, not in the one of
-    the team above."""
-    return checkout_root(team.worktree_path) != checkout_root(above.worktree_path)
 
 
 class _TeamsOfTheOrg:
@@ -644,39 +613,6 @@ class ServiceState:
 
     async def _came_back(self) -> None:
         """Take up what the org had begun before the server stopped."""
-
-
-def _child_node(
-    taken: set[str], parent: SessionTeam, child: SplitChild
-) -> SessionTeamInput:
-    """The team a split makes of ``child`` in the session of ``parent``,
-    for a team whose id is not in ``taken`` and is added to it."""
-    base = ".".join(
-        re.sub(r"[^A-Za-z0-9_-]+", "-", segment) for segment in child.path.split("/")
-    )
-    team_id, attempt = base, 1
-    while team_id in taken:
-        attempt += 1
-        team_id = f"{base}-{attempt}"
-    taken.add(team_id)
-    return SessionTeamInput(
-        id=session_team_id(team_id, parent.session),
-        session=parent.session,
-        team_id=team_id,
-        parent_id=parent.id,
-        title=child.title,
-        boundary=child_boundary(child),
-        isolation=child.isolation,
-        agent_profile=child.agent_profile,
-        agent_type=child.agent_type,
-        worktree_path=parent.worktree_path,
-        branch=parent.branch,
-        agents=[],
-        status="idle",
-        headline=provisional_summary(child.task).headline,
-        summary=_summary_of(child.task),
-        since=instant(),
-    )
 
 
 # Steps whose outcome is in the tree alone. The steps that start agents are

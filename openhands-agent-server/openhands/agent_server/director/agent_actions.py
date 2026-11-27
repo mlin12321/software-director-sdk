@@ -424,7 +424,7 @@ def approve_teams(service: DirectorService, caller: Caller) -> str:
         _named(proposal, [team.title for team in split.replaces]),
         _paths(proposal),
     )
-    service.carry_out_split(node.id)
+    service.team_splits.carry_out_split(node.id)
     waits = (
         " The teams they replace are removed first, once their agents have "
         "finished what they are doing."
@@ -889,7 +889,7 @@ def prune_team(
     if team is None or team.parent_id != caller.node.id:
         raise Invalid(f"{place_id} is not a team directly below yours")
     place_id = team.id
-    service.prune(place_id, reason.strip())
+    service.team_splits.prune(place_id, reason.strip())
     return (
         f"Pruning {team.title!r}. Its folder goes back to your team's {names.writer} "
         f"when it is gone. Your {names.writer} is given what the team left and told "

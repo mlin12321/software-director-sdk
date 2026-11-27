@@ -13,7 +13,7 @@ import pytest
 from openhands.agent_server.director import compaction
 from openhands.agent_server.director.launch import StartedAgent
 from openhands.agent_server.director.models import LeftoverDocument, SplitChild
-from openhands.agent_server.director.org_store import team_id_of
+from openhands.agent_server.director.org_store import hand_over_of, team_id_of
 from openhands.agent_server.director.prompts import (
     HAND_OVER_ROLE,
     left_behind,
@@ -21,7 +21,6 @@ from openhands.agent_server.director.prompts import (
 from openhands.agent_server.director.run_state import TASK
 from openhands.agent_server.director.service import (
     DirectorService,
-    hand_over_of,
 )
 from openhands.agent_server.director.split import ProposedTeam
 from openhands.agent_server.director.tools import (

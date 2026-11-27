@@ -139,6 +139,14 @@ def new_agents(ic_id: UUID, member: str) -> list[AgentRef]:
     return [AgentRef(role=member, conversation_id=str(ic_id), status="idle")]
 
 
+def hand_over_of(place: SessionTeam) -> HandOverMode | None:
+    """The hand-over mode of the team's IC, if it is or was in it."""
+    for agent in place.agents:
+        if agent.hand_over is not None:
+            return agent.hand_over
+    return None
+
+
 def session_of(node: OrgNodeInput) -> str:
     """The session a place belongs to; '' for a team of the org."""
     return node.session if isinstance(node, SessionTeam) else ""

@@ -94,3 +94,9 @@ def summarize_team(llm: LLM, task: str) -> TeamSummary | None:
         part.text for part in response.message.content if isinstance(part, TextContent)
     )
     return parse_summary(text)
+
+
+def summary_of(text: str) -> str:
+    """The first line of a text, cut to what a summary holds."""
+    first_line = text.strip().splitlines()[0] if text.strip() else ""
+    return first_line[:200]

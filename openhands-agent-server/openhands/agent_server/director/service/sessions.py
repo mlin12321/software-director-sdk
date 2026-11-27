@@ -7,6 +7,7 @@ from itertools import count
 from pathlib import Path
 from uuid import UUID, uuid4
 
+from openhands.agent_server.director.confinement import apart
 from openhands.agent_server.director.git import GitError, git, head_of, ref_stamp
 from openhands.agent_server.director.headline import provisional_summary
 from openhands.agent_server.director.intents import Brief, CloseSession
@@ -51,9 +52,6 @@ from openhands.agent_server.director.service.request_routing_service import (
     RequestRoutingService,
 )
 from openhands.agent_server.director.service.splits import Splits
-from openhands.agent_server.director.service.state import (
-    apart,
-)
 from openhands.agent_server.director.service.team_history_service import ASKED_KEPT
 from openhands.agent_server.director.service.work_queue_service import BASE_LANE
 from openhands.agent_server.director.split import shape_of
@@ -609,7 +607,9 @@ class Sessions(Splits):
                 kept = await asyncio.to_thread(
                     self._keep_unmerged, top, above, plan.stamp
                 )
-                await asyncio.to_thread(self._discard_work, started, plan.stamp)
+                await asyncio.to_thread(
+                    self.team_splits.discard_work, started, plan.stamp
+                )
             intent = run.step_done(intent, "kept", kept=kept)
         if "deleted" not in intent.steps:
             for conversation_id in conversations:

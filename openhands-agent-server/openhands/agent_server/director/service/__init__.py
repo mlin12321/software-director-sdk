@@ -9,7 +9,7 @@ from uuid import UUID
 
 from openhands.agent_server.director.boundary import nearest_team, worded
 from openhands.agent_server.director.git import is_git_repository
-from openhands.agent_server.director.headline import provisional_summary
+from openhands.agent_server.director.headline import provisional_summary, summary_of
 from openhands.agent_server.director.intents import LandOrg
 from openhands.agent_server.director.launch import TeamLauncher
 from openhands.agent_server.director.models import (
@@ -26,6 +26,7 @@ from openhands.agent_server.director.models import (
 )
 from openhands.agent_server.director.org_store import (
     AGENT_LOST,
+    hand_over_of,
     instant,
     is_division_lead,
 )
@@ -48,9 +49,7 @@ from openhands.agent_server.director.service.state import (
     ORG_WAITS,
     RESTART_NOTE,
     ROOT_ID,
-    _summary_of,
     checkout_root,
-    hand_over_of,
 )
 from openhands.agent_server.director.service.sync import Sync
 from openhands.agent_server.director.service.team_messaging_service import failure_waits
@@ -107,14 +106,14 @@ class DirectorService(Sync):
         for kind, step in {
             "brief": self._do_brief,
             "launch_member": self._do_launch_member,
-            "split": self._do_split,
+            "split": self.team_splits.do_split,
             "start_team": self._do_start_team,
-            "finish_split": self._do_finish_split,
-            "hand_over": self._do_hand_over,
+            "finish_split": self.team_splits.do_finish_split,
+            "hand_over": self.team_splits.do_hand_over,
             "request_review": self._do_request_review,
             "accept": self._do_accept,
             "land_org": self._do_land_org,
-            "prune": self._do_prune,
+            "prune": self.team_splits.do_prune,
             "close_session": self._do_close_session,
         }.items():
             self.resumable_work.register(kind, step)
@@ -252,7 +251,7 @@ class DirectorService(Sync):
                     isolation="shared",
                     agent_type=root_type,
                     headline=named.headline,
-                    summary=_summary_of(request.task),
+                    summary=summary_of(request.task),
                     since=instant(),
                 )
             )

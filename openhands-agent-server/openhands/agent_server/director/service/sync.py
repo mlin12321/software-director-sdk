@@ -10,6 +10,7 @@ from uuid import UUID, uuid4
 
 from openhands.agent_server.director import org_sync
 from openhands.agent_server.director.changes import require_editable, write_by_hand
+from openhands.agent_server.director.confinement import apart
 from openhands.agent_server.director.git_store import (
     GitStore,
 )
@@ -44,6 +45,7 @@ from openhands.agent_server.director.org_store import (
     AGENT_BLOCKED,
     AGENT_LOST,
     OrgStore,
+    hand_over_of,
     is_division_lead,
     new_agents,
 )
@@ -72,8 +74,6 @@ from openhands.agent_server.director.service.state import (
     AGENT_PAUSED,
     PAUSE_LANE,
     RESTART_NOTE,
-    apart,
-    hand_over_of,
     lane_for,
 )
 from openhands.agent_server.director.service.team_messaging_service import (
@@ -885,7 +885,7 @@ class Sync(Sessions):
         # One that was held while it worked may have ended while it was held.
         at_work = ("working", AGENT_PAUSED)
         if mode.status in at_work and shown not in at_work:
-            self._hand_over_ended(node.id)
+            self.team_splits.hand_over_ended(node.id)
             self._remind_to_submit(node.session)
 
     def _remind_to_submit(self, session: str) -> None:
@@ -978,4 +978,4 @@ class Sync(Sessions):
                 store.set_hand_over(
                     place_id, mode.model_copy(update={"status": AGENT_LOST})
                 )
-                self._hand_over_ended(place_id)
+                self.team_splits.hand_over_ended(place_id)
