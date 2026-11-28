@@ -62,6 +62,7 @@ from openhands.agent_server.director.launch import ConversationTeamLauncher
 from openhands.agent_server.director_router import (
     director_router,
     director_tools_router,
+    not_an_agent_of_the_org,
 )
 from openhands.agent_server.errors import GatewayTimeout, status_for
 from openhands.agent_server.experimental_features_router import (
@@ -686,7 +687,9 @@ def _add_api_routes(app: FastAPI) -> None:
     # ``/conversations/{conversation_id}``.
     api_router.include_router(conversation_catalog_router)
     conversation_registry.add_execution_routes(api_router)
-    api_router.include_router(conversation_router)
+    api_router.include_router(
+        conversation_router, dependencies=[Depends(not_an_agent_of_the_org)]
+    )
     api_router.include_router(credential_binding_router)
     api_router.include_router(tool_router)
     api_router.include_router(bash_router)

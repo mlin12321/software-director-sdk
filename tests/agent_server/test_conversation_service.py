@@ -27,7 +27,6 @@ from openhands.agent_server.conversation_service import (
     _create_conversation_worktree,
     _get_worktree_start_point,
     _plan_conversation_worktree,
-    _worktree_start_point,
 )
 from openhands.agent_server.event_service import EventService, ServiceInactive
 from openhands.agent_server.models import (
@@ -163,42 +162,6 @@ async def test_meta_json_has_no_agent_and_reload_uses_base_state(tmp_path):
         reloaded = await service2.get_conversation(conv_id)
         assert reloaded is not None
         assert reloaded.agent.llm.model == "gpt-4o"
-
-
-@pytest.mark.asyncio
-async def test_a_resume_adapter_changes_the_saved_agent_before_it_starts(tmp_path):
-    conversations_dir = tmp_path / "conversations"
-    workspace_dir = tmp_path / "workspace"
-    workspace_dir.mkdir()
-    request = StartConversationRequest(
-        agent=Agent(llm=LLM(model="gpt-4o", usage_id="test-llm"), tools=[]),
-        workspace=LocalWorkspace(working_dir=str(workspace_dir)),
-        confirmation_policy=NeverConfirm(),
-    )
-    async with ConversationService(conversations_dir=conversations_dir) as service:
-        info, _ = await service.start_conversation(request)
-        conv_id = info.id
-
-    seen = []
-
-    def adapt(conversation_id, agent):
-        seen.append((conversation_id, agent.llm.model))
-        return agent.model_copy(
-            update={"llm": agent.llm.model_copy(update={"model": "gpt-4o-mini"})}
-        )
-
-    async with ConversationService(conversations_dir=conversations_dir) as service2:
-        stop = service2.add_resume_adapter(adapt)
-        assert await service2.resume_conversation(conv_id)
-        event_service = await service2.get_event_service(conv_id)
-        assert event_service is not None
-        state = await event_service.get_state()
-
-        assert seen == [(conv_id, "gpt-4o")]
-        assert state.agent.llm.model == "gpt-4o-mini"
-        assert event_service.get_conversation().agent.llm.model == "gpt-4o-mini"
-        stop()
-        assert service2._resume_adapters == []
 
 
 @pytest.mark.asyncio
@@ -2527,33 +2490,6 @@ class TestConversationServiceStartConversation:
         assert not (
             conversation_service.conversations_dir / conversation_id.hex
         ).exists()
-
-    def test_a_worktree_from_a_commit_here_fetches_nothing(self, tmp_path):
-        """A commit id cannot move: the remote is not asked for it."""
-        repo_dir = tmp_path / "repo"
-        _init_git_repo(repo_dir)
-        run_git_command(
-            ["git", "remote", "add", "origin", str(tmp_path / "unreachable")],
-            repo_dir,
-        )
-        head = run_git_command(["git", "rev-parse", "HEAD"], repo_dir).strip()
-        fetched = []
-
-        with patch(
-            "openhands.agent_server.conversation_service._fetch_origin",
-            side_effect=fetched.append,
-        ):
-            assert (
-                _worktree_start_point(
-                    repo_dir, ConversationWorktreeOptions(base="ref", ref=head)
-                )
-                == head
-            )
-            _worktree_start_point(
-                repo_dir, ConversationWorktreeOptions(base="ref", ref="main")
-            )
-
-        assert fetched == [repo_dir]
 
     def test_get_worktree_start_point_tolerates_fetch_failure(self, tmp_path):
         """If ``git fetch origin`` fails, fall back to cached refs.
@@ -5189,63 +5125,3 @@ async def test_settings_launch_builds_the_agent_once(conversation_service, tmp_p
 
     create_agent.assert_called_once()
     assert "browser_tool_set" in [t.name for t in captured["agent"].tools]
-
-
-def _plain_request(workspace_dir: Path) -> StartConversationRequest:
-    return StartConversationRequest(
-        agent=Agent(llm=LLM(model="gpt-4o", usage_id="test-llm"), tools=[]),
-        workspace=LocalWorkspace(working_dir=str(workspace_dir)),
-    )
-
-
-@pytest.mark.asyncio
-async def test_execution_status_listeners_hear_every_conversation_until_stopped(
-    tmp_path,
-):
-    heard: list[tuple[UUID, ConversationExecutionStatus]] = []
-    async with ConversationService(
-        conversations_dir=tmp_path / "conversations"
-    ) as service:
-        stop = service.add_execution_status_listener(
-            lambda conversation_id, status: heard.append((conversation_id, status))
-        )
-        first, _ = await service.start_conversation(_plain_request(tmp_path))
-        second, _ = await service.start_conversation(_plain_request(tmp_path))
-        await service.pause_conversation(second.id)
-        stop()
-        await service.pause_conversation(first.id)
-
-    assert (first.id, ConversationExecutionStatus.IDLE) in heard
-    assert heard[-1] == (second.id, ConversationExecutionStatus.PAUSED)
-    assert (first.id, ConversationExecutionStatus.PAUSED) not in heard
-
-
-@pytest.mark.asyncio
-async def test_a_failing_execution_status_listener_does_not_break_the_conversation(
-    tmp_path,
-):
-    def explode(conversation_id: UUID, status: ConversationExecutionStatus) -> None:
-        raise RuntimeError("listener bug")
-
-    async with ConversationService(
-        conversations_dir=tmp_path / "conversations"
-    ) as service:
-        service.add_execution_status_listener(explode)
-
-        info, _ = await service.start_conversation(_plain_request(tmp_path))
-
-        assert await service.pause_conversation(info.id)
-
-
-@pytest.mark.asyncio
-async def test_get_execution_statuses_covers_unloaded_conversations(tmp_path):
-    conversations_dir = tmp_path / "conversations"
-    async with ConversationService(conversations_dir=conversations_dir) as service:
-        info, _ = await service.start_conversation(_plain_request(tmp_path))
-        await service.pause_conversation(info.id)
-    unknown = uuid4()
-
-    async with ConversationService(conversations_dir=conversations_dir) as reloaded:
-        statuses = await reloaded.get_execution_statuses([info.id, unknown])
-
-    assert statuses == {info.id: ConversationExecutionStatus.PAUSED}

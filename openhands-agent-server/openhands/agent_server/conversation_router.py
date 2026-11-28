@@ -29,9 +29,7 @@ from openhands.agent_server.dependencies import (
     get_conversation_registry,
     get_conversation_service,
     get_llm_profile_store,
-    get_optional_director_service,
 )
-from openhands.agent_server.director import DirectorService
 from openhands.agent_server.errors import error_responses
 from openhands.agent_server.event_service import CondensationUnavailable
 from openhands.agent_server.launch import launch_error
@@ -396,30 +394,8 @@ async def interrupt_conversation(
     return Success()
 
 
-def _not_an_agent_of_the_org(
-    conversation_id: UUID,
-    director: Annotated[DirectorService | None, Depends(get_optional_director_service)],
-) -> None:
-    """Refuse to copy, extend or delete an org agent's conversation: a copy
-    or a child would act as that agent, in no team, and a session whose
-    agent is deleted is left without it."""
-    if director is not None and director.is_agent(conversation_id):
-        raise Conflict(
-            "This conversation is an agent of the org: it cannot be forked "
-            "or deleted, and starts no conversation of its own. Close its "
-            "session to end it, or open one to give the org more work."
-        )
-
-
 @conversation_router.delete(
-    "/{conversation_id}",
-    responses=error_responses(
-        {
-            NotFound: "Item not found",
-            Conflict: "The conversation is an agent of the org",
-        }
-    ),
-    dependencies=[Depends(_not_an_agent_of_the_org)],
+    "/{conversation_id}", responses=error_responses({NotFound: "Item not found"})
 )
 async def delete_conversation(
     conversation_id: UUID,
@@ -884,7 +860,6 @@ async def condense_conversation(
         ),
     },
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(_not_an_agent_of_the_org)],
 )
 async def fork_conversation(
     conversation_id: UUID,
@@ -934,7 +909,6 @@ async def fork_conversation(
         ),
     },
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(_not_an_agent_of_the_org)],
 )
 async def start_child_conversation(
     conversation_id: UUID,

@@ -2,6 +2,7 @@
 
 import ast
 import re
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -268,3 +269,57 @@ def test_the_director_is_one_class_that_holds_services():
     assert {name for name in modules if not name.endswith("_service.py")} == {
         "__init__.py"
     }
+
+
+# The files of OpenHands the director changes, said with the reason for each
+# in ``director/AGENTS.md``. A change to one more conflicts when upstream is
+# merged: look for a way from outside before adding to these.
+CHANGED_IN_OPENHANDS = {
+    "openhands-agent-server/openhands/agent_server/README.md",
+    "openhands-agent-server/openhands/agent_server/__main__.py",
+    "openhands-agent-server/openhands/agent_server/agent-server.spec",
+    "openhands-agent-server/openhands/agent_server/api.py",
+    "openhands-agent-server/openhands/agent_server/config.py",
+    "openhands-agent-server/openhands/agent_server/conversation_service.py",
+    "openhands-agent-server/openhands/agent_server/dependencies.py",
+    "openhands-agent-server/openhands/agent_server/event_service.py",
+    "openhands-agent-server/openhands/agent_server/init_router.py",
+    "openhands-agent-server/openhands/agent_server/server_context.py",
+    "openhands-sdk/openhands/sdk/agent/acp_agent.py",
+    "openhands-sdk/openhands/sdk/agent/base.py",
+    "openhands-sdk/openhands/sdk/conversation/impl/local_conversation.py",
+}
+UPSTREAM = "origin/upstream-base"
+PACKAGES = [
+    "openhands-agent-server/openhands",
+    "openhands-sdk/openhands",
+    "openhands-tools/openhands",
+    "openhands-workspace/openhands",
+]
+
+
+def test_the_director_changes_no_more_of_openhands():
+    root = DIRECTOR.parents[3]
+
+    def git(*args: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["git", "-C", str(root), *args], capture_output=True, text=True
+        )
+
+    if git("rev-parse", "--verify", "--quiet", UPSTREAM).returncode != 0:
+        pytest.skip(f"{UPSTREAM} is not fetched here")
+    # The upstream this checkout has merged: the ref may be ahead of it.
+    merged = git("merge-base", UPSTREAM, "HEAD")
+    assert merged.returncode == 0, merged.stderr
+    # Files OpenHands has that differ here; new files (A) are the director's.
+    changed = git(
+        "diff",
+        "--name-only",
+        "--diff-filter=MDR",
+        merged.stdout.strip(),
+        "--",
+        *PACKAGES,
+    )
+
+    assert changed.returncode == 0, changed.stderr
+    assert set(changed.stdout.split()) <= CHANGED_IN_OPENHANDS
