@@ -244,6 +244,19 @@ def test_only_the_environment_knows_git():
     assert not reached
 
 
+def test_records_kept_in_memory_run_no_git():
+    # The second implementation of the records and the remote is what
+    # shows that their interfaces say nothing only git can do.
+    reached = {
+        f"{path.name} imports {name}"
+        for path in (DIRECTOR / "environment" / "memory").glob("*.py")
+        for name in _reached(path)
+        if name == GIT or name.startswith(f"{GIT}.") or name == "subprocess"
+    }
+
+    assert not reached
+
+
 @pytest.mark.parametrize(
     "module",
     [

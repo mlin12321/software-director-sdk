@@ -9,7 +9,7 @@ memory is laid out in one, whatever keeps it.
 
 import json
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Collection
+from collections.abc import Callable, Collection, Mapping
 from typing import NamedTuple
 
 from pydantic import TypeAdapter, ValidationError
@@ -196,6 +196,42 @@ def settle(path: str, ours: str | None, theirs: str | None) -> tuple[str | None,
     except ValidationError:
         pass
     return ours, True
+
+
+def merge_files(
+    base: Mapping[str, str],
+    ours: Mapping[str, str],
+    theirs: Mapping[str, str],
+    take_theirs: Collection[str] = (),
+) -> tuple[list[StoreChange], list[str]]:
+    """Merge two versions of a store that both come from ``base``, file by
+    file, for a store that cannot merge the lines of a file.
+
+    A file one side changed is that side's. A file both changed is what
+    `settle` makes of it, or the other side's where ``take_theirs``
+    names it.
+
+    Returns:
+        What to change in ``ours``, and the files both sides changed of
+        which this side's text was kept.
+    """
+    changes: list[StoreChange] = []
+    kept: list[str] = []
+    for path in sorted({*ours, *theirs}):
+        was, mine, other = base.get(path), ours.get(path), theirs.get(path)
+        if mine == other or other == was:
+            continue
+        if mine == was:
+            changes.append(StoreChange(path, other))
+            continue
+        content, ours_kept = settle(path, mine, other)
+        if ours_kept and path in take_theirs:
+            content, ours_kept = other, False
+        if content != mine:
+            changes.append(StoreChange(path, content))
+        if ours_kept:
+            kept.append(path)
+    return changes, kept
 
 
 def taking_in(
