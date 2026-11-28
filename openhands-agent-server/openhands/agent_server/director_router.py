@@ -471,13 +471,41 @@ async def get_recovery(
 
 
 @director_router.get("/automations/open-session", response_model=AutomationBundle)
-async def open_session_automation() -> AutomationBundle:
+async def open_session_automation(
+    text: Annotated[
+        str, Query(description="What is asked of the org. Needed for a schedule.")
+    ] = "",
+    title: Annotated[str, Query(description="What to call the session.")] = "",
+    key: Annotated[
+        str,
+        Query(
+            description=(
+                "Names what happened, so that an event delivered twice opens "
+                "one session."
+            )
+        ),
+    ] = "",
+    path: Annotated[
+        str, Query(description="The directory of the repository it is about.")
+    ] = "",
+    source: Annotated[str, Query(description="What sends it, in words.")] = "",
+) -> AutomationBundle:
     """The script automation that opens a session of the org for an event.
 
     Upload it to the automation service with any trigger, a webhook source or
-    a schedule: each run posts what happened to `POST /org/events`.
+    a schedule: each run posts what happened to `POST /org/events`. What is
+    given here is kept in the bundle; in `text`, `title` and `key`, `{a.b}`
+    is that field of the event (`{issue.key}`).
     """
-    return open_session_bundle()
+    return open_session_bundle(
+        {
+            "DIRECTOR_EVENT_TEXT": text,
+            "DIRECTOR_EVENT_TITLE": title,
+            "DIRECTOR_EVENT_KEY": key,
+            "DIRECTOR_EVENT_PATH": path,
+            "DIRECTOR_EVENT_SOURCE": source,
+        }
+    )
 
 
 @director_router.post(

@@ -893,6 +893,26 @@ async def test_the_automation_that_opens_sessions_is_served_as_a_bundle(running)
     assert again.json() == bundle
 
 
+async def test_what_the_automation_is_set_to_is_kept_in_its_bundle(running):
+    client, _, _ = running
+
+    served = await client.get(
+        "/api/director/automations/open-session",
+        params={"title": "{issue.key}", "key": "{issue.key}", "source": "Jira"},
+    )
+
+    packed = io.BytesIO(base64.b64decode(served.json()["tarball_base64"]))
+    with tarfile.open(fileobj=packed, mode="r:gz") as tar:
+        assert tar.getnames() == ["main.py", "settings.json"]
+        settings = tar.extractfile("settings.json")
+        assert settings is not None
+        assert json.loads(settings.read()) == {
+            "DIRECTOR_EVENT_KEY": "{issue.key}",
+            "DIRECTOR_EVENT_SOURCE": "Jira",
+            "DIRECTOR_EVENT_TITLE": "{issue.key}",
+        }
+
+
 async def test_an_event_opens_a_session_over_the_api(running, repo):
     client, _, service = running
     await client.post("/api/director/org", json=org_body(repo))

@@ -14,6 +14,7 @@ import type {
   DirectorOpenedSession,
   DirectorRoutedMessage,
   DirectorAutomationBundle,
+  DirectorOpenSessionAutomationSettings,
   DirectorEventSession,
   DirectorOrgEventRequest,
   DirectorSession,
@@ -257,11 +258,15 @@ export class DirectorClient {
 
   /**
    * The script automation that opens a session of the org for an event, to
-   * upload to the automation service with any trigger.
+   * upload to the automation service with any trigger. What it is set to is
+   * kept in the bundle.
    */
-  async getOpenSessionAutomation(): Promise<DirectorAutomationBundle> {
+  async getOpenSessionAutomation(
+    settings: DirectorOpenSessionAutomationSettings = {}
+  ): Promise<DirectorAutomationBundle> {
     const response = await this.client.get<DirectorAutomationBundle>(
-      `${DIRECTOR_PATH}/automations/open-session`
+      `${DIRECTOR_PATH}/automations/open-session`,
+      { params: { ...settings } }
     );
     return response.data;
   }

@@ -9,13 +9,16 @@ automation's run. It uses the standard library only.
 
 What the automation service gives it:
 
-- ``AUTOMATION_EVENT_PAYLOAD``: the event, as JSON. None for a schedule.
+- ``AUTOMATION_EVENT_PAYLOAD``: JSON with the automation's id and name, the
+  ``trigger``, and for an event ``event.payload``: what the source sent.
 - ``AGENT_SERVER_URL`` and ``SESSION_API_KEY`` (or ``OH_SESSION_API_KEYS_0``).
 - ``AUTOMATION_CALLBACK_URL``, ``AUTOMATION_CALLBACK_API_KEY`` and
   ``AUTOMATION_RUN_ID``, to report to.
 - ``OPENHANDS_OBSERVABILITY_METADATA``: the automation's id and name.
 
-What you set on the automation, each a template in which ``{a.b.c}`` is that
+What is set for the automation, in a ``settings.json`` beside this file (the
+director writes one into the bundle it serves, from what it is asked with) or
+in the environment, which comes first. Each is a template in which ``{a.b.c}`` is that
 field of the event (``{issue.key}``, ``{items.0.name}``) and a field the
 event lacks is left empty:
 
@@ -39,6 +42,7 @@ from typing import Any
 
 
 EVENTS_ROUTE = "/api/director/org/events"
+SETTINGS = "settings.json"
 _FIELD = re.compile(r"\{([\w.\-]+)\}")
 _TIMEOUT_SECONDS = 120.0
 
@@ -78,6 +82,16 @@ def request_for(env: Mapping[str, str]) -> dict[str, Any]:
         about = {}
     if not isinstance(about, Mapping):
         about = {}
+    if isinstance(event, Mapping) and "trigger" in event:
+        # The service hands a run what happened inside what it knows of the
+        # run. The templates name fields of what the source sent.
+        about = {
+            "automation.id": event.get("automation_id"),
+            "automation.name": event.get("automation_name"),
+            **about,
+        }
+        inside = event.get("event")
+        event = inside.get("payload") if isinstance(inside, Mapping) else None
     name = env.get("DIRECTOR_EVENT_SOURCE", "") or str(
         about.get("automation.name") or ""
     )
@@ -169,7 +183,21 @@ def report(
         print(f"The run could not be told: {failed}", file=sys.stderr)
 
 
-def main(env: Mapping[str, str] = os.environ) -> int:
+def settings_beside() -> dict[str, str]:
+    """What ``settings.json`` beside this file sets; nothing without one."""
+    try:
+        with open(os.path.join(os.path.dirname(__file__), SETTINGS)) as file:
+            found = json.load(file)
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(found, Mapping):
+        return {}
+    return {name: str(value) for name, value in found.items()}
+
+
+def main(env: Mapping[str, str] | None = None) -> int:
+    if env is None:
+        env = {**settings_beside(), **os.environ}
     opened, error = None, ""
     try:
         opened = open_session(env)

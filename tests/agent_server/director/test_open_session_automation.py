@@ -1,6 +1,11 @@
 """Tests for the script an automation runs to open a session for an event."""
 
+import base64
+import io
 import json
+import os
+import subprocess
+import tarfile
 import threading
 from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -8,6 +13,7 @@ from typing import Any
 
 import pytest
 
+from openhands.agent_server.director.automations.open_session import bundle
 from openhands.agent_server.director.automations.open_session.main import (
     EVENTS_ROUTE,
     field_of,
@@ -108,6 +114,44 @@ def test_the_request_says_what_is_asked_and_names_the_event():
     }
 
 
+def test_what_the_source_sent_is_taken_out_of_what_the_service_hands_a_run():
+    # As automation service 1.36.0 hands it to a run.
+    handed = {
+        "automation_id": "a-1",
+        "automation_name": "Tickets to the org",
+        "event": {"event_key": "ticket.created", "payload": TICKET},
+        "trigger": "event",
+    }
+
+    request = request_for(
+        {
+            "AUTOMATION_EVENT_PAYLOAD": json.dumps(handed),
+            "DIRECTOR_EVENT_KEY": "{issue.key}",
+        }
+    )
+
+    assert request["payload"] == TICKET
+    assert request["source"] == {
+        "name": "Tickets to the org",
+        "automation_id": "a-1",
+        "run_id": "",
+        "event_key": "SHOP-7",
+    }
+
+
+def test_a_run_on_a_schedule_has_no_event():
+    handed = {"automation_id": "a-1", "automation_name": "Daily", "trigger": "cron"}
+
+    request = request_for(
+        {
+            "AUTOMATION_EVENT_PAYLOAD": json.dumps(handed),
+            "DIRECTOR_EVENT_TEXT": "Update the dependencies.",
+        }
+    )
+
+    assert (request["text"], request["payload"]) == ("Update the dependencies.", None)
+
+
 def test_an_event_nothing_is_said_about_asks_the_org_to_handle_it():
     request = request_for(
         {
@@ -145,6 +189,31 @@ def test_it_posts_the_event_to_the_director_and_tells_the_run(server, capsys):
     assert told_headers["authorization"] == "Bearer run-key"
     assert said == {"status": "COMPLETED", "run_id": "run-1", "conversation_id": "c1"}
     assert json.loads(capsys.readouterr().out)["session_id"] == "s1"
+
+
+def test_the_bundle_runs_as_the_service_runs_it_with_what_it_was_set_to(
+    server, tmp_path
+):
+    served = bundle(
+        {"DIRECTOR_EVENT_TITLE": "{issue.key}", "DIRECTOR_EVENT_KEY": "{issue.key}"}
+    )
+    packed = io.BytesIO(base64.b64decode(served.tarball_base64))
+    with tarfile.open(fileobj=packed, mode="r:gz") as tar:
+        tar.extractall(tmp_path, filter="data")
+
+    ran = subprocess.run(
+        served.entrypoint.split(),
+        cwd=tmp_path,
+        # The environment comes first: it names another title.
+        env={**os.environ, **env_for(server, DIRECTOR_EVENT_TITLE="From the run")},
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert ran.returncode == 0, ran.stderr
+    _, _, body = server.received[0]
+    assert (body["title"], body["source"]["event_key"]) == ("From the run", "SHOP-7")
 
 
 def test_a_refusal_fails_the_run_with_the_directors_reason(server, capsys):

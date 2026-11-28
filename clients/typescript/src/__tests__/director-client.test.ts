@@ -138,11 +138,11 @@ describe('DirectorClient', () => {
     const fetchMock = mockFetch(() => jsonResponse(bundle));
     const client = new DirectorClient({ host: 'http://example.com' });
 
-    const result = await client.getOpenSessionAutomation();
+    const result = await client.getOpenSessionAutomation({ key: '{issue.key}', source: 'Jira' });
 
     const [url, init] = fetchMock.mock.calls[0];
     expect(`${init.method} ${url}`).toBe(
-      'GET http://example.com/api/director/automations/open-session'
+      'GET http://example.com/api/director/automations/open-session?key=%7Bissue.key%7D&source=Jira'
     );
     expect(result).toEqual(bundle);
   });

@@ -400,6 +400,23 @@ export interface DirectorOrgEventRequest {
   source?: Partial<Omit<DirectorRequestSource, 'kind'>>;
 }
 
+/**
+ * What the automation that opens sessions is set to. In `text`, `title` and
+ * `key`, `{a.b}` is that field of the event (`{issue.key}`).
+ */
+export interface DirectorOpenSessionAutomationSettings {
+  /** What is asked of the org. Needed for a schedule. */
+  text?: string;
+  /** What to call the session. */
+  title?: string;
+  /** Names what happened, so that an event delivered twice opens one session. */
+  key?: string;
+  /** The directory of the repository it is about. */
+  path?: string;
+  /** What sends it, in words. */
+  source?: string;
+}
+
 /** A script the automation service runs, as it takes one to upload. */
 export interface DirectorAutomationBundle {
   name: string;
