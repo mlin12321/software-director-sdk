@@ -19,8 +19,8 @@ Examples: `examples/01_standalone_sdk/46_agent_settings.py`
 - `S19.mcp-config-secrets`: `mcp_config` is a typed server map; env, headers and bearer auth are redacted in dumps, encrypted with a cipher when one is supplied, legacy plaintext decrypts, and `create_agent()` gets the real values. Unit: `tests/sdk/test_settings.py::test_openhands_agent_settings_mcp_config_redacts_env_and_headers`, `::test_mcp_config_encrypts_env_and_headers_with_cipher`, `::test_openhands_agent_settings_create_agent_keeps_real_mcp_secrets`. Example: none. Real-LLM: none.
 - `S19.tool-concurrency-persona`: `tool_concurrency_limit` defaults to 1 and rejects invalid values; `persona` is applied to the built agent's prompt, and without it the built-in prompt is used. Unit: `tests/sdk/test_settings.py::test_tool_concurrency_limit_invalid_values_rejected`, `::test_create_agent_applies_persona`. Example: none. Real-LLM: none.
 - `S19.subscription-llm-settings`: subscription-auth LLM fields round-trip through settings and are rehydrated into a working runtime LLM on load. Unit: `tests/sdk/test_settings.py::test_llm_subscription_fields_roundtrip`, `::test_llm_from_persisted_rehydrates_subscription_runtime`. Example: none. Real-LLM: none.
-- `S19.acp-settings`: `ACPAgentSettings(acp_server=...)` resolves the default command for known servers (rewriting `npx` to a pinned binary when present), requires an explicit command for a custom server, refuses an `llm` (`ACPAgentSettings.llm was removed; use acp_model instead.`; a persisted v8 ACP payload drops it on migration), and maps the provider's API-key env var. Unit: `tests/sdk/test_settings.py::test_acp_create_agent_uses_server_default_command`, `::test_acp_custom_server_requires_explicit_command`, `::test_acp_settings_llm_is_removed`. Example: none. Real-LLM: none.
-- `S19.acp-providers-catalog`: the ACP provider registry (`ACP_PROVIDERS`, detection by agent name or command, file-secret specs) and the install catalog of pinned npm packages with a rendered Docker install plan. Unit: `tests/sdk/settings/test_acp_providers.py`, `tests/sdk/settings/test_acp_install_catalog.py`. Example: none. Real-LLM: none.
+- `S19.acp-settings`: `ACPAgentSettings(acp_server=...)` resolves the default command for known servers (rewriting `npx` to a pinned binary when present; `antigravity` resolves to `agy acp`, and an explicit `acp_command` survives a JSON round trip), requires an explicit command for a custom server, refuses an `llm` (`ACPAgentSettings.llm was removed; use acp_model instead.`; a persisted v8 ACP payload drops it on migration), and maps the provider's API-key env var. Unit: `tests/sdk/test_settings.py::test_acp_create_agent_uses_server_default_command`, `::test_acp_custom_server_requires_explicit_command`, `::test_acp_settings_llm_is_removed`. Example: none. Real-LLM: none.
+- `S19.acp-providers-catalog`: the ACP provider registry (`ACP_PROVIDERS`: six `npx` providers plus the native `antigravity`, whose default command is the user-installed `agy acp`; detection by agent name, or by command, where a native launcher matches only by its exact basename; file-secret specs) and the install catalog of pinned npm packages (the `npx` providers only) with a rendered Docker install plan. Unit: `tests/sdk/settings/test_acp_providers.py`, `tests/sdk/settings/test_acp_install_catalog.py`. Example: none. Real-LLM: none.
 - `S19.validate-dispatch`: `validate_agent_settings` dispatches on `agent_kind` (`openhands` or `acp`), defaults to `openhands` when it is missing, and canonicalizes the legacy `llm` kind so it never returns `LLMAgentSettings`. Unit: `tests/sdk/test_settings.py::test_validate_agent_settings_dispatches_on_agent_kind`, `::test_validate_agent_settings_defaults_to_openhands_when_discriminator_missing`, `tests/sdk/test_apply_agent_settings_diff.py::test_validate_never_returns_llm_subclass`. Example: none. Real-LLM: none.
 - `S19.schema-migrations`: persisted agent settings from v0 to v9 migrate step by step to v10 (legacy proxy LLM, `modify_params`, MCP auth shapes and `type` to `transport`, ACP LLM removal, retired switches folded at v8 and dropped at v9, MCP servers with neither `command` nor `url` dropped at v10); a newer, negative or non-integer `schema_version` is rejected; `from_persisted` and `model_validate` agree on current payloads. Unit: `tests/sdk/test_settings.py::test_validate_agent_settings_migrates_v0_llm_payload`, `::test_validate_agent_settings_rejects_newer_schema_version`, `::test_openhands_agent_settings_from_persisted_migrates_legacy_payloads`. Example: none. Real-LLM: none.
 - `S19.conversation-settings`: `ConversationSettings` (schema v1) round-trips, migrates a v0 payload, rejects newer versions, validates observability metadata, accepts both agent variants, and `create_request(...)` builds a start-conversation request with confirmation policy and security analyzer. Unit: `tests/sdk/test_settings.py::test_conversation_settings_model_dump_roundtrip`, `::test_conversation_settings_from_persisted_migrates_v0_payload`, `::test_conversation_settings_create_request`. Example: none. Real-LLM: none.
@@ -34,6 +34,7 @@ Examples: `examples/01_standalone_sdk/46_agent_settings.py`
 - `S19.profile-resolve`: since 1.60 a launch has two stages in `openhands.sdk.launch`. `resolve(profile_or_id, LaunchStores(llm_profiles=..., mcp_config=..., skills=...))` runs where the stores live and returns a reference-free `ResolvedLaunch` with validated settings: it loads the LLM profile, filters MCP servers, applies `disabled_skills`, scopes tools and delegation, and keeps persona and verification; every dangling reference (LLM profile, MCP servers, meta-profile) is raised together as `UnresolvedProfileReferences`. `finalize(resolved, LaunchRuntime(...))` builds the agent where it runs; `preview_launch(profile, stores, runtime)` reports the same verdict without raising, with secrets redacted. The legacy `resolve_agent_profile` / `resolve_agent_profile_dry_run` were removed. Unit: `tests/sdk/launch/test_resolve_legacy_parity.py`. Example: none. Real-LLM: none.
 - `S19.profile-refs`: renaming an LLM profile cascades to every agent profile that cites it, atomically; deleting a referenced LLM profile raises `ProfileReferenced` naming the referrers. Unit: `tests/sdk/profiles/test_profile_refs.py`, `tests/sdk/profiles/test_store_protocol_hoists.py`. Example: none. Real-LLM: none.
 - `S19.profile-seed`: `build_seed_profile(settings)` derives the default profile from current settings (persona, explicit tools, ACP branch, no disabled skills); `save_profile_preserving_identity` keeps the id and bumps `revision`. Unit: `tests/sdk/profiles/test_store_protocol_hoists.py`. Example: none. Real-LLM: none.
+- `S19.profile-sandbox`: both profile variants take an optional `sandbox=ProfileSandboxSettings(spec_id=...)` (exported from `openhands.sdk.profiles`): a sandbox spec id the host that provisions sandboxes reads; it round-trips through `validate_agent_profile` and `AgentProfileStore`, a stored profile without it loads with `sandbox` `None`, an empty `spec_id`, a missing `spec_id`, an extra key or a non-object is refused, and `resolve()` gives exactly the same `AgentSettings` with or without it. Unit: `tests/sdk/profiles/test_agent_profile.py::test_sandbox_defaults_to_none_and_older_payloads_load`, `::test_sandbox_round_trips_on_both_variants`, `::test_sandbox_rejects_empty_or_unknown_fields`, `tests/sdk/launch/test_resolve.py::test_sandbox_metadata_does_not_change_the_resolved_settings`. Example: none. Real-LLM: none.
 - `S19.credential-binding`: `HttpVersionedCredentialBinding(url, headers).load()` GETs `{value, version}`, `replace(expected_version, value)` PUTs and returns the new version; 404 and 400/422 raise `CredentialNeedsReauthentication`, 409 `CredentialConflict`, 401/403 `CredentialAuthorizationRejected`, 501 `CredentialBindingUnsupported`, invalid URLs `CredentialInvalidResponse`; `reauthorize()` swaps headers for the same URL. Unit: `tests/sdk/test_credential.py`. Example: none. Real-LLM: none.
 
 ## How to get to it (agent POV)
@@ -42,7 +43,7 @@ Examples: `examples/01_standalone_sdk/46_agent_settings.py`
 - `settings.create_agent()`, `settings.model_dump(mode="json")`, `OpenHandsAgentSettings.model_validate(payload)`, `OpenHandsAgentSettings.from_persisted(payload)`, `ConversationSettings.from_persisted(payload)`: `S19.settings-roundtrip`, `S19.schema-migrations`.
 - Constants: `AGENT_SETTINGS_SCHEMA_VERSION = 8`, `CONVERSATION_SETTINGS_SCHEMA_VERSION = 1` (`settings/model.py`), `AGENT_PROFILE_SCHEMA_VERSION = 3` (`profiles/agent_profile.py`).
 - Files: `tests/sdk/persisted_settings_baselines/v1..v10/*.json`, `.github/scripts/check_persisted_settings_compat.py`, workflow `.github/workflows/persisted-settings-compat.yml`: `S19.persisted-baselines`, `S19.pypi-baseline-gate`.
-- `from openhands.sdk.profiles import AgentProfileStore, OpenHandsAgentProfile, ACPAgentProfile, validate_agent_profile, cascade_rename, delete_llm_profile, rename_llm_profile, build_seed_profile, save_profile_preserving_identity`; on disk `~/.openhands/agent-profiles/<name>.json` (moved by `OH_PERSISTENCE_DIR`): `S19.profile-*`. LLM profiles themselves (the `llm_profile_ref` targets) belong to the LLM profile store family (example 37).
+- `from openhands.sdk.profiles import AgentProfileStore, OpenHandsAgentProfile, ACPAgentProfile, validate_agent_profile, cascade_rename, delete_llm_profile, rename_llm_profile, build_seed_profile, save_profile_preserving_identity, ProfileSandboxSettings`; on disk `~/.openhands/agent-profiles/<name>.json` (moved by `OH_PERSISTENCE_DIR`): `S19.profile-*`. LLM profiles themselves (the `llm_profile_ref` targets) belong to the LLM profile store family (example 37).
 - `from openhands.sdk.credential import HttpVersionedCredentialBinding, ResolvedCredential, Credential*`: `S19.credential-binding`; consumed by the ACP agent's file-credential sync.
 - Env read by example 46: `LLM_API_KEY`, `LLM_MODEL` (default `gpt-5.5`), `LLM_BASE_URL`.
 
@@ -119,22 +120,31 @@ Preconditions:
   ```
   The `npx` default command applies because `claude-agent-acp` is not on `PATH` here (`acp.pinned_binary_on_path`); with the pinned binary installed it is rewritten to that binary.
 - **Subscription LLM rehydration (`S19.subscription-llm-settings`), blocked: needs a ChatGPT subscription login (`LLM.subscription_login()`, interactive OAuth).** The round trip of the subscription fields is proven above; turning them into a working runtime LLM needs the stored OAuth credentials.
-- **ACP provider registry and install catalog (`S19.acp-providers-catalog`).** The registry, detection by agent name and by command, file secrets, and the install plan, through the program and through the catalog's own CLI (the agent-server Dockerfile's `acp-providers` stage).
+- **ACP provider registry and install catalog (`S19.acp-providers-catalog`, `S19.acp-settings`).** The registry, detection by agent name and by command, file secrets, and the install plan, through the program and through the catalog's own CLI (the agent-server Dockerfile's `acp-providers` stage). The program also builds `ACPAgentSettings(acp_server="antigravity")` with no command and with `/opt/antigravity/bin/agy acp`, round-trips each through JSON and calls `create_agent()`.
   ```sh
   export SDK_VERIFY_RUN=$(control-sdk new --field run)
   control-sdk program S19/acp_catalog \
-    --check providers len-eq 6 --check commands_pin_catalog.claude-code eq true --check commands_pin_catalog.codex eq true \
+    --check providers len-eq 7 --check providers contains antigravity --check native_commands.antigravity eq '["agy", "acp"]' \
+    --check catalog_is_npm_providers eq true --check antigravity.in_install_catalog eq false \
+    --check commands_pin_catalog.claude-code eq true --check commands_pin_catalog.codex eq true \
     --check commands_pin_catalog.pi eq true --check commands_pin_catalog.opencode eq true \
     --check by_agent_name.claude-agent-acp eq claude-code --check by_agent_name.Codex-ACP eq codex \
-    --check by_agent_name.my-own-agent missing \
+    --check by_agent_name.Antigravity eq antigravity --check by_agent_name.some-random-agy-utility missing \
+    --check by_agent_name.legacy missing --check by_agent_name.my-own-agent missing \
     --check by_command.npx_codex eq codex --check by_command.bin_claude eq claude-code \
+    --check by_command.agy eq antigravity --check by_command.bin_agy eq antigravity \
+    --check by_command.agy_wrapper missing --check by_command.legacy missing \
     --check by_command.wrapper missing --check by_command.custom missing \
+    --check antigravity.default.command eq '["agy", "acp"]' --check antigravity.default.server eq antigravity \
+    --check antigravity.explicit.command eq '["/opt/antigravity/bin/agy", "acp"]' --check antigravity.explicit.detected eq antigravity \
+    --check antigravity.api_key_env eq GEMINI_API_KEY --check antigravity.session_mode eq default \
     --check file_secrets.codex contains CODEX_AUTH_JSON --check file_secrets.pi contains PI_AUTH_JSON \
     --check default_file_secrets len-eq 4 --check unknown_provider missing \
     --check default_plan.bins len-eq 3 --check pi_packages_deduplicated eq true --check unknown_plan_error contains "expected one of"
   control-sdk exec --expect-output 'PACKAGES="@agentclientprotocol/claude-agent-acp@' --expect-output ' @agentclientprotocol/codex-acp@' \
     --expect-output 'WRAPPER_BINS="claude-agent-acp codex-acp"' -- python -m openhands.sdk.settings.acp_install_catalog claude-code,codex
   ```
+  `agy` (and `/usr/local/bin/agy`) is recognised as Antigravity, while a name that merely contains `agy` (`my-agy-wrapper`, `some-random-agy-utility`) or an unknown launcher (`legacy`) is not. Running Antigravity itself is blocked here: no `agy` binary is installed and it needs a Google sign-in.
 - **Pinned ACP packages are published (`S19.acp-providers-catalog`).** Network: every pin in the install catalog exists on registry.npmjs.org (exit 3 when the registry cannot be reached).
   ```sh
   export SDK_VERIFY_RUN=$(control-sdk new --field run)
@@ -184,6 +194,20 @@ Preconditions:
     --check seed.id_kept eq true --check seed.revision_bumped eq true
   ```
   Six threads saving the same name through `save_profile_preserving_identity` leave one profile, one id, revision 5. `list()` returns file names (`coder.json`), as documented.
+- **Sandbox metadata on a profile (`S19.profile-sandbox`).** A v4 payload without the field, both variants with a spec id, four refused shapes, a save and load through the run's `AgentProfileStore`, and `resolve()` of the same profile with and without the field. No model call.
+  ```sh
+  export SDK_VERIFY_RUN=$(control-sdk new --field run)
+  control-sdk program S19/profile_sandbox \
+    --check old_payload_sandbox eq null \
+    --check variants.openhands.spec_id eq registry.example/agent-server:qa-s19 --check variants.openhands.round_trip eq true \
+    --check variants.acp.type eq ACPAgentProfile --check variants.acp.spec_id eq registry.example/agent-server:qa-s19 \
+    --check variants.acp.round_trip eq true \
+    --check refused.empty_spec eq string_too_short --check refused.no_spec eq missing \
+    --check refused.extra_key eq extra_forbidden --check refused.string eq model_type \
+    --check store.spec_id eq registry.example/agent-server:qa-s19 --check store.on_disk_spec eq 1 \
+    --check resolve.same_settings eq true --check resolve.settings_mention_spec eq false
+  ```
+  Expected: an older payload loads with no sandbox; the spec id survives validation, a dump-and-load and the store on both variants; the bad shapes are refused with those error types; and the resolved settings are identical with and without the sandbox, which never appears in them.
 - **Credential binding (`S19.credential-binding`).** A versioned credential source served on localhost (Bearer auth, 409 on a stale version, fixed status paths), loaded and replaced through `HttpVersionedCredentialBinding`.
   ```sh
   export SDK_VERIFY_RUN=$(control-sdk new --field run)

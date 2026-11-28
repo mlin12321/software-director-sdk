@@ -14,7 +14,8 @@ Examples: `examples/01_standalone_sdk/14_context_condenser.py`, `examples/01_sta
 - `S06.context-skills`: repo skills (no triggers) go into the system prompt and triggered skills into the user message whose text matches a trigger (case-insensitive), with already-activated skills skipped; `disabled_skills` drops named skills and duplicate names are rejected. Skill loading and discovery are family S07. Unit: `tests/sdk/context/test_agent_context.py`. Example: `examples/01_standalone_sdk/03_activate_skill.py`. Real-LLM: `tests/integration/tests/t09_invoke_skill.py`.
 - `S06.context-secrets`: secret names and descriptions (never values) from `AgentContext(secrets=...)` and the conversation's secret registry are listed in the system prompt; raw string secrets are redacted on serialization and round-trip through a cipher. Unit: `tests/sdk/context/test_agent_context.py::test_get_system_message_suffix_with_secrets_only`, `tests/sdk/context/test_agent_context_serialization.py`, `tests/sdk/context/prompts/test_prompt_snapshot.py::test_dynamic_context_with_secret_registry`. Example: none. Real-LLM: none.
 - `S06.context-datetime`: `current_datetime` (a `datetime` or a string; defaults to now) is rendered in the dynamic part of the system prompt. Unit: `tests/sdk/context/test_agent_context.py::test_get_system_message_suffix_with_datetime_only`, `::test_agent_context_default_datetime`. Example: none. Real-LLM: none.
-- `S06.system-prompt-registry`: the built-in prompt is assembled from registered sections (default and planning presets), its rendering for fixed inputs matches checked-in snapshots, and the static block has no dynamic content. Unit: `tests/sdk/context/prompts/test_prompt_snapshot.py`, `tests/sdk/context/prompts/test_registry.py`, `tests/sdk/context/prompts/test_default_registry.py`, `tests/sdk/context/prompts/test_planning_registry.py`, `tests/sdk/context/prompts/test_section.py`. Example: none. Real-LLM: none.
+- `S06.system-prompt-registry`: the built-in prompt is assembled from registered sections (default, planning, and the `project_coordinator` and `project_worker` presets that `system_prompt_filename="system_prompt_project_coordinator.j2"` / `"system_prompt_project_worker.j2"` select; `AgentContext.project_context`, which the agent server sets for a project's members, renders as a `<PROJECT>` block in the dynamic context), its rendering for fixed inputs matches checked-in snapshots, and the static block has no dynamic content. Unit: `tests/sdk/context/prompts/test_prompt_snapshot.py`, `tests/sdk/context/prompts/test_registry.py`, `tests/sdk/context/prompts/test_default_registry.py`, `tests/sdk/context/prompts/test_planning_registry.py`, `tests/sdk/context/prompts/test_project_registry.py`, `tests/sdk/context/prompts/test_section.py`. Example: none. Real-LLM: none.
+- `S06.project-prompt-edits`: the project coordinator and worker presets edit the default prompt's wording, and every edit applies to the current default text, so importing the SDK and building any built-in prompt logs no `Default prompt text changed` warning. Unit: `tests/sdk/context/prompts/test_project_registry.py`. Example: none. Real-LLM: none.
 - `S06.system-prompt-model-specific`: GPT-5 and GPT-5 Codex models get their own prompt section (detected from the canonical model name or a variant override); Claude and Gemini vendor files are included only for their models. Unit: `tests/sdk/context/test_prompt_model_spec.py`, `tests/sdk/context/test_agent_context_model_specific.py`. Example: none. Real-LLM: none.
 - `S06.system-prompt-custom`: `Agent(system_prompt=...)` replaces the built-in prompt; `system_prompt_filename` accepts a relative or absolute template path (missing files raise); `system_prompt_kwargs` feed the template. Unit: `tests/sdk/context/test_prompt_absolute_path.py`, `tests/sdk/context/prompts/test_persona.py::test_inline_system_prompt_wins_over_persona`. Example: none. Real-LLM: none.
 - `S06.persona-soul`: a persona replaces the persona sections and keeps capability and dynamic sections; the identity line comes from `~/.openhands/SOUL.md` when present, else a built-in default. Unit: `tests/sdk/context/prompts/test_persona.py`, `tests/sdk/context/prompts/test_prompt_snapshot.py::test_soul_default_snapshot`, `::test_soul_custom_snapshot`. Example: none. Real-LLM: none.
@@ -30,6 +31,7 @@ Examples: `examples/01_standalone_sdk/14_context_condenser.py`, `examples/01_sta
 - `S06.hard-reset`: when summarizing fails (LLM error or invalid range) the condenser retries a hard context reset up to `hard_context_reset_max_retries` (5), shrinking event text by `hard_context_reset_context_scaling` (0.8) each time, and keeps the leading system prompt. Unit: `tests/sdk/context/condenser/test_llm_summarizing_condenser.py::test_llm_error_triggers_hard_context_reset`, `::test_hard_context_reset_preserves_leading_system_prompt`, `tests/sdk/context/condenser/test_rolling_condenser.py::test_hard_context_reset_condensation_is_returned`. Example: none. Real-LLM: `tests/integration/tests/c02_hard_context_reset.py`.
 - `S06.summary-llm-streaming`: the summarizing LLM is a separate `LLM` (own `usage_id` for cost tracking); streaming is switched off for summaries unless the provider requires it, and `extra_body` is not passed. Unit: `tests/sdk/context/condenser/test_llm_summarizing_condenser.py::test_summarization_disables_streaming_when_llm_streams`, `::test_get_condensation_does_not_pass_extra_body`. Example: `examples/01_standalone_sdk/14_context_condenser.py`. Real-LLM: none.
 - `S06.manual-condense`: `conversation.condense()` adds a `CondensationRequest` and runs one step to process it; it raises `ValueError` with setup instructions when there is no condenser or the condenser does not handle requests. Unit: `tests/sdk/conversation/test_condense.py`. Example: none. Real-LLM: none.
+- `S06.condense-pending-action`: `conversation.condense()` while an action waits for confirmation (`AlwaysConfirm`) does not run it: the command has not run, no observation is recorded, the status stays `waiting_for_confirmation`, and condense either records a `Condensation` or raises; a later `run()` (approval) runs the action exactly once. Unit: **none (untested)**. Example: none. Real-LLM: none. Known failure [#7160](https://github.com/OpenHands/software-agent-sdk/issues/7160).
 - `S06.context-overflow-request`: a context-window or malformed-history error from the LLM becomes a `CondensationRequest` when the condenser handles requests, and is raised (with a warning) otherwise. Unit: `tests/sdk/agent/test_agent_context_window_condensation.py`. Example: none. Real-LLM: `tests/integration/tests/c02_hard_context_reset.py`. (Also listed as `S01.context-overflow`.)
 - `S06.condenser-resume`: the state's cached `View` applies condensations incrementally and matches a full rebuild, and the resume path rebuilds it from the reloaded `Condensation` events. Unit: `tests/sdk/conversation/test_state_view_cache.py`. Example: `examples/01_standalone_sdk/14_context_condenser.py`. Real-LLM: none.
 - `S06.noop-condenser`: `NoOpCondenser` returns the view unchanged, with or without an agent LLM. Unit: `tests/sdk/context/condenser/test_no_op_condenser.py`. Example: none. Real-LLM: none.
@@ -38,7 +40,7 @@ Examples: `examples/01_standalone_sdk/14_context_condenser.py`, `examples/01_sta
 ## How to get to it (agent POV)
 
 - `Agent(llm=..., tools=..., agent_context=AgentContext(...))` with `skills`, `system_message_suffix`, `user_message_suffix`, `secrets`, `current_datetime`, `disabled_skills`, `load_user_skills`, `load_public_skills`, `load_project_skills`, `load_memory`: `S06.context-*`, `S06.memory-*`.
-- `Agent(system_prompt=..., system_prompt_filename="system_prompt.j2" | "system_prompt_planning.j2" | path, system_prompt_kwargs={...})`: `S06.system-prompt-*`. Files: `~/.openhands/SOUL.md` (`S06.persona-soul`), `~/.openhands/memory/MEMORY.md` and `<workspace>/.openhands/memory/MEMORY.md` (`S06.memory-load`). `OH_PERSISTENCE_DIR` replaces `~/.openhands`.
+- `Agent(system_prompt=..., system_prompt_filename="system_prompt.j2" | "system_prompt_planning.j2" | "system_prompt_project_coordinator.j2" | "system_prompt_project_worker.j2" | path, system_prompt_kwargs={...})`: `S06.system-prompt-*`. Files: `~/.openhands/SOUL.md` (`S06.persona-soul`), `~/.openhands/memory/MEMORY.md` and `<workspace>/.openhands/memory/MEMORY.md` (`S06.memory-load`). `OH_PERSISTENCE_DIR` replaces `~/.openhands`.
 - `Agent(condenser=LLMSummarizingCondenser(llm=llm.model_copy(update={"usage_id": "condenser"}), max_size=..., max_tokens=..., keep_first=..., minimum_progress=..., hard_context_reset_max_retries=..., hard_context_reset_context_scaling=...))`: `S06.summarizing-*`, `S06.soft-vs-hard`, `S06.hard-reset`, `S06.summary-llm-streaming`.
 - `from openhands.sdk.context.condenser import NoOpCondenser, PipelineCondenser, LLMSummarizingCondenser, CondenserBase, RollingCondenser`: `S06.noop-condenser`, `S06.pipeline-condenser`; subclass `RollingCondenser` for a custom condenser.
 - `conversation.condense()`: `S06.manual-condense`. Events: `Condensation(forgotten_event_ids, summary, summary_offset)`, `CondensationRequest`, `CondensationSummaryEvent` in `openhands.sdk.event`: `S06.view`.
@@ -82,6 +84,10 @@ The programs under `programs/S06/` record every scripted LLM call (`recorder.py`
     --check static_same_across_contexts eq true --check static_has_dynamic_values eq false \
     --check dynamic_has_values eq true --check soul_default eq true \
     --check planning_differs eq true --check planning_tags contains PLAN_STRUCTURE \
+    --check project_coordinator_tags contains ROUTING --check project_coordinator_tags contains BRIEFS \
+    --check project_coordinator_tags not-contains CODE_QUALITY --check project_coordinator_context eq true \
+    --check project_worker_tags contains WHO_IS_SPEAKING --check project_worker_tags contains YOUR_REPORT \
+    --check project_worker_tags contains CODE_QUALITY --check project_worker_context eq true \
     --check plain_gpt5_section eq false --check gpt5_gpt5_section eq true --check gpt5_preamble eq true \
     --check codex_gpt5_section eq true --check codex_preamble eq false \
     --check canonical_gpt5_section eq true --check override_preamble eq true \
@@ -96,6 +102,13 @@ The programs under `programs/S06/` record every scripted LLM call (`recorder.py`
   control-sdk exec -- sh -c 'printf "%s\n" "You are Bob, a terse build engineer." > "$OH_PERSISTENCE_DIR/SOUL.md"'
   control-sdk program S06/prompt_variants --check soul_custom eq true --check soul_default eq false
   ```
+- **The project presets' wording edits (`S06.project-prompt-edits`).** A fresh interpreter builds the default, planning, project coordinator and project worker prompts with `Agent(system_prompt_filename=...)` and counts the `Default prompt text changed` warnings it logged.
+  ```sh
+  export SDK_VERIFY_RUN=$(control-sdk new --field run)
+  control-sdk program S06/prompt_warnings --check prompts_built eq 4 \
+    --check worker_troubleshooting_mentions_report eq true --check wording_warning_count eq 0
+  ```
+  Expected: no warning; the worker's `<TROUBLESHOOTING>` block asks in its report, and no preset edit targets text the default prompt no longer has.
 - **Persistent memory (`S06.memory-load`, `S06.memory-write-path`).** User and project `MEMORY.md` indexes (and a daily log) are written to disk; conversations with `AgentContext(load_memory=True)` start over them, then over an oversized user index, then over an empty project index and an unreadable user index.
   ```sh
   export SDK_VERIFY_RUN=$(control-sdk new --field run)
@@ -160,6 +173,15 @@ The programs under `programs/S06/` record every scripted LLM call (`recorder.py`
     --check summary_calls_soft eq 0 --check condensations_after_request eq 1 \
     --check view_kinds_after_request eq '["SystemPromptEvent", "CondensationSummaryEvent"]' --check hard_offset eq 1
   ```
+- **A summary with no text (`S06.summarizing-size`, `S06.soft-vs-hard`).** `LLMSummarizingCondenser(max_size=10, keep_first=2)` over nine scripted terminal steps while the summary LLM answers every call with no text (`""`); then the same with only whitespace (`" "`).
+  ```sh
+  export SDK_VERIFY_RUN=$(control-sdk new --field run)
+  control-sdk program S06/condense --arg empty-summary \
+    --check empty.status eq finished --check empty.summary_calls ge 1 \
+    --check empty.empty_summary_condensations eq 0 --check empty.forgotten eq 0 \
+    --check blank.status eq finished --check blank.empty_summary_condensations eq 0 --check blank.forgotten eq 0
+  ```
+  Expected: size pressure is a soft requirement, so with no usable summary the view stays as it was (nothing forgotten, no `Condensation`), as when there is nothing worth forgetting. Known failure (reproduced 2026-11-19, [#6957](https://github.com/OpenHands/software-agent-sdk/issues/6957)): both runs record two condensations whose summary is `""` (or `" "`) and forget 15 events between them; `LLMSummarizingCondenser` takes any successful reply's first text block as the summary. The issue's trigger is an empty reply with `finish_reason="length"`; the scripted LLM answers with `finish_reason="stop"`, which the condenser does not read either.
 - **Hard context reset (`S06.hard-reset`).** The summary LLM fails on the normal path and on the first reset attempt, then answers; with every attempt failing, `condense()` raises and nothing is forgotten.
   ```sh
   export SDK_VERIFY_RUN=$(control-sdk new --field run)
@@ -181,6 +203,15 @@ The programs under `programs/S06/` record every scripted LLM call (`recorder.py`
     --check none_error contains "No condenser configured" --check none_error contains LLMSummarizingCondenser \
     --check noop_error contains "does not handle condensation requests"
   ```
+- **Condense while an action awaits confirmation (`S06.condense-pending-action`).** A scripted agent proposes one terminal command under `AlwaysConfirm`; `conversation.condense()` is called while it waits, then `run()` approves it.
+  ```sh
+  export SDK_VERIFY_RUN=$(control-sdk new --field run)
+  control-sdk program S06/condense --arg pending \
+    --check error missing --check status_before eq waiting_for_confirmation --check ran_before eq false \
+    --check ran_after eq false --check observations_after eq 0 --check status_after eq waiting_for_confirmation \
+    --check condensed_or_refused eq true --check approve_error missing --check runs_after_approve eq 1
+  ```
+  Expected: condense leaves the pending command alone and either condenses or raises; approving afterwards runs it once. Known failure (reproduced 2026-11-27, [#7160](https://github.com/OpenHands/software-agent-sdk/issues/7160)): `condense()` returns without error and without a `Condensation`, but the command ran (`ran_after` true, one `ObservationEvent`): `LocalConversation._condense()` calls `agent.step()`, which executes pending actions first (implicit confirmation) and returns before the condenser. The status still reads `waiting_for_confirmation`. The agent-server twin `F10.condense-pending-action` (`POST /condense`) shows the same; fix in review: [#7161](https://github.com/OpenHands/software-agent-sdk/pull/7161).
 - **Context-window errors (`S06.context-overflow-request`).** The agent's scripted LLM raises `LLMContextWindowExceedError` mid-task.
   ```sh
   export SDK_VERIFY_RUN=$(control-sdk new --field run)
@@ -248,4 +279,5 @@ The programs under `programs/S06/` record every scripted LLM call (`recorder.py`
 - `~/.openhands/SOUL.md` changes the identity line of every built-in prompt; prompt snapshot tests guard against that, but ad-hoc prompt comparisons do not. Regenerate snapshots with `REGEN_PROMPT_SNAPSHOTS=1 uv run pytest tests/sdk/context/prompts/test_prompt_snapshot.py`.
 - `memory_context` is resolved at the first `send_message()`/`run()` (the workspace is not known when `AgentContext` validates), so inspecting `agent.agent_context` before that shows no memory.
 - `c01_thinking_block_condenser.py` skips models without `extended_thinking`; models with `reasoning_effort` (OpenAI o-series, GPT-5) produce reasoning items, not thinking blocks.
+- `render_template` reports every template load failure as `FileNotFoundError: Prompt file <path> not found`, even when the file exists: a `system_prompt_filename` template with a Jinja syntax error fails at the first `send_message()` with that message (the `TemplateSyntaxError` is only the `__context__`), and when the Jinja bytecode cache (`$OH_PERSISTENCE_DIR/cache/jinja`) cannot be written (disk full) the condenser's `summarizing_system.j2` fails the same way, ending `run()`/`arun()` in ERROR with no LLM call, even for a soft (size) requirement ([#7103](https://github.com/OpenHands/software-agent-sdk/issues/7103), `S06.system-prompt-custom`, `S06.soft-vs-hard`).
 - No failing tests were found in this family's commands at 4cc0582.

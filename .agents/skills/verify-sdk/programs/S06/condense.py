@@ -15,6 +15,8 @@ Usage: condense.py MODE
             reset (retries, then gives up).
   soft      size pressure with nothing worth forgetting (minimum_progress)
             leaves the run alone; an explicit request resets hard.
+  empty-summary  size pressure while the summary LLM answers with no text
+            (""), then with only whitespace (" ").
   reasons   condensation reasons and their combination, on a View taken from
             a real conversation (the API a custom condenser author uses).
   pipeline  PipelineCondenser and NoOpCondenser inside conversations.
@@ -23,6 +25,8 @@ Usage: condense.py MODE
   dispositions  get_observation_dispositions over a real conversation's
             events plus a recovery AgentErrorEvent (recovery_reason=
             "server_restart") ahead of a call's late result, against View.
+  pending   conversation.condense() while an action waits for confirmation
+            (AlwaysConfirm), then the action is approved with run().
   live      the run's real model works through several commands with a
             real summarizing LLM (max_size=10), then is condensed on request.
 
@@ -49,6 +53,7 @@ from openhands.sdk.event import (
     CondensationSummaryEvent,
     ObservationEvent,
 )
+from openhands.sdk.security.confirmation_policy import AlwaysConfirm
 from openhands.tools.terminal import TerminalTool
 
 
@@ -361,6 +366,26 @@ elif mode == "soft":
     out["hard_offset"] = conds[-1].summary_offset if conds else None
     conversation.close()
 
+elif mode == "empty-summary":
+    for name, blank in (("empty", ""), ("blank", " ")):
+        usage_id = f"condenser-{name}"
+        condenser = summarizer([blank] * 6, usage_id=usage_id)
+        conversation = conversation_for(echo_steps(8) + [{"finish": "done"}], condenser)
+        error = run(conversation)
+        conds = condensations(conversation)
+        out[name] = {
+            "error": error,
+            "status": conversation.state.execution_status.value,
+            "summary_calls": len(calls(usage_id)),
+            "condensations": len(conds),
+            "empty_summary_condensations": sum(
+                not (c.summary or "").strip() for c in conds
+            ),
+            "forgotten": sum(len(c.forgotten_event_ids) for c in conds),
+            "summaries": [c.summary for c in conds],
+        }
+        conversation.close()
+
 elif mode == "reasons":
     script = echo_steps(12) + [{"finish": "done"}]
     conversation = conversation_for(script, None)
@@ -529,6 +554,46 @@ elif mode == "dispositions":
     ] == [d.canonical_event_id for d in dispositions]
     out["events_unchanged"] = [e.model_dump_json() for e in merged] == before
     out["actions_only"] = len(get_observation_dispositions(actions))
+
+elif mode == "pending":
+    marker = paths["workspace"] / "qa-s06-unapproved.txt"
+    script = [
+        {"tool": "terminal", "args": {"command": f"echo ran >> {marker.name}"}},
+        {"finish": "done"},
+    ]
+    conversation = conversation_for(script, summarizer(["SUMMARY-P."], max_size=100))
+    conversation.set_confirmation_policy(AlwaysConfirm())
+    out["error"] = run(conversation, "Run the command.")
+    out["status_before"] = conversation.state.execution_status.value
+    out["ran_before"] = marker.exists()
+    agent_calls = len(calls("agent"))
+    try:
+        conversation.condense()
+        out["condense_error"] = None
+    except Exception as exc:
+        out["condense_error"] = f"{type(exc).__name__}: {str(exc)[:200]}"
+    kinds = [type(e).__name__ for e in conversation.state.events]
+    out["status_after"] = conversation.state.execution_status.value
+    out["ran_after"] = marker.exists()
+    out["observations_after"] = kinds.count("ObservationEvent")
+    out["condensations"] = len(condensations(conversation))
+    out["condensed_or_refused"] = bool(
+        out["condensations"] or out["condense_error"] is not None
+    )
+    out["agent_calls_during_condense"] = len(calls("agent")) - agent_calls
+    out["approve_error"] = None
+    try:
+        conversation.run()  # approve the pending action
+    except Exception as exc:
+        out["approve_error"] = type(exc).__name__
+    out["status_approved"] = conversation.state.execution_status.value
+    out["runs_after_approve"] = (
+        marker.read_text().count("ran") if marker.exists() else 0
+    )
+    out["observations_approved"] = sum(
+        isinstance(e, ObservationEvent) for e in conversation.state.events
+    )
+    conversation.close()
 
 elif mode == "live":
     condenser = LLMSummarizingCondenser(
