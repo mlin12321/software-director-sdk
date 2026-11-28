@@ -74,6 +74,7 @@ from openhands.agent_server.director.service.team_summary_service import (
 from openhands.agent_server.director.service.team_type_service import TeamTypeService
 from openhands.agent_server.director.split import (
     Shape,
+    ShapeConflict,
     Side,
     is_inside,
     merge_shapes,
@@ -291,6 +292,79 @@ class SessionMergeService:
             teams.extend(store.sub_teams(team.id))
         return session_places, shape_of(session_places), shape_of(teams)
 
+    def _directory_taken(
+        self,
+        team_id: str,
+        path: str,
+        above_id: str,
+        *,
+        settled: bool,
+        leaving: Collection[str],
+    ) -> bool:
+        """Whether another team of the org has the directory a team would
+        take, or is beside it with a directory that holds it or lies in it.
+
+        Args:
+            settled: Its Manager put it there, or its place is new: what
+                its directory holds goes under it, so only the same
+                directory is in the way.
+        """
+        return any(
+            other.id != team_id
+            and other.id not in leaving
+            and (
+                (held := normalize_store_path(other.boundary.path)) == path
+                or not settled
+                and other.parent_id == above_id
+                and (is_inside(path, held) or is_inside(held, path))
+            )
+            for other in self.org().teams()
+        )
+
+    def _write_team(
+        self, team_id: str, above_id: str, place: SessionTeam, title: str
+    ) -> bool:
+        """Add a team to the org as a session has it, or make the org's
+        team what the session has.
+
+        Returns:
+            False when the org's team could not be moved under ``above_id``.
+        """
+        store = self.org()
+        if store.team(team_id) is None:
+            store.upsert(
+                OrgNodeInput(
+                    id=team_id,
+                    parent_id=above_id,
+                    title=title,
+                    boundary=place.boundary,
+                    isolation=place.isolation,
+                    agent_profile=place.agent_profile,
+                    agent_type=place.agent_type,
+                    headline=place.headline,
+                    summary=place.summary,
+                    leftover_documents=place.leftover_documents,
+                    since=place.since,
+                )
+            )
+            return True
+        try:
+            store.move(team_id, above_id)
+        except OrgStoreError:
+            logger.exception("Could not move team %s under %s", team_id, above_id)
+            return False
+        store.update_team(
+            team_id,
+            title=title,
+            boundary=place.boundary,
+            agent_profile=place.agent_profile,
+            agent_type=place.agent_type,
+            summary=place.summary,
+            leftover_documents=place.leftover_documents,
+            since=place.since,
+        )
+        return True
+
     def _put_team(
         self,
         session: SessionInput,
@@ -331,54 +405,12 @@ class SessionMergeService:
             above_id = under
         elif moved:
             above_id = self.session_records.home_of(places[session.team_id], path)
-        home = store.team(above_id)
-        if home is None or any(
-            other.id != team_id
-            and other.id not in leaving
-            and (
-                (held := normalize_store_path(other.boundary.path)) == path
-                # Beside a team one of whose directories holds the other's.
-                # Where its Manager put it, or its place is new, that is
-                # settled: what it holds goes under it.
-                or not moved
-                and other.parent_id == above_id
-                and (is_inside(path, held) or is_inside(held, path))
-            )
-            for other in store.teams()
+        if store.team(above_id) is None or self._directory_taken(
+            team_id, path, above_id, settled=moved, leaving=leaving
         ):
             return False
-        if store.team(team_id) is None:
-            store.upsert(
-                OrgNodeInput(
-                    id=team_id,
-                    parent_id=above_id,
-                    title=title or place.title,
-                    boundary=place.boundary,
-                    isolation=place.isolation,
-                    agent_profile=place.agent_profile,
-                    agent_type=place.agent_type,
-                    headline=place.headline,
-                    summary=place.summary,
-                    leftover_documents=place.leftover_documents,
-                    since=place.since,
-                )
-            )
-        else:
-            try:
-                store.move(team_id, above_id)
-            except OrgStoreError:
-                logger.exception("Could not move team %s under %s", team_id, above_id)
-                return False
-            store.update_team(
-                team_id,
-                title=title or place.title,
-                boundary=place.boundary,
-                agent_profile=place.agent_profile,
-                agent_type=place.agent_type,
-                summary=place.summary,
-                leftover_documents=place.leftover_documents,
-                since=place.since,
-            )
+        if not self._write_team(team_id, above_id, place, title or place.title):
+            return False
         if moved:
             for other in store.sub_teams(above_id):
                 if other.id != team_id and is_inside(other.boundary.path, path):
@@ -510,6 +542,38 @@ class SessionMergeService:
         session_places, theirs, now = shapes
         take, clashes = merge_shapes(session.shape, theirs, now)
         places = {place.team_id: place for place in session_places}
+        items, coming = self._team_items(top, places, clashes, before)
+        items += self._document_items(top, coming)
+        items += coming.values()
+        decided = {_same(item): item for item in before if item.use}
+        return take, [
+            item.model_copy(
+                update={
+                    "use": known.use,
+                    "replacement": known.replacement,
+                    "under": known.under,
+                    "named": known.named,
+                }
+            )
+            if (known := decided.get(_same(item))) is not None
+            else item
+            for item in items
+        ]
+
+    def _team_items(
+        self,
+        top: SessionTeam,
+        places: dict[str, SessionTeam],
+        clashes: Sequence[ShapeConflict],
+        before: list[MergeItem],
+    ) -> tuple[list[MergeItem], dict[tuple[str, str], MergeItem]]:
+        """The teams a session and the org each made something else of.
+
+        Returns:
+            One item for each, and the documents that come with a team
+            whose place in the org is gone, by document and directory.
+        """
+        store = self.org()
         items: list[MergeItem] = []
         coming: dict[tuple[str, str], MergeItem] = {}
         came: dict[str, dict[str, MergeItem]] = {}
@@ -544,6 +608,15 @@ class SessionMergeService:
                     moved_to=moved_to,
                 )
             )
+        return items, coming
+
+    def _document_items(
+        self, top: SessionTeam, coming: Collection[tuple[str, str]]
+    ) -> list[MergeItem]:
+        """The documents a session and the org each wrote something else
+        in, among those that wait with the teams. ``coming`` are settled
+        with their team and left out."""
+        items: list[MergeItem] = []
         memory = self.team_memory()
         for file, (text, over) in sorted(
             self.session_records.drafts(top.session).items()
@@ -564,21 +637,7 @@ class SessionMergeService:
                         org=has or "",
                     )
                 )
-        items += coming.values()
-        decided = {_same(item): item for item in before if item.use}
-        return take, [
-            item.model_copy(
-                update={
-                    "use": known.use,
-                    "replacement": known.replacement,
-                    "under": known.under,
-                    "named": known.named,
-                }
-            )
-            if (known := decided.get(_same(item))) is not None
-            else item
-            for item in items
-        ]
+        return items
 
     def org_turn(self) -> None:
         """Move on what the sessions' work makes of the org's teams and of

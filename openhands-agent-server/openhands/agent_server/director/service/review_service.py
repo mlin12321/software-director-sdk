@@ -775,6 +775,98 @@ class ReviewService:
             return False, meets
         return True, meets
 
+    def _wait_for_branch(
+        self,
+        place: SessionTeam,
+        reviewer: str | None,
+        elsewhere: tuple[str, str],
+        reconciled: str,
+        choices: list[dict[str, str]],
+    ) -> None:
+        """Ask the human to switch their checkout back to the branch the
+        session started from; their answer merges the accepted work."""
+        started_on, on = elsewhere
+        self.ask_to_clear(
+            place.id,
+            f"The session started from the branch {started_on!r}, "
+            "and your checkout is now "
+            + ("on no branch" if on in ("", "HEAD") else f"on {on!r}")
+            + f".\nSwitch it back to {started_on!r}, then answer "
+            "this: the work is merged then.",
+            reconciled,
+            choices,
+        )
+        self.message_delivery.notify(
+            reviewer,
+            f"The work of {place.title!r} is accepted and waits for "
+            "the human, whose checkout is on another branch than the "
+            "one the session started from. There is nothing more "
+            "for you to do.",
+        )
+
+    def _merge_refused(
+        self,
+        place: SessionTeam,
+        above: SessionTeam,
+        reviewer: str | None,
+        result: MergeBack,
+        reconciled: str,
+        choices: list[dict[str, str]],
+    ) -> None:
+        """Tell whoever has to clear the checkout above that the merge was
+        refused as the checkout is."""
+        if is_division_lead(above):
+            # Only the human can clear their own checkout: they are
+            # asked, and their answer merges the work.
+            self.ask_to_clear(
+                place.id,
+                f"git would not merge it as the checkout is:\n"
+                f"{result.detail}\nCommit or put aside what is in "
+                "the way, then answer this: the work is merged then.",
+                reconciled,
+                choices,
+            )
+            self.message_delivery.notify(
+                reviewer,
+                f"The work of {place.title!r} is accepted and waits for "
+                "the human, whose uncommitted changes are in the way of "
+                "the merge. There is nothing more for you to do.",
+            )
+            return
+        self.message_delivery.notify(
+            reviewer,
+            f"git would not merge the work of {place.title!r} into your "
+            f"checkout as it is:\n{result.detail}\n"
+            + (
+                "What is in the way is work that is not committed "
+                "yet in the same files. Accept it again with "
+                "`review_team` once that is committed."
+                if self.org().opens_session(place)
+                else "Commit or put aside what is in the way, then "
+                "accept it again with `review_team`."
+            ),
+        )
+
+    def _send_back_outside(
+        self, place: SessionTeam, reviewer: str | None, result: MergeBack
+    ) -> None:
+        """Send work back that changed files outside what its team owns."""
+        where = place.boundary.path or "the repository"
+        issue = (
+            f"These files are outside {where}, which is all your "
+            "team owns. Take them out of your commits."
+        )
+        self.request_changes(
+            place.id,
+            [ReviewFinding(path=", ".join(result.files), issue=issue)],
+        )
+        self.message_delivery.notify(
+            reviewer,
+            f"The work of {place.title!r} was not taken into your "
+            f"checkout: {issue} ({', '.join(result.files)}) "
+            "It was sent back to the team.",
+        )
+
     async def _merge_above(
         self,
         place: SessionTeam,
@@ -793,29 +885,11 @@ class ReviewService:
         """
         place_id = place.id
         names = self.team_types.names_at(place_id)
-        where = place.boundary.path or "the repository"
         opens = self.org().opens_session(place)
         resolved: tuple[str, ...] = ()
         elsewhere = await asyncio.to_thread(self._elsewhere, place, above)
         if elsewhere is not None:
-            started_on, on = elsewhere
-            self.ask_to_clear(
-                place_id,
-                f"The session started from the branch {started_on!r}, "
-                "and your checkout is now "
-                + ("on no branch" if on in ("", "HEAD") else f"on {on!r}")
-                + f".\nSwitch it back to {started_on!r}, then answer "
-                "this: the work is merged then.",
-                reconciled,
-                choices,
-            )
-            self.message_delivery.notify(
-                reviewer,
-                f"The work of {place.title!r} is accepted and waits for "
-                "the human, whose checkout is on another branch than the "
-                "one the session started from. There is nothing more "
-                "for you to do.",
-            )
+            self._wait_for_branch(place, reviewer, elsewhere, reconciled, choices)
             return None
         if not opens:
             # What is uncommitted in a session's directory is the work
@@ -843,54 +917,11 @@ class ReviewService:
             resolved = result.files if result.outcome == "merged" else ()
         else:
             await asyncio.to_thread(self.confinement.drop_merge_checkout, place_id)
-        if result.outcome == "refused" and is_division_lead(above):
-            # Only the human can clear their own checkout: they are
-            # asked, and their answer merges the work.
-            self.ask_to_clear(
-                place_id,
-                f"git would not merge it as the checkout is:\n"
-                f"{result.detail}\nCommit or put aside what is in "
-                "the way, then answer this: the work is merged then.",
-                reconciled,
-                choices,
-            )
-            self.message_delivery.notify(
-                reviewer,
-                f"The work of {place.title!r} is accepted and waits for "
-                "the human, whose uncommitted changes are in the way of "
-                "the merge. There is nothing more for you to do.",
-            )
-            return None
         if result.outcome == "refused":
-            self.message_delivery.notify(
-                reviewer,
-                f"git would not merge the work of {place.title!r} into your "
-                f"checkout as it is:\n{result.detail}\n"
-                + (
-                    "What is in the way is work that is not committed "
-                    "yet in the same files. Accept it again with "
-                    "`review_team` once that is committed."
-                    if opens
-                    else "Commit or put aside what is in the way, then "
-                    "accept it again with `review_team`."
-                ),
-            )
+            self._merge_refused(place, above, reviewer, result, reconciled, choices)
             return None
         if result.outcome == "outside":
-            issue = (
-                f"These files are outside {where}, which is all your "
-                "team owns. Take them out of your commits."
-            )
-            self.request_changes(
-                place_id,
-                [ReviewFinding(path=", ".join(result.files), issue=issue)],
-            )
-            self.message_delivery.notify(
-                reviewer,
-                f"The work of {place.title!r} was not taken into your "
-                f"checkout: {issue} ({', '.join(result.files)}) "
-                "It was sent back to the team.",
-            )
+            self._send_back_outside(place, reviewer, result)
             return None
         merged = result.outcome == "merged"
         if resolved:
@@ -1054,6 +1085,78 @@ class ReviewService:
         on = self.checkouts.branch(above.worktree_path)
         return None if on == started_on else (started_on, on)
 
+    def _all_below_accepted(self, place_id: str) -> bool:
+        """Whether a team has sub-teams that were given work, and the work
+        of each is accepted. A team that was set up and never given work
+        owes none."""
+        teams = [
+            team
+            for team in self.org().below(place_id)
+            if team.review is not None
+            or self.team_types.writer_conversation(team) is not None
+        ]
+        return bool(teams) and all(
+            team.review is not None and team.review.state == "accepted"
+            for team in teams
+        )
+
+    async def _meets_other_work(self, place: SessionTeam, above: SessionTeam) -> bool:
+        """Whether a session's work meets what other sessions delivered, or
+        the human's checkout has moved to another branch: the reviewer is
+        asked then, even if the team changed nothing."""
+        try:
+            return (
+                await asyncio.to_thread(self._to_reconcile, place, above) is not None
+                or await asyncio.to_thread(self._elsewhere, place, above) is not None
+            )
+        except (EnvironmentFailed, OSError):
+            return True
+
+    async def _merge_unreviewed(
+        self, place: SessionTeam, above: SessionTeam
+    ) -> str | None:
+        """Merge a team's checkout into the one above.
+
+        Returns:
+            What kept it from merging, or None when it merged.
+        """
+        try:
+            result = await asyncio.to_thread(
+                self.checkouts.merge, place, above, place.title
+            )
+        except (EnvironmentFailed, OSError) as error:
+            return str(error)
+        if result.outcome in ("refused", "conflicts", "outside"):
+            return f"{result.outcome}: {', '.join(result.files) or result.detail}"
+        return None
+
+    async def _record_passed_up(self, place: SessionTeam, opens: bool) -> None:
+        """Mark a team's work accepted without a review; the work of a
+        session becomes the org's."""
+        store = self.org()
+        tip = await asyncio.to_thread(self.checkouts.version, Path(place.worktree_path))
+        store.set_review(
+            place.id,
+            Review(
+                state="accepted",
+                summary="The accepted work of its sub-teams, with no changes of "
+                "its own.",
+                passed_up=True,
+                commit=tip or "",
+                at=utc_now(),
+                # It goes into the org after what was submitted before now.
+                seq=self.session_merges.next_submission() if opens else 0,
+            ),
+            base_commit=tip or place.base_commit,
+        )
+        self.check_counts.work_accepted(place)
+        if opens:
+            await asyncio.to_thread(
+                self.session_merges.land_accepted, store.place(place.id) or place, None
+            )
+            # As after any accept: what changes from now is said once more.
+            self.session_merges.changed_since_accept.pop(place.session, None)
+
     async def pass_up(self, place_id: str, *, acted: bool) -> None:
         """Take a team's work into the team above without another review,
         when all of it is work of its sub-teams that was accepted.
@@ -1072,16 +1175,7 @@ class ReviewService:
         # A Division Lead place reviews; it has no work to hand on.
         if place is None or is_division_lead(place) or not store.below(place_id):
             return
-        # A team that was set up and never given work owes none.
-        teams = [
-            team
-            for team in store.below(place_id)
-            if team.review is not None
-            or self.team_types.writer_conversation(team) is not None
-        ]
-        if not teams or any(
-            team.review is None or team.review.state != "accepted" for team in teams
-        ):
+        if not self._all_below_accepted(place_id):
             return
         if place.review is not None and place.review.state == "pending":
             return
@@ -1104,17 +1198,12 @@ class ReviewService:
         # The work of a session meets what other sessions delivered: where
         # it does, or the human's checkout has moved to another branch, the
         # reviewer is asked even if the team changed nothing.
-        meets = False
-        if not own and above is not None and store.opens_session(place):
-            try:
-                meets = (
-                    await asyncio.to_thread(self._to_reconcile, place, above)
-                    is not None
-                    or await asyncio.to_thread(self._elsewhere, place, above)
-                    is not None
-                )
-            except (EnvironmentFailed, OSError):
-                meets = True
+        meets = (
+            not own
+            and above is not None
+            and opens
+            and await self._meets_other_work(place, above)
+        )
         if own or above is None or meets:
             if not acted:
                 self.message_delivery.notify(
@@ -1130,19 +1219,8 @@ class ReviewService:
                     + "Call `submit_review` when your team's work is complete.",
                 )
             return
-        team = Path(place.worktree_path)
         if self.checkouts.is_apart(place, above):
-            try:
-                result = await asyncio.to_thread(
-                    self.checkouts.merge, place, above, place.title
-                )
-                problem = (
-                    f"{result.outcome}: {', '.join(result.files) or result.detail}"
-                    if result.outcome in ("refused", "conflicts", "outside")
-                    else None
-                )
-            except (EnvironmentFailed, OSError) as error:
-                problem = str(error)
+            problem = await self._merge_unreviewed(place, above)
             if problem is not None:
                 self.message_delivery.notify(
                     ic,
@@ -1154,28 +1232,7 @@ class ReviewService:
                     "when it accepts the work.",
                 )
                 return
-        tip = await asyncio.to_thread(self.checkouts.version, team)
-        store.set_review(
-            place_id,
-            Review(
-                state="accepted",
-                summary="The accepted work of its sub-teams, with no changes of "
-                "its own.",
-                passed_up=True,
-                commit=tip or "",
-                at=utc_now(),
-                # It goes into the org after what was submitted before now.
-                seq=self.session_merges.next_submission() if opens else 0,
-            ),
-            base_commit=tip or place.base_commit,
-        )
-        self.check_counts.work_accepted(place)
-        if opens:
-            await asyncio.to_thread(
-                self.session_merges.land_accepted, store.place(place_id) or place, None
-            )
-            # As after any accept: what changes from now is said once more.
-            self.session_merges.changed_since_accept.pop(place.session, None)
+        await self._record_passed_up(place, opens)
         self.tell_turns()
         if acted:
             self.message_delivery.notify(
