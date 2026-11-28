@@ -129,6 +129,24 @@ describe('DirectorClient', () => {
     expect(result).toEqual(opened);
   });
 
+  it('gets the automation that opens sessions for events', async () => {
+    const bundle = {
+      name: 'Open a session of the org',
+      entrypoint: 'python3 main.py',
+      tarball_base64: 'H4sI',
+    };
+    const fetchMock = mockFetch(() => jsonResponse(bundle));
+    const client = new DirectorClient({ host: 'http://example.com' });
+
+    const result = await client.getOpenSessionAutomation();
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(`${init.method} ${url}`).toBe(
+      'GET http://example.com/api/director/automations/open-session'
+    );
+    expect(result).toEqual(bundle);
+  });
+
   it('opens a session at a team, lists the open ones and closes one', async () => {
     const session = {
       id: 's1a2b3c',

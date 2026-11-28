@@ -13,6 +13,7 @@ import type {
   DirectorOrgSummary,
   DirectorOpenedSession,
   DirectorRoutedMessage,
+  DirectorAutomationBundle,
   DirectorEventSession,
   DirectorOrgEventRequest,
   DirectorSession,
@@ -250,6 +251,17 @@ export class DirectorClient {
     const response = await this.client.post<DirectorEventSession>(
       `${DIRECTOR_PATH}/org/events`,
       request
+    );
+    return response.data;
+  }
+
+  /**
+   * The script automation that opens a session of the org for an event, to
+   * upload to the automation service with any trigger.
+   */
+  async getOpenSessionAutomation(): Promise<DirectorAutomationBundle> {
+    const response = await this.client.get<DirectorAutomationBundle>(
+      `${DIRECTOR_PATH}/automations/open-session`
     );
     return response.data;
   }

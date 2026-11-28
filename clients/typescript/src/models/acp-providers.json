@@ -1,16 +1,11 @@
 {
   "antigravity": {
-    "agent_name_patterns": [
-      "antigravity"
-    ],
+    "agent_name_patterns": ["antigravity"],
     "api_key_env_var": "GEMINI_API_KEY",
     "base_url_env_var": null,
     "binary_name": "agy",
     "data_dir_env_var": "HOME",
-    "default_command": [
-      "agy",
-      "acp"
-    ],
+    "default_command": ["agy", "acp"],
     "default_session_mode": "default",
     "display_name": "Google Antigravity",
     "effort_config_id": null,
@@ -23,9 +18,7 @@
     "supports_set_session_model": true
   },
   "claude-code": {
-    "agent_name_patterns": [
-      "claude-agent"
-    ],
+    "agent_name_patterns": ["claude-agent"],
     "api_key_env_var": "ANTHROPIC_API_KEY",
     "base_url_env_var": "ANTHROPIC_BASE_URL",
     "binary_name": "claude-agent-acp",
@@ -39,20 +32,11 @@
     "default_session_mode": "bypassPermissions",
     "display_name": "Claude Code",
     "effort_config_id": "effort",
-    "effort_levels": [
-      "low",
-      "medium",
-      "high",
-      "xhigh",
-      "max"
-    ],
+    "effort_levels": ["low", "medium", "high", "xhigh", "max"],
     "env_conflicts": [
       {
         "dominant": "CLAUDE_CODE_OAUTH_TOKEN",
-        "strip": [
-          "ANTHROPIC_API_KEY",
-          "ANTHROPIC_BASE_URL"
-        ]
+        "strip": ["ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL"]
       }
     ],
     "file_secrets": [],
@@ -62,30 +46,16 @@
     "supports_set_session_model": true
   },
   "codex": {
-    "agent_name_patterns": [
-      "codex-acp"
-    ],
+    "agent_name_patterns": ["codex-acp"],
     "api_key_env_var": "OPENAI_API_KEY",
     "base_url_env_var": "OPENAI_BASE_URL",
     "binary_name": "codex-acp",
     "data_dir_env_var": "CODEX_HOME",
-    "default_command": [
-      "npx",
-      "-y",
-      "--prefer-offline",
-      "@agentclientprotocol/codex-acp@2.2.2"
-    ],
+    "default_command": ["npx", "-y", "--prefer-offline", "@agentclientprotocol/codex-acp@2.2.2"],
     "default_session_mode": "agent-full-access",
     "display_name": "Codex",
     "effort_config_id": "reasoning_effort",
-    "effort_levels": [
-      "low",
-      "medium",
-      "high",
-      "xhigh",
-      "max",
-      "ultra"
-    ],
+    "effort_levels": ["low", "medium", "high", "xhigh", "max", "ultra"],
     "env_conflicts": [],
     "file_secrets": [
       {
@@ -103,20 +73,12 @@
     "supports_set_session_model": true
   },
   "gemini-cli": {
-    "agent_name_patterns": [
-      "gemini-cli"
-    ],
+    "agent_name_patterns": ["gemini-cli"],
     "api_key_env_var": "GEMINI_API_KEY",
     "base_url_env_var": "GEMINI_BASE_URL",
     "binary_name": "gemini",
     "data_dir_env_var": "HOME",
-    "default_command": [
-      "npx",
-      "-y",
-      "--prefer-offline",
-      "@google/gemini-cli@0.46.0",
-      "--acp"
-    ],
+    "default_command": ["npx", "-y", "--prefer-offline", "@google/gemini-cli@0.46.0", "--acp"],
     "default_session_mode": "default",
     "display_name": "Gemini CLI",
     "effort_config_id": null,
@@ -129,10 +91,7 @@
         "filename": "gcloud-credentials.json",
         "secret_name": "GOOGLE_APPLICATION_CREDENTIALS_JSON",
         "subdir": "gemini-cli",
-        "warn_if_unset": [
-          "GOOGLE_CLOUD_PROJECT",
-          "GOOGLE_CLOUD_LOCATION"
-        ]
+        "warn_if_unset": ["GOOGLE_CLOUD_PROJECT", "GOOGLE_CLOUD_LOCATION"]
       }
     ],
     "key": "gemini-cli",
@@ -141,20 +100,12 @@
     "supports_set_session_model": true
   },
   "kimi-code": {
-    "agent_name_patterns": [
-      "kimi"
-    ],
+    "agent_name_patterns": ["kimi"],
     "api_key_env_var": null,
     "base_url_env_var": "KIMI_BASE_URL",
     "binary_name": "kimi",
     "data_dir_env_var": "KIMI_CODE_HOME",
-    "default_command": [
-      "npx",
-      "-y",
-      "--prefer-offline",
-      "@moonshot-ai/kimi-code@0.38.0",
-      "acp"
-    ],
+    "default_command": ["npx", "-y", "--prefer-offline", "@moonshot-ai/kimi-code@0.38.0", "acp"],
     "default_session_mode": "yolo",
     "display_name": "Kimi Code",
     "effort_config_id": null,
@@ -176,20 +127,12 @@
     "supports_set_session_model": true
   },
   "opencode": {
-    "agent_name_patterns": [
-      "opencode"
-    ],
+    "agent_name_patterns": ["opencode"],
     "api_key_env_var": "OPENCODE_API_KEY",
     "base_url_env_var": null,
     "binary_name": "opencode",
     "data_dir_env_var": "HOME",
-    "default_command": [
-      "npx",
-      "-y",
-      "--prefer-offline",
-      "opencode-ai@1.18.23",
-      "acp"
-    ],
+    "default_command": ["npx", "-y", "--prefer-offline", "opencode-ai@1.18.23", "acp"],
     "default_session_mode": "build",
     "display_name": "OpenCode",
     "effort_config_id": null,
@@ -202,9 +145,7 @@
     "supports_set_session_model": true
   },
   "pi": {
-    "agent_name_patterns": [
-      "pi-acp"
-    ],
+    "agent_name_patterns": ["pi-acp"],
     "api_key_env_var": "ANTHROPIC_API_KEY",
     "base_url_env_var": null,
     "binary_name": "pi-acp",

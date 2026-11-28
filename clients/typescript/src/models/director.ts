@@ -400,6 +400,15 @@ export interface DirectorOrgEventRequest {
   source?: Partial<Omit<DirectorRequestSource, 'kind'>>;
 }
 
+/** A script the automation service runs, as it takes one to upload. */
+export interface DirectorAutomationBundle {
+  name: string;
+  /** The command the service runs where the bundle is unpacked. */
+  entrypoint: string;
+  /** The bundle: a gzipped tar, in base64. */
+  tarball_base64: string;
+}
+
 /** The session an event opened, or had opened already. */
 export interface DirectorEventSession {
   session_id: string;

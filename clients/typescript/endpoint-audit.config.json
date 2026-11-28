@@ -47,6 +47,7 @@
         "GET /api/director/org",
         "POST /api/director/org",
         "POST /api/director/org/messages",
+        "GET /api/director/automations/open-session",
         "POST /api/director/org/events",
         "GET /api/director/org/search",
         "GET /api/director/settings",

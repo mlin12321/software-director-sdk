@@ -1,7 +1,10 @@
 """The director HTTP API, served by the real app."""
 
 import asyncio
+import base64
+import io
 import json
+import tarfile
 from collections.abc import AsyncIterator
 from pathlib import Path
 
@@ -870,6 +873,24 @@ async def test_the_conversation_of_an_agent_of_the_org_cannot_be_forked(running,
         json={"task": "Do it for me"},
     )
     assert child.status_code == 409
+
+
+async def test_the_automation_that_opens_sessions_is_served_as_a_bundle(running):
+    client, _, _ = running
+
+    served = await client.get("/api/director/automations/open-session")
+
+    assert served.status_code == 200
+    bundle = served.json()
+    assert bundle["entrypoint"] == "python3 main.py"
+    packed = io.BytesIO(base64.b64decode(bundle["tarball_base64"]))
+    with tarfile.open(fileobj=packed, mode="r:gz") as tar:
+        assert tar.getnames() == ["main.py"]
+        script = tar.extractfile("main.py")
+        assert script is not None
+        assert b"/api/director/org/events" in script.read()
+    again = await client.get("/api/director/automations/open-session")
+    assert again.json() == bundle
 
 
 async def test_an_event_opens_a_session_over_the_api(running, repo):

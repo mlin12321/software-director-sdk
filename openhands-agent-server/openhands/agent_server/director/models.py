@@ -1419,6 +1419,16 @@ class OrgEventRequest(BaseModel):
     source: EventSource = Field(default_factory=EventSource)
 
 
+class AutomationBundle(BaseModel):
+    """A script the automation service runs, as it takes one to upload."""
+
+    name: str
+    entrypoint: str = Field(
+        description="The command the service runs where the bundle is unpacked."
+    )
+    tarball_base64: str = Field(description="The bundle: a gzipped tar, in base64.")
+
+
 class EventSession(BaseModel):
     """The session an event opened, or had opened already."""
 

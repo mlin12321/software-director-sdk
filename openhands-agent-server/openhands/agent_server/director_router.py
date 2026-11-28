@@ -20,10 +20,14 @@ from openhands.agent_server.dependencies import (
     get_optional_director_service,
 )
 from openhands.agent_server.director.acp import TOOLS_PATH
+from openhands.agent_server.director.automations.open_session import (
+    bundle as open_session_bundle,
+)
 from openhands.agent_server.director.mcp_shim import TOKEN_HEADER
 from openhands.agent_server.director.models import (
     AcceptedChanges,
     AnswerEscalationRequest,
+    AutomationBundle,
     ConversationPlace,
     CreateOrgRequest,
     DirectorSettingsState,
@@ -464,6 +468,16 @@ async def get_recovery(
     empty.
     """
     return await service.org_run.recovery()
+
+
+@director_router.get("/automations/open-session", response_model=AutomationBundle)
+async def open_session_automation() -> AutomationBundle:
+    """The script automation that opens a session of the org for an event.
+
+    Upload it to the automation service with any trigger, a webhook source or
+    a schedule: each run posts what happened to `POST /org/events`.
+    """
+    return open_session_bundle()
 
 
 @director_router.post(
