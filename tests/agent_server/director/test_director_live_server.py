@@ -463,6 +463,9 @@ def test_director_has_submitted_work_reviewed_once_all_teams_submitted(
             time.sleep(0.05)
 
         assert states[-1:] == ["accepted"], states
+        # The team is done a moment after its review says accepted.
+        while time.time() < deadline and api().get("status") != "done":
+            time.sleep(0.05)
         node = api()
         assert node["status"] == "done"
         assert node["review"]["summary"] == "Served."
