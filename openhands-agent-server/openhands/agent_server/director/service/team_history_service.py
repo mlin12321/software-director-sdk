@@ -20,6 +20,7 @@ from openhands.agent_server.director.models import (
     OrgHistory,
     OrgNode,
     Report,
+    RequestSource,
     RoutedRequest,
     SessionTeam,
     TeamEvent,
@@ -240,7 +241,13 @@ class TeamHistoryService:
         return sorted([*read[1], *own], key=lambda request: request.at)
 
     def keep_routed(
-        self, kind: str, team: SessionTeam, text: str, chosen_by: str, reason: str
+        self,
+        kind: str,
+        team: SessionTeam,
+        text: str,
+        chosen_by: str,
+        reason: str,
+        source: RequestSource | None = None,
     ) -> None:
         """Keep a request that went straight to a team, or that the team
         said was not its own, and as an event in the record of the team
@@ -255,6 +262,7 @@ class TeamHistoryService:
                 "text": text,
                 "chosen_by": chosen_by,
                 "reason": reason,
+                "source": source or RequestSource(),
                 "id": uuid4().hex,
             }
         )

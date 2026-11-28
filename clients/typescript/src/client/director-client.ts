@@ -13,6 +13,10 @@ import type {
   DirectorOrgSummary,
   DirectorOpenedSession,
   DirectorRoutedMessage,
+  DirectorAutomationBundle,
+  DirectorOpenSessionAutomationSettings,
+  DirectorEventSession,
+  DirectorOrgEventRequest,
   DirectorSession,
   DirectorSessionTeam,
   DirectorConversationPlace,
@@ -227,6 +231,42 @@ export class DirectorClient {
     const response = await this.client.post<DirectorRoutedMessage>(
       `${DIRECTOR_PATH}/org/messages`,
       request
+    );
+    return response.data;
+  }
+
+  /**
+   * Open a session for something that happened outside the org: a ticket
+   * that was filed, an alert, a schedule that came due.
+   *
+   * The director chooses the team as for a message sent with `auto`. An
+   * event that names itself (`source.event_key`) opens one session however
+   * often it is sent. The session is closed once its work is accepted,
+   * unless the org's `close_unattended_sessions` is off.
+   *
+   * @throws HttpError 503 when there is no org or it is paused (send the
+   *   event again later); 409 when no team can take it or the org has as
+   *   many sessions open as it may.
+   */
+  async openSessionForEvent(request: DirectorOrgEventRequest): Promise<DirectorEventSession> {
+    const response = await this.client.post<DirectorEventSession>(
+      `${DIRECTOR_PATH}/org/events`,
+      request
+    );
+    return response.data;
+  }
+
+  /**
+   * The script automation that opens a session of the org for an event, to
+   * upload to the automation service with any trigger. What it is set to is
+   * kept in the bundle.
+   */
+  async getOpenSessionAutomation(
+    settings: DirectorOpenSessionAutomationSettings = {}
+  ): Promise<DirectorAutomationBundle> {
+    const response = await this.client.get<DirectorAutomationBundle>(
+      `${DIRECTOR_PATH}/automations/open-session`,
+      { params: { ...settings } }
     );
     return response.data;
   }

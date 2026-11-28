@@ -369,6 +369,76 @@ export interface DirectorResolveMerge {
  */
 export type DirectorBoundaryEnforcement = 'sandbox' | 'checks';
 
+/** A value of an event as it was received. */
+export type DirectorJson =
+  string | number | boolean | null | DirectorJson[] | { [field: string]: DirectorJson };
+
+/** Who asked for a session's work. */
+export interface DirectorRequestSource {
+  kind: 'human' | 'automation';
+  /** What sent it, in words for a person: 'Jira', 'nightly'. */
+  name: string;
+  automation_id: string;
+  run_id: string;
+  /** Names what happened, so that the same event sent twice opens one session. */
+  event_key: string;
+}
+
+/**
+ * Something that happened outside the org and that it is to work on: a
+ * ticket that was filed, an alert, a schedule that came due.
+ */
+export interface DirectorOrgEventRequest {
+  /** What is asked of the org, as a person would ask it. */
+  text: string;
+  /** What to call the session; taken from the text when empty. */
+  title?: string;
+  /** The directory the event is about, as for a message. */
+  path?: string | null;
+  /** The event as it was received; the team that takes it is shown it. */
+  payload?: { [field: string]: DirectorJson } | null;
+  source?: Partial<Omit<DirectorRequestSource, 'kind'>>;
+}
+
+/**
+ * What the automation that opens sessions is set to. In `text`, `title` and
+ * `key`, `{a.b}` is that field of the event (`{issue.key}`).
+ */
+export interface DirectorOpenSessionAutomationSettings {
+  /** What is asked of the org. Needed for a schedule. */
+  text?: string;
+  /** What to call the session. */
+  title?: string;
+  /** Names what happened, so that an event delivered twice opens one session. */
+  key?: string;
+  /** The directory of the repository it is about. */
+  path?: string;
+  /** What sends it, in words. */
+  source?: string;
+}
+
+/** A script the automation service runs, as it takes one to upload. */
+export interface DirectorAutomationBundle {
+  name: string;
+  /** The command the service runs where the bundle is unpacked. */
+  entrypoint: string;
+  /** The bundle: a gzipped tar, in base64. */
+  tarball_base64: string;
+}
+
+/** The session an event opened, or had opened already. */
+export interface DirectorEventSession {
+  session_id: string;
+  /** The place that received it; '' once the session is closed. */
+  node_id: DirectorNodeId;
+  team: string;
+  conversation_id: string;
+  /** The event had been sent before and opened this session then. */
+  duplicate: boolean;
+  chosen_by: DirectorChosenBy;
+  reason: string;
+}
+
 /** Where a message to the org went. */
 export interface DirectorRoutedMessage {
   /** The place that received it (a team in a session). */
@@ -557,6 +627,8 @@ export interface DirectorSession {
   above_id: DirectorNodeId;
   /** What the human asked of it. */
   request: string;
+  /** Who asked for it: the human, or an automation for an event. */
+  source: DirectorRequestSource;
   /** ISO 8601 timestamp. */
   opened_at: string;
   /**
@@ -1116,6 +1188,11 @@ export interface DirectorOrgSettings {
    * exists keeps its type.
    */
   allowed_agent_types?: string[] | null;
+  /**
+   * Whether a session no human opened (an automation did, for an event) is
+   * closed once its work is accepted and merged. Left out, it is.
+   */
+  close_unattended_sessions?: boolean | null;
 }
 
 /** An agent type, as someone choosing one sees it. */
@@ -1151,6 +1228,8 @@ export interface DirectorAgentTypeInfo {
 export interface DirectorOrgSettingsState {
   default_agent_type: string;
   allowed_agent_types: string[];
+  /** Whether a session no human opened is closed once its work is accepted. */
+  close_unattended_sessions: boolean;
   /** What the org sets for itself. */
   own: DirectorOrgSettings;
   /** Every agent type the director finds now. */

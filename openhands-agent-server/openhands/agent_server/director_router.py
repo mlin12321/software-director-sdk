@@ -20,15 +20,20 @@ from openhands.agent_server.dependencies import (
     get_optional_director_service,
 )
 from openhands.agent_server.director.acp import TOOLS_PATH
+from openhands.agent_server.director.automations.open_session import (
+    bundle as open_session_bundle,
+)
 from openhands.agent_server.director.mcp_shim import TOKEN_HEADER
 from openhands.agent_server.director.models import (
     AcceptedChanges,
     AnswerEscalationRequest,
+    AutomationBundle,
     ConversationPlace,
     CreateOrgRequest,
     DirectorSettingsState,
     DirectorSettingsUpdate,
     EditFileRequest,
+    EventSession,
     FileEdit,
     FileSides,
     FormerTeamSummary,
@@ -36,6 +41,7 @@ from openhands.agent_server.director.models import (
     NodeOwnership,
     OpenedSession,
     OpenSessionRequest,
+    OrgEventRequest,
     OrgHistory,
     OrgMerge,
     OrgNode,
@@ -462,6 +468,82 @@ async def get_recovery(
     empty.
     """
     return await service.org_run.recovery()
+
+
+@director_router.get("/automations/open-session", response_model=AutomationBundle)
+async def open_session_automation(
+    text: Annotated[
+        str, Query(description="What is asked of the org. Needed for a schedule.")
+    ] = "",
+    title: Annotated[str, Query(description="What to call the session.")] = "",
+    key: Annotated[
+        str,
+        Query(
+            description=(
+                "Names what happened, so that an event delivered twice opens "
+                "one session."
+            )
+        ),
+    ] = "",
+    path: Annotated[
+        str, Query(description="The directory of the repository it is about.")
+    ] = "",
+    source: Annotated[str, Query(description="What sends it, in words.")] = "",
+) -> AutomationBundle:
+    """The script automation that opens a session of the org for an event.
+
+    Upload it to the automation service with any trigger, a webhook source or
+    a schedule: each run posts what happened to `POST /org/events`. What is
+    given here is kept in the bundle; in `text`, `title` and `key`, `{a.b}`
+    is that field of the event (`{issue.key}`).
+    """
+    return open_session_bundle(
+        {
+            "DIRECTOR_EVENT_TEXT": text,
+            "DIRECTOR_EVENT_TITLE": title,
+            "DIRECTOR_EVENT_KEY": key,
+            "DIRECTOR_EVENT_PATH": path,
+            "DIRECTOR_EVENT_SOURCE": source,
+        }
+    )
+
+
+@director_router.post(
+    "/org/events",
+    response_model=EventSession,
+    responses=error_responses(
+        {
+            Conflict: (
+                "No team of the org can take the event, the org has as many "
+                "sessions open as it may, or it has no conversation to start "
+                "one from"
+            ),
+            Invalid: "The path is outside the org's repository",
+            Unavailable: (
+                "There is no org, it is paused, or the director is not "
+                "running agents; the event can be sent again"
+            ),
+        }
+    ),
+)
+async def open_session_for_event(
+    request: OrgEventRequest,
+    service: DirectorService = Depends(get_director_service),
+) -> EventSession:
+    """Open a session for something that happened outside the org.
+
+    For what no human sends: a ticket that was filed, an alert, a schedule
+    that came due. An automation receives the event, says in `text` what is
+    asked, and posts it here. The director chooses the team as it does for
+    a message sent with `auto`, opens a session there and gives its IC the
+    text with the event as it was received (`payload`).
+
+    An event that names itself (`source.event_key`) opens one session
+    however often it is sent; the answer then has `duplicate`. The session
+    is closed once its work is accepted and merged, unless the org's
+    `close_unattended_sessions` is off.
+    """
+    return await service.session_lifecycle.open_from_event(request)
 
 
 @director_router.post(

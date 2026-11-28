@@ -61,6 +61,8 @@ EVENTS = "events"
 THREADS = "threads"
 # session id and a name -> a request of it that went straight to a team
 ROUTED = "routed"
+# event key -> the session the event opened, so that it opens one
+TRIGGERED = "triggered"
 
 _TABLES = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);

@@ -1,7 +1,10 @@
 """The director HTTP API, served by the real app."""
 
 import asyncio
+import base64
+import io
 import json
+import tarfile
 from collections.abc import AsyncIterator
 from pathlib import Path
 
@@ -870,6 +873,87 @@ async def test_the_conversation_of_an_agent_of_the_org_cannot_be_forked(running,
         json={"task": "Do it for me"},
     )
     assert child.status_code == 409
+
+
+async def test_the_automation_that_opens_sessions_is_served_as_a_bundle(running):
+    client, _, _ = running
+
+    served = await client.get("/api/director/automations/open-session")
+
+    assert served.status_code == 200
+    bundle = served.json()
+    assert bundle["entrypoint"] == "python3 main.py"
+    packed = io.BytesIO(base64.b64decode(bundle["tarball_base64"]))
+    with tarfile.open(fileobj=packed, mode="r:gz") as tar:
+        assert tar.getnames() == ["main.py"]
+        script = tar.extractfile("main.py")
+        assert script is not None
+        assert b"/api/director/org/events" in script.read()
+    again = await client.get("/api/director/automations/open-session")
+    assert again.json() == bundle
+
+
+async def test_what_the_automation_is_set_to_is_kept_in_its_bundle(running):
+    client, _, _ = running
+
+    served = await client.get(
+        "/api/director/automations/open-session",
+        params={"title": "{issue.key}", "key": "{issue.key}", "source": "Jira"},
+    )
+
+    packed = io.BytesIO(base64.b64decode(served.json()["tarball_base64"]))
+    with tarfile.open(fileobj=packed, mode="r:gz") as tar:
+        assert tar.getnames() == ["main.py", "settings.json"]
+        settings = tar.extractfile("settings.json")
+        assert settings is not None
+        assert json.loads(settings.read()) == {
+            "DIRECTOR_EVENT_KEY": "{issue.key}",
+            "DIRECTOR_EVENT_SOURCE": "Jira",
+            "DIRECTOR_EVENT_TITLE": "{issue.key}",
+        }
+
+
+async def test_an_event_opens_a_session_over_the_api(running, repo):
+    client, _, service = running
+    await client.post("/api/director/org", json=org_body(repo))
+    await service.work_queue.settled()
+    event = {
+        "text": "Orders are slow: add an index.",
+        "payload": {"issue": {"key": "SHOP-7"}},
+        "source": {"name": "Jira", "event_key": "SHOP-7"},
+    }
+
+    opened = await client.post("/api/director/org/events", json=event)
+    again = await client.post("/api/director/org/events", json=event)
+
+    assert opened.status_code == 200
+    session = opened.json()
+    assert (session["duplicate"], again.json()["duplicate"]) == (False, True)
+    assert again.json()["session_id"] == session["session_id"]
+    listed = (await client.get("/api/director/org/sessions")).json()
+    [found] = [s for s in listed if s["id"] == session["session_id"]]
+    assert found["source"] == {
+        "kind": "automation",
+        "name": "Jira",
+        "automation_id": "",
+        "run_id": "",
+        "event_key": "SHOP-7",
+    }
+    settings = (await client.get("/api/director/org/settings")).json()
+    assert settings["close_unattended_sessions"] is True
+    kept = await client.patch(
+        "/api/director/org/settings", json={"close_unattended_sessions": False}
+    )
+    assert kept.json()["close_unattended_sessions"] is False
+
+
+async def test_an_event_is_refused_over_the_api_where_there_is_no_org(running):
+    client, _, _ = running
+
+    refused = await client.post("/api/director/org/events", json={"text": "Do it."})
+
+    assert refused.status_code == 503
+    assert "no org" in refused.json()["detail"]
 
 
 def test_the_routes_closed_to_org_agents_are_routes_of_a_conversation():

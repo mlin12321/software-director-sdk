@@ -143,6 +143,13 @@ class OrgSettingsService:
         """The type of a new team whose making names none."""
         return self.own_settings.default_agent_type or self.settings.default_agent_type
 
+    @property
+    def closes_unattended(self) -> bool:
+        """Whether a session no human opened is closed once its work is
+        accepted and merged. It is, unless the org says otherwise."""
+        own = self.own_settings.close_unattended_sessions
+        return True if own is None else own
+
     def _allowed_type_names(self) -> list[str]:
         own = self.own_settings.allowed_agent_types
         return self.settings.allowed_agent_types if own is None else own
@@ -163,6 +170,7 @@ class OrgSettingsService:
         return OrgSettingsState(
             default_agent_type=self.default_type(),
             allowed_agent_types=self._allowed_type_names(),
+            close_unattended_sessions=self.closes_unattended,
             own=self.own_settings,
             agent_types=[
                 AgentTypeInfo(
