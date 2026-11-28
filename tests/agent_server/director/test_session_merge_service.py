@@ -9,16 +9,13 @@ import pytest
 from openhands.agent_server.director.models import (
     DocumentChoice,
     MergeItem,
-    Review,
     TeamChoice,
 )
 from openhands.sdk.errors import Conflict, Invalid
 from tests.agent_server.director.test_review_service import Reviews
 from tests.agent_server.director.test_team_member_start_service import (
     ROOT,
-    SESSION,
 )
-from tests.agent_server.director.test_team_messaging_service import NOW
 
 
 @pytest.fixture
@@ -43,20 +40,6 @@ async def test_each_submission_comes_after_the_one_before(reviews: Reviews):
     first = reviews.merges.next_submission()
 
     assert reviews.merges.next_submission() == first + 1
-
-
-async def test_a_change_is_noted_only_once_a_sessions_work_is_accepted(
-    reviews: Reviews,
-):
-    reviews.merges.note_change(SESSION)
-    assert reviews.merges.changed_since_accept == {}
-
-    reviews.store.set_review(
-        ROOT, Review(state="accepted", seq=1, round=1, at=NOW.isoformat())
-    )
-    reviews.merges.note_change(SESSION)
-
-    assert reviews.merges.changed_since_accept == {SESSION: False}
 
 
 async def test_nothing_is_settled_where_nothing_waits(reviews: Reviews):

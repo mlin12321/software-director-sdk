@@ -449,7 +449,7 @@ async def test_a_stopped_team_is_still_stopped_after_a_restart(
     )
     await second.start(launcher)
     await second.work_queue.settled()
-    if second.org_load.summary().paused is not None:
+    if second.org_run.summary().paused is not None:
         await second.org_run.resume()
         await second.work_queue.settled()
 

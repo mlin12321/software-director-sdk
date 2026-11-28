@@ -112,7 +112,7 @@ async def test_a_paused_org_holds_messages_and_delivers_them_in_order_on_resume(
     service.message_delivery.notify(ic(service), "Second")
     await service.work_queue.settled()
 
-    assert paused.paused == "human" and service.org_load.summary().paused == "human"
+    assert paused.paused == "human" and service.org_run.summary().paused == "human"
     assert len(launcher.sent) == before
     held = await service.org_run.recovery()
     assert held.messages_held == 2 and (place(service), "message") in kinds(held)
@@ -120,7 +120,7 @@ async def test_a_paused_org_holds_messages_and_delivers_them_in_order_on_resume(
     resumed = await service.org_run.resume()
     await service.work_queue.settled()
 
-    assert resumed.paused is None and service.org_load.summary().paused is None
+    assert resumed.paused is None and service.org_run.summary().paused is None
     first, second = launcher.messages_to(ic(service))[-2:]
     assert first == "First" and "Second" in second
     assert (await service.org_run.recovery()).items == []
@@ -199,7 +199,7 @@ async def test_a_server_stopped_while_teams_wait_starts_them_in_order_once_resum
     second = await again(repo, launcher)
     left = await second.org_run.recovery()
 
-    assert second.org_load.summary().paused == "shutdown" and len(launcher.derived) == 1
+    assert second.org_run.summary().paused == "shutdown" and len(launcher.derived) == 1
     waited = [node_id for node_id, kind in kinds(left) if kind == "start"]
     assert sorted(team_id_of(node(second, node_id)) for node_id in waited) == [
         "a.t0",
@@ -241,7 +241,7 @@ async def test_a_team_start_cut_off_by_a_crash_is_finished_without_a_second_of_a
 
     second = await again(repo, launcher)
 
-    assert second.org_load.summary().paused == "crash"
+    assert second.org_run.summary().paused == "crash"
     assert (api, "start") in kinds(await second.org_run.recovery())
 
     await second.org_run.resume()
@@ -540,7 +540,7 @@ async def test_an_agent_cut_off_in_a_step_shows_paused_is_told_and_runs_again(
 
     second = await again(repo, launcher)
 
-    assert second.org_load.summary().paused == "crash"
+    assert second.org_run.summary().paused == "crash"
     root = node(second, "root")
     assert root.agents[0].status == AGENT_PAUSED and root.status != "blocked"
     assert (place(second), "run_again") in kinds(await second.org_run.recovery())
@@ -593,7 +593,7 @@ async def test_a_server_stopped_with_nothing_under_way_comes_back_running(
 
     second = await again(repo, launcher)
 
-    assert second.org_load.summary().paused is None
+    assert second.org_run.summary().paused is None
     assert (await second.org_run.recovery()).items == []
     await second.aclose()
 
@@ -612,7 +612,7 @@ async def test_an_org_set_to_resume_on_start_takes_its_work_up_unasked(
     second = await again(repo, launcher)
 
     # A human's pause holds across restarts; only a stop or a crash does not.
-    assert second.org_load.summary().paused == "human" and len(launcher.sent) == before
+    assert second.org_run.summary().paused == "human" and len(launcher.sent) == before
     await second.org_run.resume()
     await second.work_queue.settled()
     assert "Carry on" in launcher.messages_to(ic(second))[-1]
@@ -622,7 +622,7 @@ async def test_an_org_set_to_resume_on_start_takes_its_work_up_unasked(
     launcher.known[UUID(str(ic(second)))] = ConversationExecutionStatus.PAUSED
     third = await again(repo, launcher)
 
-    assert third.org_load.summary().paused is None
+    assert third.org_run.summary().paused is None
     assert launcher.resumed[-1] == (UUID(str(ic(third))), None)
     await third.aclose()
 
@@ -717,7 +717,7 @@ async def test_run_state_written_by_another_server_is_not_used(
     assert other.org_load.org.root_id == "root"
     await other.work_queue.settled()
 
-    assert other.org_load.summary().paused is None
+    assert other.org_run.summary().paused is None
     await other.org_run.resume()
     await other.work_queue.settled()
     assert len(launcher.sent) == before
@@ -797,7 +797,7 @@ def test_run_state_stays_out_of_the_repository(repo: Path):
     service = DirectorService(repo)
     service.org_load.org.replace_all([make_team("root", None)])
 
-    assert service.org_load.summary().paused is None
+    assert service.org_run.summary().paused is None
     assert run_git(repo, "status", "--porcelain") == ""
     assert (repo / ".git" / "director" / "state.db").is_file()
 

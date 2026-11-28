@@ -52,8 +52,8 @@ class RequestRoutingService:
     """Chooses the team a request goes straight to, and takes back one a
     team says is not its own.
 
-    It reads the org and asks a model; where a request that is handed back
-    goes next is decided by whoever holds it (``hand_on``).
+    It reads the org and asks a model. Where a request that is handed
+    back goes next is for whoever asked to decide.
     """
 
     org: Callable[[], OrgStore]
@@ -71,10 +71,6 @@ class RequestRoutingService:
     keep_routed: Callable[[str, SessionTeam, str, str, str], None]
     """Keeps a request as sent to a team, or as handed back by it: the
     kind, the team, the text, what chose the team, and why."""
-    hand_on: Callable[[SessionTeam, SessionTeam, RoutedRequest, str], str]
-    """Gives a request a team handed back to whoever has it next: the
-    team, the one above it, the request and why. Returns what the team
-    is told."""
     paused: Callable[[], bool]
     """Whether the org is paused, when no model is asked."""
 
@@ -241,10 +237,14 @@ class RequestRoutingService:
         reason = next((r for r in map(routing.reason_of, raw) if r), "")
         return [routing.parse_answer(answer, known) for answer in raw], reason
 
-    def not_ours(self, place: SessionTeam, why: str) -> str:
-        """A team's IC says the request the human's words brought it
-        directly is not its team's: hand it to the IC of the team above.
-        Safe from any thread.
+    def take_back(
+        self, place: SessionTeam, why: str
+    ) -> tuple[SessionTeam, RoutedRequest]:
+        """Keep that a team's IC says the request the human's words
+        brought it directly is not its team's. Safe from any thread.
+
+        Returns:
+            The team above, which it goes to next, and the request.
 
         Raises:
             Invalid: Nothing was sent to the team directly, or it was
@@ -262,4 +262,4 @@ class RequestRoutingService:
             )
         request = mine[-1]
         self.keep_routed("misrouted", place, request.text, request.chosen_by, why)
-        return self.hand_on(place, above, request, why)
+        return above, request

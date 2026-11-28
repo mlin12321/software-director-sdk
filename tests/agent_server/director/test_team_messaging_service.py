@@ -3,7 +3,6 @@ a small tree, and a launcher that records what it is sent."""
 
 import json
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -12,7 +11,7 @@ from openhands.agent_server.director.environment.git import GitCodingEnvironment
 from openhands.agent_server.director.environment.git.git_store import GitStore
 from openhands.agent_server.director.models import DirectorSettings, Stopped
 from openhands.agent_server.director.remembered import RememberedFile
-from openhands.agent_server.director.run_state import CHECKS, PROGRESS
+from openhands.agent_server.director.run_state import CHECKS, JOINED, PROGRESS
 from openhands.agent_server.director.service.check_count_service import (
     CheckCountService,
 )
@@ -33,10 +32,12 @@ from openhands.agent_server.director.service.team_messaging_service import (
 )
 from openhands.sdk.conversation.state import ConversationExecutionStatus
 from tests.agent_server.director.test_team_documents import RootAboveApi
-from tests.agent_server.director.test_team_member_start_service import ROOT, A, Starts
-
-
-NOW = datetime(2026, 1, 2, tzinfo=UTC)
+from tests.agent_server.director.test_team_member_start_service import (
+    NOW,
+    ROOT,
+    A,
+    Starts,
+)
 
 
 class Messaging(Starts):
@@ -51,9 +52,7 @@ class Messaging(Starts):
             team_memory=lambda: GitStore(repo),
             require_team_memory=lambda: GitStore(repo),
             session_drafts=session_drafts,
-            org_changed=lambda session: None,
         )
-        self.joined: list[str] = []
         self.messaging = TeamMessagingService(
             release_reviews=lambda place_id: None,
             org=lambda: self.store,
@@ -78,7 +77,7 @@ class Messaging(Starts):
                 org=lambda: self.store, run_state=self.org_state.run_state
             ),
             message_delivery=self.message_delivery,
-            member_start=self.service,
+            in_place=lambda place: False,
             resumable_work=ResumableWorkService(
                 run_state=self.org_state.run_state,
                 work_queue=self.queue,
@@ -93,8 +92,6 @@ class Messaging(Starts):
             ),
             work_queue=self.queue,
             launcher=lambda: self.launcher,
-            joined=self.joined.append,
-            clock=lambda: NOW,
         )
 
     def sent(self) -> list[str]:
@@ -117,7 +114,7 @@ async def test_what_the_director_tells_a_team_reaches_the_member_that_works(
     assert told == str(messaging.agent)
     [text] = messaging.sent()
     assert "Mind the deadline." in text
-    assert messaging.joined == []
+    assert not messaging.org_state.run_state().marked(JOINED)
 
 
 async def test_what_the_human_says_marks_the_conversation_as_joined(
@@ -126,7 +123,9 @@ async def test_what_the_human_says_marks_the_conversation_as_joined(
     messaging.messaging.tell_writer(A, "Mind the deadline.", human=True)
     await messaging.queue.settled()
 
-    assert messaging.joined == [str(messaging.agent)]
+    assert list(messaging.org_state.run_state().marked(JOINED)) == [
+        str(messaging.agent)
+    ]
 
 
 async def test_a_message_between_teams_is_kept_in_their_thread(messaging: Messaging):
@@ -151,11 +150,11 @@ async def test_a_failure_is_recorded_above_and_waits_for_the_human(
 
 
 def test_progress_is_counted_from_the_clock_it_is_given(messaging: Messaging):
-    messaging.messaging.progressed(A)
+    messaging.messaging.org_state.progressed(A)
 
     seen = json.loads(messaging.org_state.run_state().marked(PROGRESS)[A])
     assert seen["at"] == NOW.isoformat()
-    messaging.messaging.progressed(None)
+    messaging.messaging.org_state.progressed(None)
 
 
 async def test_a_manager_is_woken_once_enough_reviews_were_accepted(

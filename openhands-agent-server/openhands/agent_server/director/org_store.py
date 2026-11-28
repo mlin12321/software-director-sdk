@@ -280,6 +280,21 @@ class OrgStore:
                 and session.team_id == place.team_id
             )
 
+    def derived_from(self, place: SessionTeam) -> str | None:
+        """The place whose IC the IC of ``place`` is derived from when it
+        starts: the team above, or for the team a session is opened at and
+        its reviewer, who of the session works already."""
+        opened = self.session_of(place)
+        if is_division_lead(place) and opened:
+            return session_team_id(opened.team_id, opened.id)
+        if self.opens_session(place):
+            # A session that went a team higher has an IC below already.
+            return next(
+                (team.id for team in self.below(place.id) if team.agents),
+                place.parent_id,
+            )
+        return place.parent_id
+
     def teams(self) -> list[OrgNode]:
         """The org tree, parents before children."""
         with self._lock:

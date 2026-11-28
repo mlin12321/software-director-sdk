@@ -31,7 +31,6 @@ from openhands.agent_server.director.models import (
     SessionTeamInput,
 )
 from openhands.agent_server.director.org_store import (
-    OrgStore,
     OrgStoreError,
     conversations_of,
     division_lead_id,
@@ -61,7 +60,6 @@ from openhands.agent_server.director.service.check_count_service import (
 from openhands.agent_server.director.service.message_delivery_service import (
     MessageDeliveryService,
 )
-from openhands.agent_server.director.service.model_call_service import ModelCallService
 from openhands.agent_server.director.service.org_load_service import OrgLoadService
 from openhands.agent_server.director.service.org_run_service import OrgRunService
 from openhands.agent_server.director.service.org_save_service import OrgSaveService
@@ -144,12 +142,8 @@ class SessionLifecycleService:
     goes with it, and work that was never merged is kept under a ref.
     """
 
-    org: Callable[[], OrgStore]
-    """The org the sessions work in."""
     checkouts: Checkouts
     """Where each team's work is and how it moves."""
-    repo_dir: Callable[[], Path]
-    """The repository the org is in."""
     org_state: OrgStateService
     org_save: OrgSaveService
     org_settings: OrgSettingsService
@@ -164,10 +158,9 @@ class SessionLifecycleService:
     session_records: SessionRecordService
     session_drafts: SessionDraftService
     team_splits: TeamSplitService
-    model_calls: ModelCallService
     resumable_work: ResumableWorkService
     work_queue: WorkQueueService
-    request_routing: Callable[[], RequestRoutingService]
+    request_routing: RequestRoutingService
     """What chooses the team a request goes straight to; it is given
     :meth:`hand_on`, so it is asked for when it is needed."""
     launcher: Callable[[], TeamLauncher]
@@ -209,7 +202,7 @@ class SessionLifecycleService:
             Unavailable: The director is not running.
         """
         launcher = self.launcher()
-        store = await asyncio.to_thread(lambda: self.org())
+        store = await asyncio.to_thread(lambda: self.org_load.org)
         root = store.team(store.root_id) if store.root_id else None
         if root is None:
             raise Conflict("There is no org to open a session in")
@@ -230,7 +223,7 @@ class SessionLifecycleService:
             if team is None:
                 raise NotFound(f"Unknown team: {request.node_id}")
         elif self.org_settings.settings.route_requests and store.sub_teams(root.id):
-            choice = await self.request_routing().choose_team(text, root)
+            choice = await self.request_routing.choose_team(text, root)
             chosen_by, reason = choice.by, choice.reason
             team = store.team(choice.node_id) or root
         else:
@@ -258,7 +251,7 @@ class SessionLifecycleService:
             }
         )
         run = self.org_state.run_state()
-        checkout = str(self.repo_dir())
+        checkout = str(self.org_load.repo_dir_now())
         branch = await asyncio.to_thread(self.checkouts.branch, checkout)
         lead_id = division_lead_id(above.id, session_id)
         ids = {current.id: session_team_id(current.id, session_id) for current in shape}
@@ -385,7 +378,7 @@ class SessionLifecycleService:
         Returns:
             Its conversation.
         """
-        store = self.org()
+        store = self.org_load.org
         ic_id = conversation.conversation_id or uuid4()
         writer = self.team_types.team(top).writer
         store.update_place(top.id, agents=new_agents(ic_id, writer))
@@ -441,7 +434,7 @@ class SessionLifecycleService:
             boundary_enforcement=self.confinement.enforcement(started.kind),
         )
         self.member_start.checkout_for_session(top.id)
-        self.team_messaging.progressed(top.id)
+        self.org_state.progressed(top.id)
         self.message_delivery.joined(str(ic_id))
         self.work_queue.enqueue(
             lambda: self.team_summaries.summarize(
@@ -451,6 +444,21 @@ class SessionLifecycleService:
         )
         self.resumable_work.begin(top.id, Brief(role=writer, task=text + brief))
         return str(ic_id)
+
+    def not_ours(self, place: SessionTeam, why: str) -> str:
+        """A team's IC says the request the human's words brought it
+        directly is not its team's: hand it to the IC of the team above.
+        Safe from any thread.
+
+        Returns:
+            What the team is told.
+
+        Raises:
+            Invalid: Nothing was sent to the team directly, or it was
+                handed on already.
+        """
+        above, request = self.request_routing.take_back(place, why)
+        return self.hand_on(place, above, request, why)
 
     def hand_on(
         self, place: SessionTeam, above: SessionTeam, request: RoutedRequest, why: str
@@ -469,8 +477,8 @@ class SessionLifecycleService:
                 f"Handed to the {names.writer} of the team above ({above.title}). "
                 "It is no longer yours; go on with your own work."
             )
-        own = self.org().team(place.team_id)
-        higher = self.org().team(own.parent_id or "") if own else None
+        own = self.org_load.org.team(place.team_id)
+        higher = self.org_load.org.team(own.parent_id or "") if own else None
         try:
             top = self._lift(place, higher) if higher else None
         except OrgStoreError:
@@ -488,7 +496,7 @@ class SessionLifecycleService:
             handed_up(place, request.text, why, names=names)
             + session_brief(
                 top,
-                self.org().session_title(top),
+                self.org_load.org.session_title(top),
                 [],
                 names=names,
                 kept=self.team_types.kept_documents(top),
@@ -508,7 +516,7 @@ class SessionLifecycleService:
         Raises:
             OrgStoreError: Its work is in review already.
         """
-        store = self.org()
+        store = self.org_load.org
         session = store.session_of(node)
         reviewed_from = store.place(node.parent_id or "")
         above = store.team(higher.parent_id) if higher.parent_id else higher
@@ -612,7 +620,7 @@ class SessionLifecycleService:
     def _tell_human_misrouted(self, place: SessionTeam, text: str, why: str) -> None:
         """Put a request no team took before the human, who asked."""
         taken = {escalation.id for escalation in place.escalations}
-        self.org().raise_escalation(
+        self.org_load.org.raise_escalation(
             place.id,
             next(name for n in count(1) if (name := f"misrouted-{n}") not in taken),
             kind="design_decision",
@@ -630,13 +638,13 @@ class SessionLifecycleService:
         Raises:
             NotFound: No such session is open.
         """
-        teams = self.org().session(session_id)
+        teams = self.org_load.org.session(session_id)
         if not teams:
             raise NotFound(f"No session {session_id!r} is open")
         self.resumable_work.begin(teams[0].id, CloseSession())
 
     async def do_close_session(self, intent: Intent) -> None:
-        store = self.org()
+        store = self.org_load.org
         run = self.org_state.run_state()
         place_id = intent.node_id
         launcher = self.launcher()
@@ -779,7 +787,7 @@ class SessionLifecycleService:
             Unprocessable: The conversation cannot lead an org.
         """
         self.launcher()
-        store = await asyncio.to_thread(lambda: self.org())
+        store = await asyncio.to_thread(lambda: self.org_load.org)
         conversation = request.conversation
         workspace = await asyncio.to_thread(
             Path(conversation.workspace.working_dir).resolve
@@ -880,7 +888,7 @@ class SessionLifecycleService:
         Raises:
             NotFound: The session is not open.
         """
-        store = self.org()
+        store = self.org_load.org
         places = [
             place for place in store.session(session_id) if not is_division_lead(place)
         ]
@@ -890,7 +898,7 @@ class SessionLifecycleService:
         chosen_by: ChosenBy = "path"
         reason = ""
         if self.org_settings.settings.route_requests and len(places) > 1:
-            choice = await self.request_routing().choose_team(
+            choice = await self.request_routing.choose_team(
                 text, top, within=session_id
             )
             chosen_by, reason = choice.by, choice.reason
@@ -931,7 +939,7 @@ class SessionLifecycleService:
             Unavailable: The director is not running.
         """
         self.launcher()
-        store = await asyncio.to_thread(lambda: self.org())
+        store = await asyncio.to_thread(lambda: self.org_load.org)
         if request.session_id is not None:
             return await self._say_in_session(request.session_id, request.text)
         async with self._first_message_lock:
@@ -980,7 +988,7 @@ class SessionLifecycleService:
         chosen_by: ChosenBy = "path"
         reason = ""
         if request.auto and self.org_settings.settings.route_requests:
-            choice = await self.request_routing().choose_team(text, node)
+            choice = await self.request_routing.choose_team(text, node)
             chosen_by, reason = choice.by, choice.reason
             node = store.team(choice.node_id) or node
         elif path != node.boundary.path:

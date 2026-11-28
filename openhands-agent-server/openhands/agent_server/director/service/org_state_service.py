@@ -200,3 +200,24 @@ class OrgStateService:
             told = {"told": now} if "told" in seen else {}
             again = {"at": now, "head": seen.get("head"), "checked": now}
             run.mark(PROGRESS, place_id, json.dumps(again | told))
+
+    def progressed(self, place_id: str | None, *, by_above: bool = False) -> None:
+        """Note that a team got somewhere just now: the time it may show no
+        progress starts again. Safe from any thread.
+
+        Args:
+            by_above: The IC of the team above turned to it just now (gave
+                it a task, wrote to it, sent its work back), so the time
+                until that IC is next told how it stands starts again too.
+        """
+        if place_id is None:
+            return
+        run = self.run_state()
+        seen = progress_of(run.marked(PROGRESS).get(place_id))
+        now = self.clock().isoformat()
+        checked = now if by_above else seen.get("checked") or now
+        run.mark(
+            PROGRESS,
+            place_id,
+            json.dumps({"at": now, "head": seen.get("head"), "checked": checked}),
+        )

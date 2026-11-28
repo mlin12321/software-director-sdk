@@ -10,7 +10,6 @@ from openhands.agent_server.director.documents.schema import (
     ShownDocument,
 )
 from openhands.agent_server.director.documents.store import DocumentRef, DocumentStore
-from openhands.agent_server.director.documents.team_documents import TeamDocuments
 from openhands.agent_server.director.environment.checkouts import Checkouts
 from openhands.agent_server.director.environment.records import (
     team_key,
@@ -96,8 +95,6 @@ class TeamContextService:
     """What a session keeps until its work is accepted."""
     documents: DocumentStore
     """Where documents are read."""
-    team_documents: Callable[[], TeamDocuments]
-    """The documents of the org as each team reads them."""
 
     def asked_below(self, place: SessionTeam) -> list[dict[str, str]]:
         """The latest of what the human asked directly of the teams below
@@ -353,7 +350,7 @@ class TeamContextService:
                 "branch": place.branch,
                 "isolation": place.isolation,
             },
-            **self.team_documents().told(self.team_types.reader_of(place)),
+            **self.org_settings.team_documents().told(self.team_types.reader_of(place)),
             "documents_passed_to_you": [
                 {
                     "document": passed.name,
@@ -369,7 +366,7 @@ class TeamContextService:
                     "team": old.left_by,
                     "text": old.text,
                 }
-                for old in self.team_documents().left_to(
+                for old in self.org_settings.team_documents().left_to(
                     self.team_types.reader_of(place)
                 )
             ],

@@ -269,8 +269,7 @@ async def test_a_pushed_org_is_whole_in_another_clone_except_for_its_sessions(
     )
     assert there.org_load.org.places() == []
     assert (
-        there.org_load.summary().paused is None
-        and here.org_load.summary().paused is None
+        there.org_run.summary().paused is None and here.org_run.summary().paused is None
     )
     await here.aclose()
     await there.aclose()
@@ -372,7 +371,7 @@ async def test_a_pull_stops_on_a_conflict_and_writes_nothing(
         "Web moved on"
     )
     assert GitCodingEnvironment().org_tree(repo).head() == before
-    assert here.org_load.summary().merging and here.org_load.summary().paused == "human"
+    assert here.org_run.summary().merging and here.org_run.summary().paused == "human"
     assert await here.org_sync.merge() == pulled.merge
     with pytest.raises(Conflict, match="merge waits"):
         await here.org_sync.pull_org("origin")
@@ -399,9 +398,7 @@ async def test_a_pull_that_fails_while_it_merges_leaves_the_org_running(
         await here.org_sync.pull_org("origin")
 
     # Nothing waits to be resolved, so nothing holds the org.
-    assert (
-        not here.org_load.summary().merging and here.org_load.summary().paused is None
-    )
+    assert not here.org_run.summary().merging and here.org_run.summary().paused is None
     await here.aclose()
     await there.aclose()
 
@@ -426,7 +423,7 @@ async def test_a_conflict_is_resolved_either_way_and_the_merge_is_finished(
     assert done.result == "merged" and done.merge is None
     assert team(here, API).headline == headline
     assert team(here, WEB).headline == "Web moved on"
-    summary = here.org_load.summary()
+    summary = here.org_run.summary()
     assert not summary.merging and summary.paused is None
     assert (await here.org_sync.push_org("origin")).result == "pushed"
     await here.aclose()
@@ -461,7 +458,7 @@ async def test_a_merge_that_waits_survives_a_restart_and_can_be_abandoned(
     assert abandoned.result == "up_to_date" and await again.org_sync.merge() is None
     assert team(again, API).headline == "Mine"
     assert (
-        not again.org_load.summary().merging and again.org_load.summary().paused is None
+        not again.org_run.summary().merging and again.org_run.summary().paused is None
     )
     taken = await again.org_sync.pull_org("origin")
     everything = await again.org_sync.resolve_merge(
@@ -526,7 +523,7 @@ async def test_a_session_goes_on_with_a_team_the_pull_removed(
     # The session has the team as it set it up; it is not made to catch up
     # while it works.
     assert team_id_of(node(here, API)) == API and ic(here, API) is not None
-    assert here.org_load.summary().paused == "human"
+    assert here.org_run.summary().paused == "human"
     assert (await here.org_run.recovery()).messages_held == 1
     await here.aclose()
     await there.aclose()
@@ -605,7 +602,7 @@ async def test_a_message_with_a_conversation_opens_a_session_in_a_pulled_org(
 ):
     here, there = await an_org_on_two_machines(repo, launcher, remote, tmp_path)
     clone = there.org_load.repo_dir
-    fake = there._require_launcher()
+    fake = there.agent_launch.require()
     assert isinstance(fake, FakeLauncher)
 
     routed = await there.session_lifecycle.route_message(

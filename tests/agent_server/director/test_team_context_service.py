@@ -7,7 +7,6 @@ from uuid import uuid4
 
 import pytest
 
-from openhands.agent_server.director.documents.team_documents import TeamDocuments
 from openhands.agent_server.director.environment.git import (
     GitCheckouts,
     GitCodingEnvironment,
@@ -36,7 +35,6 @@ from openhands.agent_server.director.service.team_type_service import (
 from openhands.sdk.errors import NotFound
 from tests.agent_server.director.conftest import open_session_in, small_tree
 from tests.agent_server.director.test_team_documents import (
-    AnyOrg,
     RootAboveApi,
     TextsInADict,
 )
@@ -70,7 +68,6 @@ class Context:
             team_memory=lambda: GitStore(repo),
             require_team_memory=lambda: GitStore(repo),
             session_drafts=session_drafts,
-            org_changed=lambda session: None,
         )
         self.service = TeamContextService(
             checkouts=GitCheckouts(),
@@ -91,9 +88,6 @@ class Context:
             team_history=self.history,
             session_drafts=session_drafts,
             documents=documents,
-            team_documents=lambda: TeamDocuments(
-                documents, team_types.protocols, AnyOrg(tree)
-            ),
         )
 
 

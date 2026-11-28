@@ -1662,7 +1662,7 @@ async def test_work_that_went_up_without_a_review_counts_as_an_accept_for_remind
     await split_root(service)
     session = node(service, "root").session
     # The IC was reminded once of what changed since an earlier accept.
-    service.session_merges.changed_since_accept[session] = True
+    service.team_history.changed_since_accept[session] = True
 
     for team in ("services.api", "apps.web"):
         await use(service, ic(service, team), SubmitReviewTool, DONE)
@@ -1671,7 +1671,7 @@ async def test_work_that_went_up_without_a_review_counts_as_an_accept_for_remind
 
     review = node(service, "root").review
     assert review is not None and review.passed_up
-    assert session not in service.session_merges.changed_since_accept
+    assert session not in service.team_history.changed_since_accept
 
 
 async def test_a_landing_that_cannot_be_committed_leaves_the_tree_as_it_was(

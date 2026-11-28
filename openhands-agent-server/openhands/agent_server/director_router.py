@@ -266,7 +266,7 @@ def get_org(service: DirectorService = Depends(get_director_service)) -> OrgSumm
     Without an org `root_id` is null and the tree stream answers 404; start
     one with `POST /org`.
     """
-    return service.org_load.summary()
+    return service.org_run.summary()
 
 
 @director_router.get("/settings", response_model=DirectorSettingsState)

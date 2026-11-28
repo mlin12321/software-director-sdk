@@ -229,7 +229,7 @@ async def test_an_org_lives_in_the_repository_its_first_conversation_is_opened_i
     remembered = tmp_path / "state" / "director.json"
     first = DirectorService(repo, save_delay=0, remembered=remembered)
     await first.start(launcher)
-    before = first.org_load.summary().repo_path
+    before = first.org_run.summary().repo_path
     routed = await first.session_lifecycle.route_message(
         RouteMessageRequest(
             text="Build it", conversation=root_conversation(other / "src")
@@ -238,7 +238,7 @@ async def test_an_org_lives_in_the_repository_its_first_conversation_is_opened_i
     await first.work_queue.settled()
     await first.aclose()
 
-    assert (before, first.org_load.summary().repo_path) == (str(repo), str(other))
+    assert (before, first.org_run.summary().repo_path) == (str(repo), str(other))
     assert routed.started_org
     assert run_git(other, "rev-parse", ORG_REF).strip()
     with pytest.raises(subprocess.CalledProcessError):
@@ -255,7 +255,7 @@ async def test_an_org_lives_in_the_repository_its_first_conversation_is_opened_i
     finally:
         await second.aclose()
 
-    assert second.org_load.summary().repo_path == str(other)
+    assert second.org_run.summary().repo_path == str(other)
     assert again.conversation_id != routed.conversation_id
     assert "And tests\n\n(The human sent this from src.)" in (launcher.derived[-1].task)
 
@@ -327,7 +327,7 @@ async def test_an_org_is_not_started_outside_a_git_repository(
         await service.session_lifecycle.create_org(org_request(elsewhere))
 
     assert service.org_load.org.root_id is None
-    assert service.org_load.summary().repo_path == str(repo)
+    assert service.org_run.summary().repo_path == str(repo)
 
 
 async def test_an_org_cannot_run_in_docker(service: DirectorService, repo: Path):
@@ -361,7 +361,7 @@ async def test_no_org_is_left_when_its_root_agent_cannot_start(
         await service.session_lifecycle.create_org(org_request(repo))
 
     assert service.org_load.org.root_id is None
-    assert service.org_load.summary().node_count == 0
+    assert service.org_run.summary().node_count == 0
 
 
 async def test_a_team_works_while_an_agent_runs_and_is_blocked_by_a_failed_one(
@@ -941,7 +941,7 @@ async def test_a_server_in_a_submodule_joins_the_org_of_the_repository_above(
     service = DirectorService(submodule, save_delay=0)
     await service.start(launcher)
     try:
-        summary = service.org_load.summary()
+        summary = service.org_run.summary()
         from_here = await service.session_lifecycle.route_message(
             RouteMessageRequest(text="Refunds")
         )
@@ -986,8 +986,8 @@ async def test_a_submodule_with_an_org_of_its_own_keeps_it(
     service = DirectorService(submodule, save_delay=0)
 
     assert (
-        service.org_load.summary().repo_path,
-        service.org_load.summary().directory,
+        service.org_run.summary().repo_path,
+        service.org_run.summary().directory,
     ) == (
         str(submodule),
         "",
@@ -1011,7 +1011,7 @@ async def test_the_first_message_in_a_submodule_starts_its_org_there_when_none_i
         await service.aclose()
 
     assert routed.started_org
-    assert service.org_load.summary().repo_path == str(submodule)
+    assert service.org_run.summary().repo_path == str(submodule)
     assert run_git(submodule, "rev-parse", ORG_REF).strip()
     with pytest.raises(subprocess.CalledProcessError):
         run_git(repo, "rev-parse", "--verify", "--quiet", ORG_REF)
@@ -1056,7 +1056,7 @@ async def test_a_message_from_a_subdirectory_still_starts_the_org_above(
         await service.aclose()
 
     assert routed.started_org
-    assert service.org_load.summary().repo_path == str(repo)
+    assert service.org_run.summary().repo_path == str(repo)
 
 
 async def test_a_chat_folder_that_is_its_own_repository_does_not_join_the_one_above(
@@ -1083,7 +1083,7 @@ async def test_a_chat_folder_that_is_its_own_repository_does_not_join_the_one_ab
         await service.aclose()
 
     assert routed.started_org
-    assert service.org_load.summary().repo_path == str(submodule)
+    assert service.org_run.summary().repo_path == str(submodule)
     assert run_git(submodule, "rev-parse", ORG_REF).strip()
     assert run_git(repo, "rev-parse", ORG_REF).strip()
 
@@ -1110,7 +1110,7 @@ async def test_a_message_from_a_submodule_still_joins_the_org_above(
         await service.aclose()
 
     assert not routed.started_org
-    assert service.org_load.summary().repo_path == str(repo)
+    assert service.org_run.summary().repo_path == str(repo)
 
 
 @pytest.fixture
@@ -1137,7 +1137,7 @@ def shell_of(params: object) -> str:
 async def test_every_agent_starts_its_terminal_in_a_shell_held_to_its_boundary(
     confining: DirectorService, launcher: FakeLauncher, repo: Path
 ):
-    assert confining.org_load.summary().boundary_enforcement == "sandbox"
+    assert confining.org_run.summary().boundary_enforcement == "sandbox"
     # Missing, the hooks folder would be left for an agent to make.
     shutil.rmtree(repo / ".git" / "hooks")
     await confining.session_lifecycle.create_org(org_request(repo))
@@ -1186,7 +1186,7 @@ def run_in_shell(params: object, command: str, home: Path) -> str:
 async def test_an_ic_commits_from_its_own_index_where_shells_are_not_confined(
     service: DirectorService, launcher: FakeLauncher, repo: Path, tmp_path: Path
 ):
-    assert service.org_load.summary().boundary_enforcement == "checks"
+    assert service.org_run.summary().boundary_enforcement == "checks"
     await service.session_lifecycle.create_org(org_request(repo))
     await service.work_queue.settled()
     await split_root(service, API)

@@ -16,7 +16,6 @@ from openhands.agent_server.director.context import (
     update_block,
 )
 from openhands.agent_server.director.environment import EnvironmentFailed
-from openhands.agent_server.director.launch import TeamLauncher
 from openhands.agent_server.director.models import SessionTeam
 from openhands.agent_server.director.org_store import AGENT_LOST, OrgStore
 from openhands.agent_server.director.prompts import from_director
@@ -26,6 +25,9 @@ from openhands.agent_server.director.run_state import (
     RUNNING,
     TOLD,
     Intent,
+)
+from openhands.agent_server.director.service.agent_launch_service import (
+    AgentLaunchService,
 )
 from openhands.agent_server.director.service.org_save_service import OrgSaveService
 from openhands.agent_server.director.service.org_state_service import OrgStateService
@@ -65,20 +67,14 @@ class MessageDeliveryService:
     """What carries deliveries out, in the lane of the agent's team."""
     team_types: TeamTypeService
     """Who the members of a team are and what each is told of its part."""
-    launcher: Callable[[], TeamLauncher]
-    """What reaches the conversations; raises where there is none."""
-    is_running: Callable[[], bool]
-    """Whether the director is running agents on this server."""
+    agent_launch: AgentLaunchService
+    """What reaches the conversations, while the director runs agents."""
     context_of: Callable[[SessionTeam, str], dict[str, Any]]
     """What a member of a team reads of its place."""
-    is_stopped: Callable[[str], bool]
-    """Whether the team of a conversation, or one above it, is stopped."""
     lane_of: Callable[[Intent], str]
     """The lane a step is carried out in."""
     take_up: Callable[[int, str], None]
     """Takes up a step, by the id of its intent, in a lane."""
-    default_lane: str
-    """The lane of a message to an agent that has no team."""
     retry: float
     """How many seconds lie between two tries to send a message."""
     # The messages being delivered right now, so that resuming does not
@@ -123,7 +119,7 @@ class MessageDeliveryService:
 
     async def _mark_joined(self, conversation_id: str) -> None:
         try:
-            await self.launcher().mark_joined(UUID(conversation_id))
+            await self.agent_launch.require().mark_joined(UUID(conversation_id))
         except NotFound:
             # Not started yet, or gone: asked for again when it is written to.
             self.org_state.run_state().unmark(JOINED, conversation_id)
@@ -138,7 +134,7 @@ class MessageDeliveryService:
                 it is in, so the director's own notices wait for that turn
                 to end and only the human's words interrupt.
         """
-        if not self.is_running():
+        if not self.agent_launch.is_running:
             raise Unavailable("The director is not running agents on this server")
         found = self.org().find_by_conversation(conversation_id)
         place_id = found[0].id if found else ""
@@ -148,7 +144,7 @@ class MessageDeliveryService:
         self.org_save.save_soon()
         self.work_queue.enqueue(
             lambda: self.deliver(seq, conversation_id, text),
-            place_id or self.default_lane,
+            place_id or self.work_queue.default_lane,
         )
 
     async def deliver(
@@ -169,7 +165,7 @@ class MessageDeliveryService:
             return
         if not run.is_held(seq):
             return
-        if self.is_stopped(conversation_id):
+        if self.org().is_stopped(conversation_id):
             # It waits until the IC above sets the team going again.
             return
         if seq not in self._at_once and (
@@ -212,7 +208,7 @@ class MessageDeliveryService:
     async def send_again(self, conversation_id: UUID, text: str) -> None:
         """Send a message, trying again when the server could not take it.
         What is sent to the team after it waits behind it meanwhile."""
-        launcher = self.launcher()
+        launcher = self.agent_launch.require()
         for attempt in range(_SEND_ATTEMPTS):
             try:
                 return await launcher.send(conversation_id, text)
@@ -248,7 +244,7 @@ class MessageDeliveryService:
         """The shortening of an agent's history that it has not been told
         again after, if there is one. What the director said to it before
         then may be gone from what its model reads."""
-        launcher = self.launcher()
+        launcher = self.agent_launch.require()
         try:
             last = await launcher.condensed(UUID(conversation_id))
         except NotFound:
@@ -381,7 +377,7 @@ class MessageDeliveryService:
         self._at_once.add(seq)
         self.work_queue.enqueue(
             lambda: self.deliver(seq, conversation_id, text),
-            place_id or self.default_lane,
+            place_id or self.work_queue.default_lane,
         )
 
     def note_running(self, conversation_id: str, place_id: str, running: bool) -> None:
@@ -397,7 +393,7 @@ class MessageDeliveryService:
         else:
             self.org_state.running.discard(conversation_id)
             run.unmark(RUNNING, conversation_id)
-            if self.is_running():
+            if self.agent_launch.is_running:
                 self.deliver_what_waited(conversation_id)
                 for intent_id, (teams, lane) in list(self._settling.items()):
                     if place_id in teams:

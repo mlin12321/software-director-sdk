@@ -36,6 +36,9 @@ from openhands.agent_server.director.sandbox import (
 from openhands.agent_server.director.service.agent_confinement_service import (
     AgentConfinementService,
 )
+from openhands.agent_server.director.service.agent_launch_service import (
+    AgentLaunchService,
+)
 from openhands.agent_server.director.service.check_count_service import (
     CheckCountService,
 )
@@ -109,9 +112,6 @@ from openhands.agent_server.director.service.work_queue_service import (
     BASE_LANE,
     ORG_LANE,
     WorkQueueService,
-)
-from openhands.sdk.errors import (
-    Unavailable,
 )
 from openhands.sdk.logger import get_logger
 
@@ -232,9 +232,6 @@ class DirectorService:
                 agents' shells with, or None to leave them unconfined.
         """
         self.remembered = RememberedFile(remembered)
-        self.find_review_instructions = find_review_instructions
-        # The public skills that were looked for, by name; '' for one that
-        # could not be loaded.
         self._review_instructions_ready: asyncio.Task[None] | None = None
         self._stop_guard: Callable[[], None] | None = None
         self._stop_resume: Callable[[], None] | None = None
@@ -255,25 +252,21 @@ class DirectorService:
             type_of=lambda node: self.team_types.type_of(node),
             tree_changed=lambda: self.org_save.tree_changed(),
             loaded=self._org_loaded,
-            is_sandboxed=lambda: self.confinement.is_sandboxed,
         )
         self.start_line = StartLineService(
             org=self._org, org_state=self.org_state, retry=run_limit_retry
         )
         self.session_drafts = SessionDraftService(run_state=self.org_state.run_state)
-        # Tells of a change through a function: what a session's accepted
-        # work makes of the org is built further down.
         self.team_history = TeamHistoryService(
             org=self._org,
             team_memory=self.org_load.memory,
             require_team_memory=lambda: self.org_load.team_memory,
             session_drafts=self.session_drafts,
-            org_changed=lambda session: self.session_merges.note_change(session),
         )
         self.documents: DocumentStore = RecordDocumentStore(
             self.org_load.memory,
             self.org_state.run_state,
-            lambda session: self.session_merges.note_change(session),
+            self.team_history.note_change,
             self.team_history,
         )
         self.tree: TeamTree = TeamsOfTheOrg(self._org)
@@ -282,6 +275,7 @@ class DirectorService:
             documents=self.documents,
             tree=self.tree,
             org=self._org,
+            find_review_instructions=find_review_instructions,
         )
         self.confinement = AgentConfinementService(
             repo_dir=self.org_load.repo_dir_now,
@@ -294,9 +288,7 @@ class DirectorService:
             run_state=self.org_state.run_state,
             environment=self.environment,
             find_org=self.org_load.find_org,
-            record_need=lambda team, path, kind: self.team_history.record_need(
-                team, path, kind
-            ),
+            record_need=self.team_history.record_need,
         )
         self.org_settings = OrgSettingsService(
             environment=self.environment,
@@ -311,8 +303,7 @@ class DirectorService:
         )
         self._stall_poll = stall_poll
         self._stall_timer: asyncio.Task[None] | None = None
-        self._loop: asyncio.AbstractEventLoop | None = None
-        self._launcher: TeamLauncher | None = None
+        self.agent_launch = AgentLaunchService()
         self.work_queue = WorkQueueService(default_lane=ORG_LANE)
         self.org_save = OrgSaveService(
             environment=self.environment,
@@ -324,7 +315,7 @@ class DirectorService:
             delay=save_delay,
         )
         self.model_calls = ModelCallService(
-            launcher=self._require_launcher,
+            launcher=self.agent_launch.require,
             sessions=lambda: (
                 store.sessions() if (store := self.org_load.find_org()) else []
             ),
@@ -371,13 +362,8 @@ class DirectorService:
         return self.org_load.org
 
     def _org_loaded(self) -> None:
-        if self._loop is not None:
+        if self.agent_launch.is_running:
             self.work_queue.enqueue(self._came_back)
-
-    def _require_launcher(self) -> TeamLauncher:
-        if self._launcher is None:
-            raise Unavailable("The director is not running agents on this server")
-        return self._launcher
 
     def is_agent(self, conversation_id: UUID) -> bool:
         """Whether a conversation is one of an agent of the org. Asked by
@@ -392,9 +378,11 @@ class DirectorService:
         """Build what the director holds, each service after the ones it
         is given. ``__init__`` has built the ones that need nothing of these.
 
-        A service is given another, never the director. Where two need
-        each other, the one built first is given a function that asks
-        for the other when it is called.
+        A service is given another, never the director. Two are given a
+        function that asks for one built after them, because they call up
+        to what is built on them: ``message_delivery`` (a step is taken up
+        when a team comes to rest) and ``team_messaging`` (reviews are
+        released when a team is stopped or its IC is woken).
         """
         self.team_context = TeamContextService(
             checkouts=self.checkouts,
@@ -405,7 +393,6 @@ class DirectorService:
             team_history=self.team_history,
             session_drafts=self.session_drafts,
             documents=self.documents,
-            team_documents=self.org_settings.team_documents,
         )
         self.check_counts = CheckCountService(
             org=self._org, run_state=self.org_state.run_state
@@ -423,25 +410,18 @@ class DirectorService:
             event=self.team_history.event,
             confinement=self.confinement,
         )
-        # Takes work up through a function: what is begun is built next and
-        # is given this.
         self.message_delivery = MessageDeliveryService(
             org=self._org,
             org_state=self.org_state,
             org_save=self.org_save,
             work_queue=self.work_queue,
             team_types=self.team_types,
-            launcher=self._require_launcher,
-            is_running=lambda: self._loop is not None,
+            agent_launch=self.agent_launch,
             context_of=self.team_context.context_of,
-            is_stopped=lambda conversation_id: self.org_load.org.is_stopped(
-                conversation_id
-            ),
             lane_of=lane_for,
             take_up=lambda intent_id, lane: self.resumable_work.take_up(
                 intent_id, lane
             ),
-            default_lane=ORG_LANE,
             retry=self._run_limit_retry,
         )
         self.resumable_work = ResumableWorkService(
@@ -464,34 +444,8 @@ class DirectorService:
             team_types=self.team_types,
             model_calls=self.model_calls,
             work_queue=self.work_queue,
-            launcher=self._require_launcher,
+            launcher=self.agent_launch.require,
         )
-        # Tells of a failure and notes progress through functions: what
-        # carries messages is built next and is given this.
-        self.member_start = TeamMemberStartService(
-            checkouts=self.checkouts,
-            org=self._org,
-            repo_dir=self.org_load.repo_dir_now,
-            org_state=self.org_state,
-            start_line=self.start_line,
-            message_delivery=self.message_delivery,
-            confinement=self.confinement,
-            team_types=self.team_types,
-            team_documents=self.org_settings.team_documents,
-            launcher=self._require_launcher,
-            context_of=self.team_context.context_of,
-            tell_of_failure=lambda place_id, role, reason: (
-                self.team_messaging.tell_of_failure(place_id, role, reason)
-            ),
-            check_counts=self.check_counts,
-            team_summaries=self.team_summaries,
-            work_queue=self.work_queue,
-            progressed=lambda *args, **kwargs: self.team_messaging.progressed(
-                *args, **kwargs
-            ),
-        )
-        # Releases reviews through a function: reviews are built further
-        # down and are given this.
         self.team_messaging = TeamMessagingService(
             org=self._org,
             org_state=self.org_state,
@@ -503,20 +457,33 @@ class DirectorService:
             documents=self.documents,
             check_counts=self.check_counts,
             message_delivery=self.message_delivery,
-            member_start=self.member_start,
+            in_place=self.org_load.in_place,
             resumable_work=self.resumable_work,
             work_queue=self.work_queue,
-            launcher=self._require_launcher,
-            joined=self.message_delivery.joined,
-            clock=self._clock,
+            launcher=self.agent_launch.require,
             release_reviews=lambda place_id: self.reviews.release_reviews(place_id),
+        )
+        self.member_start = TeamMemberStartService(
+            checkouts=self.checkouts,
+            org=self._org,
+            repo_dir=self.org_load.repo_dir_now,
+            org_state=self.org_state,
+            start_line=self.start_line,
+            message_delivery=self.message_delivery,
+            confinement=self.confinement,
+            team_types=self.team_types,
+            team_documents=self.org_settings.team_documents,
+            launcher=self.agent_launch.require,
+            context_of=self.team_context.context_of,
+            tell_of_failure=self.team_messaging.tell_of_failure,
+            check_counts=self.check_counts,
+            team_summaries=self.team_summaries,
+            work_queue=self.work_queue,
         )
         self.session_merges = SessionMergeService(
             confinement=self.confinement,
             org=self._org,
             team_memory=self.org_load.memory,
-            team_documents=self.org_settings.team_documents,
-            clock=self._clock,
             org_state=self.org_state,
             org_save=self.org_save,
             org_settings=self.org_settings,
@@ -532,9 +499,7 @@ class DirectorService:
             org=self._org,
             repo_dir=self.org_load.repo_dir_now,
             checkouts=self.checkouts,
-            team_documents=self.org_settings.team_documents,
-            launcher=self._require_launcher,
-            find_review_instructions=self.find_review_instructions,
+            launcher=self.agent_launch.require,
             org_state=self.org_state,
             org_save=self.org_save,
             org_settings=self.org_settings,
@@ -555,7 +520,7 @@ class DirectorService:
             org=self._org,
             has_org=lambda: self.org_load.has_org,
             checkouts=self.checkouts,
-            launcher=self._require_launcher,
+            launcher=self.agent_launch.require,
             poll_seconds=self._stall_poll,
             org_state=self.org_state,
             org_settings=self.org_settings,
@@ -587,18 +552,14 @@ class DirectorService:
             session_drafts=self.session_drafts,
             resumable_work=self.resumable_work,
             work_queue=self.work_queue,
-            team_documents=self.org_settings.team_documents,
-            launcher=self._require_launcher,
-            is_running=lambda: self._loop is not None,
-            reviews=self.reviews,
+            agent_launch=self.agent_launch,
             retry=self._run_limit_retry,
         )
         self.org_run = OrgRunService(
             org_watch=self.org_watch,
             checkouts=self.checkouts,
-            org=self._org,
-            find_org=self.org_load.find_org,
-            repo_dir=self.org_load.repo_dir_now,
+            org_load=self.org_load,
+            team_history=self.team_history,
             org_state=self.org_state,
             org_save=self.org_save,
             org_settings=self.org_settings,
@@ -611,22 +572,22 @@ class DirectorService:
             resumable_work=self.resumable_work,
             work_queue=self.work_queue,
             team_splits=self.team_splits,
-            launcher=self._require_launcher,
-            find_launcher=lambda: self._launcher,
-            loop=lambda: self._loop,
-            home=self.org_load.home,
-            instance=self.org_load.instance,
-            working=self.org_load.working,
+            agent_launch=self.agent_launch,
             lane_of=lane_for,
             reviews=self.reviews,
-            session_merges=self.session_merges,
         )
-        # Asks for what routes requests when it hands one on: that is built
-        # next and is given this.
-        self.session_lifecycle = SessionLifecycleService(
+        self.request_routing = RequestRoutingService(
             checkouts=self.checkouts,
             org=self._org,
-            repo_dir=self.org_load.repo_dir_now,
+            model_calls=self.model_calls,
+            checkout=self.org_load.repo_dir_now,
+            purpose=self.team_messaging.purpose,
+            routed_requests=self.team_history.routed_requests,
+            keep_routed=self.team_history.keep_routed,
+            paused=lambda: self.org_state.paused is not None,
+        )
+        self.session_lifecycle = SessionLifecycleService(
+            checkouts=self.checkouts,
             org_state=self.org_state,
             org_save=self.org_save,
             org_settings=self.org_settings,
@@ -641,39 +602,23 @@ class DirectorService:
             session_records=self.session_records,
             session_drafts=self.session_drafts,
             team_splits=self.team_splits,
-            model_calls=self.model_calls,
             resumable_work=self.resumable_work,
             work_queue=self.work_queue,
-            request_routing=lambda: self.request_routing,
-            launcher=self._require_launcher,
+            request_routing=self.request_routing,
+            launcher=self.agent_launch.require,
             reviews=self.reviews,
             session_merges=self.session_merges,
             org_load=self.org_load,
             org_run=self.org_run,
         )
-        self.request_routing = RequestRoutingService(
-            checkouts=self.checkouts,
-            org=self._org,
-            model_calls=self.model_calls,
-            checkout=self.org_load.repo_dir_now,
-            purpose=self.team_messaging.purpose,
-            routed_requests=self.team_history.routed_requests,
-            keep_routed=self.team_history.keep_routed,
-            hand_on=self.session_lifecycle.hand_on,
-            paused=lambda: self.org_state.paused is not None,
-        )
         self.org_sync = OrgSyncService(
             environment=self.environment,
-            org=self._org,
-            repo_dir=self.org_load.repo_dir_now,
-            repository=self.org_load.repository,
+            org_load=self.org_load,
             org_state=self.org_state,
             org_save=self.org_save,
             work_queue=self.work_queue,
             org_run=self.org_run,
-            launcher=self._require_launcher,
-            join=self.org_load.join,
-            working=self.org_load.working,
+            launcher=self.agent_launch.require,
         )
 
     async def _came_back(self) -> None:
@@ -681,8 +626,7 @@ class DirectorService:
 
     async def start(self, launcher: TeamLauncher) -> None:
         """Begin running agents through ``launcher``, on the running loop."""
-        self._loop = asyncio.get_running_loop()
-        self._launcher = launcher
+        self.agent_launch.begin(launcher)
         await self.work_queue.__aenter__()
         await self.org_save.__aenter__()
         self._stop_status = launcher.on_status(self.org_run.on_status)
@@ -693,7 +637,7 @@ class DirectorService:
         # What reviewers check work by is fetched now, off the loop, so
         # that no review request is the first to wait for it.
         self._review_instructions_ready = asyncio.create_task(
-            asyncio.to_thread(self.reviews.load_review_instructions),
+            asyncio.to_thread(self.team_types.load_review_instructions),
             name="director-review-instructions",
         )
         self._stall_timer = asyncio.create_task(
@@ -740,6 +684,5 @@ class DirectorService:
             task.cancel()
         await asyncio.gather(*timers, return_exceptions=True)
         await self.org_save.__aexit__(None, None, None)
-        self._launcher = None
-        self._loop = None
+        self.agent_launch.end()
         self.org_state.close()
