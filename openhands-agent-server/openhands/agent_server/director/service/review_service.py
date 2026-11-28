@@ -668,31 +668,69 @@ class ReviewService:
         reconciled: str = "",
         choices: list[dict[str, str]] | None = None,
     ) -> None:
-        names = self.team_types.names_at(place_id)
+        """Accept the work of a team, as its reviewer asked: a step of
+        resumable work, so each stage holds when it is run again."""
         store = self.org()
         place = store.place(place_id)
         above = store.place(place.parent_id) if place and place.parent_id else None
         if place is None or above is None or place.review is None:
             return
         if place.review.state == "accepted":
-            # Cut off after the acceptance was made: what follows it is
-            # still owed.
-            merge = (
-                self.session_merges.merge_of(place)
-                if store.opens_session(place)
-                else None
-            )
-            if merge is not None and not merge.code_landed:
-                # What its reviewer made of its documents lands with it, as the
-                # first time.
-                self.session_merges.take_document_choices(place, choices or [])
-                await asyncio.to_thread(self.session_merges.land_accepted, place, None)
-            await self.pass_up(above.id, acted=True)
-            # Whoever waited behind this work is still to hear it is their turn.
-            self.tell_turns()
+            await self._finish_accepted(place, above, choices or [])
         if place.review.state != "pending":
             return
         reviewer = self.team_types.reviewer_conversation(above)
+        if not self._is_its_turn(place, reviewer):
+            return
+        allowed, meets = await self._may_merge(place, above, reviewer, reconciled)
+        if not allowed:
+            return
+        merged, resolved = False, ()
+        if self.checkouts.is_apart(place, above):
+            taken = await self._merge_above(
+                place, above, reviewer, meets, reconciled, choices or []
+            )
+            if taken is None:
+                return
+            merged, resolved = taken
+        tip = await asyncio.to_thread(self.checkouts.version, Path(place.worktree_path))
+        self._record_accepted(place, above, tip, meets, resolved, reconciled)
+        if store.opens_session(place):
+            self.session_merges.take_document_choices(place, choices or [])
+            await asyncio.to_thread(
+                self.session_merges.land_accepted, place, meets.seen if meets else None
+            )
+            self.session_merges.changed_since_accept.pop(place.session, None)
+        self._tell_accepted(place, above, reviewer, merged)
+        await self.pass_up(above.id, acted=True)
+        if needed_above:
+            self._tell_who_waits(place, above, needed_above)
+
+    async def _finish_accepted(
+        self, place: SessionTeam, above: SessionTeam, choices: list[dict[str, str]]
+    ) -> None:
+        """Carry out what follows an acceptance that was cut off after it
+        was made."""
+        store = self.org()
+        # Cut off after the acceptance was made: what follows it is
+        # still owed.
+        merge = (
+            self.session_merges.merge_of(place) if store.opens_session(place) else None
+        )
+        if merge is not None and not merge.code_landed:
+            # What its reviewer made of its documents lands with it, as the
+            # first time.
+            self.session_merges.take_document_choices(place, choices)
+            await asyncio.to_thread(self.session_merges.land_accepted, place, None)
+        await self.pass_up(above.id, acted=True)
+        # Whoever waited behind this work is still to hear it is their turn.
+        self.tell_turns()
+
+    def _is_its_turn(self, place: SessionTeam, reviewer: str | None) -> bool:
+        """Whether no work submitted earlier is still undecided; the
+        reviewer is told which when some is."""
+        store = self.org()
+        names = self.team_types.names_at(place.id)
         first = self._before(place)
         if first is not None:
             # The acceptance of work submitted earlier was carried out
@@ -702,12 +740,19 @@ class ReviewService:
                 reviewer,
                 accept_in_order(place, first, store.session_title(first), names=names),
             )
-            return
-        where = place.boundary.path or "the repository"
-        team = Path(place.worktree_path)
-        merged = False
-        resolved: tuple[str, ...] = ()
-        opens = store.opens_session(place)
+            return False
+        return True
+
+    async def _may_merge(
+        self,
+        place: SessionTeam,
+        above: SessionTeam,
+        reviewer: str | None,
+        reconciled: str,
+    ) -> tuple[bool, Meets | None]:
+        """Whether the work can be merged as it is now, and what its
+        reviewer had to reconcile; the reviewer is told why when not."""
+        store = self.org()
         try:
             meets = await asyncio.to_thread(self._to_reconcile, place, above)
         except (EnvironmentFailed, OSError):
@@ -716,7 +761,7 @@ class ReviewService:
         if refusal is not None:
             # Something came into the checkout between the review and now.
             self.message_delivery.notify(reviewer, refusal)
-            return
+            return False, meets
         astray = await asyncio.to_thread(
             self.checkouts.astray, place, store.below(place.id), self.repo_dir()
         )
@@ -727,116 +772,151 @@ class ReviewService:
                 f"The work of {place.title!r} is not accepted yet. {astray} "
                 "Send it back with `review_team` and that as what to change.",
             )
-            return
-        if self.checkouts.is_apart(place, above):
-            elsewhere = await asyncio.to_thread(self._elsewhere, place, above)
-            if elsewhere is not None:
-                started_on, on = elsewhere
-                self.ask_to_clear(
-                    place_id,
-                    f"The session started from the branch {started_on!r}, "
-                    "and your checkout is now "
-                    + ("on no branch" if on in ("", "HEAD") else f"on {on!r}")
-                    + f".\nSwitch it back to {started_on!r}, then answer "
-                    "this: the work is merged then.",
-                    reconciled,
-                    choices or [],
-                )
-                self.message_delivery.notify(
-                    reviewer,
-                    f"The work of {place.title!r} is accepted and waits for "
-                    "the human, whose checkout is on another branch than the "
-                    "one the session started from. There is nothing more "
-                    "for you to do.",
-                )
-                return
-            if not opens:
-                # What is uncommitted in a session's directory is the work
-                # of the team it was opened beside, and stays.
-                await asyncio.to_thread(self._put_aside, above, place)
-            try:
-                result = await asyncio.to_thread(
-                    self.checkouts.merge, place, above, self._merged_as(place)
-                )
-            except (EnvironmentFailed, OSError) as error:
-                self.message_delivery.notify(
-                    reviewer,
-                    f"The work of {place.title!r} could not be merged into your "
-                    f"checkout, and still waits for your review: {error}",
-                )
-                return
-            if result.outcome == "conflicts":
-                finished = await asyncio.to_thread(
-                    self._finish_merge, place, above, result
-                )
-                if isinstance(finished, str):
-                    if opens:
-                        self.session_merges.show_reviewer_items(place, meets)
-                    self.message_delivery.notify(reviewer, finished)
-                    return
-                result = finished
-                resolved = result.files if result.outcome == "merged" else ()
-            else:
-                await asyncio.to_thread(self.confinement.drop_merge_checkout, place_id)
-            if result.outcome == "refused" and is_division_lead(above):
-                # Only the human can clear their own checkout: they are
-                # asked, and their answer merges the work.
-                self.ask_to_clear(
-                    place_id,
-                    f"git would not merge it as the checkout is:\n"
-                    f"{result.detail}\nCommit or put aside what is in "
-                    "the way, then answer this: the work is merged then.",
-                    reconciled,
-                    choices or [],
-                )
-                self.message_delivery.notify(
-                    reviewer,
-                    f"The work of {place.title!r} is accepted and waits for "
-                    "the human, whose uncommitted changes are in the way of "
-                    "the merge. There is nothing more for you to do.",
-                )
-                return
-            if result.outcome == "refused":
-                self.message_delivery.notify(
-                    reviewer,
-                    f"git would not merge the work of {place.title!r} into your "
-                    f"checkout as it is:\n{result.detail}\n"
-                    + (
-                        "What is in the way is work that is not committed "
-                        "yet in the same files. Accept it again with "
-                        "`review_team` once that is committed."
-                        if opens
-                        else "Commit or put aside what is in the way, then "
-                        "accept it again with `review_team`."
-                    ),
-                )
-                return
-            if result.outcome == "outside":
-                issue = (
-                    f"These files are outside {where}, which is all your "
-                    "team owns. Take them out of your commits."
-                )
-                self.request_changes(
-                    place_id,
-                    [ReviewFinding(path=", ".join(result.files), issue=issue)],
-                )
-                self.message_delivery.notify(
-                    reviewer,
-                    f"The work of {place.title!r} was not taken into your "
-                    f"checkout: {issue} ({', '.join(result.files)}) "
-                    "It was sent back to the team.",
-                )
-                return
-            merged = result.outcome == "merged"
-            if resolved:
-                self.message_delivery.notify(
-                    self.team_types.writer_conversation(place),
-                    f"Your team's work did not merge by itself. The {names.reviewer} "
-                    "that "
-                    "reviewed it finished the merge in these files, which are "
-                    f"now as it left them: {', '.join(resolved)}",
-                )
-        tip = await asyncio.to_thread(self.checkouts.version, team)
+            return False, meets
+        return True, meets
+
+    async def _merge_above(
+        self,
+        place: SessionTeam,
+        above: SessionTeam,
+        reviewer: str | None,
+        meets: Meets | None,
+        reconciled: str,
+        choices: list[dict[str, str]],
+    ) -> tuple[bool, tuple[str, ...]] | None:
+        """Merge the work of a team into the checkout above.
+
+        Returns:
+            Whether anything was merged and the files its reviewer finished
+            the merge in; None when the work is not accepted now, and whoever
+            has to act was told.
+        """
+        place_id = place.id
+        names = self.team_types.names_at(place_id)
+        where = place.boundary.path or "the repository"
+        opens = self.org().opens_session(place)
+        resolved: tuple[str, ...] = ()
+        elsewhere = await asyncio.to_thread(self._elsewhere, place, above)
+        if elsewhere is not None:
+            started_on, on = elsewhere
+            self.ask_to_clear(
+                place_id,
+                f"The session started from the branch {started_on!r}, "
+                "and your checkout is now "
+                + ("on no branch" if on in ("", "HEAD") else f"on {on!r}")
+                + f".\nSwitch it back to {started_on!r}, then answer "
+                "this: the work is merged then.",
+                reconciled,
+                choices,
+            )
+            self.message_delivery.notify(
+                reviewer,
+                f"The work of {place.title!r} is accepted and waits for "
+                "the human, whose checkout is on another branch than the "
+                "one the session started from. There is nothing more "
+                "for you to do.",
+            )
+            return None
+        if not opens:
+            # What is uncommitted in a session's directory is the work
+            # of the team it was opened beside, and stays.
+            await asyncio.to_thread(self._put_aside, above, place)
+        try:
+            result = await asyncio.to_thread(
+                self.checkouts.merge, place, above, self._merged_as(place)
+            )
+        except (EnvironmentFailed, OSError) as error:
+            self.message_delivery.notify(
+                reviewer,
+                f"The work of {place.title!r} could not be merged into your "
+                f"checkout, and still waits for your review: {error}",
+            )
+            return None
+        if result.outcome == "conflicts":
+            finished = await asyncio.to_thread(self._finish_merge, place, above, result)
+            if isinstance(finished, str):
+                if opens:
+                    self.session_merges.show_reviewer_items(place, meets)
+                self.message_delivery.notify(reviewer, finished)
+                return None
+            result = finished
+            resolved = result.files if result.outcome == "merged" else ()
+        else:
+            await asyncio.to_thread(self.confinement.drop_merge_checkout, place_id)
+        if result.outcome == "refused" and is_division_lead(above):
+            # Only the human can clear their own checkout: they are
+            # asked, and their answer merges the work.
+            self.ask_to_clear(
+                place_id,
+                f"git would not merge it as the checkout is:\n"
+                f"{result.detail}\nCommit or put aside what is in "
+                "the way, then answer this: the work is merged then.",
+                reconciled,
+                choices,
+            )
+            self.message_delivery.notify(
+                reviewer,
+                f"The work of {place.title!r} is accepted and waits for "
+                "the human, whose uncommitted changes are in the way of "
+                "the merge. There is nothing more for you to do.",
+            )
+            return None
+        if result.outcome == "refused":
+            self.message_delivery.notify(
+                reviewer,
+                f"git would not merge the work of {place.title!r} into your "
+                f"checkout as it is:\n{result.detail}\n"
+                + (
+                    "What is in the way is work that is not committed "
+                    "yet in the same files. Accept it again with "
+                    "`review_team` once that is committed."
+                    if opens
+                    else "Commit or put aside what is in the way, then "
+                    "accept it again with `review_team`."
+                ),
+            )
+            return None
+        if result.outcome == "outside":
+            issue = (
+                f"These files are outside {where}, which is all your "
+                "team owns. Take them out of your commits."
+            )
+            self.request_changes(
+                place_id,
+                [ReviewFinding(path=", ".join(result.files), issue=issue)],
+            )
+            self.message_delivery.notify(
+                reviewer,
+                f"The work of {place.title!r} was not taken into your "
+                f"checkout: {issue} ({', '.join(result.files)}) "
+                "It was sent back to the team.",
+            )
+            return None
+        merged = result.outcome == "merged"
+        if resolved:
+            self.message_delivery.notify(
+                self.team_types.writer_conversation(place),
+                f"Your team's work did not merge by itself. The {names.reviewer} "
+                "that "
+                "reviewed it finished the merge in these files, which are "
+                f"now as it left them: {', '.join(resolved)}",
+            )
+        return merged, resolved
+
+    def _record_accepted(
+        self,
+        place: SessionTeam,
+        above: SessionTeam,
+        tip: str | None,
+        meets: Meets | None,
+        resolved: tuple[str, ...],
+        reconciled: str,
+    ) -> None:
+        """Keep that the work is accepted, in the tree and in the record of
+        the team above."""
+        assert place.review is not None
+        store = self.org()
+        place_id = place.id
         store.set_review(
             place_id,
             place.review.model_copy(update={"state": "accepted", "at": utc_now()}),
@@ -861,12 +941,18 @@ class ReviewService:
             [place.boundary.path],
             between=(place.base_commit, tip) if place.base_commit and tip else ("", ""),
         )
-        if opens:
-            self.session_merges.take_document_choices(place, choices or [])
-            await asyncio.to_thread(
-                self.session_merges.land_accepted, place, meets.seen if meets else None
-            )
-            self.session_merges.changed_since_accept.pop(place.session, None)
+
+    def _tell_accepted(
+        self,
+        place: SessionTeam,
+        above: SessionTeam,
+        reviewer: str | None,
+        merged: bool,
+    ) -> None:
+        """Tell the team, its reviewer and whoever waited behind the work
+        that it is accepted."""
+        place_id = place.id
+        names = self.team_types.names_at(place_id)
         self.org_state.run_state().unmark(SHOWN, place_id)
         self.org_state.run_state().unmark(CLEARING, place_id)
         self.tell_turns()
@@ -881,9 +967,16 @@ class ReviewService:
             self.message_delivery.notify(
                 reviewer, f"The work of {place.title!r} is merged into your checkout."
             )
-        await self.pass_up(above.id, acted=True)
+
+    def _tell_who_waits(
+        self, place: SessionTeam, above: SessionTeam, needed_above: str
+    ) -> None:
+        """Tell the team further up that work it waits on is accepted
+        below it."""
+        store = self.org()
+        where = place.boundary.path or "the repository"
         further = store.place(above.parent_id) if above.parent_id else None
-        if needed_above and further is not None:
+        if further is not None:
             self.message_delivery.notify(
                 self.team_types.writer_conversation(further),
                 f"Team {above.title!r} (id {above.id}) below you accepted the "

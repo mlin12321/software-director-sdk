@@ -751,35 +751,11 @@ class SessionMergeService:
             if merge is None or session is None or merge.org_queued or not waiting:
                 raise Conflict("Nothing of a session waits for you to settle")
             top = store.session(session.id)[0]
-            named = [item.key for item in waiting if item.kind == "team"]
-            unknown = [choice.team for choice in teams if choice.team not in named]
-            if unknown:
-                raise Invalid(
-                    f"Not waiting: {', '.join(unknown)}. The teams that wait: "
-                    f"{', '.join(named) or 'none'}"
-                )
+            self._check_teams_wait(waiting, teams)
             placed = {choice.team: choice for choice in teams}
             for choice in teams:
                 self._check_placement(top, choice)
-            agreed = [
-                (item.document, item.key) for item in waiting if item.waits_with_teams
-            ]
-            chosen = {
-                (choice.document, normalize_store_path(choice.folder)): choice
-                for choice in choices
-            }
-            for document in {document for document, _ in chosen}:
-                unknown = [
-                    path
-                    for named, path in chosen
-                    if named == document and (named, path) not in agreed
-                ]
-                wait = [path for named, path in agreed if named == document]
-                if unknown:
-                    raise Invalid(
-                        f"No {document} wait for: {', '.join(unknown)}. The folders "
-                        f"whose {document} wait: {', '.join(wait) or 'none'}"
-                    )
+            chosen = self._document_choices(waiting, choices)
             others = [item for item in merge.items if item.gate == "ic"]
             _, now = self._manager_items(top, merge.items)
             if {_same(item) for item in now} != {_same(item) for item in waiting}:
@@ -797,31 +773,7 @@ class SessionMergeService:
                         names=names,
                     )
                 )
-            settled = []
-            for item in waiting:
-                choice = (
-                    chosen.get((item.document, item.key))
-                    if item.waits_with_teams
-                    else None
-                )
-                place = placed.get(item.key) if item.kind == "team" else None
-                use: Use = "session"
-                if place is not None:
-                    use = place.use
-                elif choice is not None:
-                    use = choice.use
-                settled.append(
-                    item.model_copy(
-                        update={
-                            "use": use,
-                            "replacement": choice.replacement
-                            if choice and use == "replacement"
-                            else "",
-                            "under": place.under if place else None,
-                            "named": place.title if place else None,
-                        }
-                    )
-                )
+            settled = self._settled(waiting, placed, chosen)
             self._keep_merge(
                 top,
                 merge.model_copy(update={"items": [*others, *settled], "note": note}),
@@ -836,6 +788,85 @@ class SessionMergeService:
             "session's "
             "work has accepted it."
         )
+
+    def _check_teams_wait(
+        self, waiting: list[MergeItem], teams: list[TeamChoice]
+    ) -> None:
+        """Hold the teams a Manager named to those that wait.
+
+        Raises:
+            Invalid: A team named does not wait.
+        """
+        named = [item.key for item in waiting if item.kind == "team"]
+        unknown = [choice.team for choice in teams if choice.team not in named]
+        if unknown:
+            raise Invalid(
+                f"Not waiting: {', '.join(unknown)}. The teams that wait: "
+                f"{', '.join(named) or 'none'}"
+            )
+
+    def _document_choices(
+        self, waiting: list[MergeItem], choices: Sequence[DocumentChoice]
+    ) -> dict[tuple[str, str], DocumentChoice]:
+        """What a Manager chose for each document that waits with the
+        teams, by document and folder.
+
+        Raises:
+            Invalid: A folder named has no such document waiting.
+        """
+        agreed = [
+            (item.document, item.key) for item in waiting if item.waits_with_teams
+        ]
+        chosen = {
+            (choice.document, normalize_store_path(choice.folder)): choice
+            for choice in choices
+        }
+        for document in {document for document, _ in chosen}:
+            unknown = [
+                path
+                for named, path in chosen
+                if named == document and (named, path) not in agreed
+            ]
+            wait = [path for named, path in agreed if named == document]
+            if unknown:
+                raise Invalid(
+                    f"No {document} wait for: {', '.join(unknown)}. The folders "
+                    f"whose {document} wait: {', '.join(wait) or 'none'}"
+                )
+        return chosen
+
+    def _settled(
+        self,
+        waiting: list[MergeItem],
+        placed: dict[str, TeamChoice],
+        chosen: dict[tuple[str, str], DocumentChoice],
+    ) -> list[MergeItem]:
+        """What waited, with what the Manager settled of each: the
+        session's holds where nothing else was said."""
+        settled = []
+        for item in waiting:
+            choice = (
+                chosen.get((item.document, item.key)) if item.waits_with_teams else None
+            )
+            place = placed.get(item.key) if item.kind == "team" else None
+            use: Use = "session"
+            if place is not None:
+                use = place.use
+            elif choice is not None:
+                use = choice.use
+            settled.append(
+                item.model_copy(
+                    update={
+                        "use": use,
+                        "replacement": choice.replacement
+                        if choice and use == "replacement"
+                        else "",
+                        "under": place.under if place else None,
+                        "named": place.title if place else None,
+                    }
+                )
+            )
+        return settled
 
     def _check_placement(self, top: SessionTeam, choice: TeamChoice) -> None:
         """Hold where a Manager puts a team it takes from a session, and
@@ -936,6 +967,10 @@ class SessionMergeService:
         seen: dict[str, str | None] | None,
         org: tuple[dict[str, Side], list[MergeItem]] | None,
     ) -> Landed:
+        """Make what a session kept the org's: its records alone while its
+        teams wait (``org`` is None), or its teams, the documents settled
+        with them and its records together. A landing that fails leaves
+        the tree and the merge as they were."""
         store = self.org()
         session = store.session_of(top)
         shapes = self._shapes(top)
@@ -943,24 +978,7 @@ class SessionMergeService:
         if session is None or shapes is None or merge is None:
             return Landed(Taken([], []), [], [], [], [], [])
         if org is None:
-            take, items = self._manager_items(top, [])
-            waits = {*take, *(item.key for item in items if item.kind == "team")}
-            agreements = {
-                file
-                for file in self.session_records.drafts(top.session)
-                if self._waits_for_team_changes(file)
-            }
-            self._keep_merge(
-                top,
-                merge.model_copy(
-                    update={
-                        "code_landed": True,
-                        "items": [i for i in merge.items if i.gate == "manager"],
-                    }
-                ),
-            )
-            records = self.session_records.land(top, seen, waits=waits, held=agreements)
-            return Landed(records, [], [], [], [], [])
+            return Landed(self._land_records(top, merge, seen), [], [], [], [], [])
         # What the tree and the merge were, for a landing that fails: the
         # tree never moves without the team memory that goes with it.
         tree = [
@@ -973,59 +991,12 @@ class SessionMergeService:
             session_places, theirs, _ = shapes
             places = {place.team_id: place for place in session_places}
             decided = {item.key: item for item in items if item.kind == "team"}
-            taken: list[str] = []
-            kept = [team for team, item in decided.items() if item.use != "session"]
-            leaving = [
-                *(team for team, side in take.items() if side is None),
-                *(
-                    team
-                    for team, item in decided.items()
-                    if item.use == "session" and team not in places
-                ),
-            ]
-            # Those above before those below, and what goes after what moved.
-            for team in places:
-                settled = team in decided and decided[team].use == "session"
-                if take.get(team) is not None or settled:
-                    item = decided.get(team)
-                    done = self._put_team(
-                        session,
-                        places,
-                        team,
-                        item.under if item and settled else None,
-                        item.named if item and settled else None,
-                        leaving,
-                    )
-                    if settled:
-                        (taken if done else kept).append(team)
-            for team in leaving:
-                store.remove(team)
-                if team in decided:
-                    taken.append(team)
+            taken, kept = self._take_teams(session, places, take, decided)
             # What it has now is what it is next compared by: a team the org
             # keeps otherwise is not brought up again unless the session changes
             # it once more.
             store.set_shape(session.id, theirs)
-            texts: dict[str, str | None] = {}
-            agreed: list[tuple[str, str]] = []
-            held: list[tuple[str, str]] = []
-            others: list[tuple[str, str, str]] = []
-            for item in items:
-                if not item.waits_with_teams:
-                    continue
-                file = DocumentRef(item.key, item.document).path
-                if item.use == "org" or (
-                    item.with_team is not None and item.with_team not in taken
-                ):
-                    self.session_records.undraft(top.session, file)
-                    held.append((item.document, item.key))
-                    others.append((item.document, item.key, item.org))
-                    continue
-                text = item.replacement if item.use == "replacement" else item.session
-                texts[file] = f"{text.strip()}\n" if text.strip() else None
-                agreed.append((item.document, item.key))
-                if item.use == "replacement":
-                    others.append((item.document, item.key, text))
+            texts, agreed, held, others = self._take_documents(top, items, taken)
             self._keep_merge(top, None)
             records = self.session_records.land(top, seen, chosen=texts, tree=True)
         except BaseException:
@@ -1034,6 +1005,114 @@ class SessionMergeService:
             self._keep_merge(top, merge)
             raise
         return Landed(records, taken, kept, agreed, held, others)
+
+    def _land_records(
+        self, top: SessionTeam, merge: Merge, seen: dict[str, str | None] | None
+    ) -> Taken:
+        """Land a session's records while what it makes of the org's teams
+        still waits for the Manager: those teams' records and the documents
+        settled with them are held back."""
+        take, items = self._manager_items(top, [])
+        waits = {*take, *(item.key for item in items if item.kind == "team")}
+        agreements = {
+            file
+            for file in self.session_records.drafts(top.session)
+            if self._waits_for_team_changes(file)
+        }
+        self._keep_merge(
+            top,
+            merge.model_copy(
+                update={
+                    "code_landed": True,
+                    "items": [i for i in merge.items if i.gate == "manager"],
+                }
+            ),
+        )
+        return self.session_records.land(top, seen, waits=waits, held=agreements)
+
+    def _take_teams(
+        self,
+        session: SessionInput,
+        places: dict[str, SessionTeam],
+        take: dict[str, Side],
+        decided: dict[str, MergeItem],
+    ) -> tuple[list[str], list[str]]:
+        """Make the org's teams what the session has, where that was
+        settled or needs no settling.
+
+        Returns:
+            The teams settled that were taken from the session, and those
+            the org keeps as it has them.
+        """
+        store = self.org()
+        taken: list[str] = []
+        kept = [team for team, item in decided.items() if item.use != "session"]
+        leaving = [
+            *(team for team, side in take.items() if side is None),
+            *(
+                team
+                for team, item in decided.items()
+                if item.use == "session" and team not in places
+            ),
+        ]
+        # Those above before those below, and what goes after what moved.
+        for team in places:
+            settled = team in decided and decided[team].use == "session"
+            if take.get(team) is not None or settled:
+                item = decided.get(team)
+                done = self._put_team(
+                    session,
+                    places,
+                    team,
+                    item.under if item and settled else None,
+                    item.named if item and settled else None,
+                    leaving,
+                )
+                if settled:
+                    (taken if done else kept).append(team)
+        for team in leaving:
+            store.remove(team)
+            if team in decided:
+                taken.append(team)
+        return taken, kept
+
+    def _take_documents(
+        self, top: SessionTeam, items: list[MergeItem], taken: list[str]
+    ) -> tuple[
+        dict[str, str | None],
+        list[tuple[str, str]],
+        list[tuple[str, str]],
+        list[tuple[str, str, str]],
+    ]:
+        """Work out what becomes of each document that waited with the
+        teams: the session's or a replacement lands, the org's stays.
+
+        Returns:
+            The text to land for each file (None removes it), the documents
+            that land, those held back, and for those whose writer has to
+            be told, the text that holds instead of what it wrote.
+        """
+        texts: dict[str, str | None] = {}
+        agreed: list[tuple[str, str]] = []
+        held: list[tuple[str, str]] = []
+        others: list[tuple[str, str, str]] = []
+        for item in items:
+            if not item.waits_with_teams:
+                continue
+            file = DocumentRef(item.key, item.document).path
+            if item.use == "org" or (
+                item.with_team is not None and item.with_team not in taken
+            ):
+                self.session_records.undraft(top.session, file)
+                held.append((item.document, item.key))
+                others.append((item.document, item.key, item.org))
+                continue
+            text = item.replacement if item.use == "replacement" else item.session
+            texts[file] = f"{text.strip()}\n" if text.strip() else None
+            agreed.append((item.document, item.key))
+            if item.use == "replacement":
+                others.append((item.document, item.key, text))
+        return texts, agreed, held, others
 
     def land_accepted(
         self, top: SessionTeam, seen: dict[str, str | None] | None
