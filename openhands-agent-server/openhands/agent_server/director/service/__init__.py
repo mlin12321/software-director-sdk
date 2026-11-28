@@ -60,6 +60,9 @@ from openhands.agent_server.director.service.org_settings_service import (
 )
 from openhands.agent_server.director.service.org_state_service import OrgStateService
 from openhands.agent_server.director.service.org_sync_service import OrgSyncService
+from openhands.agent_server.director.service.org_watch_service import (
+    OrgWatchService,
+)
 from openhands.agent_server.director.service.request_routing_service import (
     RequestRoutingService,
 )
@@ -75,17 +78,11 @@ from openhands.agent_server.director.service.session_draft_service import (
 from openhands.agent_server.director.service.session_lifecycle_service import (
     SessionLifecycleService,
 )
-from openhands.agent_server.director.service.session_limit_service import (
-    SessionLimitService,
-)
 from openhands.agent_server.director.service.session_merge_service import (
     SessionMergeService,
 )
 from openhands.agent_server.director.service.session_record_service import (
     SessionRecordService,
-)
-from openhands.agent_server.director.service.stall_watch_service import (
-    StallWatchService,
 )
 from openhands.agent_server.director.service.start_line_service import StartLineService
 from openhands.agent_server.director.service.team_context_service import (
@@ -554,36 +551,22 @@ class DirectorService:
             session_records=self.session_records,
             session_merges=self.session_merges,
         )
-        self.session_limits = SessionLimitService(
+        self.org_watch = OrgWatchService(
             org=self._org,
             has_org=lambda: self.org_load.has_org,
+            checkouts=self.checkouts,
             launcher=self._require_launcher,
+            poll_seconds=self._stall_poll,
             org_state=self.org_state,
             org_settings=self.org_settings,
             org_save=self.org_save,
             team_types=self.team_types,
+            team_history=self.team_history,
             team_messaging=self.team_messaging,
-            work_queue=self.work_queue,
-        )
-        self.stall_watch = StallWatchService(
-            checkouts=self.checkouts,
-            org=self._org,
-            has_org=lambda: self.org_load.has_org,
-            settings=lambda: self.org_settings.settings,
-            run_state=self.org_state.run_state,
-            clock=self._clock,
-            paused=lambda: self.org_state.paused is not None,
-            running=lambda: self.org_state.running,
+            reviews=self.reviews,
+            session_merges=self.session_merges,
             model_calls=self.model_calls,
-            count_use=self.session_limits.count_use,
-            poll_seconds=self._stall_poll,
-            check_managers=self.session_merges.check_managers,
             work_queue=self.work_queue,
-            progressed=self.team_messaging.progressed,
-            release_reviews=self.reviews.release_held,
-            record_event=self.team_history.record_event,
-            tell_writer=self.team_messaging.tell_writer,
-            tell_above=self.team_messaging.tell_above,
         )
         self.team_splits = TeamSplitService(
             checkouts=self.checkouts,
@@ -611,7 +594,7 @@ class DirectorService:
             retry=self._run_limit_retry,
         )
         self.org_run = OrgRunService(
-            session_limits=self.session_limits,
+            org_watch=self.org_watch,
             checkouts=self.checkouts,
             org=self._org,
             find_org=self.org_load.find_org,
@@ -714,7 +697,7 @@ class DirectorService:
             name="director-review-instructions",
         )
         self._stall_timer = asyncio.create_task(
-            self.stall_watch.watch(), name="director-stall-watch"
+            self.org_watch.watch(), name="director-stall-watch"
         )
         if self.org_load.find_org() is not None:
             self.work_queue.enqueue(self._came_back)

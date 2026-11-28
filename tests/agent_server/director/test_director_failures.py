@@ -8,7 +8,7 @@ import pytest
 
 from openhands.agent_server.director.org_store import AGENT_LOST
 from openhands.agent_server.director.service import DirectorService
-from openhands.agent_server.director.service.stall_watch_service import (
+from openhands.agent_server.director.service.org_watch_service import (
     STALL_WAITS,
 )
 from openhands.agent_server.director.service.team_messaging_service import failure_waits
@@ -232,10 +232,10 @@ async def test_the_human_is_asked_of_a_stalled_team_with_no_ic_above(
         repo, launcher, clock=lambda: now[0], stall_poll=3600
     )
     try:
-        await service.stall_watch.check_stalls()
+        await service.org_watch.check_stalls()
         await service.work_queue.settled()
         now[0] += timedelta(minutes=120)
-        await service.stall_watch.check_stalls()
+        await service.org_watch.check_stalls()
         await service.work_queue.settled()
 
         top = node(service, "root")

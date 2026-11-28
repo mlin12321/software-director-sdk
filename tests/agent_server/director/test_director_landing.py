@@ -1415,7 +1415,7 @@ async def test_a_manager_that_does_not_answer_is_asked_again_and_then_the_human(
 
     async def later(minutes: int) -> None:
         now[0] += timedelta(minutes=minutes)
-        await service.stall_watch.check_stalls()
+        await service.org_watch.check_stalls()
         await service.work_queue.settled()
 
     await later(30)

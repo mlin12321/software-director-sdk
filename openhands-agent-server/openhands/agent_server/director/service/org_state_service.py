@@ -25,7 +25,6 @@ from openhands.agent_server.director.run_state import (
     RunState,
     RunStateError,
 )
-from openhands.agent_server.director.service.stall_watch_service import progress_of
 from openhands.sdk.logger import get_logger
 
 
@@ -43,6 +42,18 @@ def _reason(kept: str | None) -> PauseReason | None:
     if kept == "human" or kept == "shutdown" or kept == "crash":
         return kept
     return None
+
+
+def progress_of(kept: str | None) -> dict[str, Any]:
+    """What is known of a team's progress: when it last got anywhere
+    (``at``), the last commit in its directory then (``head``), when the IC
+    above was last told that it shows none (``told``), and when that IC last
+    turned to the team or was told of it (``checked``)."""
+    try:
+        seen = json.loads(kept) if kept else {}
+    except ValueError:
+        return {}
+    return seen if isinstance(seen, dict) else {}
 
 
 @dataclass
