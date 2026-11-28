@@ -308,8 +308,18 @@ def test_the_director_changes_no_more_of_openhands():
 
     if git("rev-parse", "--verify", "--quiet", UPSTREAM).returncode != 0:
         pytest.skip(f"{UPSTREAM} is not fetched here")
+    # The upstream this checkout has merged: the ref may be ahead of it.
+    merged = git("merge-base", UPSTREAM, "HEAD")
+    assert merged.returncode == 0, merged.stderr
     # Files OpenHands has that differ here; new files (A) are the director's.
-    changed = git("diff", "--name-only", "--diff-filter=MDR", UPSTREAM, "--", *PACKAGES)
+    changed = git(
+        "diff",
+        "--name-only",
+        "--diff-filter=MDR",
+        merged.stdout.strip(),
+        "--",
+        *PACKAGES,
+    )
 
     assert changed.returncode == 0, changed.stderr
     assert set(changed.stdout.split()) <= CHANGED_IN_OPENHANDS
